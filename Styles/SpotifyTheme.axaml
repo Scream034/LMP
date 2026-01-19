@@ -1,6 +1,6 @@
 <!-- Styles/SpotifyTheme.axaml -->
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- Color Palette -->
     <Style>
@@ -11,16 +11,16 @@
             <Color x:Key="BgElevated">#282828</Color>
             <Color x:Key="BgHighlight">#333333</Color>
             <Color x:Key="BgHover">#3E3E3E</Color>
-            
+
             <!-- Brand Colors -->
             <Color x:Key="AccentGreen">#1DB954</Color>
             <Color x:Key="AccentGreenHover">#1ED760</Color>
-            
+
             <!-- Text Colors -->
             <Color x:Key="TextPrimary">#FFFFFF</Color>
             <Color x:Key="TextSecondary">#B3B3B3</Color>
             <Color x:Key="TextMuted">#6A6A6A</Color>
-            
+
             <!-- Brushes -->
             <SolidColorBrush x:Key="BgPrimaryBrush" Color="{StaticResource BgPrimary}" />
             <SolidColorBrush x:Key="BgSecondaryBrush" Color="{StaticResource BgSecondary}" />
@@ -107,7 +107,8 @@
     <!-- Slider (Seek/Volume) -->
     <Style Selector="Slider.spotify-slider">
         <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+        <!-- Background ставим Transparent, чтобы видеть ProgressBar снизу -->
+        <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="Slider.spotify-slider /template/ Thumb">
         <Setter Property="Width" Value="12" />

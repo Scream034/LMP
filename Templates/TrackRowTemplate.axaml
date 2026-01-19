@@ -1,61 +1,69 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-        xmlns:asyncImage="using:AsyncImageLoader"
-        xmlns:mi="using:Material.Icons.Avalonia">
+        xmlns:mi="using:Material.Icons.Avalonia"
+        xmlns:asyncImage="using:AsyncImageLoader">
 
-    <Style Selector="ContentControl.track-row">
+    <Style Selector="ContentControl.track-card">
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate x:DataType="vm:TrackItemViewModel">
-                    <Grid ColumnDefinitions="Auto, *, Auto, Auto, Auto" Background="Transparent" Margin="0,4" Classes="track-grid">
-                        
-                        <!-- Thumbnail / Play -->
-                        <Panel Grid.Column="0" Width="48" Height="48" Margin="0,0,16,0">
-                            <Border CornerRadius="4" ClipToBounds="True">
-                                <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"/>
+                    <!-- ФИКС: Фиксированная ширина и Margin -->
+                    <Button Command="{Binding PlayCommand}"
+                            Background="Transparent"
+                            CornerRadius="6"
+                            Padding="8"
+                            Width="160"
+                            Margin="0,0,8,16"
+                            VerticalAlignment="Top">
+                        <StackPanel>
+                            <!-- Cover Image -->
+                            <Border Width="144" Height="144" 
+                                    CornerRadius="6" 
+                                    ClipToBounds="True"
+                                    BoxShadow="0 4 8 0 #40000000"
+                                    Margin="0,0,0,12">
+                                <Panel Background="#282828">
+                                    <mi:MaterialIcon Kind="MusicNote" 
+                                                     Width="48" Height="48" 
+                                                     Foreground="#555"
+                                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"/>
+                                    <!-- Оптимизация: Mode=OneTime для URL, так как он редко меняется -->
+                                    <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
+                                           Stretch="UniformToFill"
+                                           IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}}"/>
+                                    
+                                    <!-- Overlay Play Button (Hover effect handled in styles) -->
+                                    <Panel Classes="hover-overlay" Background="#66000000" IsVisible="{Binding IsHovered}">
+                                         <mi:MaterialIcon Kind="PlayCircle" Width="48" Height="48" Foreground="White"/>
+                                    </Panel>
+                                </Panel>
                             </Border>
-                            <Button Command="{Binding PlayCommand}" Classes="play-overlay" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <!-- ИСПРАВЛЕНО: StaticResource BoolToSelector -->
-                                <mi:MaterialIcon Kind="{Binding IsPlaying, Converter={StaticResource BoolToSelector}, ConverterParameter=Pause|Play}" 
-                                                 Width="24" Height="24" Foreground="White"/>
-                            </Button>
-                        </Panel>
 
-                        <!-- Info -->
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                            <!-- ИСПРАВЛЕНО: StaticResource BoolToSelector -->
+                            <!-- Title (Trimming enabled) -->
                             <TextBlock Text="{Binding Title}" 
-                                       Foreground="{Binding IsCurrentTrack, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#FFFFFF'}"
-                                       FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
-                            <TextBlock Text="{Binding Author}" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                                       FontWeight="Bold" 
+                                       FontSize="14"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxLines="1"
+                                       ToolTip.Tip="{Binding Title}"/>
+
+                            <!-- Artist (Trimming enabled) -->
+                            <TextBlock Text="{Binding Author}" 
+                                       FontSize="12" 
+                                       Margin="0,4,0,0"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxLines="1"/>
                         </StackPanel>
-
-                        <!-- Download Status -->
-                        <Panel Grid.Column="2" Margin="16,0" VerticalAlignment="Center">
-                            <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16" Foreground="{StaticResource AccentBrush}" IsVisible="{Binding IsDownloaded}"/>
-                            <ProgressBar Value="{Binding DownloadProgress}" Maximum="1" Width="50" Height="4" IsVisible="{Binding IsDownloading}" Foreground="{StaticResource AccentBrush}"/>
-                        </Panel>
-
-                        <!-- Like -->
-                        <Button Grid.Column="3" Classes="icon-btn" Command="{Binding ToggleLikeCommand}" Margin="0,0,16,0">
-                            <!-- ИСПРАВЛЕНО: StaticResource BoolToSelector (дважды) -->
-                            <mi:MaterialIcon Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
-                                             Width="18" Height="18"
-                                             Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"/>
-                        </Button>
-
-                        <!-- Duration -->
-                        <TextBlock Grid.Column="4" Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}" VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}" Width="50" TextAlignment="Right" Margin="0,0,16,0"/>
-                    </Grid>
+                    </Button>
                 </DataTemplate>
             </Setter.Value>
         </Setter>
     </Style>
-
-    <Style Selector="Grid.track-grid Button.play-overlay">
-        <Setter Property="Opacity" Value="0"/><Setter Property="Background" Value="#80000000"/><Setter Property="Width" Value="48"/><Setter Property="Height" Value="48"/><Setter Property="CornerRadius" Value="4"/>
+    
+    <Style Selector="Button:pointerover Border Panel.hover-overlay">
+        <Setter Property="IsVisible" Value="True"/>
     </Style>
-    <Style Selector="Grid.track-grid:pointerover Button.play-overlay"><Setter Property="Opacity" Value="1"/></Style>
-    <Style Selector="Grid.track-grid:pointerover"><Setter Property="Background" Value="{StaticResource BgHighlightBrush}"/></Style>
 </Styles>

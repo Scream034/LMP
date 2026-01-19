@@ -13,12 +13,13 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 {
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
+    private readonly DownloadService _downloads; // Для статуса буферизации
     private readonly DispatcherTimer _positionTimer;
+
+    // Флаг, который показывает, что пользователь сейчас тащит ползунок
     private bool _isSeeking;
 
-    // We keep CurrentTrack nullable, but HasTrack controls visibility
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
-
     [Reactive] public bool IsLoading { get; private set; }
     [Reactive] public bool IsPlaying { get; private set; }
     [Reactive] public bool IsPaused { get; private set; }
@@ -28,6 +29,11 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public double PositionSeconds { get; set; }
     [Reactive] public double DurationSeconds { get; private set; }
 
+    // Новое свойство для отображения прогресса буферизации/скачивания (от 0 до 1)
+    [Reactive] public double BufferedProgress { get; private set; }
+    // Длина буфера в секундах для привязки к ширине слайдера
+    [Reactive] public double BufferedSeconds { get; private set; }
+
     [Reactive] public float Volume { get; set; }
     [Reactive] public bool IsMuted { get; private set; }
     [Reactive] public bool ShuffleEnabled { get; set; }
@@ -35,7 +41,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public bool IsLiked { get; private set; }
     [Reactive] public bool HasTrack { get; private set; }
 
-    // Helper properties to avoid "Value is null" binding errors
     public string SafeTitle => CurrentTrack?.Title ?? "";
     public string SafeAuthor => CurrentTrack?.Author ?? "";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
@@ -50,10 +55,11 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private float _volumeBeforeMute;
 
-    public PlayerBarViewModel(AudioEngine audio, LibraryService library)
+    public PlayerBarViewModel(AudioEngine audio, LibraryService library, DownloadService downloads)
     {
         _audio = audio;
         _library = library;
+        _downloads = downloads;
 
         Volume = _audio.GetVolume();
         ShuffleEnabled = _audio.ShuffleEnabled;
@@ -63,89 +69,63 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _positionTimer.Tick += (_, _) => UpdatePosition();
         _positionTimer.Start();
 
-        // 1. Loading State
-        Observable.FromEvent<bool>(
-            h => _audio.OnLoadingChanged += h,
-            h => _audio.OnLoadingChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(loading => IsLoading = loading);
+        // Подписки на AudioEngine
+        Observable.FromEvent<bool>(h => _audio.OnLoadingChanged += h, h => _audio.OnLoadingChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler).Subscribe(loading => IsLoading = loading);
 
-        // 2. Track Changes
-        Observable.FromEvent<TrackInfo>(
-                h => _audio.OnTrackChanged += h,
-                h => _audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(OnTrackChanged);
+        Observable.FromEvent<TrackInfo>(h => _audio.OnTrackChanged += h, h => _audio.OnTrackChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler).Subscribe(OnTrackChanged);
 
-        // 3. Playback State
-        Observable.FromEvent(
-                h => _audio.OnPlaybackStopped += h,
-                h => _audio.OnPlaybackStopped -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdatePlayState());
+        Observable.FromEvent(h => _audio.OnPlaybackStopped += h, h => _audio.OnPlaybackStopped -= h)
+            .ObserveOn(RxApp.MainThreadScheduler).Subscribe(_ => UpdatePlayState());
 
-        // 4. Volume (Throttled is fine for volume)
-        this.WhenAnyValue(x => x.Volume)
-            .Throttle(TimeSpan.FromMilliseconds(50))
-            .Subscribe(v =>
+        Observable.FromEvent<TimeSpan>(h => _audio.OnPositionChanged += h, h => _audio.OnPositionChanged -= h)
+             .ObserveOn(RxApp.MainThreadScheduler)
+             .Subscribe(pos =>
+             {
+                 // Обновляем VM, только если не перетаскиваем ползунок
+                 if (!_isSeeking)
+                 {
+                     Position = pos;
+                     PositionSeconds = pos.TotalSeconds;
+                 }
+             });
+
+        // Подписка на скачивание (для визуализации буфера)
+        Observable.FromEvent<Action<string, float>, (string, float)>(
+            h => (id, p) => h((id, p)),
+            h => _downloads.OnProgress += h,
+            h => _downloads.OnProgress -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(x =>
             {
-                _audio.SetVolume(v);
-                IsMuted = v == 0;
+                if (CurrentTrack != null && x.Item1 == CurrentTrack.Id)
+                {
+                    BufferedProgress = x.Item2;
+                    BufferedSeconds = DurationSeconds * x.Item2;
+                }
             });
 
-        // NOTE: We REMOVED the PositionSeconds subscription here. 
-        // Seeking is now handled explicitly in EndSeek/OnSeekEnd to avoid conflicts with the timer.
+        // Volume logic
+        this.WhenAnyValue(x => x.Volume).Throttle(TimeSpan.FromMilliseconds(50)).Subscribe(v =>
+        {
+            _audio.SetVolume(v);
+            IsMuted = v == 0;
+        });
 
         var hasTrack = this.WhenAnyValue(x => x.HasTrack);
 
-        PlayPauseCommand = ReactiveCommand.Create(() =>
-        {
-            _audio.TogglePlayPause();
-            UpdatePlayState();
-        }, hasTrack);
-
+        PlayPauseCommand = ReactiveCommand.Create(() => { _audio.TogglePlayPause(); UpdatePlayState(); }, hasTrack);
         PreviousCommand = ReactiveCommand.Create(() => _audio.PlayPrevious(), hasTrack);
         NextCommand = ReactiveCommand.Create(() => _audio.PlayNext(), hasTrack);
-
-        ToggleShuffleCommand = ReactiveCommand.Create(() =>
-        {
-            ShuffleEnabled = !ShuffleEnabled;
-            _audio.ShuffleEnabled = ShuffleEnabled;
-        });
-
+        ToggleShuffleCommand = ReactiveCommand.Create(() => { ShuffleEnabled = !ShuffleEnabled; _audio.ShuffleEnabled = ShuffleEnabled; });
         ToggleRepeatCommand = ReactiveCommand.Create(() =>
         {
-            RepeatMode = RepeatMode switch
-            {
-                RepeatMode.None => RepeatMode.RepeatAll,
-                RepeatMode.RepeatAll => RepeatMode.RepeatOne,
-                RepeatMode.RepeatOne => RepeatMode.None,
-                _ => RepeatMode.None
-            };
+            RepeatMode = RepeatMode switch { RepeatMode.None => RepeatMode.RepeatAll, RepeatMode.RepeatAll => RepeatMode.RepeatOne, _ => RepeatMode.None };
             _audio.RepeatMode = RepeatMode;
         });
-
-        ToggleLikeCommand = ReactiveCommand.Create(() =>
-        {
-            if (CurrentTrack != null)
-            {
-                _library.ToggleLike(CurrentTrack);
-                IsLiked = CurrentTrack.IsLiked;
-            }
-        }, hasTrack);
-
-        ToggleMuteCommand = ReactiveCommand.Create(() =>
-        {
-            if (IsMuted)
-            {
-                Volume = _volumeBeforeMute > 0 ? _volumeBeforeMute : 0.5f;
-            }
-            else
-            {
-                _volumeBeforeMute = Volume;
-                Volume = 0;
-            }
-        });
+        ToggleLikeCommand = ReactiveCommand.Create(() => { if (CurrentTrack != null) { _library.ToggleLike(CurrentTrack); IsLiked = CurrentTrack.IsLiked; } }, hasTrack);
+        ToggleMuteCommand = ReactiveCommand.Create(() => { if (IsMuted) Volume = _volumeBeforeMute > 0 ? _volumeBeforeMute : 0.5f; else { _volumeBeforeMute = Volume; Volume = 0; } });
     }
 
     private void OnTrackChanged(TrackInfo? track)
@@ -153,7 +133,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         CurrentTrack = track;
         HasTrack = track != null;
 
-        // Notify safe properties changed to update UI
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(SafeAuthor));
         this.RaisePropertyChanged(nameof(SafeThumbnail));
@@ -165,11 +144,29 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             IsLiked = track.IsLiked;
             Position = TimeSpan.Zero;
             PositionSeconds = 0;
+
+            // Если трек уже скачан, буфер полный
+            if (track.IsDownloaded)
+            {
+                BufferedProgress = 1.0;
+                BufferedSeconds = DurationSeconds;
+            }
+            else if (_downloads.IsDownloading(track.Id))
+            {
+                BufferedProgress = _downloads.GetProgress(track.Id);
+                BufferedSeconds = DurationSeconds * BufferedProgress;
+            }
+            else
+            {
+                BufferedProgress = 0;
+                BufferedSeconds = 0;
+            }
         }
         else
         {
             DurationSeconds = 1;
             PositionSeconds = 0;
+            BufferedSeconds = 0;
         }
 
         UpdatePlayState();
@@ -177,16 +174,18 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private void UpdatePosition()
     {
-        // Only update from audio engine if user IS NOT dragging the slider
         if (HasTrack && !_isSeeking)
         {
             Position = _audio.CurrentPosition;
             PositionSeconds = Position.TotalSeconds;
 
+            // Уточнение длительности, если стрим подгрузил метаданные
             if (Math.Abs(DurationSeconds - _audio.TotalDuration.TotalSeconds) > 1 && _audio.TotalDuration.TotalSeconds > 0)
             {
                 Duration = _audio.TotalDuration;
                 DurationSeconds = Duration.TotalSeconds;
+                // Обновляем буфер бар при изменении длины
+                if (BufferedProgress > 0) BufferedSeconds = DurationSeconds * BufferedProgress;
             }
         }
         UpdatePlayState();
@@ -198,14 +197,15 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         IsPaused = _audio.IsPaused;
     }
 
+    // Вызывается при нажатии (Start Drag)
     public void StartSeek()
     {
         _isSeeking = true;
     }
 
+    // Вызывается при отпускании (End Drag / Click)
     public void EndSeek()
     {
-        // Apply the seek only when the user releases the handle
         if (HasTrack)
         {
             _audio.Seek(TimeSpan.FromSeconds(PositionSeconds));
@@ -213,8 +213,5 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _isSeeking = false;
     }
 
-    public void Dispose()
-    {
-        _positionTimer.Stop();
-    }
+    public void Dispose() => _positionTimer.Stop();
 }

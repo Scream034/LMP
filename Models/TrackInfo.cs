@@ -11,20 +11,44 @@ public class TrackInfo
     public string Url { get; set; } = string.Empty;
     public string StreamUrl { get; set; } = string.Empty;
     public TimeSpan Duration { get; set; }
-    public string ThumbnailUrl { get; set; } = string.Empty;
-    
+
+    private string _thumbnailUrl = string.Empty;
+    public string ThumbnailUrl
+    {
+        get
+        {
+            // Если есть URL, возвращаем его
+            if (!string.IsNullOrEmpty(_thumbnailUrl))
+                return _thumbnailUrl;
+
+            // Fallback: генерируем URL превью YouTube по ID
+            if (Id.StartsWith("yt_") && Id.Length > 3)
+            {
+                var videoId = Id.Substring(3);
+                // YouTube thumbnail URLs
+                return $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
+            }
+
+            return string.Empty;
+        }
+        set => _thumbnailUrl = value;
+    }
+
+    // Для проверки - есть ли реальный thumbnail
+    public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl);
+
     // Состояние в библиотеке
     public bool IsLiked { get; set; }
     public bool IsDisliked { get; set; }
     public bool IsDownloaded { get; set; }
     public string? LocalPath { get; set; }
-    
+
     // В каких плейлистах находится
     public HashSet<string> InPlaylists { get; set; } = new();
-    
+
     // Метаданные для радио
     public string? RadioSeedId { get; set; }
-    
+
     public TrackInfo Clone() => new()
     {
         Id = Id,
@@ -33,7 +57,7 @@ public class TrackInfo
         Url = Url,
         StreamUrl = StreamUrl,
         Duration = Duration,
-        ThumbnailUrl = ThumbnailUrl,
+        _thumbnailUrl = _thumbnailUrl,
         IsLiked = IsLiked,
         IsDisliked = IsDisliked,
         IsDownloaded = IsDownloaded,

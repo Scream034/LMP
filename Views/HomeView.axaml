@@ -1,4 +1,3 @@
-<!-- Views/HomeView.axaml -->
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
@@ -6,70 +5,112 @@
              x:Class="MyLiteMusicPlayer.Views.HomeView"
              x:DataType="vm:HomeViewModel">
 
-    <StackPanel Spacing="32">
-        <!-- Greeting -->
-        <TextBlock Text="{Binding Greeting}"
-                   FontSize="32"
-                   FontWeight="Bold"
-                   Foreground="{StaticResource TextPrimaryBrush}"/>
+    <Grid RowDefinitions="Auto, *">
 
-        <!-- Recently Played -->
-        <StackPanel Spacing="16" IsVisible="{Binding RecentTracks.Count}">
-            <TextBlock Text="Recently Played"
-                       FontSize="24"
+        <!-- Верхняя часть: Приветствие и Категории -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,24">
+            <TextBlock Text="{Binding Greeting}"
+                       FontSize="32"
                        FontWeight="Bold"
-                       Foreground="{StaticResource TextPrimaryBrush}"/>
+                       Foreground="{StaticResource TextPrimaryBrush}"
+                       Margin="0,0,0,16" />
 
-            <ItemsControl ItemsSource="{Binding RecentTracks}">
-                <ItemsControl.ItemsPanel>
+            <!-- Categories Selector (Таблетки) -->
+            <ListBox ItemsSource="{Binding Categories}"
+                     SelectedItem="{Binding SelectedCategory}"
+                     Background="Transparent"
+                     Margin="0,0,0,8">
+                
+                <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal"/>
+                        <StackPanel Orientation="Horizontal" Spacing="0" />
                     </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:TrackItemViewModel">
-                        <ContentControl Content="{Binding}" 
-                                        ContentTemplate="{StaticResource TrackCardTemplate}"
-                                        Margin="0,0,16,16"/>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </StackPanel>
+                </ListBox.ItemsPanel>
 
-        <!-- Recommendations -->
-        <StackPanel Spacing="16">
-            <TextBlock Text="Made For You"
-                       FontSize="24"
-                       FontWeight="Bold"
-                       Foreground="{StaticResource TextPrimaryBrush}"/>
-
-            <ListBox ItemsSource="{Binding Recommendations}"
-                     Background="Transparent">
+                <!-- Шаблон текста кнопки категории -->
                 <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:TrackItemViewModel">
-                        <ContentControl Content="{Binding}" 
-                                        ContentTemplate="{StaticResource TrackRowTemplate}"/>
+                    <DataTemplate x:DataType="vm:CategoryItem">
+                        <TextBlock Text="{Binding Name}" 
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Center"/>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
+
+                <!-- Стили для таблеток категорий -->
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem">
+                        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                        <Setter Property="Padding" Value="16,8" />
+                        <Setter Property="Margin" Value="0,0,10,0" />
+                        <Setter Property="CornerRadius" Value="20" />
+                        <Setter Property="Cursor" Value="Hand" />
+                        <Setter Property="VerticalContentAlignment" Value="Center"/>
+                    </Style>
+
+                    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+                        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+                    </Style>
+
+                    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                        <Setter Property="Background" Value="{StaticResource TextPrimaryBrush}" />
+                        <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}" />
+                    </Style>
+                    
+                    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter">
+                        <Setter Property="Background" Value="#DDDDDD" />
+                        <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}" />
+                    </Style>
+                </ListBox.Styles>
             </ListBox>
         </StackPanel>
 
-        <!-- Trending -->
-        <StackPanel Spacing="16">
-            <TextBlock Text="Trending Now"
-                       FontSize="24"
-                       FontWeight="Bold"
-                       Foreground="{StaticResource TextPrimaryBrush}"/>
+        <!-- Основной контент -->
+        <ScrollViewer Grid.Row="1"
+                      x:Name="MainScrollViewer"
+                      ScrollChanged="OnScrollChanged">
+            <StackPanel>
+                <ProgressBar IsIndeterminate="True"
+                             HorizontalAlignment="Center"
+                             IsVisible="{Binding IsLoading}"
+                             Height="4" Width="200"
+                             Margin="0,0,0,20" />
 
-            <ListBox ItemsSource="{Binding Trending}"
-                     Background="Transparent">
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:TrackItemViewModel">
-                        <ContentControl Content="{Binding}" 
-                                        ContentTemplate="{StaticResource TrackRowTemplate}"/>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
-        </StackPanel>
-    </StackPanel>
+                <!-- 
+                   Список треков.
+                   Мы НЕ задаем ItemTemplate, так как он определен глобально в App.axaml.
+                   Avalonia сама найдет шаблон для TrackItemViewModel.
+                -->
+                <ListBox ItemsSource="{Binding ActiveTracks}" 
+                         Background="Transparent"
+                         SelectionMode="Single">
+                    
+                    <!-- Убираем отступы у элементов списка для плотного вида -->
+                    <ListBox.Styles>
+                        <Style Selector="ListBoxItem">
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                        </Style>
+                        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                        </Style>
+                         <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent"/>
+                        </Style>
+                    </ListBox.Styles>
+                </ListBox>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20"
+                            IsVisible="{Binding IsLoading}">
+                    <TextBlock Text="Loading more..."
+                               Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
+
+                <Panel Height="100" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </UserControl>

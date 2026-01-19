@@ -371,48 +371,53 @@ public class YoutubeProvider
 
         Debug.WriteLine($"[YoutubeProvider] ConvertToTrackInfo:");
         Debug.WriteLine($"  ID: '{data.ID}', Title: '{data.Title}'");
-        Debug.WriteLine($"  Uploader: '{data.Uploader}', Channel: '{data.Channel}'");
 
         string bestStream = string.Empty;
+        string? thumbnailUrl = null;
+
+        // Получаем лучший thumbnail
+        if (!string.IsNullOrEmpty(data.Thumbnail))
+        {
+            thumbnailUrl = data.Thumbnail;
+        }
+        else if (data.Thumbnails != null && data.Thumbnails.Any())
+        {
+            // Берем thumbnail среднего качества
+            var thumb = data.Thumbnails
+                .Where(t => t.Url != null)
+                .OrderByDescending(t => t.Width ?? 0)
+                .Skip(data.Thumbnails.Length / 2)
+                .FirstOrDefault();
+            thumbnailUrl = thumb?.Url;
+        }
 
         if (data.Formats != null && data.Formats.Any())
         {
-            // Фильтруем ТОЛЬКО аудио-форматы (без видео)
+            // ТОЛЬКО audio-only форматы (без видео)
             var audioOnlyFormats = data.Formats
                 .Where(f => f.AudioBitrate != null && f.AudioBitrate > 0)
-                .Where(f => f.VideoCodec == "none" || string.IsNullOrEmpty(f.VideoCodec))
+                .Where(f => f.VideoCodec == "none" || string.IsNullOrEmpty(f.VideoCodec) || f.VideoCodec == "null")
+                .Where(f => !string.IsNullOrEmpty(f.Url))
                 .OrderByDescending(f => f.AudioBitrate)
                 .ToList();
 
-            Debug.WriteLine($"  Audio-only formats found: {audioOnlyFormats.Count}");
-
-            foreach (var fmt in audioOnlyFormats)
+            Debug.WriteLine($"  Audio-only formats: {audioOnlyFormats.Count}");
+            foreach (var fmt in audioOnlyFormats.Take(4))
             {
-                Debug.WriteLine($"    - ext={fmt.Extension}, abr={fmt.AudioBitrate}, acodec={fmt.AudioCodec}, vcodec={fmt.VideoCodec}");
+                Debug.WriteLine($"    - {fmt.Extension} abr={fmt.AudioBitrate} acodec={fmt.AudioCodec}");
             }
 
-            YoutubeDLSharp.Metadata.FormatData? bestFormat;
-
-            // ИЗМЕНЕНИЕ: Всегда предпочитаем webm/opus - он лучше работает со стримингом
-            // m4a требует seek к концу файла для чтения метаданных, что плохо для стриминга
-            bestFormat = audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm" && f.AudioCodec == "opus")
-                         ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm")
-                         ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "m4a")
-                         ?? audioOnlyFormats.FirstOrDefault();
+            // Предпочитаем webm/opus - лучше для стриминга
+            var bestFormat = audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm" && f.AudioCodec?.Contains("opus") == true)
+                             ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm")
+                             ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "m4a")
+                             ?? audioOnlyFormats.FirstOrDefault();
 
             if (bestFormat != null)
             {
                 bestStream = bestFormat.Url ?? string.Empty;
-                Debug.WriteLine($"  Selected format: ext={bestFormat.Extension}, bitrate={bestFormat.AudioBitrate}, codec={bestFormat.AudioCodec}");
+                Debug.WriteLine($"  Selected: {bestFormat.Extension} abr={bestFormat.AudioBitrate}");
             }
-            else
-            {
-                Debug.WriteLine("  WARNING: No suitable audio format found!");
-            }
-        }
-        else
-        {
-            Debug.WriteLine("  WARNING: No formats available!");
         }
 
         string videoId = data.ID ?? "";
@@ -424,10 +429,7 @@ public class YoutubeProvider
                 (c >= '0' && c <= '9') ||
                 c == '_' || c == '-').ToArray());
 
-            if (cleanedId.Length == 11)
-                videoId = cleanedId;
-            else
-                videoId = Guid.NewGuid().ToString("N").Substring(0, 11);
+            videoId = cleanedId.Length == 11 ? cleanedId : Guid.NewGuid().ToString("N").Substring(0, 11);
         }
 
         string trackUrl = data.WebpageUrl ?? "";
@@ -444,7 +446,7 @@ public class YoutubeProvider
             Url = trackUrl,
             StreamUrl = bestStream,
             Duration = data.Duration != null ? TimeSpan.FromSeconds((double)data.Duration) : TimeSpan.Zero,
-            ThumbnailUrl = data.Thumbnail ?? string.Empty
+            ThumbnailUrl = thumbnailUrl ?? string.Empty  // Может быть пустым - TrackInfo сам сгенерирует
         };
     }
 }
