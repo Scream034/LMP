@@ -4,62 +4,97 @@
     x:Class="MyLiteMusicPlayer.Views.SettingsView"
     x:DataType="vm:SettingsViewModel">
 
-    <StackPanel Spacing="24" MaxWidth="800" HorizontalAlignment="Left">
-        <TextBlock Text="Settings" FontSize="32" FontWeight="Bold" />
+    <ScrollViewer>
+        <StackPanel Spacing="24" MaxWidth="800" HorizontalAlignment="Left" Margin="0,0,24,40">
+            <TextBlock Text="Settings" FontSize="32" FontWeight="Bold" />
 
-        <!-- Account -->
-        <StackPanel Spacing="12">
-            <TextBlock Text="Account" FontSize="18" FontWeight="Bold" />
-            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                <StackPanel Orientation="Horizontal" Spacing="16">
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="{Binding UserEmail, FallbackValue='Not logged in'}"
-                            FontWeight="SemiBold" />
-                        <TextBlock
-                            Text="{Binding IsAuthenticated, Converter={StaticResource BoolToSelector}, ConverterParameter='Authenticated|Guest Mode'}"
-                            FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" />
+            <!-- Account -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Account" FontSize="18" FontWeight="Bold" />
+                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="{Binding UserEmail, FallbackValue='Not logged in'}"
+                                FontWeight="SemiBold" />
+                            <TextBlock
+                                Text="{Binding IsAuthenticated, Converter={StaticResource BoolToSelector}, ConverterParameter='Authenticated|Guest Mode'}"
+                                FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
+
+                        <Button Command="{Binding LoginCommand}" Content="Log In"
+                            IsVisible="{Binding !IsAuthenticated}" />
+                        <Button Command="{Binding LogoutCommand}" Content="Log Out"
+                            IsVisible="{Binding IsAuthenticated}" />
                     </StackPanel>
+                </Border>
+            </StackPanel>
 
-                    <Button Command="{Binding LoginCommand}" Content="Log In"
-                        IsVisible="{Binding !IsAuthenticated}" />
-                    <Button Command="{Binding LogoutCommand}" Content="Log Out"
-                        IsVisible="{Binding IsAuthenticated}" />
-                </StackPanel>
-            </Border>
-        </StackPanel>
+            <!-- Performance (НОВАЯ СЕКЦИЯ) -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Performance &amp; Loading" FontSize="18" FontWeight="Bold" />
+                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="20">
 
-        <!-- Storage -->
-        <StackPanel Spacing="12">
-            <TextBlock Text="Storage" FontSize="18" FontWeight="Bold" />
-            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                <StackPanel Spacing="16">
-                    <StackPanel>
-                        <TextBlock Text="Download Location" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding DownloadPath}" FontSize="12"
-                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
+                        <!-- Batch Size Slider -->
+                        <StackPanel>
+                            <Grid ColumnDefinitions="*, Auto">
+                                <TextBlock Grid.Column="0" Text="Songs to load per request"
+                                    FontWeight="SemiBold" />
+                                <TextBlock Grid.Column="1" Text="{Binding LoadBatchSize}"
+                                    FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                            </Grid>
+                            <TextBlock Text="Higher values load more songs but may take longer."
+                                FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"
+                                Margin="0,4,0,8" />
+
+                            <Slider Minimum="5" Maximum="50" TickFrequency="5"
+                                IsSnapToTickEnabled="True"
+                                Value="{Binding LoadBatchSize}"
+                                Foreground="{StaticResource AccentBrush}" />
+                        </StackPanel>
+
+                        <!-- Smooth Loading Checkbox -->
+                        <CheckBox IsChecked="{Binding EnableSmoothLoading}"
+                            Content="Enable Smooth Loading Animation"
+                            ToolTip.Tip="Adds a cascade effect when loading tracks. Disable for instant appearance." />
+
                     </StackPanel>
+                </Border>
+            </StackPanel>
 
-                    <StackPanel Orientation="Horizontal" Spacing="12">
-                        <Button Command="{Binding BrowseDownloadPathCommand}"
-                            Content="Change Location" />
-                        <Button Command="{Binding ClearHistoryCommand}"
-                            Content="Clear Search History" />
+            <!-- Storage -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Storage" FontSize="18" FontWeight="Bold" />
+                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="16">
+                        <StackPanel>
+                            <TextBlock Text="Download Location" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding DownloadPath}" FontSize="12"
+                                Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button Command="{Binding BrowseDownloadPathCommand}"
+                                Content="Change Location" />
+                            <Button Command="{Binding ClearHistoryCommand}"
+                                Content="Clear Search History" />
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
-            </Border>
-        </StackPanel>
+                </Border>
+            </StackPanel>
 
-        <!-- General -->
-        <StackPanel Spacing="12">
-            <TextBlock Text="General" FontSize="18" FontWeight="Bold" />
-            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                <StackPanel Spacing="12">
-                    <CheckBox IsChecked="{Binding DiscordRpcEnabled}"
-                        Content="Enable Discord Rich Presence" />
-                    <CheckBox IsChecked="{Binding AutoPlayOnPaste}"
-                        Content="Auto-play when pasting URLs" />
-                </StackPanel>
-            </Border>
+            <!-- General -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="General" FontSize="18" FontWeight="Bold" />
+                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="12">
+                        <CheckBox IsChecked="{Binding DiscordRpcEnabled}"
+                            Content="Enable Discord Rich Presence" />
+                        <CheckBox IsChecked="{Binding AutoPlayOnPaste}"
+                            Content="Auto-play when pasting URLs" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </StackPanel>
-    </StackPanel>
+    </ScrollViewer>
 </UserControl>

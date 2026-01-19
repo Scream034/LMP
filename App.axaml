@@ -10,18 +10,17 @@
 
     <Application.DataTemplates>
         <!-- 
-           ГЛОБАЛЬНЫЙ ШАБЛОН ДЛЯ ТРЕКА.
-           Теперь, где бы вы ни положили TrackItemViewModel (в ListBox, ContentControl),
-           он будет отображаться красиво, а не как текст.
+           ЕДИНЫЙ ШАБЛОН ТРЕКА (TrackRow)
+           Используется в HomeView, SearchView, PlaylistView.
+           Теперь визуально они будут идентичны.
         -->
         <DataTemplate DataType="{x:Type vm:TrackItemViewModel}">
             <Grid ColumnDefinitions="Auto, *, Auto, Auto, Auto" Background="Transparent" Margin="0,4" Classes="track-grid">
-                <!-- Thumbnail / Play -->
+                <!-- 1. Картинка + Play -->
                 <Panel Grid.Column="0" Width="48" Height="48" Margin="0,0,16,0">
                     <Border CornerRadius="4" ClipToBounds="True">
                         <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"/>
                     </Border>
-                    <!-- Кнопка Play поверх картинки -->
                     <Button Command="{Binding PlayCommand}" Classes="play-overlay" 
                             HorizontalAlignment="Center" VerticalAlignment="Center">
                         <mi:MaterialIcon Kind="{Binding IsPlaying, Converter={StaticResource BoolToSelector}, ConverterParameter=Pause|Play}" 
@@ -29,16 +28,18 @@
                     </Button>
                 </Panel>
 
-                <!-- Info -->
+                <!-- 2. Инфо -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="{Binding Title}" 
                                Foreground="{Binding IsCurrentTrack, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#FFFFFF'}"
-                               FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                               FontWeight="Medium" 
+                               TextTrimming="CharacterEllipsis"/>
                     <TextBlock Text="{Binding Author}" FontSize="12" 
-                               Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                               Foreground="{StaticResource TextSecondaryBrush}" 
+                               TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
 
-                <!-- Download Status -->
+                <!-- 3. Статус скачивания -->
                 <Panel Grid.Column="2" Margin="16,0" VerticalAlignment="Center">
                     <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16" 
                                      Foreground="{StaticResource AccentBrush}" IsVisible="{Binding IsDownloaded}"/>
@@ -46,21 +47,21 @@
                                  IsVisible="{Binding IsDownloading}" Foreground="{StaticResource AccentBrush}"/>
                 </Panel>
 
-                <!-- Like -->
+                <!-- 4. Лайк -->
                 <Button Grid.Column="3" Classes="icon-btn" Command="{Binding ToggleLikeCommand}" Margin="0,0,16,0">
                     <mi:MaterialIcon Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
                                      Width="18" Height="18"
                                      Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"/>
                 </Button>
 
-                <!-- Duration -->
+                <!-- 5. Длительность -->
                 <TextBlock Grid.Column="4" Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}" 
                            VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}" 
                            Width="50" TextAlignment="Right" Margin="0,0,16,0"/>
             </Grid>
         </DataTemplate>
         
-        <!-- ГЛОБАЛЬНЫЙ ШАБЛОН ДЛЯ ПЛЕЙЛИСТА (карточка) -->
+        <!-- Шаблон карточки плейлиста -->
         <DataTemplate DataType="{x:Type vm:PlaylistCardViewModel}">
              <Button Command="{Binding OpenCommand}"
                     Background="{StaticResource BgElevatedBrush}"
@@ -69,35 +70,16 @@
                     Width="180" Height="240"
                     Margin="0,0,24,24">
                 <StackPanel>
-                    <!-- Cover Image -->
-                    <Border Width="148" Height="148" 
-                            CornerRadius="4" 
-                            ClipToBounds="True"
-                            BoxShadow="0 4 10 0 #40000000"
-                            Margin="0,0,0,16">
+                    <Border Width="148" Height="148" CornerRadius="4" ClipToBounds="True" Margin="0,0,0,16" BoxShadow="0 4 10 0 #40000000">
                         <Panel Background="#333">
-                            <mi:MaterialIcon Kind="MusicNote" 
-                                             Width="64" Height="64" 
-                                             Foreground="#555"
+                            <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64" Foreground="#555"
                                              IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"/>
-                            <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
-                                   Stretch="UniformToFill"
+                            <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"
                                    IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}}"/>
                         </Panel>
                     </Border>
-
-                    <!-- Title -->
-                    <TextBlock Text="{Binding Name}" 
-                               FontWeight="Bold" 
-                               FontSize="16"
-                               TextTrimming="CharacterEllipsis"
-                               Foreground="{StaticResource TextPrimaryBrush}"/>
-
-                    <!-- Subtitle -->
-                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks'}" 
-                               FontSize="13" 
-                               Margin="0,4,0,0"
-                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="16" TextTrimming="CharacterEllipsis" Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks'}" FontSize="13" Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}"/>
                 </StackPanel>
             </Button>
         </DataTemplate>
@@ -109,13 +91,14 @@
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
         <StyleInclude Source="/Styles/SpotifyTheme.axaml" />
         
-        <!-- Стили для оверлея кнопки Play (нужны для DataTemplate выше) -->
+        <!-- Стили для кнопки Play поверх картинки -->
         <Style Selector="Grid.track-grid Button.play-overlay">
             <Setter Property="Opacity" Value="0"/>
             <Setter Property="Background" Value="#80000000"/>
             <Setter Property="Width" Value="48"/>
             <Setter Property="Height" Value="48"/>
             <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
         <Style Selector="Grid.track-grid:pointerover Button.play-overlay">
             <Setter Property="Opacity" Value="1"/>

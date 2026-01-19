@@ -8,16 +8,19 @@ public class LibraryData
     public Dictionary<string, Playlist> Playlists { get; set; } = new();
     public List<string> LikedTrackIds { get; set; } = new();
     public List<string> RecentlyPlayedIds { get; set; } = new();
-    
-    // Настройки
+
+    // Настройки плеера
     public float Volume { get; set; } = 0.5f;
     public bool ShuffleEnabled { get; set; }
     public RepeatMode RepeatMode { get; set; } = RepeatMode.None;
-    
+
     // Настройки приложения
     public string DownloadPath { get; set; } = string.Empty;
     public bool DiscordRpcEnabled { get; set; } = true;
     public bool AutoPlayOnUrlPaste { get; set; } = true;
+
+    public int LoadBatchSize { get; set; } = 20;        // Сколько грузить за раз (10-50)
+    public bool EnableSmoothLoading { get; set; } = true; // Плавная анимация загрузки
 }
 
 public enum RepeatMode

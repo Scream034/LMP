@@ -1,31 +1,35 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-             xmlns:asyncImage="using:AsyncImageLoader"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             x:Class="MyLiteMusicPlayer.Views.PlaylistView"
-             x:DataType="vm:PlaylistViewModel">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+    xmlns:asyncImage="using:AsyncImageLoader"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    x:Class="MyLiteMusicPlayer.Views.PlaylistView"
+    x:DataType="vm:PlaylistViewModel">
 
     <DockPanel>
         <!-- Header -->
         <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto, *" Margin="0,0,0,32">
-            <!-- Cover -->
-            <Border Grid.Column="0" Width="200" Height="200" CornerRadius="4" ClipToBounds="True" Background="#282828">
-                 <Panel>
+            <Border Grid.Column="0" Width="200" Height="200" CornerRadius="4" ClipToBounds="True"
+                Background="#282828">
+                <Panel>
                     <mi:MaterialIcon Kind="MusicNote" Width="80" Height="80" Foreground="#555"
-                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"/>
-                    <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"/>
-                 </Panel>
+                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
+                    <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
+                        Stretch="UniformToFill" />
+                </Panel>
             </Border>
-            
-            <!-- Info -->
+
             <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
-                <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"/>
-                <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black" Margin="0,4,0,16" TextWrapping="Wrap"/>
-                
+                <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
+                    Foreground="{StaticResource TextSecondaryBrush}" />
+                <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black"
+                    Margin="0,4,0,16" TextWrapping="Wrap" />
+
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks,'}" Foreground="{StaticResource TextSecondaryBrush}"/>
-                    <TextBlock Text="{Binding TotalDuration, StringFormat='{}{0:h}h {0:m}m'}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks,'}"
+                        Foreground="{StaticResource TextSecondaryBrush}" />
+                    <TextBlock Text="{Binding TotalDuration, StringFormat='{}{0:h}h {0:m}m'}"
+                        Foreground="{StaticResource TextSecondaryBrush}" />
                 </StackPanel>
             </StackPanel>
         </Grid>
@@ -33,25 +37,28 @@
         <!-- Actions -->
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="24" Margin="0,0,0,24">
             <Button Classes="play-circle" Command="{Binding PlayAllCommand}">
-                <mi:MaterialIcon Kind="Play" Width="28" Height="28" Foreground="Black"/>
+                <mi:MaterialIcon Kind="Play" Width="28" Height="28" Foreground="Black" />
             </Button>
-            
-            <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}" ToolTip.Tip="Shuffle Play">
-                 <mi:MaterialIcon Kind="Shuffle" Width="24" Height="24"/>
+
+            <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}" ToolTip.Tip="Shuffle">
+                <mi:MaterialIcon Kind="Shuffle" Width="24" Height="24" />
             </Button>
-            
-            <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}" ToolTip.Tip="Download All">
-                 <mi:MaterialIcon Kind="Download" Width="24" Height="24"/>
+
+            <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}"
+                ToolTip.Tip="Download All">
+                <mi:MaterialIcon Kind="Download" Width="24" Height="24" />
             </Button>
         </StackPanel>
 
         <!-- Tracks List -->
+        <!-- Использует глобальный DataTemplate -->
         <ListBox ItemsSource="{Binding Tracks}" Background="Transparent">
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <ContentControl Content="{Binding}" Classes="track-row"/>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
+            <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Margin" Value="0" />
+                </Style>
+            </ListBox.Styles>
         </ListBox>
     </DockPanel>
 </UserControl>

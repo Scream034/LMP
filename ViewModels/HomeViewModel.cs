@@ -15,7 +15,7 @@ namespace MyLiteMusicPlayer.ViewModels;
 public class CategoryItem
 {
     public string Name { get; set; } = "";
-    public string Query { get; set; } = ""; // Пусто для спец. категорий (Recent)
+    public string Query { get; set; } = "";
     public bool IsSpecial { get; set; }
 }
 
@@ -27,17 +27,17 @@ public class HomeViewModel : ViewModelBase
     private readonly DownloadService _downloads;
     private readonly GoogleAuthService _auth;
 
+    // Для фильтрации дубликатов (храним ID всех загруженных треков)
+    private readonly HashSet<string> _loadedTrackIds = new();
+
     [Reactive] public bool IsLoading { get; private set; }
+    [Reactive] public bool HasMoreItems { get; private set; } = true; // Скрыть кнопку, если пусто
     [Reactive] public string Greeting { get; private set; } = string.Empty;
 
-    // Категории
     public ObservableCollection<CategoryItem> Categories { get; } = new();
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
-
-    // Контент (Используем ObservableCollection для UI)
     public ObservableCollection<TrackItemViewModel> ActiveTracks { get; } = new();
 
-    // Команды
     public ReactiveCommand<CategoryItem, Unit> RefreshCommand { get; }
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
 
@@ -57,21 +57,16 @@ public class HomeViewModel : ViewModelBase
         UpdateGreeting();
         InitializeCategories();
 
-        // Команда обновления (смена категории)
         RefreshCommand = ReactiveCommand.CreateFromTask<CategoryItem>(async (cat) =>
         {
-            if (cat != null)
-            {
-                SelectedCategory = cat; 
-            }
+            if (cat != null) SelectedCategory = cat;
             await Task.CompletedTask;
         });
 
-        // Команда подгрузки (Infinite Scroll)
         LoadMoreCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            if (!IsLoading && SelectedCategory != null && !SelectedCategory.IsSpecial)
-                await LoadCategoryDataAsync(SelectedCategory, reset: false);
+            if (!IsLoading && HasMoreItems)
+                await LoadCategoryDataAsync(SelectedCategory!, reset: false);
         });
 
         // Реакция на смену категории
@@ -89,25 +84,17 @@ public class HomeViewModel : ViewModelBase
     {
         Categories.Add(new CategoryItem { Name = "Recently Played", IsSpecial = true });
         Categories.Add(new CategoryItem { Name = "Trending", Query = "trending music" });
-        Categories.Add(new CategoryItem { Name = "My Mix", Query = "My Supermix" });
+        Categories.Add(new CategoryItem { Name = "My Mix", Query = "My Supermix" }); // Youtube Mix
         Categories.Add(new CategoryItem { Name = "Lo-Fi", Query = "lofi hip hop radio" });
-        Categories.Add(new CategoryItem { Name = "Rock", Query = "best rock music" });
-        Categories.Add(new CategoryItem { Name = "Electronic", Query = "electronic dance music" });
-        Categories.Add(new CategoryItem { Name = "Focus", Query = "deep focus music" });
-        Categories.Add(new CategoryItem { Name = "Sleep", Query = "sleep music rain" });
         Categories.Add(new CategoryItem { Name = "Phonk", Query = "best phonk music" });
-        Categories.Add(new CategoryItem { Name = "Jazz", Query = "relaxing jazz" });
+        Categories.Add(new CategoryItem { Name = "Rock", Query = "rock hits" });
+        Categories.Add(new CategoryItem { Name = "Jazz", Query = "jazz relaxing" });
     }
 
     private void UpdateGreeting()
     {
-        var hour = DateTime.Now.Hour;
-        Greeting = hour switch
-        {
-            < 12 => "Good morning",
-            < 18 => "Good afternoon",
-            _ => "Good evening"
-        };
+        var h = DateTime.Now.Hour;
+        Greeting = h switch { < 12 => "Good morning", < 18 => "Good afternoon", _ => "Good evening" };
     }
 
     private async Task LoadCategoryDataAsync(CategoryItem category, bool reset)
@@ -117,22 +104,31 @@ public class HomeViewModel : ViewModelBase
 
         try
         {
-            if (reset) ActiveTracks.Clear();
+            if (reset)
+            {
+                ActiveTracks.Clear();
+                _loadedTrackIds.Clear();
+                HasMoreItems = true;
+            }
 
-            List<TrackInfo> newTracks = new();
+            List<TrackInfo> rawTracks = new();
+
+            // 1. ПОЛУЧАЕМ НАСТРОЙКИ
+            int loadCount = _library.Data.LoadBatchSize; // Берем из настроек
+            bool useSmoothLoading = _library.Data.EnableSmoothLoading; // Берем из настроек
+
+            // Защита от странных значений
+            if (loadCount < 5) loadCount = 5;
+            if (loadCount > 100) loadCount = 100;
 
             if (category.Name == "Recently Played")
             {
                 if (reset)
                 {
-                    var recent = _library.GetRecentlyPlayed(100);
-                    newTracks.AddRange(recent);
+                    // Для локальной истории грузим x2 от батча, чтобы заполнить экран
+                    rawTracks = _library.GetRecentlyPlayed(loadCount * 2);
+                    HasMoreItems = false;
                 }
-            }
-            else if (category.Name == "My Mix" && _auth.IsAuthenticated)
-            {
-                var recs = await _youtube.GetPersonalRecommendationsAsync(20);
-                newTracks.AddRange(recs);
             }
             else
             {
@@ -141,38 +137,64 @@ public class HomeViewModel : ViewModelBase
                 if (reset)
                 {
                     if (category.Name == "Trending")
-                        newTracks = await _youtube.GetTrendingAsync(25);
+                        rawTracks = await _youtube.GetTrendingAsync(loadCount);
                     else
-                        newTracks = await _youtube.SearchAsync(query, 25);
+                        rawTracks = await _youtube.SearchAsync(query, loadCount);
                 }
                 else
                 {
                     if (ActiveTracks.Count > 0)
                     {
-                        int skip = Math.Max(0, ActiveTracks.Count - 5);
-                        var seed = ActiveTracks[skip + Random.Shared.Next(Math.Min(5, ActiveTracks.Count - skip))].Track;
-                        var related = await _youtube.GetRadioAsync(seed, 15);
-
-                        foreach (var r in related)
-                        {
-                            if (!ActiveTracks.Any(at => at.Track.Id == r.Id))
-                                newTracks.Add(r);
-                        }
+                        var seedTrack = ActiveTracks[Random.Shared.Next(Math.Max(0, ActiveTracks.Count - 5), ActiveTracks.Count)].Track;
+                        rawTracks = await _youtube.GetRadioAsync(seedTrack, loadCount);
                     }
                 }
             }
 
-            foreach (var track in newTracks)
+            // Фильтрация дубликатов
+            var uniqueNewTracks = new List<TrackInfo>();
+            foreach (var t in rawTracks)
             {
-                if (!ActiveTracks.Any(x => x.Track.Id == track.Id))
+                if (!_loadedTrackIds.Contains(t.Id))
                 {
-                    ActiveTracks.Add(CreateTrackVM(track));
+                    _loadedTrackIds.Add(t.Id);
+                    uniqueNewTracks.Add(t);
+                }
+            }
+
+            if (uniqueNewTracks.Count == 0 && !reset)
+            {
+                HasMoreItems = false;
+            }
+            else
+            {
+                // 2. ИСПОЛЬЗУЕМ НАСТРОЙКУ АНИМАЦИИ
+                if (useSmoothLoading)
+                {
+                    // Плавная загрузка
+                    foreach (var track in uniqueNewTracks)
+                    {
+                        var vm = CreateTrackVM(track);
+                        ActiveTracks.Add(vm);
+                        await Task.Delay(reset ? 10 : 25); // Задержка для эффекта
+                    }
+                }
+                else
+                {
+                    // Моментальная загрузка
+                    // Лучше использовать AddRange, если коллекция поддерживает, или цикл без await
+                    foreach (var track in uniqueNewTracks)
+                    {
+                        var vm = CreateTrackVM(track);
+                        ActiveTracks.Add(vm);
+                    }
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading category {category.Name}: {ex.Message}");
+            Console.WriteLine($"Load Error: {ex.Message}");
+            HasMoreItems = false;
         }
         finally
         {
@@ -182,6 +204,7 @@ public class HomeViewModel : ViewModelBase
 
     private TrackItemViewModel CreateTrackVM(TrackInfo track)
     {
+        // Синхронизация с библиотекой (лайки, скачано)
         if (_library.HasTrack(track.Id))
         {
             var existing = _library.GetTrack(track.Id);
@@ -196,6 +219,8 @@ public class HomeViewModel : ViewModelBase
         return new TrackItemViewModel(track, _audio, _library, _downloads,
             onPlay: t =>
             {
+                // При клике на трек в Home - очищаем очередь и играем этот трек,
+                // а остальные из списка добавляем в очередь
                 _audio.ClearQueue();
                 _audio.PlayTrack(t);
 
@@ -205,14 +230,7 @@ public class HomeViewModel : ViewModelBase
                     if (found) _audio.Enqueue(vm.Track);
                     if (vm.Track.Id == t.Id) found = true;
                 }
-
                 _library.AddToRecentlyPlayed(t);
-            },
-            onRadio: async t =>
-            {
-                var radio = await _youtube.GetRadioAsync(t);
-                _audio.ClearQueue();
-                _audio.EnqueueRange(radio);
             });
     }
 }

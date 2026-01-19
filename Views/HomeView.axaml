@@ -1,43 +1,32 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-             xmlns:mi="using:Material.Icons.Avalonia"
              x:Class="MyLiteMusicPlayer.Views.HomeView"
              x:DataType="vm:HomeViewModel">
 
     <Grid RowDefinitions="Auto, *">
-
-        <!-- Верхняя часть: Приветствие и Категории -->
+        <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,24">
             <TextBlock Text="{Binding Greeting}"
-                       FontSize="32"
-                       FontWeight="Bold"
+                       FontSize="32" FontWeight="Bold"
                        Foreground="{StaticResource TextPrimaryBrush}"
                        Margin="0,0,0,16" />
 
-            <!-- Categories Selector (Таблетки) -->
+            <!-- Categories -->
             <ListBox ItemsSource="{Binding Categories}"
                      SelectedItem="{Binding SelectedCategory}"
-                     Background="Transparent"
-                     Margin="0,0,0,8">
-                
+                     Background="Transparent" Margin="0,0,0,8">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel Orientation="Horizontal" Spacing="0" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
-
-                <!-- Шаблон текста кнопки категории -->
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:CategoryItem">
-                        <TextBlock Text="{Binding Name}" 
-                                   FontWeight="SemiBold"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Center"/>
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
-
-                <!-- Стили для таблеток категорий -->
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem">
                         <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
@@ -46,48 +35,42 @@
                         <Setter Property="Margin" Value="0,0,10,0" />
                         <Setter Property="CornerRadius" Value="20" />
                         <Setter Property="Cursor" Value="Hand" />
-                        <Setter Property="VerticalContentAlignment" Value="Center"/>
                     </Style>
-
-                    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
-                        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
-                    </Style>
-
                     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
                         <Setter Property="Background" Value="{StaticResource TextPrimaryBrush}" />
                         <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}" />
                     </Style>
-                    
-                    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter">
-                        <Setter Property="Background" Value="#DDDDDD" />
-                        <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}" />
+                    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+                        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
                     </Style>
                 </ListBox.Styles>
             </ListBox>
         </StackPanel>
 
-        <!-- Основной контент -->
-        <ScrollViewer Grid.Row="1"
-                      x:Name="MainScrollViewer"
-                      ScrollChanged="OnScrollChanged">
+        <!-- Content -->
+        <ScrollViewer Grid.Row="1" x:Name="MainScrollViewer">
             <StackPanel>
+                <!-- Initial Load Spinner (Скрыт, если есть треки) -->
                 <ProgressBar IsIndeterminate="True"
                              HorizontalAlignment="Center"
                              IsVisible="{Binding IsLoading}"
+                             Foreground="{StaticResource AccentBrush}"
                              Height="4" Width="200"
-                             Margin="0,0,0,20" />
+                             Margin="0,0,0,20">
+                     <!-- Показываем этот бар только если список пуст (первая загрузка) -->
+                     <ProgressBar.IsVisible>
+                         <MultiBinding Converter="{x:Static BoolConverters.And}">
+                             <Binding Path="IsLoading"/>
+                             <Binding Path="!ActiveTracks.Count"/>
+                         </MultiBinding>
+                     </ProgressBar.IsVisible>
+                </ProgressBar>
 
-                <!-- 
-                   Список треков.
-                   Мы НЕ задаем ItemTemplate, так как он определен глобально в App.axaml.
-                   Avalonia сама найдет шаблон для TrackItemViewModel.
-                -->
+                <!-- Track List (Uses Global DataTemplate) -->
                 <ListBox ItemsSource="{Binding ActiveTracks}" 
                          Background="Transparent"
                          SelectionMode="Single">
-                    
-                    <!-- Убираем отступы у элементов списка для плотного вида -->
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem">
                             <Setter Property="Padding" Value="0"/>
@@ -103,13 +86,37 @@
                     </ListBox.Styles>
                 </ListBox>
 
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20"
-                            IsVisible="{Binding IsLoading}">
-                    <TextBlock Text="Loading more..."
-                               Foreground="{StaticResource TextSecondaryBrush}" />
+                <!-- Load More Section -->
+                <StackPanel Margin="0,24,0,40" HorizontalAlignment="Center" 
+                            IsVisible="{Binding HasMoreItems}">
+                    
+                    <!-- Button -->
+                    <Button Command="{Binding LoadMoreCommand}"
+                            Content="Load More"
+                            IsVisible="{Binding !IsLoading}"
+                            HorizontalAlignment="Center"
+                            Background="{StaticResource BgElevatedBrush}"
+                            Foreground="{StaticResource TextPrimaryBrush}"
+                            CornerRadius="20" Padding="32,12"
+                            Cursor="Hand">
+                        <Button.Styles>
+                            <Style Selector="Button:pointerover">
+                                <Setter Property="Background" Value="{StaticResource BgHighlightBrush}"/>
+                            </Style>
+                        </Button.Styles>
+                    </Button>
+
+                    <!-- Loading Text (Spinner inside) -->
+                    <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsLoading}">
+                        <ProgressBar IsIndeterminate="True" Width="20" Height="20" 
+                                     Foreground="{StaticResource AccentBrush}"
+                                     Theme="{StaticResource FluentProgressBar}"/>
+                        <TextBlock Text="Loading..." VerticalAlignment="Center" 
+                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                    </StackPanel>
                 </StackPanel>
 
-                <Panel Height="100" />
+                <Panel Height="60" />
             </StackPanel>
         </ScrollViewer>
     </Grid>
