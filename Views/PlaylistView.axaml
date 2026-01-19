@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     xmlns:asyncImage="using:AsyncImageLoader"
@@ -20,13 +20,13 @@
             </Border>
 
             <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
-                <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
+                <TextBlock Text="{Binding L[Playlist_Type]}" FontSize="12" FontWeight="Bold"
                     Foreground="{StaticResource TextSecondaryBrush}" />
                 <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black"
                     Margin="0,4,0,16" TextWrapping="Wrap" />
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks,'}"
+                    <TextBlock Text="{Binding FormattedTrackCount}"
                         Foreground="{StaticResource TextSecondaryBrush}" />
                     <TextBlock Text="{Binding TotalDuration, StringFormat='{}{0:h}h {0:m}m'}"
                         Foreground="{StaticResource TextSecondaryBrush}" />

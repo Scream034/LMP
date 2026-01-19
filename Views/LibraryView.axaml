@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
              x:Class="MyLiteMusicPlayer.Views.LibraryView"
@@ -6,21 +6,21 @@
 
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="16" Margin="0,0,0,24">
-            <TextBlock Text="Your Library" FontSize="32" FontWeight="Bold"/>
+            <TextBlock Text="{Binding L[Library_Title]}" FontSize="32" FontWeight="Bold"/>
             
             <Button Command="{Binding CreatePlaylistCommand}" 
-                    Content="New Playlist"
+                    Content="{Binding L[Library_NewPlaylist]}"
                     VerticalAlignment="Center"/>
                     
             <Button Command="{Binding SyncAccountPlaylistsCommand}" 
-                    Content="Sync YouTube"
+                    Content="{Binding L[Library_SyncYoutube]}"
                     VerticalAlignment="Center"/>
         </StackPanel>
 
         <!-- Создание плейлиста -->
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" 
                     IsVisible="{Binding NewPlaylistName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <TextBox Text="{Binding NewPlaylistName}" Watermark="Playlist Name" Width="200"/>
+            <TextBox Text="{Binding NewPlaylistName}" Watermark="{Binding L[Library_PlaylistNamePlaceholder]}" Width="200"/>
         </StackPanel>
 
         <!-- Сетка плейлистов -->

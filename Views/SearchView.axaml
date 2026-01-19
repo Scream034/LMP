@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     xmlns:mi="using:Material.Icons.Avalonia"
@@ -8,11 +8,11 @@
     <DockPanel>
         <!-- Header -->
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
-            <TextBlock Text="Search" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
+            <TextBlock Text="{Binding L[Sidebar_Search]}" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
 
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <TextBox Classes="search-box"
-                    Watermark="What do you want to play?"
+                    Watermark="{Binding L[Search_Placeholder]}"
                     Text="{Binding SearchQuery}"
                     Width="360" HorizontalAlignment="Left"
                     CornerRadius="20" Padding="15,10">

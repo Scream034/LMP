@@ -140,6 +140,22 @@ public sealed class LocalizationService : INotifyPropertyChanged
             return value;
         return fallback ?? $"[{key}]";
     }
+
+    public string RawGet(string key) => _resources[key];
+
+    public string GetPlural(string key, int number)
+    {
+        var forms = this[key].Split('|', StringSplitOptions.RemoveEmptyEntries);
+        if (forms.Length < 3) return forms[0]; // Fallback
+
+        // Правила для русского языка
+        int n = Math.Abs(number) % 100;
+        int n1 = n % 10;
+        if (n > 10 && n < 20) return $"{number} {forms[2]}";
+        if (n1 > 1 && n1 < 5) return $"{number} {forms[1]}";
+        if (n1 == 1) return $"{number} {forms[0]}";
+        return $"{number} {forms[2]}";
+    }
 }
 
 public class LanguageItem

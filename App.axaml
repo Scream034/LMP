@@ -79,7 +79,7 @@
                         </Panel>
                     </Border>
                     <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="16" TextTrimming="CharacterEllipsis" Foreground="{StaticResource TextPrimaryBrush}"/>
-                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks'}" FontSize="13" Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <TextBlock Text="{Binding FormattedTrackCount}" FontSize="13" Margin="0,4,0,0" Foreground="{StaticResource TextSecondaryBrush}"/>
                 </StackPanel>
             </Button>
         </DataTemplate>

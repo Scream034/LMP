@@ -11,13 +11,37 @@ using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
+public class PlaylistCardViewModel : ViewModelBase
+{
+    public Playlist Playlist { get; }
+    public string Name => Playlist.Name;
+    public string? ThumbnailUrl => Playlist.ThumbnailUrl;
+    public int TrackCount => Playlist.TrackCount;
+    public bool IsLocal => Playlist.IsLocal;
+    public bool IsLiked => Playlist.Id == "liked";
+
+    public ReactiveCommand<Unit, Unit> OpenCommand { get; }
+
+    public string FormattedTrackCount => LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
+
+    public PlaylistCardViewModel(Playlist playlist, Action<string> onOpen)
+    {
+        Playlist = playlist;
+        OpenCommand = ReactiveCommand.Create(() => onOpen(playlist.Id));
+
+        this.WhenAnyValue(x => x.TrackCount)
+    .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)));
+
+        LocalizationService.Instance.LanguageChanged += (s, e) =>
+            this.RaisePropertyChanged(nameof(FormattedTrackCount));
+    }
+}
+
 public class PlaylistViewModel : ViewModelBase
 {
     private readonly LibraryService _library;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
-
-    private string? _playlistId;
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
@@ -30,6 +54,8 @@ public class PlaylistViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
     public ReactiveCommand<Unit, Unit> ShufflePlayCommand { get; }
     public ReactiveCommand<Unit, Unit> DownloadAllCommand { get; }
+
+    public string FormattedTrackCount => LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
     public PlaylistViewModel(
         LibraryService library,
@@ -65,11 +91,16 @@ public class PlaylistViewModel : ViewModelBase
                 _downloads.StartDownload(item.Track);
             }
         }, hasTracks);
+
+        this.WhenAnyValue(x => x.TrackCount)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)));
+
+        LocalizationService.Instance.LanguageChanged += (s, e) =>
+            this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
 
     public void LoadPlaylist(string playlistId)
     {
-        _playlistId = playlistId;
         var playlist = _library.GetPlaylist(playlistId);
 
         if (playlist == null) return;

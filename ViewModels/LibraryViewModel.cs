@@ -7,27 +7,8 @@ using System;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Threading.Tasks;
 
 namespace MyLiteMusicPlayer.ViewModels;
-
-public class PlaylistCardViewModel : ViewModelBase
-{
-    public Playlist Playlist { get; }
-    public string Name => Playlist.Name;
-    public string? ThumbnailUrl => Playlist.ThumbnailUrl;
-    public int TrackCount => Playlist.TrackCount;
-    public bool IsLocal => Playlist.IsLocal;
-    public bool IsLiked => Playlist.Id == "liked";
-
-    public ReactiveCommand<Unit, Unit> OpenCommand { get; }
-
-    public PlaylistCardViewModel(Playlist playlist, Action<string> onOpen)
-    {
-        Playlist = playlist;
-        OpenCommand = ReactiveCommand.Create(() => onOpen(playlist.Id));
-    }
-}
 
 public class LibraryViewModel : ViewModelBase
 {

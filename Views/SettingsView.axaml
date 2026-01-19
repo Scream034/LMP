@@ -1,4 +1,4 @@
-<!-- Views/SettingsView.axaml -->
+﻿<!-- Views/SettingsView.axaml -->
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
@@ -32,32 +32,35 @@
         <StackPanel Spacing="32" MaxWidth="700" Margin="32">
 
             <!-- Заголовок -->
-            <TextBlock Text="{Binding L_Title}" FontSize="32" FontWeight="Bold" />
+            <TextBlock Text="{Binding L[Settings_Title]}" FontSize="32" FontWeight="Bold" />
 
             <!-- СЕКЦИЯ: АККАУНТ И ЯЗЫК -->
             <StackPanel Spacing="16">
-                <TextBlock Classes="section-header" Text="{Binding L_AccountLanguage}" />
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_Account_Language]}" />
 
                 <Grid ColumnDefinitions="*, Auto" VerticalAlignment="Center">
                     <StackPanel>
-                        <TextBlock Text="{Binding UserEmail, FallbackValue='Not signed in'}"
+                        <!-- Отображение Email или заглушки -->
+                        <TextBlock Text="{Binding DisplayEmail}"
                             FontWeight="SemiBold" />
-                        <TextBlock
-                            Text="{Binding IsAuthenticated, Converter={StaticResource BoolToSelector}, ConverterParameter='Authenticated|Guest Mode'}"
-                            Foreground="{StaticResource TextSecondaryBrush}" FontSize="13" />
+
+                        <!-- Отображение статуса (Авторизован/Гость) -->
+                        <TextBlock Text="{Binding AuthStatusText}"
+                            Foreground="{StaticResource TextSecondaryBrush}"
+                            FontSize="13" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
                         <Button Command="{Binding LoginCommand}"
-                            Content="{Binding L_Login}"
+                            Content="{Binding L[Auth_Login]}"
                             IsVisible="{Binding !IsAuthenticated}" Classes="accent" />
                         <Button Command="{Binding LogoutCommand}"
-                            Content="{Binding L_Logout}"
+                            Content="{Binding L[Auth_Logout]}"
                             IsVisible="{Binding IsAuthenticated}" />
                     </StackPanel>
                 </Grid>
 
                 <Grid ColumnDefinitions="*, Auto" Classes="setting-row">
-                    <TextBlock Classes="setting-title" Text="{Binding L_Language}" />
+                    <TextBlock Classes="setting-title" Text="{Binding L[Language]}" />
                     <ComboBox Grid.Column="1"
                         ItemsSource="{Binding Languages}"
                         SelectedItem="{Binding SelectedLanguage}"
@@ -68,12 +71,12 @@
 
             <!-- СЕКЦИЯ: АУДИО -->
             <StackPanel Spacing="16">
-                <TextBlock Classes="section-header" Text="{Binding L_Audio}" />
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_Audio]}" />
 
                 <Grid Classes="setting-row" ColumnDefinitions="*, 200">
                     <StackPanel Margin="0,0,24,0">
-                        <TextBlock Classes="setting-title" Text="{Binding L_MaxVolume}" />
-                        <TextBlock Classes="setting-desc" Text="{Binding L_MaxVolumeDesc}" />
+                        <TextBlock Classes="setting-title" Text="{Binding L[Audio_MaxVolume]}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding L[Audio_MaxVolumeDesc]}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                         <TextBlock Text="{Binding MaxVolumeLimit, StringFormat='{}{0}%'}"
@@ -85,8 +88,8 @@
 
                 <Grid Classes="setting-row" ColumnDefinitions="*, 200">
                     <StackPanel Margin="0,0,24,0">
-                        <TextBlock Classes="setting-title" Text="{Binding L_Gain}" />
-                        <TextBlock Classes="setting-desc" Text="{Binding L_GainDesc}" />
+                        <TextBlock Classes="setting-title" Text="{Binding L[Audio_Gain]}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding L[Audio_GainDesc]}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                         <TextBlock Text="{Binding TargetGainDb, StringFormat='{}{0:F1} dB'}"
@@ -98,22 +101,22 @@
 
             <!-- СЕКЦИЯ: ОБЩЕЕ -->
             <StackPanel Spacing="16">
-                <TextBlock Classes="section-header" Text="{Binding L_General}" />
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_General]}" />
 
                 <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
-                    <TextBlock Classes="setting-title" Text="{Binding L_Discord}" />
+                    <TextBlock Classes="setting-title" Text="{Binding L[General_Discord]}" />
                     <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiscordRpcEnabled}"
                         OnContent="" OffContent="" />
                 </Grid>
 
                 <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
-                    <TextBlock Classes="setting-title" Text="{Binding L_AutoPaste}" />
+                    <TextBlock Classes="setting-title" Text="{Binding L[General_AutoPaste]}" />
                     <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoPlayOnPaste}"
                         OnContent="" OffContent="" />
                 </Grid>
 
                 <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
-                    <TextBlock Classes="setting-title" Text="{Binding L_SmoothLoading}" />
+                    <TextBlock Classes="setting-title" Text="{Binding L[Perf_SmoothLoading]}" />
                     <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSmoothLoading}"
                         OnContent="" OffContent="" />
                 </Grid>
@@ -121,26 +124,26 @@
 
             <!-- СЕКЦИЯ: ХРАНИЛИЩЕ -->
             <StackPanel Spacing="16">
-                <TextBlock Classes="section-header" Text="{Binding L_Storage}" />
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_Storage_Data]}" />
 
                 <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
                     <StackPanel>
-                        <TextBlock Classes="setting-title" Text="{Binding L_DownloadPath}" />
+                        <TextBlock Classes="setting-title" Text="{Binding L[Storage_Path]}" />
                         <TextBlock Classes="setting-desc" Text="{Binding DownloadPath}"
                             TextTrimming="CharacterEllipsis" MaxWidth="400" />
                     </StackPanel>
                     <Button Grid.Column="1"
-                        Content="{Binding L_ChangeFolder}"
+                        Content="{Binding L[Storage_Change]}"
                         Command="{Binding BrowseDownloadPathCommand}" />
                 </Grid>
 
                 <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,8,0,0">
-                    <Button Content="{Binding L_ClearHistory}"
+                    <Button Content="{Binding L[Storage_ClearHistory]}"
                         Command="{Binding ClearHistoryCommand}"
                         Background="Transparent"
                         BorderBrush="{StaticResource BgHighlightBrush}"
                         BorderThickness="1" />
-                    <Button Content="{Binding L_ResetApp}"
+                    <Button Content="{Binding L[Storage_ResetApp]}"
                         Command="{Binding ResetLibraryCommand}"
                         Foreground="#FF6B6B"
                         Background="Transparent" />

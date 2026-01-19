@@ -1,4 +1,4 @@
-<!-- Views/MainWindow.axaml -->
+﻿<!-- Views/MainWindow.axaml -->
 <Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
@@ -35,21 +35,21 @@
                         <Button Classes="sidebar-btn" Command="{Binding NavigateHomeCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="Home" Width="24" Height="24" />
-                                <TextBlock Text="Home" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Sidebar_Home]}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
 
                         <Button Classes="sidebar-btn" Command="{Binding NavigateSearchCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
-                                <TextBlock Text="Search" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Sidebar_Search]}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
 
                         <Button Classes="sidebar-btn" Command="{Binding NavigateLibraryCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24" />
-                                <TextBlock Text="Library" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Sidebar_Library]}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                     </StackPanel>
@@ -84,7 +84,7 @@
                                     <TextBlock Text="{Binding UserName, FallbackValue='Guest'}"
                                         FontWeight="SemiBold"
                                         Foreground="{StaticResource TextPrimaryBrush}" />
-                                    <TextBlock Text="Settings"
+                                    <TextBlock Text="{Binding L[Sidebar_Settings]}"
                                         FontSize="12"
                                         Foreground="{StaticResource TextMutedBrush}" />
                                 </StackPanel>

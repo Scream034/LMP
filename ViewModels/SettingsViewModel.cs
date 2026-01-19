@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -17,27 +16,6 @@ public class SettingsViewModel : ViewModelBase
     private readonly LibraryService _library;
     private readonly GoogleAuthService _auth;
     private readonly IDialogService _dialog;
-
-    // === ЛОКАЛИЗАЦИЯ (прямые свойства для надёжного биндинга) ===
-    [Reactive] public string L_Title { get; private set; } = "";
-    [Reactive] public string L_AccountLanguage { get; private set; } = "";
-    [Reactive] public string L_Audio { get; private set; } = "";
-    [Reactive] public string L_Storage { get; private set; } = "";
-    [Reactive] public string L_General { get; private set; } = "";
-    [Reactive] public string L_Login { get; private set; } = "";
-    [Reactive] public string L_Logout { get; private set; } = "";
-    [Reactive] public string L_Language { get; private set; } = "";
-    [Reactive] public string L_MaxVolume { get; private set; } = "";
-    [Reactive] public string L_MaxVolumeDesc { get; private set; } = "";
-    [Reactive] public string L_Gain { get; private set; } = "";
-    [Reactive] public string L_GainDesc { get; private set; } = "";
-    [Reactive] public string L_DownloadPath { get; private set; } = "";
-    [Reactive] public string L_ChangeFolder { get; private set; } = "";
-    [Reactive] public string L_ClearHistory { get; private set; } = "";
-    [Reactive] public string L_ResetApp { get; private set; } = "";
-    [Reactive] public string L_Discord { get; private set; } = "";
-    [Reactive] public string L_AutoPaste { get; private set; } = "";
-    [Reactive] public string L_SmoothLoading { get; private set; } = "";
 
     // === НАСТРОЙКИ ===
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
@@ -64,6 +42,16 @@ public class SettingsViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> LoginCommand { get; }
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
 
+    // Свойство для отображения Email или текста "Не вошел"
+    public string DisplayEmail => string.IsNullOrWhiteSpace(UserEmail)
+        ? L["Auth_NotSignedIn"]
+        : UserEmail;
+
+    // Свойство для статуса авторизации
+    public string AuthStatusText => IsAuthenticated
+        ? L["Auth_LoggedIn"]
+        : L["Auth_Guest"];
+
     public SettingsViewModel(LibraryService library, GoogleAuthService auth, IDialogService dialog)
     {
         _library = library;
@@ -73,12 +61,23 @@ public class SettingsViewModel : ViewModelBase
         // Загружаем настройки
         LoadSettings();
         UpdateAuthState();
-        UpdateLocalizedStrings();
-
-        // Подписка на смену языка
-        LocalizationService.Instance.LanguageChanged += (_, _) => UpdateLocalizedStrings();
 
         // === ПОДПИСКИ НА ИЗМЕНЕНИЯ ===
+
+        // Магия: когда меняется язык или статус входа, уведомляем интерфейс об обновлении
+        LocalizationService.Instance.LanguageChanged += (s, e) =>
+        {
+            this.RaisePropertyChanged(nameof(DisplayEmail));
+            this.RaisePropertyChanged(nameof(AuthStatusText));
+        };
+
+        // Если IsAuthenticated меняется, тоже обновляем текст
+        this.WhenAnyValue(x => x.IsAuthenticated, x => x.UserEmail)
+            .Subscribe(_ =>
+            {
+                this.RaisePropertyChanged(nameof(DisplayEmail));
+                this.RaisePropertyChanged(nameof(AuthStatusText));
+            });
 
         // Язык
         this.WhenAnyValue(x => x.SelectedLanguage)
@@ -182,31 +181,6 @@ public class SettingsViewModel : ViewModelBase
         // Установка языка
         SelectedLanguage = Languages.FirstOrDefault(x => x.Code == _library.Data.LanguageCode)
                            ?? Languages[0];
-    }
-
-    private void UpdateLocalizedStrings()
-    {
-        var loc = LocalizationService.Instance;
-
-        L_Title = loc["Settings_Title"];
-        L_AccountLanguage = loc["Settings_Account_Language"].ToUpperInvariant();
-        L_Audio = loc["Settings_Audio"].ToUpperInvariant();
-        L_Storage = loc["Settings_Storage_Data"].ToUpperInvariant();
-        L_General = loc["Settings_General"].ToUpperInvariant();
-        L_Login = loc["Auth_Login"];
-        L_Logout = loc["Auth_Logout"];
-        L_Language = loc["Language"];
-        L_MaxVolume = loc["Audio_MaxVolume"];
-        L_MaxVolumeDesc = loc["Audio_MaxVolumeDesc"];
-        L_Gain = loc["Audio_Gain"];
-        L_GainDesc = loc["Audio_GainDesc"];
-        L_DownloadPath = loc["Storage_Path"];
-        L_ChangeFolder = loc["Storage_Change"];
-        L_ClearHistory = loc["Storage_ClearHistory"];
-        L_ResetApp = loc["Storage_ResetApp"];
-        L_Discord = loc["General_Discord"];
-        L_AutoPaste = loc["General_AutoPaste"];
-        L_SmoothLoading = loc["Perf_SmoothLoading"];
     }
 
     private async Task BrowseDownloadPathAsync()

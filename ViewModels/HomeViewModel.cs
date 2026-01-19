@@ -129,7 +129,7 @@ public class HomeViewModel : ViewModelBase, IDisposable
     private void UpdateGreeting()
     {
         var h = DateTime.Now.Hour;
-        Greeting = h switch { < 12 => "Good morning", < 18 => "Good afternoon", _ => "Good evening" };
+        Greeting = h switch { < 12 => L["Home_Greeting_Morning"], < 18 => L["Home_Greeting_Afternoon"], _ => L["Home_Greeting_Evening"] };
     }
 
     private async Task LoadCategoryDataAsync(CategoryItem category, bool reset)
