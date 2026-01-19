@@ -8,18 +8,22 @@ namespace MyLiteMusicPlayer.Services;
 
 public class AudioEngine : IDisposable
 {
-    private readonly IWavePlayer _outputDevice;
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;
     private readonly DownloadService _downloadService;
-    private readonly HttpClient _httpClient;
+
+    // Устройство вывода - пересоздаём при ошибках
+    private IWavePlayer? _outputDevice;
+    private readonly object _deviceLock = new();
 
     private WaveStream? _currentStream;
     private VolumeSampleProvider? _volumeControl;
 
-    private CancellationTokenSource? _streamCts;
-    private readonly object _lock = new();
-    private Guid _currentSessionId;
+    // Ключевое: семафор гарантирует что только ОДНА операция воспроизведения активна
+    private readonly SemaphoreSlim _playbackSemaphore = new(1, 1);
+
+    private CancellationTokenSource? _positionLoopCts;
+    private volatile int _sessionVersion; // Атомарный счётчик сессий
     private bool _isManualStop;
     private float _userVolumeMultiplier = 1.0f;
 
@@ -28,14 +32,14 @@ public class AudioEngine : IDisposable
     private int _historyIndex = -1;
 
     public TrackInfo? CurrentTrack { get; private set; }
-    public bool IsPlaying => _outputDevice.PlaybackState == PlaybackState.Playing;
-    public bool IsPaused => _outputDevice.PlaybackState == PlaybackState.Paused;
+    public bool IsPlaying => _outputDevice?.PlaybackState == PlaybackState.Playing;
+    public bool IsPaused => _outputDevice?.PlaybackState == PlaybackState.Paused;
 
     private TimeSpan _currentPosition;
     public TimeSpan CurrentPosition => _currentPosition;
     public TimeSpan TotalDuration => _currentStream?.TotalTime ?? CurrentTrack?.Duration ?? TimeSpan.Zero;
 
-    private bool _isLoading;
+    private volatile bool _isLoading;
     public bool IsLoading
     {
         get => _isLoading;
@@ -67,41 +71,46 @@ public class AudioEngine : IDisposable
         _library = library;
         _downloadService = downloadService;
 
-        // HTTP клиент для стриминга
-        _httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromMinutes(30) // Долгие треки
-        };
-
-        _outputDevice = new WaveOutEvent
-        {
-            DesiredLatency = 150, // Уменьшаем для быстрого старта
-            NumberOfBuffers = 3
-        };
-        _outputDevice.PlaybackStopped += OnDevicePlaybackStopped;
+        InitializeOutputDevice();
 
         _userVolumeMultiplier = _library.Data.Volume;
         ShuffleEnabled = _library.Data.ShuffleEnabled;
         RepeatMode = _library.Data.RepeatMode;
     }
 
+    private void InitializeOutputDevice()
+    {
+        lock (_deviceLock)
+        {
+            try
+            {
+                _outputDevice?.Dispose();
+            }
+            catch { }
+
+            _outputDevice = new WaveOutEvent
+            {
+                DesiredLatency = 150,
+                NumberOfBuffers = 3
+            };
+            _outputDevice.PlaybackStopped += OnDevicePlaybackStopped;
+        }
+    }
+
     #region Volume Control
 
     public void SetVolume(float multiplier)
     {
-        lock (_lock)
+        _userVolumeMultiplier = Math.Clamp(multiplier, 0f, 4f);
+
+        _library.Data.Volume = _userVolumeMultiplier;
+        _library.Save();
+
+        if (_volumeControl != null)
         {
-            _userVolumeMultiplier = Math.Clamp(multiplier, 0f, 4f);
-
-            _library.Data.Volume = _userVolumeMultiplier;
-            _library.Save();
-
-            if (_volumeControl != null)
-            {
-                float dbGain = _library.Data.TargetGainDb;
-                float dbMultiplier = (float)Math.Pow(10, dbGain / 20.0);
-                _volumeControl.Volume = _userVolumeMultiplier * dbMultiplier;
-            }
+            float dbGain = _library.Data.TargetGainDb;
+            float dbMultiplier = (float)Math.Pow(10, dbGain / 20.0);
+            _volumeControl.Volume = _userVolumeMultiplier * dbMultiplier;
         }
     }
 
@@ -115,40 +124,156 @@ public class AudioEngine : IDisposable
     {
         if (track == null) return;
 
-        var sessionId = Guid.NewGuid();
-        lock (_lock) _currentSessionId = sessionId;
+        // 1. Инкрементируем версию сессии - все старые операции станут невалидными
+        int mySession = Interlocked.Increment(ref _sessionVersion);
 
-        _streamCts?.Cancel();
-        _streamCts = new CancellationTokenSource();
-        var ct = _streamCts.Token;
+        Debug.WriteLine($"[AudioEngine] === Session {mySession}: Starting '{track.Title}' ===");
 
+        // 2. Показываем UI сразу
         IsLoading = true;
         CurrentTrack = track;
         _currentPosition = TimeSpan.Zero;
         OnTrackChanged?.Invoke(track);
 
+        // 3. Ждём семафор - гарантирует что предыдущая операция завершена
+        bool acquired = await _playbackSemaphore.WaitAsync(TimeSpan.FromSeconds(10));
+        if (!acquired)
+        {
+            Debug.WriteLine($"[AudioEngine] Session {mySession}: Semaphore timeout, forcing...");
+            // Принудительно сбрасываем состояние
+            ForceReset();
+            await _playbackSemaphore.WaitAsync();
+        }
+
         try
         {
-            StopInternal(false);
-
-            var sw = Stopwatch.StartNew();
-
-            WaveStream reader = await Task.Run(async () =>
+            // 4. Проверяем актуальность сессии
+            if (_sessionVersion != mySession)
             {
-                Debug.WriteLine($"[AudioEngine-Thread] Starting stream creation on thread {Environment.CurrentManagedThreadId}");
-                return await CreateStreamReaderAsync(track, ct);
-            }, ct);
-
-            sw.Stop();
-            Debug.WriteLine($"[AudioEngine] Stream ready in {sw.ElapsedMilliseconds}ms");
-
-            if (ct.IsCancellationRequested || _currentSessionId != sessionId)
-            {
-                reader.Dispose();
+                Debug.WriteLine($"[AudioEngine] Session {mySession}: Already superseded, aborting");
                 return;
             }
 
-            lock (_lock)
+            // 5. Останавливаем текущее воспроизведение
+            StopCurrentPlayback();
+
+            // 6. Создаём поток (может занять время)
+            var sw = Stopwatch.StartNew();
+            WaveStream? reader = null;
+
+            try
+            {
+                reader = await CreateStreamReaderAsync(track, mySession);
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.WriteLine($"[AudioEngine] Session {mySession}: Cancelled during stream creation");
+                return;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AudioEngine] Session {mySession}: Stream error: {ex.Message}");
+                OnError?.Invoke($"Ошибка загрузки: {ex.Message}");
+                return;
+            }
+
+            // 7. Ещё раз проверяем сессию ПОСЛЕ создания потока
+            if (_sessionVersion != mySession)
+            {
+                Debug.WriteLine($"[AudioEngine] Session {mySession}: Superseded after stream creation");
+                SafeDispose(reader);
+                return;
+            }
+
+            sw.Stop();
+            Debug.WriteLine($"[AudioEngine] Session {mySession}: Stream ready in {sw.ElapsedMilliseconds}ms");
+
+            // 8. Настраиваем воспроизведение
+            if (!SetupPlayback(reader, mySession))
+            {
+                SafeDispose(reader);
+                return;
+            }
+
+            // 9. Запускаем
+            AddToHistory(track);
+            StartPositionLoop(mySession);
+        }
+        finally
+        {
+            // Освобождаем семафор только если мы актуальная сессия
+            if (_sessionVersion == mySession)
+            {
+                IsLoading = false;
+            }
+            _playbackSemaphore.Release();
+        }
+    }
+
+    private async Task<WaveStream> CreateStreamReaderAsync(TrackInfo track, int session)
+    {
+        // Локальный файл - быстрый путь
+        if (track.IsDownloaded && File.Exists(track.LocalPath))
+        {
+            Debug.WriteLine($"[AudioEngine] Session {session}: Using local file");
+            return new AudioFileReader(track.LocalPath);
+        }
+
+        // Получаем stream URL
+        string? streamUrl = track.StreamUrl;
+        if (string.IsNullOrEmpty(streamUrl))
+        {
+            Debug.WriteLine($"[AudioEngine] Session {session}: Refreshing stream URL...");
+
+            using var urlCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            streamUrl = await _youtube.RefreshStreamUrlAsync(track, urlCts.Token);
+        }
+
+        if (string.IsNullOrEmpty(streamUrl))
+            throw new Exception("Не удалось получить ссылку на аудиопоток");
+
+        // Проверяем сессию перед долгой операцией
+        if (_sessionVersion != session)
+            throw new OperationCanceledException();
+
+        // Создаём MediaFoundationReader
+        // ВАЖНО: Это синхронная блокирующая операция, её нельзя отменить!
+        Debug.WriteLine($"[AudioEngine] Session {session}: Creating MediaFoundationReader...");
+        var sw = Stopwatch.StartNew();
+
+        var reader = await Task.Run(() =>
+        {
+            try
+            {
+                return new MediaFoundationReader(streamUrl, new MediaFoundationReader.MediaFoundationReaderSettings
+                {
+                    RequestFloatOutput = true
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AudioEngine] Session {session}: MFR creation failed: {ex.Message}");
+                throw;
+            }
+        });
+
+        sw.Stop();
+        Debug.WriteLine($"[AudioEngine] Session {session}: MFR created in {sw.ElapsedMilliseconds}ms");
+
+        return reader;
+    }
+
+    private bool SetupPlayback(WaveStream reader, int session)
+    {
+        lock (_deviceLock)
+        {
+            if (_sessionVersion != session)
+            {
+                Debug.WriteLine($"[AudioEngine] Session {session}: Superseded in SetupPlayback");
+                return false;
+            }
+
+            try
             {
                 _currentStream = reader;
 
@@ -156,80 +281,144 @@ public class AudioEngine : IDisposable
                 _volumeControl = new VolumeSampleProvider(sampleProvider);
                 SetVolume(_userVolumeMultiplier);
 
-                _outputDevice.Init(_volumeControl);
+                // Пересоздаём устройство если нужно
+                if (_outputDevice == null)
+                {
+                    InitializeOutputDevice();
+                }
+
+                _outputDevice!.Init(_volumeControl);
                 _outputDevice.Play();
+
+                Debug.WriteLine($"[AudioEngine] Session {session}: Playback started");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AudioEngine] Session {session}: Setup failed: {ex.Message}");
+
+                // Пробуем пересоздать устройство
+                try
+                {
+                    InitializeOutputDevice();
+                    _outputDevice!.Init(_volumeControl);
+                    _outputDevice.Play();
+                    Debug.WriteLine($"[AudioEngine] Session {session}: Recovered after device reinit");
+                    return true;
+                }
+                catch (Exception ex2)
+                {
+                    Debug.WriteLine($"[AudioEngine] Session {session}: Recovery failed: {ex2.Message}");
+                    OnError?.Invoke($"Ошибка воспроизведения: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+    }
+
+    private void StopCurrentPlayback()
+    {
+        // Останавливаем position loop
+        _positionLoopCts?.Cancel();
+        _positionLoopCts = null;
+
+        lock (_deviceLock)
+        {
+            // Останавливаем устройство
+            try
+            {
+                _outputDevice?.Stop();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AudioEngine] Stop device error: {ex.Message}");
             }
 
-            AddToHistory(track);
-            _ = TrackPositionLoopAsync(sessionId, ct);
+            // Диспозим поток
+            var oldStream = _currentStream;
+            _currentStream = null;
+            _volumeControl = null;
+
+            if (oldStream != null)
+            {
+                _ = Task.Run(() => SafeDispose(oldStream));
+            }
+        }
+    }
+
+    private void ForceReset()
+    {
+        Debug.WriteLine($"[AudioEngine] Force reset!");
+
+        _positionLoopCts?.Cancel();
+        _positionLoopCts = null;
+
+        lock (_deviceLock)
+        {
+            try { _outputDevice?.Stop(); } catch { }
+            try { _outputDevice?.Dispose(); } catch { }
+            _outputDevice = null;
+
+            var oldStream = _currentStream;
+            _currentStream = null;
+            _volumeControl = null;
+
+            if (oldStream != null)
+            {
+                _ = Task.Run(() => SafeDispose(oldStream));
+            }
+        }
+
+        InitializeOutputDevice();
+    }
+
+    private void StartPositionLoop(int session)
+    {
+        _positionLoopCts?.Cancel();
+        _positionLoopCts = new CancellationTokenSource();
+        var ct = _positionLoopCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested && _sessionVersion == session)
+                {
+                    if (_outputDevice?.PlaybackState == PlaybackState.Playing && _currentStream != null)
+                    {
+                        try
+                        {
+                            _currentPosition = _currentStream.CurrentTime;
+                            OnPositionChanged?.Invoke(_currentPosition);
+                        }
+                        catch { }
+                    }
+                    await Task.Delay(250, ct);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, ct);
+    }
+
+    private static void SafeDispose(IDisposable? disposable)
+    {
+        if (disposable == null) return;
+
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            disposable.Dispose();
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > 100)
+            {
+                Debug.WriteLine($"[AudioEngine] ⚠️ Slow dispose: {sw.ElapsedMilliseconds}ms");
+            }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[AudioEngine] Playback Error: {ex.Message}");
-            OnError?.Invoke(ex.Message);
-            StopInternal(true);
+            Debug.WriteLine($"[AudioEngine] Dispose error (ignored): {ex.Message}");
         }
-        finally
-        {
-            if (_currentSessionId == sessionId)
-                IsLoading = false;
-        }
-    }
-
-    private async Task<WaveStream> CreateStreamReaderAsync(TrackInfo track, CancellationToken ct)
-    {
-        // 1. Локальный файл
-        if (track.IsDownloaded && File.Exists(track.LocalPath))
-        {
-            return new AudioFileReader(track.LocalPath);
-        }
-
-        // 2. Получаем stream URL (асинхронно, не блочит)
-        string? streamUrl = track.StreamUrl;
-        if (string.IsNullOrEmpty(streamUrl))
-        {
-            streamUrl = await _youtube.RefreshStreamUrlAsync(track, ct);
-        }
-
-        if (string.IsNullOrEmpty(streamUrl))
-            throw new Exception("Не удалось получить ссылку на аудиопоток.");
-
-        // 3. Создание MediaFoundationReader (синхронное, но мы уже в Task.Run)
-        Debug.WriteLine($"[AudioEngine-Thread] Creating MediaFoundationReader...");
-        var sw = Stopwatch.StartNew();
-
-        // ВАЖНО: MediaFoundationReader конструктор блокирует поток!
-        // Поэтому он ДОЛЖЕН быть внутри Task.Run
-        var reader = new MediaFoundationReader(streamUrl, new MediaFoundationReader.MediaFoundationReaderSettings
-        {
-            RequestFloatOutput = true // Лучшее качество
-        });
-
-        sw.Stop();
-        Debug.WriteLine($"[AudioEngine-Thread] MediaFoundationReader created in {sw.ElapsedMilliseconds}ms");
-
-        return reader;
-    }
-
-    private async Task TrackPositionLoopAsync(Guid sessionId, CancellationToken ct)
-    {
-        try
-        {
-            while (!ct.IsCancellationRequested && _currentSessionId == sessionId)
-            {
-                if (_outputDevice.PlaybackState == PlaybackState.Playing && _currentStream != null)
-                {
-                    try
-                    {
-                        _currentPosition = _currentStream.CurrentTime;
-                        OnPositionChanged?.Invoke(_currentPosition);
-                    }
-                    catch { }
-                }
-                await Task.Delay(250, ct);
-            }
-        }
-        catch (OperationCanceledException) { }
     }
 
     #endregion
@@ -238,13 +427,10 @@ public class AudioEngine : IDisposable
 
     public void Enqueue(TrackInfo track)
     {
-        lock (_lock)
-        {
-            if (_outputDevice.PlaybackState == PlaybackState.Stopped && !IsLoading)
-                _ = PlayTrackAsync(track);
-            else
-                _queue.Enqueue(track);
-        }
+        if (_outputDevice?.PlaybackState == PlaybackState.Stopped && !IsLoading)
+            _ = PlayTrackAsync(track);
+        else
+            _queue.Enqueue(track);
     }
 
     public void EnqueueRange(IEnumerable<TrackInfo> tracks)
@@ -252,48 +438,57 @@ public class AudioEngine : IDisposable
         foreach (var t in tracks) Enqueue(t);
     }
 
-    public void ClearQueue() { lock (_lock) _queue.Clear(); }
+    public void ClearQueue()
+    {
+        _queue.Clear();
+    }
 
     public async Task PlayNextAsync()
     {
         TrackInfo? next = null;
-        lock (_lock)
+
+        if (RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
         {
-            if (RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
-            {
-                next = CurrentTrack;
-            }
-            else if (ShuffleEnabled && _queue.Count > 0)
-            {
-                var list = _queue.ToList();
-                int idx = Random.Shared.Next(list.Count);
-                next = list[idx];
-                list.RemoveAt(idx);
-                _queue.Clear();
-                foreach (var t in list) _queue.Enqueue(t);
-            }
-            else if (_queue.TryDequeue(out var queued))
-            {
-                next = queued;
-            }
+            next = CurrentTrack;
+        }
+        else if (ShuffleEnabled && _queue.Count > 0)
+        {
+            var list = _queue.ToList();
+            int idx = Random.Shared.Next(list.Count);
+            next = list[idx];
+            list.RemoveAt(idx);
+            _queue.Clear();
+            foreach (var t in list) _queue.Enqueue(t);
+        }
+        else if (_queue.TryDequeue(out var queued))
+        {
+            next = queued;
         }
 
-        if (next != null) await PlayTrackAsync(next);
-        else Stop();
+        if (next != null)
+        {
+            await PlayTrackAsync(next);
+        }
+        else
+        {
+            Stop();
+        }
     }
 
     public async Task PlayPreviousAsync()
     {
         TrackInfo? prev = null;
-        lock (_lock)
+
+        if (_historyIndex > 0)
         {
-            if (_historyIndex > 0)
-            {
-                _historyIndex--;
-                prev = _history[_historyIndex];
-            }
+            _historyIndex--;
+            prev = _history[_historyIndex];
         }
-        if (prev != null) await PlayTrackAsync(prev);
+
+        if (prev != null)
+        {
+            await PlayTrackAsync(prev);
+        }
     }
 
     private void AddToHistory(TrackInfo track)
@@ -314,67 +509,57 @@ public class AudioEngine : IDisposable
 
     public void TogglePlayPause()
     {
-        if (IsPlaying) _outputDevice.Pause();
-        else if (IsPaused) _outputDevice.Play();
-        else if (CurrentTrack != null) _ = PlayTrackAsync(CurrentTrack);
+        lock (_deviceLock)
+        {
+            if (_outputDevice == null) return;
+
+            if (IsPlaying)
+            {
+                _outputDevice.Pause();
+            }
+            else if (IsPaused)
+            {
+                _outputDevice.Play();
+            }
+            else if (CurrentTrack != null)
+            {
+                _ = PlayTrackAsync(CurrentTrack);
+            }
+        }
     }
 
     public void Seek(TimeSpan position)
     {
-        lock (_lock)
+        if (_currentStream == null) return;
+
+        var target = position;
+        if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+        if (target > _currentStream.TotalTime) target = _currentStream.TotalTime;
+
+        try
         {
-            if (_currentStream == null) return;
-
-            var target = position;
-            if (target < TimeSpan.Zero) target = TimeSpan.Zero;
-            if (target > _currentStream.TotalTime) target = _currentStream.TotalTime;
-
-            try
-            {
-                _currentStream.CurrentTime = target;
-                _currentPosition = target;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[AudioEngine] Seek error: {ex.Message}");
-            }
+            _currentStream.CurrentTime = target;
+            _currentPosition = target;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[AudioEngine] Seek error: {ex.Message}");
         }
     }
 
     public void Stop()
     {
-        lock (_lock)
-        {
-            _isManualStop = true;
-            _currentSessionId = Guid.NewGuid();
-            StopInternal(true);
-            _isManualStop = false;
-        }
-    }
+        Interlocked.Increment(ref _sessionVersion);
+        _isManualStop = true;
 
-    private void StopInternal(bool clearCurrent)
-    {
-        try
-        {
-            _outputDevice.Stop();
-        }
-        catch { }
+        StopCurrentPlayback();
 
-        try
-        {
-            _currentStream?.Dispose();
-        }
-        catch { }
+        CurrentTrack = null;
+        _currentPosition = TimeSpan.Zero;
+        OnTrackChanged?.Invoke(null);
+        IsLoading = false;
 
-        _currentStream = null;
-        _volumeControl = null;
-
-        if (clearCurrent)
-        {
-            CurrentTrack = null;
-            _currentPosition = TimeSpan.Zero;
-            OnTrackChanged?.Invoke(null);
-        }
+        _isManualStop = false;
     }
 
     #endregion
@@ -389,13 +574,17 @@ public class AudioEngine : IDisposable
         {
             Debug.WriteLine($"[AudioEngine] Device Error: {e.Exception.Message}");
             OnError?.Invoke(e.Exception.Message);
+            return;
         }
 
+        // Проверяем, действительно ли трек закончился
         bool finished = _currentStream != null &&
+                        _currentStream.TotalTime.TotalSeconds > 0 &&
                         (_currentStream.TotalTime - _currentStream.CurrentTime).TotalSeconds < 1.5;
 
         if (finished)
         {
+            Debug.WriteLine($"[AudioEngine] Track finished, playing next");
             _ = PlayNextAsync();
         }
         else
@@ -408,11 +597,20 @@ public class AudioEngine : IDisposable
 
     public void Dispose()
     {
-        _streamCts?.Cancel();
-        _outputDevice.PlaybackStopped -= OnDevicePlaybackStopped;
-        _outputDevice.Dispose();
-        _currentStream?.Dispose();
-        _streamCts?.Dispose();
-        _httpClient.Dispose();
+        Interlocked.Increment(ref _sessionVersion);
+        _positionLoopCts?.Cancel();
+
+        lock (_deviceLock)
+        {
+            if (_outputDevice != null)
+            {
+                _outputDevice.PlaybackStopped -= OnDevicePlaybackStopped;
+                _outputDevice.Dispose();
+            }
+            _currentStream?.Dispose();
+        }
+
+        _positionLoopCts?.Dispose();
+        _playbackSemaphore.Dispose();
     }
 }
