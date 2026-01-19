@@ -5,12 +5,15 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
-    
+
     <!-- FIX: Removed manual Include/Remove of .axaml files. 
          Avalonia SDK handles this automatically. 
          Keeping manual includes causes "Duplicate x:Class" errors. -->
@@ -33,5 +36,9 @@
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="ReactiveUI.Fody" Version="19.5.41" />
     <PackageReference Include="YoutubeDLSharp" Version="1.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="External\YoutubeExplode\YoutubeExplode\YoutubeExplode.csproj" />
   </ItemGroup>
 </Project>

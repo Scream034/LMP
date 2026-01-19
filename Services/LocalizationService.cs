@@ -12,8 +12,7 @@ namespace MyLiteMusicPlayer.Services;
 
 public sealed class LocalizationService : INotifyPropertyChanged
 {
-    private static readonly Lazy<LocalizationService> _lazy = new(() => new LocalizationService());
-    public static LocalizationService Instance => _lazy.Value;
+    public static LocalizationService Instance = new();
 
     private string _currentLanguage = "en"; // Дефолт - английский
     private Dictionary<string, string> _resources = new();
