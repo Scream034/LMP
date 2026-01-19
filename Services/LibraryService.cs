@@ -283,7 +283,7 @@ public class LibraryService
     public List<TrackInfo> GetPlaylistTracks(string playlistId)
     {
         if (!Data.Playlists.TryGetValue(playlistId, out var playlist))
-            return new List<TrackInfo>();
+            return [];
 
         return playlist.TrackIds
             .Select(GetTrack)

@@ -1,0 +1,49 @@
+<!-- Views/Dialogs/ConfirmDialog.axaml -->
+<Window xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dialogs="using:MyLiteMusicPlayer.Views.Dialogs"
+    x:Class="MyLiteMusicPlayer.Views.Dialogs.ConfirmDialog"
+    x:DataType="dialogs:ConfirmDialog"
+    Title="Confirm"
+    Width="400" Height="180"
+    WindowStartupLocation="CenterOwner"
+    CanResize="False"
+    ShowInTaskbar="False"
+    SystemDecorations="BorderOnly"
+    Background="{StaticResource BgBaseBrush}">
+
+    <Border BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8"
+        Padding="24">
+        <Grid RowDefinitions="Auto, *, Auto">
+
+            <!-- Заголовок -->
+            <TextBlock Grid.Row="0"
+                Text="{Binding DialogTitle}"
+                FontSize="18" FontWeight="Bold"
+                Foreground="{StaticResource TextPrimaryBrush}"
+                Margin="0,0,0,16" />
+
+            <!-- Сообщение -->
+            <TextBlock Grid.Row="1"
+                Text="{Binding Message}"
+                TextWrapping="Wrap"
+                Foreground="{StaticResource TextSecondaryBrush}"
+                VerticalAlignment="Center" />
+
+            <!-- Кнопки -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="12" Margin="0,24,0,0">
+                <Button Content="{Binding CancelText}"
+                    Command="{Binding CancelCommand}"
+                    MinWidth="80"
+                    Background="Transparent"
+                    BorderBrush="{StaticResource BgHighlightBrush}"
+                    BorderThickness="1" />
+                <Button Content="{Binding ConfirmText}"
+                    Command="{Binding ConfirmCommand}"
+                    MinWidth="80"
+                    Classes="accent" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

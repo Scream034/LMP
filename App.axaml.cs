@@ -19,16 +19,17 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
     }
 
-    /// <summary>
-    /// Точка входа после инициализации Avalonia.
-    /// </summary>
     public override void OnFrameworkInitializationCompleted()
     {
         Debug.WriteLine("[LIFECYCLE] Framework initialization completed.");
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // 1. Создаем ViewModel и Окно немедленно
+            // 1. Инициализируем локализацию ДО создания UI
+            var library = Program.Services.GetRequiredService<LibraryService>();
+            LocalizationService.Instance.Initialize(library.Data.LanguageCode);
+
+            // 2. Теперь создаём UI
             var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow
             {
@@ -40,7 +41,7 @@ public partial class App : Application
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
-            // 2. Запускаем тяжелую инициализацию в фоне
+            // 3. Фоновая инициализация
             _ = Task.Run(async () =>
             {
                 try
@@ -52,7 +53,7 @@ public partial class App : Application
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ERROR] Background initialization failed: {ex.Message}\n{ex.StackTrace}");
+                    Debug.WriteLine($"[ERROR] Background initialization failed: {ex.Message}");
                 }
             });
         }

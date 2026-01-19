@@ -1,99 +1,150 @@
+<!-- Views/SettingsView.axaml -->
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     x:Class="MyLiteMusicPlayer.Views.SettingsView"
     x:DataType="vm:SettingsViewModel">
 
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section-header">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,16" />
+        </Style>
+        <Style Selector="Grid.setting-row">
+            <Setter Property="Margin" Value="0,0,0,16" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.setting-title">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.setting-desc">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+    </UserControl.Styles>
+
     <ScrollViewer>
-        <StackPanel Spacing="24" MaxWidth="800" HorizontalAlignment="Left" Margin="0,0,24,40">
-            <TextBlock Text="Settings" FontSize="32" FontWeight="Bold" />
+        <StackPanel Spacing="32" MaxWidth="700" Margin="32">
 
-            <!-- Account -->
-            <StackPanel Spacing="12">
-                <TextBlock Text="Account" FontSize="18" FontWeight="Bold" />
-                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                    <StackPanel Orientation="Horizontal" Spacing="16">
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="{Binding UserEmail, FallbackValue='Not logged in'}"
-                                FontWeight="SemiBold" />
-                            <TextBlock
-                                Text="{Binding IsAuthenticated, Converter={StaticResource BoolToSelector}, ConverterParameter='Authenticated|Guest Mode'}"
-                                FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" />
-                        </StackPanel>
+            <!-- Заголовок -->
+            <TextBlock Text="{Binding L_Title}" FontSize="32" FontWeight="Bold" />
 
-                        <Button Command="{Binding LoginCommand}" Content="Log In"
-                            IsVisible="{Binding !IsAuthenticated}" />
-                        <Button Command="{Binding LogoutCommand}" Content="Log Out"
+            <!-- СЕКЦИЯ: АККАУНТ И ЯЗЫК -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L_AccountLanguage}" />
+
+                <Grid ColumnDefinitions="*, Auto" VerticalAlignment="Center">
+                    <StackPanel>
+                        <TextBlock Text="{Binding UserEmail, FallbackValue='Not signed in'}"
+                            FontWeight="SemiBold" />
+                        <TextBlock
+                            Text="{Binding IsAuthenticated, Converter={StaticResource BoolToSelector}, ConverterParameter='Authenticated|Guest Mode'}"
+                            Foreground="{StaticResource TextSecondaryBrush}" FontSize="13" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
+                        <Button Command="{Binding LoginCommand}"
+                            Content="{Binding L_Login}"
+                            IsVisible="{Binding !IsAuthenticated}" Classes="accent" />
+                        <Button Command="{Binding LogoutCommand}"
+                            Content="{Binding L_Logout}"
                             IsVisible="{Binding IsAuthenticated}" />
                     </StackPanel>
-                </Border>
+                </Grid>
+
+                <Grid ColumnDefinitions="*, Auto" Classes="setting-row">
+                    <TextBlock Classes="setting-title" Text="{Binding L_Language}" />
+                    <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding Languages}"
+                        SelectedItem="{Binding SelectedLanguage}"
+                        DisplayMemberBinding="{Binding Name}"
+                        MinWidth="140" />
+                </Grid>
             </StackPanel>
 
-            <!-- Performance (НОВАЯ СЕКЦИЯ) -->
-            <StackPanel Spacing="12">
-                <TextBlock Text="Performance &amp; Loading" FontSize="18" FontWeight="Bold" />
-                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                    <StackPanel Spacing="20">
+            <!-- СЕКЦИЯ: АУДИО -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L_Audio}" />
 
-                        <!-- Batch Size Slider -->
-                        <StackPanel>
-                            <Grid ColumnDefinitions="*, Auto">
-                                <TextBlock Grid.Column="0" Text="Songs to load per request"
-                                    FontWeight="SemiBold" />
-                                <TextBlock Grid.Column="1" Text="{Binding LoadBatchSize}"
-                                    FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
-                            </Grid>
-                            <TextBlock Text="Higher values load more songs but may take longer."
-                                FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"
-                                Margin="0,4,0,8" />
-
-                            <Slider Minimum="5" Maximum="50" TickFrequency="5"
-                                IsSnapToTickEnabled="True"
-                                Value="{Binding LoadBatchSize}"
-                                Foreground="{StaticResource AccentBrush}" />
-                        </StackPanel>
-
-                        <!-- Smooth Loading Checkbox -->
-                        <CheckBox IsChecked="{Binding EnableSmoothLoading}"
-                            Content="Enable Smooth Loading Animation"
-                            ToolTip.Tip="Adds a cascade effect when loading tracks. Disable for instant appearance." />
-
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L_MaxVolume}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding L_MaxVolumeDesc}" />
                     </StackPanel>
-                </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding MaxVolumeLimit, StringFormat='{}{0}%'}"
+                            HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4" />
+                        <Slider Minimum="100" Maximum="400" Value="{Binding MaxVolumeLimit}"
+                            TickFrequency="100" IsSnapToTickEnabled="True" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L_Gain}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding L_GainDesc}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding TargetGainDb, StringFormat='{}{0:F1} dB'}"
+                            HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4" />
+                        <Slider Minimum="-12" Maximum="12" Value="{Binding TargetGainDb}" />
+                    </StackPanel>
+                </Grid>
             </StackPanel>
 
-            <!-- Storage -->
-            <StackPanel Spacing="12">
-                <TextBlock Text="Storage" FontSize="18" FontWeight="Bold" />
-                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                    <StackPanel Spacing="16">
-                        <StackPanel>
-                            <TextBlock Text="Download Location" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding DownloadPath}" FontSize="12"
-                                Foreground="{StaticResource TextSecondaryBrush}" Margin="0,4" />
-                        </StackPanel>
+            <!-- СЕКЦИЯ: ОБЩЕЕ -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L_General}" />
 
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <Button Command="{Binding BrowseDownloadPathCommand}"
-                                Content="Change Location" />
-                            <Button Command="{Binding ClearHistoryCommand}"
-                                Content="Clear Search History" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L_Discord}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiscordRpcEnabled}"
+                        OnContent="" OffContent="" />
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L_AutoPaste}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoPlayOnPaste}"
+                        OnContent="" OffContent="" />
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L_SmoothLoading}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSmoothLoading}"
+                        OnContent="" OffContent="" />
+                </Grid>
             </StackPanel>
 
-            <!-- General -->
-            <StackPanel Spacing="12">
-                <TextBlock Text="General" FontSize="18" FontWeight="Bold" />
-                <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8" Padding="16">
-                    <StackPanel Spacing="12">
-                        <CheckBox IsChecked="{Binding DiscordRpcEnabled}"
-                            Content="Enable Discord Rich Presence" />
-                        <CheckBox IsChecked="{Binding AutoPlayOnPaste}"
-                            Content="Auto-play when pasting URLs" />
+            <!-- СЕКЦИЯ: ХРАНИЛИЩЕ -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L_Storage}" />
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <TextBlock Classes="setting-title" Text="{Binding L_DownloadPath}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding DownloadPath}"
+                            TextTrimming="CharacterEllipsis" MaxWidth="400" />
                     </StackPanel>
-                </Border>
+                    <Button Grid.Column="1"
+                        Content="{Binding L_ChangeFolder}"
+                        Command="{Binding BrowseDownloadPathCommand}" />
+                </Grid>
+
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,8,0,0">
+                    <Button Content="{Binding L_ClearHistory}"
+                        Command="{Binding ClearHistoryCommand}"
+                        Background="Transparent"
+                        BorderBrush="{StaticResource BgHighlightBrush}"
+                        BorderThickness="1" />
+                    <Button Content="{Binding L_ResetApp}"
+                        Command="{Binding ResetLibraryCommand}"
+                        Foreground="#FF6B6B"
+                        Background="Transparent" />
+                </StackPanel>
             </StackPanel>
         </StackPanel>
     </ScrollViewer>

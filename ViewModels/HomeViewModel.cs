@@ -34,10 +34,10 @@ public class HomeViewModel : ViewModelBase, IDisposable
     private readonly MemoryMonitor _memoryMonitor;
 
     // Кэширование
-    private List<TrackInfo> _cachedTracks = new();
+    private List<TrackInfo> _cachedTracks = [];
     private int _displayedCount = 0;
     private string _currentCategoryKey = "";
-    private readonly HashSet<string> _loadedTrackIds = new();
+    private readonly HashSet<string> _loadedTrackIds = [];
     private CancellationTokenSource? _loadCts;
 
     // UI State
@@ -52,9 +52,9 @@ public class HomeViewModel : ViewModelBase, IDisposable
     [Reactive] public LoadingStats Stats { get; private set; } = new();
     [Reactive] public bool ShowDebugInfo { get; set; } = true;
 
-    public ObservableCollection<CategoryItem> Categories { get; } = new();
+    public ObservableCollection<CategoryItem> Categories { get; } = [];
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
-    public ObservableCollection<TrackItemViewModel> ActiveTracks { get; } = new();
+    public ObservableCollection<TrackItemViewModel> ActiveTracks { get; } = [];
 
     public ReactiveCommand<CategoryItem, Unit> RefreshCommand { get; }
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
@@ -453,7 +453,7 @@ public class HomeViewModel : ViewModelBase, IDisposable
             onPlay: t =>
             {
                 _audio.ClearQueue();
-                _audio.PlayTrack(t);
+                _ = _audio.PlayTrackAsync(t);
 
                 bool found = false;
                 foreach (var vm in ActiveTracks)

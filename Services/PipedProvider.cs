@@ -36,8 +36,8 @@ public class PipedProvider
         _http.DefaultRequestHeaders.Add("User-Agent", "LiteMusicPlayer/1.0");
 
         // Актуальные инстансы (обновляй на https://piped-instances.kavin.rocks/)
-        _instances = new List<PipedInstance>
-        {
+        _instances =
+        [
             new("https://pipedapi.kavin.rocks"),
             new("https://pipedapi.adminforge.de"),
             new("https://api.piped.yt"),
@@ -45,7 +45,7 @@ public class PipedProvider
             new("https://pipedapi.leptons.xyz"),
             new("https://piped-api.garuber.eu"),
             new("https://pipedapi.drgns.space")
-        };
+        ];
     }
 
     /// <summary>
@@ -90,7 +90,7 @@ public class PipedProvider
         }
 
         Debug.WriteLine($"[Piped] All instances failed!");
-        return new List<TrackInfo>();
+        return [];
     }
 
     /// <summary>
@@ -112,7 +112,7 @@ public class PipedProvider
         catch (Exception ex)
         {
             Debug.WriteLine($"[Piped] Trending failed: {ex.Message}");
-            return new List<TrackInfo>();
+            return [];
         }
     }
 

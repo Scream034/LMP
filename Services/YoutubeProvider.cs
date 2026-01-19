@@ -182,14 +182,14 @@ public class YoutubeProvider
 
     public async Task<List<TrackInfo>> SearchAsync(string query, int maxResults = 20)
     {
-        if (!IsReady) return new List<TrackInfo>();
+        if (!IsReady) return [];
 
         try
         {
             string searchParam = $"ytsearch{maxResults}:{query}";
             var res = await _ytdl.RunVideoDataFetch(searchParam);
 
-            if (!res.Success) return new List<TrackInfo>();
+            if (!res.Success) return [];
 
             var results = new List<TrackInfo>();
 
@@ -212,7 +212,7 @@ public class YoutubeProvider
         catch (Exception ex)
         {
             Debug.WriteLine($"[YoutubeProvider] SearchAsync EXCEPTION: {ex.Message}");
-            return new List<TrackInfo>();
+            return [];
         }
     }
 
@@ -247,18 +247,18 @@ public class YoutubeProvider
 
     public async Task<List<TrackInfo>> GetRadioAsync(TrackInfo sourceTrack, int count = 25)
     {
-        if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url)) return new List<TrackInfo>();
+        if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url)) return [];
         try
         {
             string? videoId = ExtractVideoId(sourceTrack.Url);
-            if (string.IsNullOrEmpty(videoId)) return new List<TrackInfo>();
+            if (string.IsNullOrEmpty(videoId)) return [];
             string mixUrl = $"https://www.youtube.com/watch?v={videoId}&list=RD{videoId}";
             var result = await GetPlaylistAsync(mixUrl);
-            var tracks = result?.Tracks.Take(count).ToList() ?? new List<TrackInfo>();
+            var tracks = result?.Tracks.Take(count).ToList() ?? [];
             foreach (var track in tracks) track.RadioSeedId = sourceTrack.Id;
             return tracks;
         }
-        catch { return new List<TrackInfo>(); }
+        catch { return []; }
     }
 
     public async Task<List<TrackInfo>> GetTrendingAsync(int count = 20)
@@ -267,7 +267,7 @@ public class YoutubeProvider
         {
             string trendingUrl = "https://music.youtube.com/playlist?list=RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs";
             var result = await GetPlaylistAsync(trendingUrl);
-            return result?.Tracks.Take(count).ToList() ?? new List<TrackInfo>();
+            return result?.Tracks.Take(count).ToList() ?? [];
         }
         catch { return await SearchAsync("top music 2024", count); }
     }

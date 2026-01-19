@@ -17,7 +17,7 @@ public class CachedSearchResult
 {
     public string Query { get; set; } = "";
     public DateTime CachedAt { get; set; }
-    public List<TrackInfo> Tracks { get; set; } = new();
+    public List<TrackInfo> Tracks { get; set; } = [];
 }
 
 public class SearchCacheService
@@ -28,7 +28,7 @@ public class SearchCacheService
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     // In-memory LRU cache для горячих запросов
-    private readonly Dictionary<string, CachedSearchResult> _memoryCache = new();
+    private readonly Dictionary<string, CachedSearchResult> _memoryCache = [];
     private readonly LinkedList<string> _lruOrder = new();
     private const int MaxMemoryCacheItems = 10;
 
@@ -147,7 +147,7 @@ public class SearchCacheService
     public async Task<List<TrackInfo>> GetPartialAsync(string query, int count)
     {
         var cached = await GetAsync(query, minCount: 1);
-        return cached?.Take(count).ToList() ?? new List<TrackInfo>();
+        return cached?.Take(count).ToList() ?? [];
     }
 
     private void AddToMemoryCache(string key, CachedSearchResult result)
@@ -228,6 +228,7 @@ public class SearchCacheService
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
+
 
         try
         {

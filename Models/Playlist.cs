@@ -14,7 +14,7 @@ public class Playlist
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
     
-    public List<string> TrackIds { get; set; } = new();
+    public List<string> TrackIds { get; set; } = [];
     
     public int TrackCount => TrackIds.Count;
 }

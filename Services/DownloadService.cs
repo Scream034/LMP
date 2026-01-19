@@ -11,7 +11,7 @@ public class DownloadService
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;
 
-    private readonly Dictionary<string, DownloadTask> _activeTasks = new();
+    private readonly Dictionary<string, DownloadTask> _activeTasks = [];
     private readonly object _lock = new();
     private readonly SemaphoreSlim _downloadSemaphore = new(3);
 

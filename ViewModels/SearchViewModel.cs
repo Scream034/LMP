@@ -26,7 +26,7 @@ public class SearchViewModel : ViewModelBase
     [Reactive] public string? ErrorMessage { get; private set; }
     [Reactive] public string? DetectedType { get; private set; }
 
-    public ObservableCollection<TrackItemViewModel> Results { get; } = new();
+    public ObservableCollection<TrackItemViewModel> Results { get; } = [];
 
     public ReactiveCommand<Unit, Unit> SearchCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearCommand { get; }
@@ -96,17 +96,17 @@ public class SearchViewModel : ViewModelBase
             {
                 case QueryType.DirectUrl:
                     var singleTrack = await _youtube.GetTrackByUrlAsync(SearchQuery);
-                    tracks = singleTrack != null ? new List<TrackInfo> { singleTrack } : new List<TrackInfo>();
+                    tracks = singleTrack != null ? [singleTrack] : [];
                     break;
                 case QueryType.Playlist:
                     var playlistResult = await _youtube.GetPlaylistAsync(SearchQuery);
-                    tracks = playlistResult?.Tracks ?? new List<TrackInfo>();
+                    tracks = playlistResult?.Tracks ?? [];
                     break;
                 case QueryType.Search:
                     tracks = await _youtube.SearchAsync(SearchQuery);
                     break;
                 default:
-                    tracks = new List<TrackInfo>();
+                    tracks = [];
                     break;
             }
 

@@ -5,8 +5,27 @@
     x:Class="MyLiteMusicPlayer.Views.HomeView"
     x:DataType="vm:HomeViewModel">
 
+    <UserControl.Styles>
+        <!-- Анимация пульсации для Skeleton элементов -->
+        <Style Selector="Border.skeleton">
+            <Style.Animations>
+                <Animation Duration="0:0:1.5" IterationCount="Infinite">
+                    <KeyFrame KeyTime="0:0:0">
+                        <Setter Property="Opacity" Value="0.3" />
+                    </KeyFrame>
+                    <KeyFrame KeyTime="0:0:0.75">
+                        <Setter Property="Opacity" Value="0.5" />
+                    </KeyFrame>
+                    <KeyFrame KeyTime="0:0:1.5">
+                        <Setter Property="Opacity" Value="0.3" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </UserControl.Styles>
+
     <Grid RowDefinitions="Auto, Auto, *">
-        <!-- 1. Header & Categories (Fixed at top) -->
+        <!-- 1. Header & Categories -->
         <StackPanel Grid.Row="0" Margin="24,16,24,16" Spacing="16">
             <Grid ColumnDefinitions="*, Auto">
                 <TextBlock Text="{Binding Greeting}"
@@ -15,14 +34,13 @@
 
                 <Button Grid.Column="1"
                     Command="{Binding ToggleDebugCommand}"
-                    Background="Transparent"
-                    Padding="8"
-                    ToolTip.Tip="Показать отладку">
+                    Background="Transparent" Padding="8">
                     <mi:MaterialIcon Kind="Bug" Width="20" Height="20"
                         Foreground="{Binding ShowDebugInfo, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#666'}" />
                 </Button>
             </Grid>
 
+            <!-- Список категорий -->
             <ListBox ItemsSource="{Binding Categories}"
                 SelectedItem="{Binding SelectedCategory}"
                 Background="Transparent">
@@ -39,7 +57,6 @@
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem">
                         <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
-                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
                         <Setter Property="Padding" Value="16,8" />
                         <Setter Property="CornerRadius" Value="20" />
                     </Style>
@@ -51,13 +68,9 @@
             </ListBox>
         </StackPanel>
 
-        <!-- 2. Debug Stats Panel (Optional) -->
-        <Border Grid.Row="1"
-            IsVisible="{Binding ShowDebugInfo}"
-            Background="#1A1A1A"
-            CornerRadius="8"
-            Padding="16,12"
-            Margin="24,0,24,16">
+        <!-- 2. Debug Stats Panel -->
+        <Border Grid.Row="1" IsVisible="{Binding ShowDebugInfo}"
+            Background="#1A1A1A" CornerRadius="8" Padding="16,12" Margin="24,0,24,16">
             <Grid ColumnDefinitions="*, *, *, *" RowDefinitions="Auto, Auto">
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="TOTAL" FontSize="10" Foreground="#666" />
@@ -75,105 +88,131 @@
                         Foreground="#FFA500" />
                 </StackPanel>
                 <StackPanel Grid.Column="3">
-                    <TextBlock Text="LAST BATCH" FontSize="10" Foreground="#666" />
-                    <TextBlock Text="{Binding Stats.LastBatchTimeMs, StringFormat='{}{0}ms'}"
-                        FontSize="18" FontWeight="Bold" Foreground="#00BFFF" />
+                    <TextBlock Text="MEMORY" FontSize="10" Foreground="#666" />
+                    <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14" FontWeight="Bold"
+                        Foreground="#00BFFF" VerticalAlignment="Center" />
                 </StackPanel>
-                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                    Text="{Binding Stats.Source, StringFormat='Source: {0}'}" FontSize="11"
-                    Foreground="#888" Margin="0,8,0,0" />
-                <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2"
-                    Text="{Binding Stats.MemoryUsage}" FontSize="11" Foreground="#888"
-                    Margin="0,8,0,0" HorizontalAlignment="Right" />
             </Grid>
         </Border>
 
-        <!-- 3. Main Virtualized List -->
-        <!-- Убран внешний ScrollViewer. ListBox сам имеет встроенный ScrollViewer. -->
+        <!-- 3. Основной список треков -->
         <ListBox Grid.Row="2"
             ItemsSource="{Binding ActiveTracks}"
             Background="Transparent"
-            SelectionMode="Single"
             Padding="24,0">
             <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <!-- VirtualizingStackPanel обеспечивает переиспользование визуальных элементов -->
                     <VirtualizingStackPanel />
                 </ItemsPanelTemplate>
             </ListBox.ItemsPanel>
 
-            <ListBox.Styles>
-                <Style Selector="ListBoxItem">
-                    <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0,0,0,8" />
-                    <Setter Property="Background" Value="Transparent" />
-                </Style>
-            </ListBox.Styles>
-
-            <!-- Footer Section (Button & Progress) -->
-            <!-- Мы добавляем кнопку загрузки прямо в шаблон ListBox, чтобы она скроллилась вместе
-            со списком -->
             <ListBox.Template>
                 <ControlTemplate>
                     <DockPanel>
-                        <!-- Заглушка, если идет первая загрузка -->
-                        <StackPanel DockPanel.Dock="Top"
-                            IsVisible="{Binding IsLoading}"
+                        <!-- Заглушка первой загрузки -->
+                        <StackPanel DockPanel.Dock="Top" IsVisible="{Binding IsLoading}"
                             Margin="0,40" Spacing="16">
                             <ProgressBar IsIndeterminate="True"
                                 Foreground="{StaticResource AccentBrush}" Height="4" Width="200" />
-                            <TextBlock Text="Ищем музыку..." HorizontalAlignment="Center"
+                            <TextBlock Text="Ищем горячие новинки..." HorizontalAlignment="Center"
                                 Foreground="{StaticResource TextSecondaryBrush}" />
                         </StackPanel>
 
-                        <ScrollViewer Name="PART_ScrollViewer"
-                            Background="{TemplateBinding Background}"
-                            HorizontalScrollBarVisibility="{TemplateBinding (ScrollViewer.HorizontalScrollBarVisibility)}"
-                            VerticalScrollBarVisibility="{TemplateBinding (ScrollViewer.VerticalScrollBarVisibility)}">
+                        <ScrollViewer Name="PART_ScrollViewer">
                             <StackPanel>
-                                <ItemsPresenter Name="PART_ItemsPresenter"
-                                    ItemsPanel="{TemplateBinding ItemsPanel}" />
+                                <ItemsPresenter Name="PART_ItemsPresenter" />
 
-                                <!-- Load More Section (внутри скролла) -->
-                                <StackPanel Margin="0,24,0,80" HorizontalAlignment="Center"
-                                    IsVisible="{Binding HasMoreItems}">
+                                <!-- СЕКЦИЯ ЗАГРУЗКИ (SKELETONS) -->
+                                <StackPanel Margin="0,10,0,80" Spacing="8">
 
+                                    <!-- Кнопка "Загрузить еще" -->
                                     <Button Command="{Binding LoadMoreCommand}"
+                                        HorizontalAlignment="Center"
                                         Background="{StaticResource BgElevatedBrush}"
                                         CornerRadius="20" Padding="32,12">
                                         <Button.IsVisible>
                                             <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                                <Binding Path="!IsLoading" />
                                                 <Binding Path="!IsLoadingMore" />
-                                                <Binding Path="!WaitingForMore" />
+                                                <Binding Path="!IsPrefetching" />
+                                                <Binding Path="HasMoreItems" />
                                             </MultiBinding>
                                         </Button.IsVisible>
                                         <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <TextBlock Text="Загрузить еще" />
-                                            <mi:MaterialIcon Kind="ChevronDown" Width="16"
-                                                Height="16" IsVisible="{Binding !IsPrefetching}" />
-                                            <mi:MaterialIcon Kind="CloudSync" Width="16" Height="16"
-                                                Foreground="#1DB954"
-                                                IsVisible="{Binding IsPrefetching}" />
+                                            <mi:MaterialIcon Kind="ChevronDown" />
+                                            <TextBlock Text="Показать больше" />
                                         </StackPanel>
                                     </Button>
 
-                                    <StackPanel Orientation="Horizontal" Spacing="10"
-                                        IsVisible="{Binding IsLoadingMore}">
-                                        <ProgressBar IsIndeterminate="True" Width="20" Height="20"
-                                            Foreground="{StaticResource AccentBrush}" />
-                                        <TextBlock Text="Добавляем треки..."
-                                            Foreground="{StaticResource TextSecondaryBrush}" />
-                                    </StackPanel>
+                                    <!-- СКЕЛЕТЫ (Исправленный синтаксис Effect) -->
+                                    <StackPanel Spacing="10" Margin="0,10">
+                                        <StackPanel.IsVisible>
+                                            <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                                                <Binding Path="IsLoadingMore" />
+                                                <Binding Path="IsPrefetching" />
+                                            </MultiBinding>
+                                        </StackPanel.IsVisible>
 
-                                    <StackPanel IsVisible="{Binding WaitingForMore}" Spacing="8">
-                                        <StackPanel Orientation="Horizontal" Spacing="10"
-                                            HorizontalAlignment="Center">
-                                            <ProgressBar IsIndeterminate="True" Width="20"
-                                                Height="20" Foreground="#FFA500" />
-                                            <TextBlock Text="Получаем данные из YouTube..."
-                                                Foreground="#FFA500" />
-                                        </StackPanel>
+                                        <!-- Скелет 1 (Слабое размытие) -->
+                                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
+                                            <Grid.Effect>
+                                                <BlurEffect Radius="3" />
+                                            </Grid.Effect>
+                                            <Border Grid.Column="0" Width="48" Height="48"
+                                                Background="#222" CornerRadius="4"
+                                                Classes="skeleton" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center"
+                                                Margin="12,0">
+                                                <Border Width="200" Height="14" Background="#222"
+                                                    HorizontalAlignment="Left" CornerRadius="2"
+                                                    Classes="skeleton" />
+                                                <Border Width="120" Height="10" Background="#181818"
+                                                    HorizontalAlignment="Left" Margin="0,6,0,0"
+                                                    CornerRadius="2" Classes="skeleton" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Скелет 2 (Среднее размытие) -->
+                                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
+                                            <Grid.Effect>
+                                                <BlurEffect Radius="6" />
+                                            </Grid.Effect>
+                                            <Border Grid.Column="0" Width="48" Height="48"
+                                                Background="#222" CornerRadius="4"
+                                                Classes="skeleton" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center"
+                                                Margin="12,0">
+                                                <Border Width="180" Height="14" Background="#222"
+                                                    HorizontalAlignment="Left" CornerRadius="2"
+                                                    Classes="skeleton" />
+                                                <Border Width="100" Height="10" Background="#181818"
+                                                    HorizontalAlignment="Left" Margin="0,6,0,0"
+                                                    CornerRadius="2" Classes="skeleton" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Скелет 3 (Сильное размытие) -->
+                                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
+                                            <Grid.Effect>
+                                                <BlurEffect Radius="12" />
+                                            </Grid.Effect>
+                                            <Border Grid.Column="0" Width="48" Height="48"
+                                                Background="#222" CornerRadius="4"
+                                                Classes="skeleton" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center"
+                                                Margin="12,0">
+                                                <Border Width="220" Height="14" Background="#222"
+                                                    HorizontalAlignment="Left" CornerRadius="2"
+                                                    Classes="skeleton" />
+                                                <Border Width="140" Height="10" Background="#181818"
+                                                    HorizontalAlignment="Left" Margin="0,6,0,0"
+                                                    CornerRadius="2" Classes="skeleton" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <TextBlock
+                                            Text="Подгружаем новые треки из бездны интернета..."
+                                            HorizontalAlignment="Center" FontSize="12"
+                                            Foreground="#444" Margin="0,10" />
                                     </StackPanel>
                                 </StackPanel>
                             </StackPanel>

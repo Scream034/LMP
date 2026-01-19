@@ -7,7 +7,6 @@ using Material.Icons; // Убедитесь, что этот using есть
 
 namespace MyLiteMusicPlayer.Converters;
 
-// ... (оставьте старые конвертеры: TimeSpanToStringConverter и др.) ...
 public class TimeSpanToStringConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -76,7 +75,6 @@ public class VolumeToIconConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
-// ВОТ ЭТОТ КЛАСС НУЖНО БЫЛО ДОБАВИТЬ:
 public class BoolToSelectorConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -108,4 +106,24 @@ public class BoolToSelectorConverter : IValueConverter
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}
+
+/// <summary>
+/// Конвертирует строку в верхний регистр.
+/// </summary>
+public sealed class ToUpperConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is string str)
+        {
+            return str.ToUpper(culture);
+        }
+        return value;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
 }

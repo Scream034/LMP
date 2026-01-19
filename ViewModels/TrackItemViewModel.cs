@@ -92,7 +92,7 @@ public class TrackItemViewModel : ViewModelBase
             if (onPlay != null)
                 onPlay(Track);
             else
-                _audio.PlayTrack(Track);
+                _ = _audio.PlayTrackAsync(Track);
         });
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>

@@ -39,7 +39,7 @@ public class LibraryViewModel : ViewModelBase
     [Reactive] public bool IsLoading { get; private set; }
     [Reactive] public string NewPlaylistName { get; set; } = string.Empty;
 
-    public ObservableCollection<PlaylistCardViewModel> Playlists { get; } = new();
+    public ObservableCollection<PlaylistCardViewModel> Playlists { get; } = [];
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     public ReactiveCommand<Unit, Unit> CreatePlaylistCommand { get; }

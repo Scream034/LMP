@@ -25,7 +25,7 @@ public class PlaylistViewModel : ViewModelBase
     [Reactive] public TimeSpan TotalDuration { get; private set; }
     [Reactive] public bool CanEdit { get; private set; }
 
-    public ObservableCollection<TrackItemViewModel> Tracks { get; } = new();
+    public ObservableCollection<TrackItemViewModel> Tracks { get; } = [];
 
     public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
     public ReactiveCommand<Unit, Unit> ShufflePlayCommand { get; }
@@ -94,7 +94,7 @@ public class PlaylistViewModel : ViewModelBase
     private void PlayFromPlaylist(TrackInfo track)
     {
         _audio.ClearQueue();
-        _audio.PlayTrack(track);
+        _ = _audio.PlayTrackAsync(track);
 
         bool found = false;
         foreach (var item in Tracks)

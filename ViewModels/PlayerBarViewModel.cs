@@ -1,15 +1,19 @@
+using System;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using Avalonia.Threading;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using System;
-using System.Reactive;
-using System.Reactive.Linq;
-using Avalonia.Threading;
-using System.Threading.Tasks;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
+/// <summary>
+/// ViewModel для панели управления плеером.
+/// Обеспечивает связь между UI и AudioEngine, обрабатывает громкость (до 400%) и перемотку.
+/// </summary>
 public class PlayerBarViewModel : ViewModelBase, IDisposable
 {
     private readonly AudioEngine _audio;
@@ -17,41 +21,77 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly DownloadService _downloads;
     private readonly DispatcherTimer _positionTimer;
 
-    // Состояние перемотки
+    // Состояние для управления перемоткой (защита от "прыгающего" слайдера)
     private bool _isSeeking;
     private bool _justFinishedSeeking;
     private float _volumeBeforeMute;
 
-    #region Observable Properties
+    #region Observable Properties (Состояние UI)
 
+    /// <summary> Текущий воспроизводимый трек </summary>
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
+
+    /// <summary> Флаг активной загрузки/буферизации </summary>
     [Reactive] public bool IsLoading { get; private set; }
+
+    /// <summary> Флаг воспроизведения </summary>
     [Reactive] public bool IsPlaying { get; private set; }
+
+    /// <summary> Флаг паузы </summary>
     [Reactive] public bool IsPaused { get; private set; }
 
-    // Тайминги
+    // --- Тайминги ---
+
+    /// <summary> Текущая позиция в формате TimeSpan </summary>
     [Reactive] public TimeSpan Position { get; set; }
+
+    /// <summary> Общая длительность трека </summary>
     [Reactive] public TimeSpan Duration { get; private set; }
+
+    /// <summary> Текущая позиция в секундах (для Slider) </summary>
     [Reactive] public double PositionSeconds { get; set; }
+
+    /// <summary> Длительность в секундах (для Slider) </summary>
     [Reactive] public double DurationSeconds { get; private set; }
+
+    /// <summary> Прогресс буферизации в секундах </summary>
     [Reactive] public double BufferedSeconds { get; private set; }
 
-    // Громкость и настройки
+    // --- Громкость и Настройки ---
+
+    /// <summary> 
+    /// Текущее значение громкости в UI (от 0 до MaxVolume).
+    /// </summary>
     [Reactive] public float Volume { get; set; }
+
+    /// <summary> 
+    /// Максимально допустимый предел громкости (100, 200, 300 или 400).
+    /// </summary>
+    [Reactive] public int MaxVolume { get; private set; } = 100;
+
+    /// <summary> Флаг выключенного звука </summary>
     [Reactive] public bool IsMuted { get; private set; }
+
+    /// <summary> Режим перемешивания </summary>
     [Reactive] public bool ShuffleEnabled { get; set; }
+
+    /// <summary> Режим повтора </summary>
     [Reactive] public RepeatMode RepeatMode { get; set; }
+
+    /// <summary> Флаг наличия трека в "Любимом" </summary>
     [Reactive] public bool IsLiked { get; private set; }
+
+    /// <summary> Флаг доступности управления (есть ли загруженный трек) </summary>
     [Reactive] public bool HasTrack { get; private set; }
 
-    // Быстрый доступ к данным трека
-    public string SafeTitle => CurrentTrack?.Title ?? "No Track";
-    public string SafeAuthor => CurrentTrack?.Author ?? "Unknown Artist";
+    // --- Безопасные свойства для биндинга ---
+    public string SafeTitle => CurrentTrack?.Title ?? "Нет трека";
+    public string SafeAuthor => CurrentTrack?.Author ?? "Неизвестный исполнитель";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
 
     #endregion
 
-    #region Commands
+    #region Commands (Команды управления)
 
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
@@ -69,39 +109,28 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _library = library;
         _downloads = downloads;
 
-        // Начальное состояние
-        Volume = _audio.GetVolume();
+        // 1. Инициализация состояния
+        MaxVolume = _library.Data.MaxVolumeLimit;
+        Volume = _audio.GetVolume() * 100f;
         ShuffleEnabled = _audio.ShuffleEnabled;
         RepeatMode = _audio.RepeatMode;
 
-        // 1. Таймер обновления позиции (опрос раз в 250мс для плавности)
+        // 2. Таймер обновления позиции
         _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-        _positionTimer.Tick += (_, _) => UpdatePosition();
+        _positionTimer.Tick += (_, _) => UpdatePositionFromEngine();
         _positionTimer.Start();
 
-        // 2. Подписки на события AudioEngine
+        // 3. Подписки на события AudioEngine
         _audio.OnLoadingChanged += loading => IsLoading = loading;
-        
-        _audio.OnTrackChanged += track => {
-            Dispatcher.UIThread.Post(() => OnTrackChanged(track));
+
+        _audio.OnTrackChanged += track =>
+        {
+            Dispatcher.UIThread.Post(() => HandleTrackChanged(track));
         };
 
         _audio.OnPlaybackStopped += () => UpdatePlayState();
 
-        // Событие изменения позиции напрямую из движка
-        _audio.OnPositionChanged += pos => 
-        {
-            // Обновляем VM только если пользователь не перематывает сейчас
-            if (!_isSeeking && !_justFinishedSeeking)
-            {
-                Dispatcher.UIThread.Post(() => {
-                    Position = pos;
-                    PositionSeconds = pos.TotalSeconds;
-                });
-            }
-        };
-
-        // 3. Подписка на прогресс загрузки (для визуализации буфера)
+        // 4. Подписка на прогресс загрузки (Буфер)
         Observable.FromEvent<Action<string, float>, (string, float)>(
             h => (id, p) => h((id, p)),
             h => _downloads.OnProgress += h,
@@ -110,69 +139,99 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             .Subscribe(x =>
             {
                 if (CurrentTrack != null && x.Item1 == CurrentTrack.Id)
-                {
                     BufferedSeconds = DurationSeconds * x.Item2;
-                }
             });
 
-        // 4. Логика громкости
+        // 5. Реактивное управление громкостью
         this.WhenAnyValue(x => x.Volume)
-            .Throttle(TimeSpan.FromMilliseconds(50))
             .Subscribe(v =>
             {
-                _audio.SetVolume(v);
+                _audio.SetVolume(v / 100f);
                 IsMuted = v <= 0.01f;
             });
 
-        // 5. Инициализация команд
+        this.WhenAnyValue(x => x.Volume)
+            .Throttle(TimeSpan.FromSeconds(1))
+            .Subscribe(v =>
+            {
+                _library.Data.Volume = v / 100f;
+                _library.Save();
+            });
+
+        // Слежение за изменением лимитов в настройках
+        Observable.FromEvent(h => _library.OnDataChanged += h, h => _library.OnDataChanged -= h)
+            .Subscribe(_ =>
+            {
+                MaxVolume = _library.Data.MaxVolumeLimit;
+                if (Volume > MaxVolume) Volume = MaxVolume;
+            });
+
+        // 6. Инициализация команд
         var canExecute = this.WhenAnyValue(x => x.HasTrack);
 
-        PlayPauseCommand = ReactiveCommand.Create(() => { 
-            _audio.TogglePlayPause(); 
-            UpdatePlayState(); 
+        PlayPauseCommand = ReactiveCommand.Create(() =>
+        {
+            _audio.TogglePlayPause();
+            UpdatePlayState();
         }, canExecute);
 
-        PreviousCommand = ReactiveCommand.Create(() => _audio.PlayPrevious(), canExecute);
-        NextCommand = ReactiveCommand.Create(() => _audio.PlayNext(), canExecute);
+        PreviousCommand = ReactiveCommand.CreateFromTask(
+            () => _audio.PlayPreviousAsync(),
+            canExecute);
 
-        ToggleShuffleCommand = ReactiveCommand.Create(() => { 
-            ShuffleEnabled = !ShuffleEnabled; 
-            _audio.ShuffleEnabled = ShuffleEnabled; 
+        NextCommand = ReactiveCommand.CreateFromTask(
+            () => _audio.PlayNextAsync(),
+            canExecute);
+
+        ToggleShuffleCommand = ReactiveCommand.Create(() =>
+        {
+            ShuffleEnabled = !ShuffleEnabled;
+            _audio.ShuffleEnabled = ShuffleEnabled;
+            _library.Data.ShuffleEnabled = ShuffleEnabled;
+            _library.Save();
         });
 
         ToggleRepeatCommand = ReactiveCommand.Create(() =>
         {
-            RepeatMode = RepeatMode switch { 
-                RepeatMode.None => RepeatMode.RepeatAll, 
-                RepeatMode.RepeatAll => RepeatMode.RepeatOne, 
-                _ => RepeatMode.None 
+            RepeatMode = RepeatMode switch
+            {
+                RepeatMode.None => RepeatMode.RepeatAll,
+                RepeatMode.RepeatAll => RepeatMode.RepeatOne,
+                _ => RepeatMode.None
             };
             _audio.RepeatMode = RepeatMode;
+            _library.Data.RepeatMode = RepeatMode;
+            _library.Save();
         });
 
-        ToggleLikeCommand = ReactiveCommand.Create(() => { 
-            if (CurrentTrack != null) { 
-                _library.ToggleLike(CurrentTrack); 
-                IsLiked = CurrentTrack.IsLiked; 
-            } 
+        ToggleLikeCommand = ReactiveCommand.Create(() =>
+        {
+            if (CurrentTrack != null)
+            {
+                _library.ToggleLike(CurrentTrack);
+                IsLiked = CurrentTrack.IsLiked;
+            }
         }, canExecute);
 
-        ToggleMuteCommand = ReactiveCommand.Create(() => { 
-            if (IsMuted) {
-                Volume = _volumeBeforeMute > 0.05f ? _volumeBeforeMute : 0.5f; 
-            } else { 
-                _volumeBeforeMute = Volume; 
-                Volume = 0; 
-            } 
+        ToggleMuteCommand = ReactiveCommand.Create(() =>
+        {
+            if (IsMuted)
+            {
+                Volume = _volumeBeforeMute > 5f ? _volumeBeforeMute : 50f;
+            }
+            else
+            {
+                _volumeBeforeMute = Volume;
+                Volume = 0;
+            }
         });
     }
 
-    private void OnTrackChanged(TrackInfo? track)
+    private void HandleTrackChanged(TrackInfo? track)
     {
         CurrentTrack = track;
         HasTrack = track != null;
 
-        // Уведомляем об изменении вычисляемых свойств
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(SafeAuthor));
         this.RaisePropertyChanged(nameof(SafeThumbnail));
@@ -185,14 +244,12 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             Position = TimeSpan.Zero;
             PositionSeconds = 0;
 
-            // Визуализация буфера
-            if (track.IsDownloaded) {
+            if (track.IsDownloaded)
                 BufferedSeconds = DurationSeconds;
-            } else if (_downloads.IsDownloading(track.Id)) {
+            else if (_downloads.IsDownloading(track.Id))
                 BufferedSeconds = DurationSeconds * _downloads.GetProgress(track.Id);
-            } else {
+            else
                 BufferedSeconds = 0;
-            }
         }
         else
         {
@@ -204,16 +261,14 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         UpdatePlayState();
     }
 
-    private void UpdatePosition()
+    private void UpdatePositionFromEngine()
     {
-        // Если мы в процессе перемотки, не берем данные из движка (чтобы избежать дерганья)
         if (!HasTrack || _isSeeking || _justFinishedSeeking) return;
 
         var currentPos = _audio.CurrentPosition;
         Position = currentPos;
         PositionSeconds = currentPos.TotalSeconds;
 
-        // Если движок обновил общую длительность (актуально для потоков)
         if (_audio.TotalDuration.TotalSeconds > 0 && Math.Abs(DurationSeconds - _audio.TotalDuration.TotalSeconds) > 1)
         {
             Duration = _audio.TotalDuration;
@@ -229,37 +284,27 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         IsPaused = _audio.IsPaused;
     }
 
-    #region Seek Logic (защита от прыжков)
+    #region Seek Logic
 
-    /// <summary>
-    /// Вызывается из View при начале перетаскивания (PointerPressed)
-    /// </summary>
     public void StartSeek()
     {
         _isSeeking = true;
         _justFinishedSeeking = false;
     }
 
-    /// <summary>
-    /// Вызывается из View при завершении перетаскивания (PointerReleased)
-    /// </summary>
     public async void EndSeek()
     {
         if (HasTrack)
         {
-            // 1. Применяем позицию в аудио-движке
             _audio.Seek(TimeSpan.FromSeconds(PositionSeconds));
-            
-            // 2. Обновляем текстовое время немедленно
             Position = TimeSpan.FromSeconds(PositionSeconds);
 
-            // 3. Активируем временную блокировку обновлений от движка
             _isSeeking = false;
             _justFinishedSeeking = true;
 
-            // 4. Ждем 400мс, пока буфер и состояние NAudio стабилизируются
-            await Task.Delay(400);
-            
+            // Задержка для стабилизации потока после перемотки
+            await Task.Delay(500);
+
             _justFinishedSeeking = false;
         }
         else

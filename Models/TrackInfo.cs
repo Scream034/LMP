@@ -44,7 +44,7 @@ public class TrackInfo
     public string? LocalPath { get; set; }
 
     // В каких плейлистах находится
-    public HashSet<string> InPlaylists { get; set; } = new();
+    public HashSet<string> InPlaylists { get; set; } = [];
 
     // Метаданные для радио
     public string? RadioSeedId { get; set; }
