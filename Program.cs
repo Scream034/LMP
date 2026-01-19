@@ -57,8 +57,7 @@ class Program
         services.AddSingleton<LibraryService>();
         services.AddSingleton<GoogleAuthService>();
         services.AddSingleton<YoutubeProvider>();
-        services.AddSingleton<IDialogService, Dia
-        logService>();
+        services.AddSingleton<IDialogService, DialogService>();
 
         // --- Fast search & caching ---
         services.AddSingleton<PipedProvider>();        // Быстрый поиск через Piped

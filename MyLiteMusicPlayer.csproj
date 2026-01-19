@@ -39,6 +39,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="External\YoutubeExplode\YoutubeExplode\YoutubeExplode.csproj" />
+    <ProjectReference Include="External\YoutubeExplode\YoutubeExplode.csproj" />
   </ItemGroup>
 </Project>
