@@ -20,6 +20,11 @@ public class YoutubeProvider
     private readonly HttpClient _http;
     private readonly GoogleAuthService _auth;
     
+    // Пути к папкам
+    private readonly string _appFolder;
+    private readonly string _binFolder;
+    private readonly string _downloadFolder;
+
     public bool IsReady { get; private set; }
 
     private static readonly Regex YoutubeVideoRegex = new(
@@ -35,29 +40,57 @@ public class YoutubeProvider
         _auth = auth;
         _http = new HttpClient();
         
-        string downloadPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "LiteMusicPlayer", "Downloads");
+        // Настройка путей
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        _appFolder = Path.Combine(appData, "LiteMusicPlayer");
+        _binFolder = Path.Combine(_appFolder, "Bin");
+        _downloadFolder = Path.Combine(_appFolder, "Downloads");
+
+        // Создаем папки
+        Directory.CreateDirectory(_binFolder);
+        Directory.CreateDirectory(_downloadFolder);
         
+        // Настраиваем YoutubeDL
         _ytdl = new YoutubeDL
         {
-            YoutubeDLPath = "yt-dlp.exe",
-            FFmpegPath = "ffmpeg.exe",
-            OutputFolder = downloadPath
+            YoutubeDLPath = Path.Combine(_binFolder, "yt-dlp.exe"),
+            FFmpegPath = Path.Combine(_binFolder, "ffmpeg.exe"),
+            OutputFolder = _downloadFolder
         };
-        
-        Directory.CreateDirectory(_ytdl.OutputFolder);
     }
 
     public async Task InitializeAsync()
     {
-        if (!File.Exists(_ytdl.YoutubeDLPath))
+        try
         {
-            Console.WriteLine("Warning: yt-dlp.exe not found!");
+            // 1. Проверяем и скачиваем yt-dlp
+            if (!File.Exists(_ytdl.YoutubeDLPath))
+            {
+                Console.WriteLine("Скачивание yt-dlp...");
+                await YoutubeDLSharp.Utils.DownloadYtDlp(_binFolder);
+                
+                // На Linux/Mac нужно дать права на выполнение, 
+                // но так как мы ориентируемся на Windows (WinExe в csproj), это опционально.
+            }
+
+            // 2. Проверяем и скачиваем FFmpeg (нужен для конвертации в mp3)
+            if (!File.Exists(_ytdl.FFmpegPath))
+            {
+                Console.WriteLine("Скачивание FFmpeg...");
+                // DownloadFFmpeg скачивает архив и распаковывает его
+                await YoutubeDLSharp.Utils.DownloadFFmpeg(_binFolder);
+            }
+
+            IsReady = true;
         }
-        IsReady = true;
-        await Task.CompletedTask;
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка инициализации бинарников: {ex.Message}");
+            IsReady = false;
+        }
     }
+
+    // ... (Остальной код без изменений) ...
 
     public QueryType DetectQueryType(string query)
     {

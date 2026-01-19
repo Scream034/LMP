@@ -6,8 +6,6 @@ D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.AssemblyInf
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.AssemblyInfo.cs
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.csproj.CoreCompileInputs.cache
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.sourcelink.json
-D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.csproj.Fody.CopyLocal.cache
-D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.csproj.Fody.RuntimeCopyLocal.cache
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.dll
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\refint\MyLiteMusicPlayer.dll
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.pdb
