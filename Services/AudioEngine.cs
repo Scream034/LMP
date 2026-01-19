@@ -29,7 +29,7 @@ public class AudioEngine : IDisposable
 
     private bool _isManualStop = false;
     private Guid _currentSessionId;
-    
+
     // Счётчик попыток для retry-логики
     private int _retryCount = 0;
     private const int MaxRetries = 2;
@@ -106,7 +106,7 @@ public class AudioEngine : IDisposable
         Debug.WriteLine($"[AudioEngine] Initialized. Cache: {_cacheFolder}");
     }
 
-    public async Task PlayTrackAsync(TrackInfo track, bool isRetry = false)
+    public async Task PlayTrackAsync(TrackInfo track)
     {
         if (track == null)
         {
@@ -116,11 +116,6 @@ public class AudioEngine : IDisposable
 
         var mySessionId = Guid.NewGuid();
         _currentSessionId = mySessionId;
-        
-        if (!isRetry)
-        {
-            _retryCount = 0;
-        }
 
         IsLoading = true;
         CurrentTrack = track;
@@ -129,10 +124,9 @@ public class AudioEngine : IDisposable
         try
         {
             Debug.WriteLine($"[AudioEngine] ========================================");
-            Debug.WriteLine($"[AudioEngine] >>> PLAY REQUEST <<< (Retry: {_retryCount})");
+            Debug.WriteLine($"[AudioEngine] >>> PLAY REQUEST <<<");
             Debug.WriteLine($"[AudioEngine] Title: '{track.Title}'");
             Debug.WriteLine($"[AudioEngine] ID: '{track.Id}'");
-            Debug.WriteLine($"[AudioEngine] Author: '{track.Author}'");
 
             lock (_lock)
             {
@@ -142,7 +136,7 @@ public class AudioEngine : IDisposable
             }
 
             Debug.WriteLine($"[AudioEngine] Requesting fresh stream URL...");
-            var freshUrl = await _youtube.RefreshStreamUrlAsync(track, useAlternativeFormat: _retryCount > 0);
+            var freshUrl = await _youtube.RefreshStreamUrlAsync(track);
 
             if (_currentSessionId != mySessionId)
             {
@@ -156,13 +150,11 @@ public class AudioEngine : IDisposable
             }
 
             Debug.WriteLine($"[AudioEngine] Fresh URL obtained. Length: {freshUrl.Length}");
-            Debug.WriteLine($"[AudioEngine] URL preview: {freshUrl.Substring(0, Math.Min(150, freshUrl.Length))}...");
 
             await StartPlaybackAsync(freshUrl, mySessionId);
 
             if (_currentSessionId == mySessionId && _outputDevice.PlaybackState == PlaybackState.Playing)
             {
-                _retryCount = 0; // Сбрасываем при успехе
                 AddToHistory(track);
                 Debug.WriteLine($"[AudioEngine] === PLAYBACK STARTED: '{track.Title}' ===");
             }
@@ -170,18 +162,6 @@ public class AudioEngine : IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine($"[AudioEngine] PLAYBACK FAILED: {ex.Message}");
-            Debug.WriteLine($"[AudioEngine] Stack: {ex.StackTrace}");
-            
-            // Retry с альтернативным форматом
-            if (_retryCount < MaxRetries && _currentSessionId == mySessionId)
-            {
-                _retryCount++;
-                Debug.WriteLine($"[AudioEngine] Retrying with alternative format ({_retryCount}/{MaxRetries})...");
-                IsLoading = false;
-                await PlayTrackAsync(track, isRetry: true);
-                return;
-            }
-            
             OnError?.Invoke($"Error: {ex.Message}");
             if (_currentSessionId == mySessionId) StopInternal(true);
         }
@@ -248,7 +228,7 @@ public class AudioEngine : IDisposable
             try { posAfterBuffer = _audioReader?.CurrentTime ?? TimeSpan.Zero; }
             catch { posAfterBuffer = TimeSpan.Zero; }
         }
-        
+
         Debug.WriteLine($"[AudioEngine] Position after buffer: {posAfterBuffer}");
         Debug.WriteLine($"[AudioEngine] Playback state: {_outputDevice.PlaybackState}");
 
@@ -448,12 +428,12 @@ public class AudioEngine : IDisposable
             Debug.WriteLine($"[AudioEngine] Exception Type: {e.Exception.GetType().Name}");
             Debug.WriteLine($"[AudioEngine] Exception Message: {e.Exception.Message}");
             Debug.WriteLine($"[AudioEngine] Exception Stack: {e.Exception.StackTrace}");
-            
+
             if (e.Exception.InnerException != null)
             {
                 Debug.WriteLine($"[AudioEngine] Inner Exception: {e.Exception.InnerException.Message}");
             }
-            
+
             OnError?.Invoke($"Playback Error: {e.Exception.Message}");
         }
 
@@ -491,17 +471,17 @@ public class AudioEngine : IDisposable
         if (pos.TotalSeconds < 1.0 && dur.TotalSeconds > 5)
         {
             Debug.WriteLine("[AudioEngine] Stream error (stopped at beginning)");
-            
+
             // Пробуем retry с альтернативным форматом
             if (_retryCount < MaxRetries && CurrentTrack != null)
             {
                 _retryCount++;
                 Debug.WriteLine($"[AudioEngine] Attempting retry {_retryCount}/{MaxRetries}...");
                 await Task.Delay(500);
-                await PlayTrackAsync(CurrentTrack, isRetry: true);
+                await PlayTrackAsync(CurrentTrack);
                 return;
             }
-            
+
             Debug.WriteLine("[AudioEngine] Max retries reached, skipping to next...");
             await Task.Delay(300);
             await PlayNextAsync();

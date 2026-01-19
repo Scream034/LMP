@@ -143,7 +143,7 @@ public class YoutubeProvider
         return match.Success ? match.Groups[1].Value : null;
     }
 
-    public async Task<TrackInfo?> GetTrackByUrlAsync(string url, bool useAlternativeFormat = false)
+    public async Task<TrackInfo?> GetTrackByUrlAsync(string url)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(url))
             return null;
@@ -152,7 +152,6 @@ public class YoutubeProvider
         {
             Debug.WriteLine($"[YoutubeProvider] === GetTrackByUrlAsync START ===");
             Debug.WriteLine($"[YoutubeProvider] URL: '{url}'");
-            Debug.WriteLine($"[YoutubeProvider] UseAlternativeFormat: {useAlternativeFormat}");
 
             var res = await _ytdl.RunVideoDataFetch(url);
 
@@ -165,7 +164,7 @@ public class YoutubeProvider
             }
 
             Debug.WriteLine($"[YoutubeProvider] Fetch SUCCESS. Converting to TrackInfo...");
-            var track = ConvertToTrackInfo(res.Data, useAlternativeFormat);
+            var track = ConvertToTrackInfo(res.Data);
 
             if (track != null)
             {
@@ -198,13 +197,13 @@ public class YoutubeProvider
             {
                 foreach (var entry in res.Data.Entries)
                 {
-                    var track = ConvertToTrackInfo(entry, false);
+                    var track = ConvertToTrackInfo(entry);
                     if (track != null) results.Add(track);
                 }
             }
             else
             {
-                var track = ConvertToTrackInfo(res.Data, false);
+                var track = ConvertToTrackInfo(res.Data);
                 if (track != null) results.Add(track);
             }
 
@@ -232,7 +231,7 @@ public class YoutubeProvider
             {
                 foreach (var entry in res.Data.Entries)
                 {
-                    var track = ConvertToTrackInfo(entry, false);
+                    var track = ConvertToTrackInfo(entry);
                     if (track != null) tracks.Add(track);
                 }
             }
@@ -288,16 +287,29 @@ public class YoutubeProvider
         catch { return null; }
     }
 
-    public async Task<string?> RefreshStreamUrlAsync(TrackInfo track, bool useAlternativeFormat = false)
+    public async Task<string?> RefreshStreamUrlAsync(TrackInfo track)
     {
         Debug.WriteLine($"[YoutubeProvider] === RefreshStreamUrlAsync START ===");
         Debug.WriteLine($"[YoutubeProvider] Track: '{track.Title}' (ID: {track.Id})");
-        Debug.WriteLine($"[YoutubeProvider] UseAlternativeFormat: {useAlternativeFormat}");
+
+        // Ждём готовности, если ещё не готов
+        if (!IsReady)
+        {
+            Debug.WriteLine("[YoutubeProvider] Not ready, waiting...");
+            for (int i = 0; i < 50 && !IsReady; i++) // макс 5 сек
+            {
+                await Task.Delay(100);
+            }
+            if (!IsReady)
+            {
+                Debug.WriteLine("[YoutubeProvider] Still not ready after waiting!");
+                return null;
+            }
+        }
 
         string? urlToUse = null;
         string cleanId = track.Id?.Trim() ?? string.Empty;
 
-        // Извлекаем YouTube ID
         if (cleanId.StartsWith("yt_"))
         {
             string rawId = cleanId.Substring(3);
@@ -334,7 +346,7 @@ public class YoutubeProvider
             return null;
         }
 
-        var freshTrack = await GetTrackByUrlAsync(urlToUse, useAlternativeFormat);
+        var freshTrack = await GetTrackByUrlAsync(urlToUse);
 
         if (freshTrack != null && !string.IsNullOrEmpty(freshTrack.StreamUrl))
         {
@@ -353,7 +365,7 @@ public class YoutubeProvider
         return null;
     }
 
-    private TrackInfo? ConvertToTrackInfo(YoutubeDLSharp.Metadata.VideoData data, bool useAlternativeFormat)
+    private TrackInfo? ConvertToTrackInfo(YoutubeDLSharp.Metadata.VideoData data)
     {
         if (data == null) return null;
 
@@ -365,49 +377,33 @@ public class YoutubeProvider
 
         if (data.Formats != null && data.Formats.Any())
         {
-            var audioFormats = data.Formats
+            // Фильтруем ТОЛЬКО аудио-форматы (без видео)
+            var audioOnlyFormats = data.Formats
                 .Where(f => f.AudioBitrate != null && f.AudioBitrate > 0)
+                .Where(f => f.VideoCodec == "none" || string.IsNullOrEmpty(f.VideoCodec))
                 .OrderByDescending(f => f.AudioBitrate)
                 .ToList();
 
-            Debug.WriteLine($"  Audio formats found: {audioFormats.Count}");
+            Debug.WriteLine($"  Audio-only formats found: {audioOnlyFormats.Count}");
 
-            // Логируем все доступные форматы
-            foreach (var fmt in audioFormats.Take(5))
+            foreach (var fmt in audioOnlyFormats)
             {
-                Debug.WriteLine($"    - ext={fmt.Extension}, bitrate={fmt.AudioBitrate}, codec={fmt.AudioCodec}, vcodec={fmt.VideoCodec}");
+                Debug.WriteLine($"    - ext={fmt.Extension}, abr={fmt.AudioBitrate}, acodec={fmt.AudioCodec}, vcodec={fmt.VideoCodec}");
             }
 
             YoutubeDLSharp.Metadata.FormatData? bestFormat;
 
-            if (useAlternativeFormat)
-            {
-                // Пробуем webm/opus вместо m4a (для YouTube Music)
-                bestFormat = audioFormats.FirstOrDefault(f => f.Extension == "webm" && f.VideoCodec == "none")
-                             ?? audioFormats.FirstOrDefault(f => f.Extension == "webm")
-                             ?? audioFormats.FirstOrDefault(f => f.Extension == "mp4")
-                             ?? audioFormats.FirstOrDefault();
-                             
-                Debug.WriteLine($"  Using ALTERNATIVE format selection");
-            }
-            else
-            {
-                // Стандартный выбор - m4a предпочтительнее
-                bestFormat = audioFormats.FirstOrDefault(f => f.Extension == "m4a")
-                             ?? audioFormats.FirstOrDefault(f => f.Extension == "mp4")
-                             ?? audioFormats.FirstOrDefault(f => f.Extension == "webm")
-                             ?? audioFormats.OrderByDescending(f => f.AudioBitrate).FirstOrDefault();
-            }
+            // ИЗМЕНЕНИЕ: Всегда предпочитаем webm/opus - он лучше работает со стримингом
+            // m4a требует seek к концу файла для чтения метаданных, что плохо для стриминга
+            bestFormat = audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm" && f.AudioCodec == "opus")
+                         ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm")
+                         ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "m4a")
+                         ?? audioOnlyFormats.FirstOrDefault();
 
             if (bestFormat != null)
             {
                 bestStream = bestFormat.Url ?? string.Empty;
                 Debug.WriteLine($"  Selected format: ext={bestFormat.Extension}, bitrate={bestFormat.AudioBitrate}, codec={bestFormat.AudioCodec}");
-                
-                if (!string.IsNullOrEmpty(bestStream))
-                {
-                    Debug.WriteLine($"  Stream URL preview: {bestStream.Substring(0, Math.Min(100, bestStream.Length))}...");
-                }
             }
             else
             {
