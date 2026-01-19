@@ -30,18 +30,19 @@
             </StackPanel>
         </StackPanel>
 
-        <!-- Начальная загрузка -->
-        <StackPanel DockPanel.Dock="Top" IsVisible="{Binding IsLoading}"
-            Margin="0,40" Spacing="16">
-            <ProgressBar IsIndeterminate="True" Foreground="{StaticResource AccentBrush}"
-                Height="4" Width="200" />
-            <TextBlock Text="Ищем треки..." HorizontalAlignment="Center"
-                Foreground="{StaticResource TextSecondaryBrush}" />
-        </StackPanel>
+        <!-- Начальная загрузка (с блюром) -->
+        <ContentControl DockPanel.Dock="Top" Classes="loading-search"
+            IsVisible="{Binding IsLoading}" />
 
         <!-- Ошибка -->
-        <TextBlock DockPanel.Dock="Top" Text="{Binding ErrorMessage}" Foreground="Red"
-            IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <Border DockPanel.Dock="Top"
+            IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+            Background="#331a1a" CornerRadius="8" Padding="16" Margin="0,0,0,16">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20" Foreground="#ff6b6b" />
+                <TextBlock Text="{Binding ErrorMessage}" Foreground="#ff6b6b" />
+            </StackPanel>
+        </Border>
 
         <!-- Результаты -->
         <ScrollViewer>
@@ -58,7 +59,7 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <!-- Скелеты -->
+                <!-- Скелеты подгрузки (с блюром) -->
                 <ContentControl Classes="loading-skeletons" IsVisible="{Binding IsLoadingMore}" />
             </StackPanel>
         </ScrollViewer>

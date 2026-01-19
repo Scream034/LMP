@@ -8,9 +8,8 @@
     x:DataType="vm:HomeViewModel">
 
     <ScrollViewer>
-        <!-- ⭐ Behavior прикреплён к ScrollViewer -->
         <i:Interaction.Behaviors>
-            <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="200"/>
+            <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="200" />
         </i:Interaction.Behaviors>
 
         <StackPanel Margin="24,16">
@@ -18,13 +17,13 @@
             <Grid ColumnDefinitions="*, Auto" Margin="0,0,0,16">
                 <TextBlock Text="{Binding Greeting}"
                     FontSize="32" FontWeight="Bold"
-                    Foreground="{StaticResource TextPrimaryBrush}"/>
+                    Foreground="{StaticResource TextPrimaryBrush}" />
 
                 <Button Grid.Column="1"
                     Command="{Binding ToggleDebugCommand}"
                     Background="Transparent" Padding="8">
                     <mi:MaterialIcon Kind="Bug" Width="20" Height="20"
-                        Foreground="{Binding ShowDebugInfo, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#666'}"/>
+                        Foreground="{Binding ShowDebugInfo, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#666'}" />
                 </Button>
             </Grid>
 
@@ -34,23 +33,23 @@
                 Background="Transparent" Margin="0,0,0,16">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="10"/>
+                        <StackPanel Orientation="Horizontal" Spacing="10" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:CategoryItem">
-                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                     </DataTemplate>
                 </ListBox.ItemTemplate>
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem">
-                        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}"/>
-                        <Setter Property="Padding" Value="16,8"/>
-                        <Setter Property="CornerRadius" Value="20"/>
+                        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+                        <Setter Property="Padding" Value="16,8" />
+                        <Setter Property="CornerRadius" Value="20" />
                     </Style>
                     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                        <Setter Property="Background" Value="{StaticResource TextPrimaryBrush}"/>
-                        <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}"/>
+                        <Setter Property="Background" Value="{StaticResource TextPrimaryBrush}" />
+                        <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}" />
                     </Style>
                 </ListBox.Styles>
             </ListBox>
@@ -60,68 +59,61 @@
                 Background="#1A1A1A" CornerRadius="8" Padding="16,12" Margin="0,0,0,16">
                 <Grid ColumnDefinitions="*, *, *, *">
                     <StackPanel Grid.Column="0">
-                        <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10" Foreground="#666"/>
-                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18" FontWeight="Bold" Foreground="#1DB954"/>
+                        <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10"
+                            Foreground="#666" />
+                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18"
+                            FontWeight="Bold" Foreground="#1DB954" />
                     </StackPanel>
                     <StackPanel Grid.Column="1">
-                        <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10" Foreground="#666"/>
-                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18" FontWeight="Bold" Foreground="White"/>
+                        <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10"
+                            Foreground="#666" />
+                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18"
+                            FontWeight="Bold" Foreground="White" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
-                        <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10" Foreground="#666"/>
-                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18" FontWeight="Bold" Foreground="#FFA500"/>
+                        <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10"
+                            Foreground="#666" />
+                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18"
+                            FontWeight="Bold" Foreground="#FFA500" />
                     </StackPanel>
                     <StackPanel Grid.Column="3">
-                        <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10" Foreground="#666"/>
-                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14" FontWeight="Bold" Foreground="#00BFFF"/>
+                        <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10"
+                            Foreground="#666" />
+                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14"
+                            FontWeight="Bold" Foreground="#00BFFF" />
                     </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- 3. Начальная загрузка -->
-            <StackPanel IsVisible="{Binding IsLoading}" Margin="0,40" Spacing="16">
-                <ProgressBar IsIndeterminate="True" Foreground="{StaticResource AccentBrush}"
-                    Height="4" Width="200"/>
-                <TextBlock Text="{Binding L[Home_Loading]}"
-                    HorizontalAlignment="Center"
-                    Foreground="{StaticResource TextSecondaryBrush}"/>
-            </StackPanel>
+            <!-- 3. Начальная загрузка (с блюром) -->
+            <ContentControl Classes="loading-initial" IsVisible="{Binding IsLoading}" />
 
             <!-- 4. Список треков -->
             <ItemsControl ItemsSource="{Binding ActiveTracks}" IsVisible="{Binding !IsLoading}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel/>
+                        <StackPanel />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <ContentControl Content="{Binding}"/>
+                        <ContentControl Content="{Binding}" />
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
-            <!-- 5. Загрузка из сети -->
-            <Border IsVisible="{Binding IsFetchingFromNetwork}"
-                    Background="#80000000" CornerRadius="8"
-                    Padding="24" Margin="0,16">
-                <StackPanel Spacing="12" HorizontalAlignment="Center">
-                    <ProgressBar IsIndeterminate="True" Width="150" Height="3"
-                                 Foreground="{StaticResource AccentBrush}"/>
-                    <TextBlock Text="{Binding L[Home_FetchingMore]}"
-                               Foreground="White" FontSize="13"/>
-                </StackPanel>
-            </Border>
+            <!-- 5. Загрузка из сети (с блюром) -->
+            <ContentControl Classes="loading-network" IsVisible="{Binding IsFetchingFromNetwork}" />
 
-            <!-- 6. Скелеты загрузки -->
-            <ContentControl Classes="loading-skeletons" IsVisible="{Binding IsLoadingMore}"/>
+            <!-- 6. Скелеты подгрузки (с блюром) -->
+            <ContentControl Classes="loading-skeletons" IsVisible="{Binding IsLoadingMore}" />
 
             <!-- 7. Достигли конца -->
             <Border IsVisible="{Binding ReachedEnd}" Margin="0,24,0,80"
-                    HorizontalAlignment="Center">
+                HorizontalAlignment="Center">
                 <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.5">
-                    <mi:MaterialIcon Kind="CheckCircle" Width="20" Height="20" Foreground="#666"/>
-                    <TextBlock Text="{Binding L[Home_EndOfList]}" Foreground="#666" FontSize="14"/>
+                    <mi:MaterialIcon Kind="CheckCircle" Width="20" Height="20" Foreground="#666" />
+                    <TextBlock Text="{Binding L[Home_EndOfList]}" Foreground="#666" FontSize="14" />
                 </StackPanel>
             </Border>
         </StackPanel>
