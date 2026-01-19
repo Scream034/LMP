@@ -53,14 +53,24 @@ public class TrackItemViewModel : ViewModelBase
         IsLiked = track.IsLiked;
 
         // Subscribe to playback changes
+        // FIX: Проверяем на null, т.к. при остановке может прийти null
         Observable.FromEvent<TrackInfo>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(t =>
             {
-                IsCurrentTrack = t.Id == Track.Id;
-                IsPlaying = IsCurrentTrack && _audio.IsPlaying;
+                // FIX: t может быть null при остановке воспроизведения
+                if (t == null)
+                {
+                    IsCurrentTrack = false;
+                    IsPlaying = false;
+                }
+                else
+                {
+                    IsCurrentTrack = t.Id == Track.Id;
+                    IsPlaying = IsCurrentTrack && _audio.IsPlaying;
+                }
             });
 
         // Subscribe to download progress

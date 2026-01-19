@@ -48,7 +48,7 @@ public partial class App : Application
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ERROR] Background initialization failed: {ex.Message}");
+                    Debug.WriteLine($"[ERROR] Background initialization failed: {ex.Message}\n{ex.StackTrace}");
                 }
             });
         }

@@ -92,7 +92,7 @@ public class HomeViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Home load error: {ex.Message}");
+            Console.WriteLine($"Home load error: {ex.Message}\n{ex.StackTrace}");
         }
         finally
         {

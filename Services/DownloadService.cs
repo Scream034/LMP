@@ -106,7 +106,7 @@ public class DownloadService
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Download error: {ex.Message}");
+                Console.WriteLine($"Download error: {ex.Message}\n{ex.StackTrace}");
                 OnCompleted?.Invoke(track.Id, false, null);
             }
             finally

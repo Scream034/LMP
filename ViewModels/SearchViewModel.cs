@@ -141,7 +141,7 @@ public class SearchViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            ErrorMessage = $"Ошибка поиска: {ex.Message}";
+            ErrorMessage = $"Ошибка поиска: {ex.Message}\n{ex.StackTrace}";
         }
         finally
         {

@@ -68,7 +68,7 @@ public class MainWindowViewModel : ViewModelBase
                 CurrentPage = vm;
                 CurrentPageName = "Playlist";
             } catch (Exception ex) {
-                Debug.WriteLine($"[ERROR] Playlist navigation failed: {ex.Message}");
+                Debug.WriteLine($"[ERROR] Playlist navigation failed: {ex.Message}\n{ex.StackTrace}");
             }
         });
 
@@ -94,7 +94,7 @@ public class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[ERROR] Navigation to {name} failed: {ex.Message}");
+            Debug.WriteLine($"[ERROR] Navigation to {name} failed: {ex.Message}\n{ex.StackTrace}");
         }
     }
 

@@ -18,10 +18,13 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Console.InputEncoding = System.Text.Encoding.UTF8;
+
         try
         {
             Debug.WriteLine("[LIFECYCLE] App starting...");
-            
+
             var services = new ServiceCollection();
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
@@ -30,7 +33,7 @@ class Program
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[CRITICAL] Global crash: {ex.Message}");
+            Debug.WriteLine($"[CRITICAL] Global crash: {ex.Message}\n{ex.StackTrace}");
             // Здесь можно добавить запись в файл лога
         }
     }
@@ -59,14 +62,14 @@ class Program
         // ViewModels
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<PlayerBarViewModel>();
-        
+
         // Transient (создаются заново при каждом вызове для очистки состояния)
         services.AddTransient<HomeViewModel>();
         services.AddTransient<SearchViewModel>();
         services.AddTransient<LibraryViewModel>();
         services.AddTransient<PlaylistViewModel>();
         services.AddTransient<SettingsViewModel>();
-        
+
         Debug.WriteLine("[DI] Services registered.");
     }
 }

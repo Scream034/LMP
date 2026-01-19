@@ -70,7 +70,7 @@ public class LibraryService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to save library: {ex.Message}");
+            Console.WriteLine($"Failed to save library: {ex.Message}\n{ex.StackTrace}");
         }
     }
 

@@ -77,7 +77,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to save auth tokens: {ex.Message}");
+            Console.WriteLine($"Failed to save auth tokens: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -136,7 +136,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Login error: {ex.Message}");
+            Console.WriteLine($"Login error: {ex.Message}\n{ex.StackTrace}");
             return false;
         }
     }
@@ -181,7 +181,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Token exchange error: {ex.Message}");
+            Console.WriteLine($"Token exchange error: {ex.Message}\n{ex.StackTrace}");
             return false;
         }
     }
@@ -252,7 +252,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to fetch user info: {ex.Message}");
+            Console.WriteLine($"Failed to fetch user info: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
