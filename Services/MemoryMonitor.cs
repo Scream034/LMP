@@ -28,7 +28,7 @@ public class MemoryMonitor
 
     // Пороги предупреждений
     public long WarningThresholdMb { get; set; } = 500;
-    public long CriticalThresholdMb { get; set; } = 800;
+    public long CriticalThresholdMb { get; set; } = 700;
 
     public MemoryMonitor(TimeSpan? interval = null)
     {
