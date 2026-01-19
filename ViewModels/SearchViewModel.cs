@@ -1,179 +1,182 @@
+// ViewModels/SearchViewModel.cs
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Reactive;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
-public class SearchViewModel : ViewModelBase
+public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
     private readonly YoutubeProvider _youtube;
+    private readonly SearchCacheService _searchCache;
+    private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
-    private CancellationTokenSource? _searchCts;
+
+    private string _currentQuery = "";
+
+    protected override int BatchSize => 20;
 
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
-    [Reactive] public bool IsLoading { get; private set; }
     [Reactive] public bool HasResults { get; private set; }
     [Reactive] public string? ErrorMessage { get; private set; }
-    [Reactive] public string? DetectedType { get; private set; }
-
-    public ObservableCollection<TrackItemViewModel> Results { get; } = [];
 
     public ReactiveCommand<Unit, Unit> SearchCommand { get; }
-    public ReactiveCommand<Unit, Unit> ClearCommand { get; }
-    public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
+    public ObservableCollection<TrackItemViewModel> Results => Items;
 
     public SearchViewModel(
         YoutubeProvider youtube,
+        SearchCacheService searchCache,
+        ImageCacheService imageCache,
         AudioEngine audio,
         LibraryService library,
         DownloadService downloads)
     {
         _youtube = youtube;
+        _searchCache = searchCache;
+        _imageCache = imageCache;
         _audio = audio;
         _library = library;
         _downloads = downloads;
 
-        // Команда поиска теперь запускается вручную (кнопкой или Enter)
-        // Добавлено условие: строка не должна быть пустой
-        var canSearch = this.WhenAnyValue(x => x.SearchQuery,
-            query => !string.IsNullOrWhiteSpace(query));
-
+        var canSearch = this.WhenAnyValue(x => x.SearchQuery, q => !string.IsNullOrWhiteSpace(q));
         SearchCommand = ReactiveCommand.CreateFromTask(ExecuteSearchAsync, canSearch);
+    }
 
-        ClearCommand = ReactiveCommand.Create(() =>
+    protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
+    {
+        if (_library.HasTrack(track.Id))
         {
-            SearchQuery = string.Empty;
-            Results.Clear();
-            HasResults = false;
-            ErrorMessage = null;
-        });
-
-        var hasResults = this.WhenAnyValue(x => x.HasResults);
-        PlayAllCommand = ReactiveCommand.Create(() =>
-        {
-            if (Results.Count > 0)
+            var existing = _library.GetTrack(track.Id);
+            if (existing != null)
             {
-                _audio.ClearQueue();
-                foreach (var item in Results)
-                {
-                    _audio.Enqueue(item.Track);
-                }
+                track.IsLiked = existing.IsLiked;
+                track.IsDownloaded = existing.IsDownloaded;
             }
-        }, hasResults);
+        }
 
-        // ВАЖНО: Мы убрали автоматическую подписку с Throttle.
-        // Теперь поиск происходит только по явному действию пользователя.
+        return new TrackItemViewModel(track, _audio, _library, _downloads, PlayTrackWithContext);
+    }
+
+    protected override string GetItemId(TrackInfo item) => item.Id;
+
+    protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(_currentQuery)) return [];
+
+        var sw = Stopwatch.StartNew();
+        var newTracks = await _youtube.SearchAsync(_currentQuery, TotalCount + 50);
+        var result = newTracks.Skip(TotalCount).ToList();
+
+        Debug.WriteLine($"[Search] Fetched {result.Count} more in {sw.ElapsedMilliseconds}ms");
+
+        if (result.Count > 0)
+        {
+            var allTracks = AllItems.Concat(result).ToList();
+            _ = _searchCache.SetAsync(_currentQuery, allTracks);
+        }
+
+        return result;
     }
 
     private async Task ExecuteSearchAsync()
     {
-        // Отменяем предыдущий поиск, если он был
-        _searchCts?.Cancel();
-        _searchCts = new CancellationTokenSource();
-
+        CancelLoading();
         IsLoading = true;
         ErrorMessage = null;
-        Results.Clear();
+        ClearItems();
+
+        _currentQuery = SearchQuery.Trim();
+        var sw = Stopwatch.StartNew();
 
         try
         {
-            var queryType = _youtube.DetectQueryType(SearchQuery);
-            DetectedType = queryType.ToString();
-
+            var queryType = _youtube.DetectQueryType(_currentQuery);
             List<TrackInfo> tracks;
 
-            switch (queryType)
+            if (queryType == QueryType.DirectUrl)
             {
-                case QueryType.DirectUrl:
-                    var singleTrack = await _youtube.GetTrackByUrlAsync(SearchQuery);
-                    tracks = singleTrack != null ? [singleTrack] : [];
-                    break;
-                case QueryType.Playlist:
-                    var playlistResult = await _youtube.GetPlaylistAsync(SearchQuery);
-                    tracks = playlistResult?.Tracks ?? [];
-                    break;
-                case QueryType.Search:
-                    tracks = await _youtube.SearchAsync(SearchQuery);
-                    break;
-                default:
-                    tracks = [];
-                    break;
+                var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
+                tracks = track != null ? [track] : [];
+                await InitializeItemsAsync(tracks, canFetchMore: false);
             }
-
-            foreach (var track in tracks)
+            else if (queryType == QueryType.Playlist)
             {
-                // Синхронизация статуса (лайк/скачано) с библиотекой
-                if (_library.HasTrack(track.Id))
+                IsFetchingFromNetwork = true;
+                var playlist = await _youtube.GetPlaylistAsync(_currentQuery);
+                tracks = playlist?.Tracks ?? [];
+                IsFetchingFromNetwork = false;
+                await InitializeItemsAsync(tracks, canFetchMore: false);
+            }
+            else
+            {
+                // Проверяем кэш
+                var cached = await _searchCache.GetAsync(_currentQuery, 20);
+
+                if (cached != null && cached.Count > 0)
                 {
-                    var existing = _library.GetTrack(track.Id);
-                    if (existing != null)
+                    tracks = cached;
+                    Debug.WriteLine($"[Search] From cache: {cached.Count}");
+                }
+                else
+                {
+                    IsFetchingFromNetwork = true;
+                    tracks = await _youtube.SearchAsync(_currentQuery, 100);
+                    IsFetchingFromNetwork = false;
+
+                    if (tracks.Count > 0)
                     {
-                        track.IsLiked = existing.IsLiked;
-                        track.IsDownloaded = existing.IsDownloaded;
+                        _ = _searchCache.SetAsync(_currentQuery, tracks);
                     }
                 }
 
-                Results.Add(new TrackItemViewModel(
-                    track, _audio, _library, _downloads,
-                    onPlay: t => PlayTrackWithContext(t),
-                    onRadio: t => StartRadio(t)));
+                // Предзагрузка изображений
+                var imageUrls = tracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                _ = _imageCache.PrefetchAsync(imageUrls!);
+
+                await InitializeItemsAsync(tracks, canFetchMore: true);
             }
 
-            HasResults = Results.Count > 0;
+            HasResults = tracks.Count > 0;
             if (!HasResults)
             {
-                ErrorMessage = "Ничего не найдено";
+                ErrorMessage = L["Search_NoResults"];
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Поиск отменен, ничего не делаем
+
+            Debug.WriteLine($"[Search] '{_currentQuery}': {tracks.Count} results in {sw.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
-            ErrorMessage = $"Ошибка поиска: {ex.Message}\n{ex.StackTrace}";
+            ErrorMessage = ex.Message;
+            Debug.WriteLine($"[Search] Error: {ex.Message}");
         }
         finally
         {
             IsLoading = false;
+            IsFetchingFromNetwork = false;
         }
     }
 
-    private async void PlayTrackWithContext(TrackInfo track)
+    private void PlayTrackWithContext(TrackInfo track)
     {
         _audio.ClearQueue();
+        _ = _audio.PlayTrackAsync(track);
 
-        // ВАЖНО: Используем Async версию, чтобы UI не зависал, если ссылка требует обновления
-        await Task.Run(async () =>
+        bool found = false;
+        foreach (var item in Items)
         {
-            await _audio.PlayTrackAsync(track);
-
-            // Добавляем остальные треки из результатов в очередь
-            bool found = false;
-            foreach (var item in Results)
-            {
-                if (found)
-                    _audio.Enqueue(item.Track);
-                if (item.Track.Id == track.Id)
-                    found = true;
-            }
-
-            _library.AddToRecentlyPlayed(track);
-        });
+            if (found) _audio.Enqueue(item.Track);
+            if (item.Track.Id == track.Id) found = true;
+        }
     }
 
-    private async void StartRadio(TrackInfo track)
+    public void Dispose()
     {
-        var radioTracks = await _youtube.GetRadioAsync(track);
-        if (radioTracks.Count > 0)
-        {
-            _audio.ClearQueue();
-            _audio.EnqueueRange(radioTracks);
-        }
+        CancelLoading();
     }
 }

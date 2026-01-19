@@ -5,13 +5,11 @@
   "Common_OK": "ОК",
   "Common_Loading": "Загрузка...",
   "Common_Search": "Поиск",
-
   "Sidebar_Home": "Главная",
   "Sidebar_Search": "Поиск",
   "Sidebar_Library": "Медиатека",
   "Sidebar_Settings": "Настройки",
   "Sidebar_Guest": "Гость",
-
   "Home_Greeting_Morning": "Доброе утро",
   "Home_Greeting_Afternoon": "Добрый день",
   "Home_Greeting_Evening": "Добрый вечер",
@@ -22,22 +20,18 @@
   "Home_Debug_Displayed": "ПОКАЗАНО",
   "Home_Debug_Cached": "КЭШ",
   "Home_Debug_Memory": "ПАМЯТЬ",
-
   "Search_Title": "Поиск",
   "Search_Placeholder": "Что хочешь послушать?",
-
   "Library_Title": "Твоя медиатека",
   "Library_NewPlaylist": "Новый плейлист",
   "Library_SyncYoutube": "Синхронизация",
   "Library_PlaylistNamePlaceholder": "Название плейлиста",
-
   "Playlist_Type": "ПЛЕЙЛИСТ",
   "Playlist_TracksCount": "трек|трека|треков",
   "Playlist_DurationFormat": "{0} ч. {1} мин.",
   "Playlist_PlayAll": "Слушать все",
   "Playlist_Shuffle": "Перемешать",
   "Playlist_DownloadAll": "Скачать все",
-
   "Player_Shuffle": "Перемешать",
   "Player_Previous": "Назад",
   "Player_Play": "Играть",
@@ -46,7 +40,6 @@
   "Player_Repeat": "Повтор",
   "Player_Mute": "Без звука",
   "Player_Volume": "Громкость",
-
   "Settings_Title": "Настройки",
   "Settings_Account_Language": "Аккаунт и Язык",
   "Settings_Audio": "Звуковой движок",
@@ -69,7 +62,6 @@
   "Perf_SmoothLoading": "Плавная анимация списков",
   "General_Discord": "Статус в Discord",
   "General_AutoPaste": "Авто-плей при вставке ссылки",
-
   "Dialog_Confirm_Title": "Подтверждение",
   "Dialog_Warning_Title": "Внимание",
   "Dialog_Done_Title": "Готово",
@@ -77,5 +69,11 @@
   "Dialog_HistoryCleared_Msg": "История поиска очищена.",
   "Dialog_Reset_Msg": "Сбросить все настройки? Ваша музыкальная библиотека сохранится.",
   "Dialog_ResetComplete_Msg": "Настройки сброшены.",
-  "Dialog_Logout_Msg": "Выйти из аккаунта?"
+  "Dialog_Logout_Msg": "Выйти из аккаунта?",
+  "Home_Loading": "Ищем горячие новинки...",
+  "Home_FetchingMore": "Загружаем ещё треки...",
+  "Home_EndOfList": "Вы долистали до конца",
+  "Search_Searching": "Ищем треки...",
+  "Search_FetchingMore": "Загружаем ещё результаты...",
+  "Search_EndOfResults": "Больше результатов нет"
 }

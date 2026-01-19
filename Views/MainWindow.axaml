@@ -35,21 +35,24 @@
                         <Button Classes="sidebar-btn" Command="{Binding NavigateHomeCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="Home" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Sidebar_Home]}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Sidebar_Home]}"
+                                    VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
 
                         <Button Classes="sidebar-btn" Command="{Binding NavigateSearchCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Sidebar_Search]}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Sidebar_Search]}"
+                                    VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
 
                         <Button Classes="sidebar-btn" Command="{Binding NavigateLibraryCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Sidebar_Library]}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Sidebar_Library]}"
+                                    VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                     </StackPanel>
@@ -103,27 +106,25 @@
             <Border Grid.Column="1"
                 Background="{StaticResource BgPrimaryBrush}"
                 Padding="24">
-                <ScrollViewer>
-                    <ContentControl Content="{Binding CurrentPage}">
-                        <ContentControl.DataTemplates>
-                            <DataTemplate DataType="vm:HomeViewModel">
-                                <views:HomeView />
-                            </DataTemplate>
-                            <DataTemplate DataType="vm:SearchViewModel">
-                                <views:SearchView />
-                            </DataTemplate>
-                            <DataTemplate DataType="vm:LibraryViewModel">
-                                <views:LibraryView />
-                            </DataTemplate>
-                            <DataTemplate DataType="vm:PlaylistViewModel">
-                                <views:PlaylistView />
-                            </DataTemplate>
-                            <DataTemplate DataType="vm:SettingsViewModel">
-                                <views:SettingsView />
-                            </DataTemplate>
-                        </ContentControl.DataTemplates>
-                    </ContentControl>
-                </ScrollViewer>
+                <ContentControl Content="{Binding CurrentPage}">
+                    <ContentControl.DataTemplates>
+                        <DataTemplate DataType="vm:HomeViewModel">
+                            <views:HomeView />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:SearchViewModel">
+                            <views:SearchView />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:LibraryViewModel">
+                            <views:LibraryView />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:PlaylistViewModel">
+                            <views:PlaylistView />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:SettingsViewModel">
+                            <views:SettingsView />
+                        </DataTemplate>
+                    </ContentControl.DataTemplates>
+                </ContentControl>
             </Border>
         </Grid>
 

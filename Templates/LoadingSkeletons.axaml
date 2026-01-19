@@ -1,0 +1,71 @@
+<!-- Templates/LoadingSkeletons.axaml -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Анимация пульсации -->
+    <Style Selector="Border.skeleton">
+        <Style.Animations>
+            <Animation Duration="0:0:1.5" IterationCount="Infinite">
+                <KeyFrame KeyTime="0:0:0"><Setter Property="Opacity" Value="0.3"/></KeyFrame>
+                <KeyFrame KeyTime="0:0:0.75"><Setter Property="Opacity" Value="0.5"/></KeyFrame>
+                <KeyFrame KeyTime="0:0:1.5"><Setter Property="Opacity" Value="0.3"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- Универсальный контрол для скелетов загрузки -->
+    <Style Selector="ContentControl.loading-skeletons">
+        <Setter Property="ContentTemplate">
+            <Setter.Value>
+                <DataTemplate>
+                    <StackPanel Spacing="10" Margin="0,16,0,80">
+                        <!-- Скелет 1 (Слабое размытие) -->
+                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
+                            <Grid.Effect><BlurEffect Radius="3"/></Grid.Effect>
+                            <Border Grid.Column="0" Width="48" Height="48" 
+                                    Background="#222" CornerRadius="4" Classes="skeleton"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
+                                <Border Width="200" Height="14" Background="#222" 
+                                        HorizontalAlignment="Left" CornerRadius="2" Classes="skeleton"/>
+                                <Border Width="120" Height="10" Background="#181818"
+                                        HorizontalAlignment="Left" Margin="0,6,0,0" 
+                                        CornerRadius="2" Classes="skeleton"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Скелет 2 (Среднее размытие) -->
+                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
+                            <Grid.Effect><BlurEffect Radius="6"/></Grid.Effect>
+                            <Border Grid.Column="0" Width="48" Height="48" 
+                                    Background="#222" CornerRadius="4" Classes="skeleton"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
+                                <Border Width="180" Height="14" Background="#222" 
+                                        HorizontalAlignment="Left" CornerRadius="2" Classes="skeleton"/>
+                                <Border Width="100" Height="10" Background="#181818"
+                                        HorizontalAlignment="Left" Margin="0,6,0,0" 
+                                        CornerRadius="2" Classes="skeleton"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Скелет 3 (Сильное размытие) -->
+                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
+                            <Grid.Effect><BlurEffect Radius="12"/></Grid.Effect>
+                            <Border Grid.Column="0" Width="48" Height="48" 
+                                    Background="#222" CornerRadius="4" Classes="skeleton"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
+                                <Border Width="220" Height="14" Background="#222" 
+                                        HorizontalAlignment="Left" CornerRadius="2" Classes="skeleton"/>
+                                <Border Width="140" Height="10" Background="#181818"
+                                        HorizontalAlignment="Left" Margin="0,6,0,0" 
+                                        CornerRadius="2" Classes="skeleton"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="Загружаем..." HorizontalAlignment="Center" 
+                                   FontSize="12" Foreground="#444" Margin="0,10"/>
+                    </StackPanel>
+                </DataTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</Styles>

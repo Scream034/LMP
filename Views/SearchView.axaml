@@ -2,51 +2,65 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     xmlns:mi="using:Material.Icons.Avalonia"
+    xmlns:i="using:Avalonia.Xaml.Interactivity"
+    xmlns:b="using:MyLiteMusicPlayer.Behaviors"
     x:Class="MyLiteMusicPlayer.Views.SearchView"
     x:DataType="vm:SearchViewModel">
 
     <DockPanel>
         <!-- Header -->
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
-            <TextBlock Text="{Binding L[Sidebar_Search]}" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
+            <TextBlock Text="{Binding L[Sidebar_Search]}" FontSize="32" FontWeight="Bold"
+                Margin="0,0,0,16" />
 
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <TextBox Classes="search-box"
                     Watermark="{Binding L[Search_Placeholder]}"
                     Text="{Binding SearchQuery}"
-                    Width="360" HorizontalAlignment="Left"
-                    CornerRadius="20" Padding="15,10">
+                    Width="360" CornerRadius="20" Padding="15,10">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
                     </TextBox.KeyBindings>
                 </TextBox>
 
-                <Button Command="{Binding SearchCommand}"
-                    Classes="icon-btn" Width="40" Height="40"
-                    Background="{StaticResource BgElevatedBrush}">
+                <Button Command="{Binding SearchCommand}" Classes="icon-btn"
+                    Width="40" Height="40" Background="{StaticResource BgElevatedBrush}">
                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
                 </Button>
             </StackPanel>
         </StackPanel>
 
-        <!-- Loading -->
-        <ProgressBar DockPanel.Dock="Top" IsIndeterminate="True"
-            IsVisible="{Binding IsLoading}" VerticalAlignment="Top"
-            Foreground="{StaticResource AccentBrush}" />
+        <!-- Начальная загрузка -->
+        <StackPanel DockPanel.Dock="Top" IsVisible="{Binding IsLoading}"
+            Margin="0,40" Spacing="16">
+            <ProgressBar IsIndeterminate="True" Foreground="{StaticResource AccentBrush}"
+                Height="4" Width="200" />
+            <TextBlock Text="Ищем треки..." HorizontalAlignment="Center"
+                Foreground="{StaticResource TextSecondaryBrush}" />
+        </StackPanel>
 
-        <!-- Error -->
+        <!-- Ошибка -->
         <TextBlock DockPanel.Dock="Top" Text="{Binding ErrorMessage}" Foreground="Red"
             IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-        <!-- Results List -->
-        <!-- Теперь использует глобальный DataTemplate из App.axaml -->
-        <ListBox ItemsSource="{Binding Results}" Background="Transparent">
-            <ListBox.Styles>
-                <Style Selector="ListBoxItem">
-                    <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0" />
-                </Style>
-            </ListBox.Styles>
-        </ListBox>
+        <!-- Результаты -->
+        <ScrollViewer>
+            <i:Interaction.Behaviors>
+                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="150" />
+            </i:Interaction.Behaviors>
+
+            <StackPanel>
+                <ItemsControl ItemsSource="{Binding Items}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <ContentControl Content="{Binding}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Скелеты -->
+                <ContentControl Classes="loading-skeletons" IsVisible="{Binding IsLoadingMore}" />
+            </StackPanel>
+        </ScrollViewer>
     </DockPanel>
 </UserControl>

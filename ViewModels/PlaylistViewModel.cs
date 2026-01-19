@@ -1,41 +1,12 @@
-// ViewModels/PlaylistViewModel.cs
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using System.Collections.ObjectModel;
 using System.Reactive;
-using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
-public class PlaylistCardViewModel : ViewModelBase
-{
-    public Playlist Playlist { get; }
-    public string Name => Playlist.Name;
-    public string? ThumbnailUrl => Playlist.ThumbnailUrl;
-    public int TrackCount => Playlist.TrackCount;
-    public bool IsLocal => Playlist.IsLocal;
-    public bool IsLiked => Playlist.Id == "liked";
-
-    public ReactiveCommand<Unit, Unit> OpenCommand { get; }
-
-    public string FormattedTrackCount => LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
-
-    public PlaylistCardViewModel(Playlist playlist, Action<string> onOpen)
-    {
-        Playlist = playlist;
-        OpenCommand = ReactiveCommand.Create(() => onOpen(playlist.Id));
-
-        this.WhenAnyValue(x => x.TrackCount)
-    .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)));
-
-        LocalizationService.Instance.LanguageChanged += (s, e) =>
-            this.RaisePropertyChanged(nameof(FormattedTrackCount));
-    }
-}
-
-public class PlaylistViewModel : ViewModelBase
+public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 {
     private readonly LibraryService _library;
     private readonly AudioEngine _audio;
@@ -47,13 +18,12 @@ public class PlaylistViewModel : ViewModelBase
     [Reactive] public TimeSpan TotalDuration { get; private set; }
     [Reactive] public bool CanEdit { get; private set; }
 
-    public ObservableCollection<TrackItemViewModel> Tracks { get; } = [];
-
     public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
     public ReactiveCommand<Unit, Unit> ShufflePlayCommand { get; }
     public ReactiveCommand<Unit, Unit> DownloadAllCommand { get; }
 
-    public string FormattedTrackCount => LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
+    public string FormattedTrackCount =>
+        LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
     public PlaylistViewModel(
         LibraryService library,
@@ -68,56 +38,57 @@ public class PlaylistViewModel : ViewModelBase
 
         PlayAllCommand = ReactiveCommand.Create(() =>
         {
+            if (AllItems.Count == 0) return;
             _audio.ClearQueue();
             _audio.ShuffleEnabled = false;
-            foreach (var item in Tracks)
-                _audio.Enqueue(item.Track);
+            _audio.EnqueueRange(AllItems);
+            _ = _audio.PlayTrackAsync(AllItems[0]);
         }, hasTracks);
 
         ShufflePlayCommand = ReactiveCommand.Create(() =>
         {
+            if (AllItems.Count == 0) return;
             _audio.ClearQueue();
             _audio.ShuffleEnabled = true;
-            foreach (var item in Tracks)
-                _audio.Enqueue(item.Track);
+            _audio.EnqueueRange(AllItems);
+            _ = _audio.PlayTrackAsync(AllItems[0]);
         }, hasTracks);
 
         DownloadAllCommand = ReactiveCommand.Create(() =>
         {
-            foreach (var item in Tracks.Where(t => !t.IsDownloaded))
+            foreach (var track in AllItems.Where(t => !t.IsDownloaded))
             {
-                _downloads.StartDownload(item.Track);
+                _downloads.StartDownload(track);
             }
         }, hasTracks);
 
+        // Обновление локализации
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)));
 
-        LocalizationService.Instance.LanguageChanged += (s, e) =>
+        LocalizationService.Instance.LanguageChanged += (_, _) =>
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
 
-    public void LoadPlaylist(string playlistId)
+    protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
+    {
+        return new TrackItemViewModel(track, _audio, _library, _downloads, PlayFromPlaylist);
+    }
+
+    public async void LoadPlaylist(string playlistId)
     {
         var playlist = _library.GetPlaylist(playlistId);
-
         if (playlist == null) return;
 
         PlaylistName = playlist.Name;
         ThumbnailUrl = playlist.ThumbnailUrl;
         CanEdit = playlist.IsLocal && playlist.Id != "liked";
 
-        Tracks.Clear();
         var tracks = _library.GetPlaylistTracks(playlistId);
-
-        foreach (var track in tracks)
-        {
-            Tracks.Add(new TrackItemViewModel(track, _audio, _library, _downloads,
-                onPlay: t => PlayFromPlaylist(t)));
-        }
-
-        TrackCount = Tracks.Count;
+        TrackCount = tracks.Count;
         TotalDuration = TimeSpan.FromSeconds(tracks.Sum(t => t.Duration.TotalSeconds));
+
+        await InitializeItemsAsync(tracks);
     }
 
     private void PlayFromPlaylist(TrackInfo track)
@@ -126,12 +97,10 @@ public class PlaylistViewModel : ViewModelBase
         _ = _audio.PlayTrackAsync(track);
 
         bool found = false;
-        foreach (var item in Tracks)
+        foreach (var item in AllItems)
         {
-            if (found)
-                _audio.Enqueue(item.Track);
-            if (item.Track.Id == track.Id)
-                found = true;
+            if (found) _audio.Enqueue(item);
+            if (item.Id == track.Id) found = true;
         }
 
         _library.AddToRecentlyPlayed(track);

@@ -1,4 +1,3 @@
-// ViewModels/LibraryViewModel.cs
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -18,6 +17,7 @@ public class LibraryViewModel : ViewModelBase
     [Reactive] public bool IsLoading { get; private set; }
     [Reactive] public string NewPlaylistName { get; set; } = string.Empty;
 
+    // Теперь PlaylistCardViewModel определен в отдельном файле и доступен
     public ObservableCollection<PlaylistCardViewModel> Playlists { get; } = [];
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
@@ -33,6 +33,8 @@ public class LibraryViewModel : ViewModelBase
         _library = library;
         _youtube = youtube;
         _auth = auth;
+
+        // Навигация через главную страницу
         _navigateToPlaylist = mainWindow.NavigateToPlaylist;
 
         RefreshCommand = ReactiveCommand.Create(LoadPlaylists);
@@ -56,7 +58,7 @@ public class LibraryViewModel : ViewModelBase
             IsLoading = false;
         });
 
-        // Subscribe to library changes
+        // Подписка на изменения в библиотеке (например, добавление в избранное)
         Observable.FromEvent(
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
@@ -70,6 +72,7 @@ public class LibraryViewModel : ViewModelBase
     {
         Playlists.Clear();
 
+        // Превращаем модели данных из сервиса в ViewModels для отображения
         foreach (var playlist in _library.GetAllPlaylists())
         {
             Playlists.Add(new PlaylistCardViewModel(playlist, _navigateToPlaylist));

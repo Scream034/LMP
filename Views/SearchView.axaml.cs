@@ -1,4 +1,3 @@
-// Views/SearchView.axaml.cs
 using Avalonia.Controls;
 
 namespace MyLiteMusicPlayer.Views;
@@ -9,4 +8,6 @@ public partial class SearchView : UserControl
     {
         InitializeComponent();
     }
+    
+    // Code-behind очищен!
 }
