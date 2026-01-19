@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {}
+    "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {}
   },
   "projects": {
-    "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {
+    "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
+        "projectUniqueName": "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
         "projectName": "MyLiteMusicPlayer",
-        "projectPath": "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
+        "projectPath": "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
         "packagesPath": "C:\\Users\\paralax\\.nuget\\packages\\",
-        "outputPath": "d:\\Projects\\CS\\MyLiteMusicPlayer\\obj\\",
+        "outputPath": "D:\\Projects\\CS\\MyLiteMusicPlayer\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\paralax\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -44,6 +44,10 @@
         "net10.0": {
           "targetAlias": "net10.0",
           "dependencies": {
+            "AsyncImageLoader.Avalonia": {
+              "target": "Package",
+              "version": "[3.5.0, )"
+            },
             "Avalonia": {
               "target": "Package",
               "version": "[11.3.11, )"
@@ -60,6 +64,10 @@
               "target": "Package",
               "version": "[11.3.11, )"
             },
+            "Avalonia.ReactiveUI": {
+              "target": "Package",
+              "version": "[11.3.8, )"
+            },
             "Avalonia.Themes.Fluent": {
               "target": "Package",
               "version": "[11.3.11, )"
@@ -67,6 +75,26 @@
             "CommunityToolkit.Mvvm": {
               "target": "Package",
               "version": "[8.2.1, )"
+            },
+            "Material.Icons.Avalonia": {
+              "target": "Package",
+              "version": "[2.4.1, )"
+            },
+            "Microsoft.Extensions.DependencyInjection": {
+              "target": "Package",
+              "version": "[10.0.2, )"
+            },
+            "NAudio": {
+              "target": "Package",
+              "version": "[2.2.1, )"
+            },
+            "ReactiveUI.Fody": {
+              "target": "Package",
+              "version": "[19.5.41, )"
+            },
+            "YoutubeDLSharp": {
+              "target": "Package",
+              "version": "[1.2.0, )"
             }
           },
           "imports": [
