@@ -17,6 +17,7 @@ public class AudioEngine : IDisposable
 {
     private readonly IWavePlayer _outputDevice;
     private readonly YoutubeProvider _youtube;
+    private readonly PipedProvider _piped; // Добавлено
     private readonly LibraryService _library;          // Добавлено для проверки кэша
     private readonly DownloadService _downloadService;  // Добавлено для авто-кэширования
 
@@ -67,12 +68,13 @@ public class AudioEngine : IDisposable
     public event Action<TimeSpan>? OnPositionChanged;
 
     // Обновленный конструктор с инъекцией сервисов
-    public AudioEngine(YoutubeProvider youtube, LibraryService library, DownloadService downloadService)
+    public AudioEngine(YoutubeProvider youtube, PipedProvider piped, LibraryService library, DownloadService downloadService)
     {
         _youtube = youtube;
         _library = library;
         _downloadService = downloadService;
-
+        _piped = piped; // Инициализация
+        
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "Cache");
         Directory.CreateDirectory(_cacheFolder);
@@ -145,9 +147,21 @@ public class AudioEngine : IDisposable
             {
                 // Нет файла - стримим из интернета
                 Debug.WriteLine($"[AudioEngine] Stream requested. Fetching URL...");
-                var freshUrl = await _youtube.RefreshStreamUrlAsync(track);
+                if (string.IsNullOrEmpty(track.StreamUrl))
+                {
+                    // Пробуем Piped сначала (быстрее)
+                    var streamUrl = await _piped.GetStreamUrlAsync(track.Id.Replace("yt_", ""));
 
-                if (ct.IsCancellationRequested) return;
+                    if (string.IsNullOrEmpty(streamUrl))
+                    {
+                        // Fallback на yt-dlp
+                        streamUrl = await _youtube.RefreshStreamUrlAsync(track);
+                    }
+
+                    track.StreamUrl = streamUrl ?? "";
+                }
+
+                string freshUrl = track.StreamUrl; // Используем обновленный StreamUrl
                 if (string.IsNullOrEmpty(freshUrl)) throw new Exception("Could not resolve stream URL");
 
                 _currentDuration = track.Duration;

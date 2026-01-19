@@ -8,6 +8,7 @@ using MyLiteMusicPlayer.Services;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using AsyncImageLoader;
 
 namespace MyLiteMusicPlayer;
 
@@ -35,6 +36,9 @@ public partial class App : Application
             };
 
             Debug.WriteLine("[UI] Main window created and shown.");
+
+            var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
+            ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
             // 2. Запускаем тяжелую инициализацию в фоне
             _ = Task.Run(async () =>

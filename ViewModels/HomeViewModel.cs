@@ -1,3 +1,4 @@
+// ViewModels/HomeViewModel.cs
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -21,28 +22,35 @@ public class CategoryItem
     public bool IsSpecial { get; set; }
 }
 
-public class HomeViewModel : ViewModelBase
+public class HomeViewModel : ViewModelBase, IDisposable
 {
     private readonly YoutubeProvider _youtube;
+    private readonly PipedProvider _piped;
+    private readonly SearchCacheService _searchCache;
+    private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
-    private readonly GoogleAuthService _auth;
+    private readonly MemoryMonitor _memoryMonitor;
 
-    // ===== КЭШИРОВАНИЕ =====
-    private List<TrackInfo> _cachedTracks = new();      // Все загруженные треки
-    private int _displayedCount = 0;                     // Сколько уже показано
-    private string _currentCategoryKey = "";             // Ключ текущей категории
-    private readonly HashSet<string> _loadedTrackIds = new(); // Для фильтрации дубликатов
+    // Кэширование
+    private List<TrackInfo> _cachedTracks = new();
+    private int _displayedCount = 0;
+    private string _currentCategoryKey = "";
+    private readonly HashSet<string> _loadedTrackIds = new();
+    private CancellationTokenSource? _loadCts;
 
-    // Для отмены фоновой загрузки при смене категории
-    private CancellationTokenSource? _prefetchCts;
-
+    // UI State
     [Reactive] public bool IsLoading { get; private set; }
-    [Reactive] public bool IsLoadingMore { get; private set; } // Отдельный флаг для Load More
+    [Reactive] public bool IsLoadingMore { get; private set; }
+    [Reactive] public bool IsPrefetching { get; private set; }
     [Reactive] public bool HasMoreItems { get; private set; } = true;
+    [Reactive] public bool WaitingForMore { get; private set; }
     [Reactive] public string Greeting { get; private set; } = string.Empty;
-    [Reactive] public string LoadingStatus { get; private set; } = ""; // Для отладки
+
+    // Debug Stats
+    [Reactive] public LoadingStats Stats { get; private set; } = new();
+    [Reactive] public bool ShowDebugInfo { get; set; } = true;
 
     public ObservableCollection<CategoryItem> Categories { get; } = new();
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
@@ -50,43 +58,55 @@ public class HomeViewModel : ViewModelBase
 
     public ReactiveCommand<CategoryItem, Unit> RefreshCommand { get; }
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
+    public ReactiveCommand<Unit, Unit> ToggleDebugCommand { get; }
 
-    // Константы
-    private const int PREFETCH_COUNT = 60;  // Сколько загружать за раз с YouTube
-    private const int PREFETCH_THRESHOLD = 15; // Когда начинать подгрузку в фоне
+    private const int PREFETCH_COUNT = 60;
+    private const int PREFETCH_THRESHOLD = 15;
 
     public HomeViewModel(
         YoutubeProvider youtube,
+        PipedProvider piped,
+        SearchCacheService searchCache,
+        ImageCacheService imageCache,
         AudioEngine audio,
         LibraryService library,
         DownloadService downloads,
-        GoogleAuthService auth)
+        MemoryMonitor memoryMonitor)
     {
         _youtube = youtube;
+        _piped = piped;
+        _searchCache = searchCache;
+        _imageCache = imageCache;
         _audio = audio;
         _library = library;
         _downloads = downloads;
-        _auth = auth;
+        _memoryMonitor = memoryMonitor;
 
         UpdateGreeting();
         InitializeCategories();
 
+        _memoryMonitor.OnStatsUpdated += _ => UpdateStatsDisplay();
+
         RefreshCommand = ReactiveCommand.CreateFromTask<CategoryItem>(async cat =>
         {
-            if (cat != null)
-            {
-                SelectedCategory = cat;
-                await LoadCategoryDataAsync(cat, reset: true);
-            }
+            if (cat != null) await LoadCategoryDataAsync(cat, reset: true);
         });
 
-        // Load More — теперь моментальный!
         LoadMoreCommand = ReactiveCommand.CreateFromTask(
-            async () => await ShowNextBatchAsync(),
-            this.WhenAnyValue(x => x.IsLoading, x => x.IsLoadingMore, x => x.HasMoreItems,
-                (loading, loadingMore, hasMore) => !loading && !loadingMore && hasMore));
+            LoadMoreAsync,
+            this.WhenAnyValue(
+                x => x.IsLoading,
+                x => x.IsLoadingMore,
+                x => x.HasMoreItems,
+                x => x.WaitingForMore,
+                (l, lm, h, w) => !l && !lm && h && !w));
 
-        // Реакция на смену категории
+        // ИСПРАВЛЕНО: Возвращаем Unit, а не bool
+        ToggleDebugCommand = ReactiveCommand.Create(() =>
+        {
+            ShowDebugInfo = !ShowDebugInfo;
+        });
+
         this.WhenAnyValue(x => x.SelectedCategory)
             .Skip(1)
             .Where(cat => cat != null)
@@ -99,11 +119,11 @@ public class HomeViewModel : ViewModelBase
     {
         Categories.Add(new CategoryItem { Name = "Recently Played", IsSpecial = true });
         Categories.Add(new CategoryItem { Name = "Trending", Query = "trending music 2024" });
-        Categories.Add(new CategoryItem { Name = "My Mix", Query = "My Supermix" });
-        Categories.Add(new CategoryItem { Name = "Lo-Fi", Query = "lofi hip hop radio beats" });
-        Categories.Add(new CategoryItem { Name = "Phonk", Query = "best phonk music drift" });
-        Categories.Add(new CategoryItem { Name = "Rock", Query = "rock hits classic" });
-        Categories.Add(new CategoryItem { Name = "Jazz", Query = "jazz relaxing smooth" });
+        Categories.Add(new CategoryItem { Name = "My Mix", Query = "youtube mix playlist" });
+        Categories.Add(new CategoryItem { Name = "Lo-Fi", Query = "lofi hip hop chill beats" });
+        Categories.Add(new CategoryItem { Name = "Phonk", Query = "phonk drift music" });
+        Categories.Add(new CategoryItem { Name = "Rock", Query = "rock classics hits" });
+        Categories.Add(new CategoryItem { Name = "Jazz", Query = "smooth jazz relaxing" });
     }
 
     private void UpdateGreeting()
@@ -112,34 +132,22 @@ public class HomeViewModel : ViewModelBase
         Greeting = h switch { < 12 => "Good morning", < 18 => "Good afternoon", _ => "Good evening" };
     }
 
-    /// <summary>
-    /// Загрузка категории. При reset=true — полная перезагрузка с сервера.
-    /// </summary>
     private async Task LoadCategoryDataAsync(CategoryItem category, bool reset)
     {
         if (IsLoading) return;
 
+        _loadCts?.Cancel();
+        _loadCts = new CancellationTokenSource();
+        var ct = _loadCts.Token;
+
         var sw = Stopwatch.StartNew();
         var categoryKey = category.Query ?? category.Name;
 
-        // Если это та же категория и не reset — просто показываем следующую порцию
-        if (!reset && categoryKey == _currentCategoryKey && _cachedTracks.Count > _displayedCount)
-        {
-            await ShowNextBatchAsync();
-            return;
-        }
-
-        // ===== ПОЛНАЯ ПЕРЕЗАГРУЗКА =====
         IsLoading = true;
-        LoadingStatus = "Connecting to YouTube...";
-
-        // Отменяем предыдущую фоновую загрузку
-        _prefetchCts?.Cancel();
-        _prefetchCts = new CancellationTokenSource();
+        WaitingForMore = false;
 
         try
         {
-            // Очистка
             ActiveTracks.Clear();
             _loadedTrackIds.Clear();
             _cachedTracks.Clear();
@@ -147,50 +155,89 @@ public class HomeViewModel : ViewModelBase
             _currentCategoryKey = categoryKey;
             HasMoreItems = true;
 
-            Debug.WriteLine($"[Home] Loading category: '{category.Name}' (query: '{categoryKey}')");
-            LoadingStatus = $"Searching: {category.Name}...";
-
-            // ===== ОДИН БОЛЬШОЙ ЗАПРОС (предзагрузка) =====
-            int prefetchCount = category.Name == "Recently Played"
-                ? 100  // Локальные данные — можно больше
-                : PREFETCH_COUNT;
+            Debug.WriteLine($"[Home] Loading: '{category.Name}'");
+            string source;
 
             if (category.Name == "Recently Played")
             {
-                _cachedTracks = _library.GetRecentlyPlayed(prefetchCount);
-                Debug.WriteLine($"[Home] Loaded {_cachedTracks.Count} recent tracks from library");
-            }
-            else if (category.Name == "Trending")
-            {
-                _cachedTracks = await _youtube.GetTrendingAsync(prefetchCount);
-                Debug.WriteLine($"[Home] Loaded {_cachedTracks.Count} trending tracks");
+                _cachedTracks = _library.GetRecentlyPlayed(100);
+                source = "library";
+                HasMoreItems = false;
             }
             else
             {
-                _cachedTracks = await _youtube.SearchAsync(categoryKey, prefetchCount);
-                Debug.WriteLine($"[Home] Loaded {_cachedTracks.Count} search results");
+                // ===== СТРАТЕГИЯ ЗАГРУЗКИ =====
+
+                // 1. Проверяем disk cache
+                var cached = await _searchCache.GetAsync(categoryKey, PREFETCH_COUNT / 2);
+
+                if (cached != null && cached.Count > 0)
+                {
+                    _cachedTracks = cached;
+                    source = $"disk-cache ({cached.Count})";
+                    Debug.WriteLine($"[Home] Loaded from disk cache");
+
+                    // Обновляем кэш в фоне
+                    _ = RefreshCacheInBackgroundAsync(categoryKey, ct);
+                }
+                else
+                {
+                    // 2. Пробуем Piped (быстро!)
+                    List<TrackInfo> pipedTracks;
+
+                    if (category.Name == "Trending")
+                        pipedTracks = await _piped.GetTrendingAsync("US", PREFETCH_COUNT, ct);
+                    else
+                        pipedTracks = await _piped.SearchAsync(categoryKey, PREFETCH_COUNT, ct);
+
+                    if (pipedTracks.Count > 0)
+                    {
+                        _cachedTracks = pipedTracks;
+                        source = $"piped ({sw.ElapsedMilliseconds}ms)";
+
+                        // Сохраняем в кэш
+                        _ = _searchCache.SetAsync(categoryKey, pipedTracks);
+                    }
+                    else
+                    {
+                        // 3. Fallback на yt-dlp
+                        Debug.WriteLine($"[Home] Piped failed, using yt-dlp");
+                        _cachedTracks = await _youtube.SearchAsync(categoryKey, PREFETCH_COUNT);
+                        source = $"yt-dlp ({sw.ElapsedMilliseconds}ms)";
+
+                        if (_cachedTracks.Count > 0)
+                        {
+                            _ = _searchCache.SetAsync(categoryKey, _cachedTracks);
+                        }
+                    }
+                }
             }
 
             sw.Stop();
-            Debug.WriteLine($"[Home] Fetch completed in {sw.ElapsedMilliseconds}ms");
-            LoadingStatus = $"Loaded {_cachedTracks.Count} tracks in {sw.ElapsedMilliseconds}ms";
+            UpdateStats(source, sw.ElapsedMilliseconds, _cachedTracks.Count);
 
-            // Показываем первую порцию
             if (_cachedTracks.Count > 0)
             {
-                IsLoading = false; // Скрываем главный спиннер
+                IsLoading = false;
+
+                // Предзагрузка изображений
+                var imageUrls = _cachedTracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                _ = _imageCache.PrefetchAsync(imageUrls!, ct);
+
                 await ShowNextBatchAsync();
             }
             else
             {
                 HasMoreItems = false;
-                LoadingStatus = "No tracks found";
             }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.WriteLine($"[Home] Load cancelled");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Home] Load ERROR: {ex.Message}");
-            LoadingStatus = $"Error: {ex.Message}";
+            Debug.WriteLine($"[Home] Load error: {ex.Message}");
             HasMoreItems = false;
         }
         finally
@@ -199,14 +246,47 @@ public class HomeViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Показать следующую порцию из кэша (МОМЕНТАЛЬНО!)
-    /// </summary>
+    private async Task LoadMoreAsync()
+    {
+        if (_displayedCount < _cachedTracks.Count)
+        {
+            await ShowNextBatchAsync();
+            return;
+        }
+
+        if (SelectedCategory?.Name == "Recently Played")
+        {
+            HasMoreItems = false;
+            return;
+        }
+
+        WaitingForMore = true;
+        Debug.WriteLine($"[Home] Cache empty, fetching more...");
+
+        try
+        {
+            await FetchMoreTracksAsync();
+
+            if (_displayedCount < _cachedTracks.Count)
+            {
+                await ShowNextBatchAsync();
+            }
+            else
+            {
+                HasMoreItems = false;
+            }
+        }
+        finally
+        {
+            WaitingForMore = false;
+        }
+    }
+
     private async Task ShowNextBatchAsync()
     {
         if (_displayedCount >= _cachedTracks.Count)
         {
-            HasMoreItems = false;
+            HasMoreItems = _cachedTracks.Count > 0 && SelectedCategory?.Name != "Recently Played";
             return;
         }
 
@@ -215,20 +295,22 @@ public class HomeViewModel : ViewModelBase
 
         try
         {
-            int batchSize = _library.Data.LoadBatchSize;
-            if (batchSize < 5) batchSize = 10;
-            if (batchSize > 50) batchSize = 50;
+            int batchSize = Math.Clamp(_library.Data.LoadBatchSize, 5, 50);
+            bool smooth = _library.Data.EnableSmoothLoading;
 
-            bool smoothLoading = _library.Data.EnableSmoothLoading;
-
-            // Берём следующую порцию из кэша
             var nextBatch = _cachedTracks
                 .Skip(_displayedCount)
                 .Take(batchSize)
                 .Where(t => !_loadedTrackIds.Contains(t.Id))
                 .ToList();
 
-            Debug.WriteLine($"[Home] Showing batch: {nextBatch.Count} tracks (from cache position {_displayedCount})");
+            // Предзагрузка изображений следующего батча
+            var nextImageUrls = _cachedTracks
+                .Skip(_displayedCount + batchSize)
+                .Take(batchSize)
+                .Select(t => t.ThumbnailUrl)
+                .Where(u => !string.IsNullOrEmpty(u));
+            _ = _imageCache.PrefetchAsync(nextImageUrls!);
 
             foreach (var track in nextBatch)
             {
@@ -236,27 +318,21 @@ public class HomeViewModel : ViewModelBase
                 var vm = CreateTrackVM(track);
                 ActiveTracks.Add(vm);
 
-                if (smoothLoading)
-                {
-                    await Task.Delay(20); // Плавное появление
-                }
+                if (smooth) await Task.Delay(15);
             }
 
-            _displayedCount += batchSize; // Увеличиваем даже если часть была отфильтрована
+            _displayedCount += batchSize;
+            sw.Stop();
 
-            // Проверяем, нужно ли подгружать ещё
+            UpdateStats("batch", sw.ElapsedMilliseconds, ActiveTracks.Count);
+
             int remaining = _cachedTracks.Count - _displayedCount;
-            HasMoreItems = remaining > 0;
+            HasMoreItems = remaining > 0 || SelectedCategory?.Name != "Recently Played";
 
-            Debug.WriteLine($"[Home] Batch shown in {sw.ElapsedMilliseconds}ms. Remaining in cache: {remaining}");
-
-            // ===== ФОНОВАЯ ПОДГРУЗКА =====
-            // Если осталось мало и это не локальная категория — подгружаем ещё
-            if (remaining < PREFETCH_THRESHOLD &&
-                SelectedCategory?.Name != "Recently Played" &&
-                _prefetchCts != null && !_prefetchCts.IsCancellationRequested)
+            // Фоновая подгрузка
+            if (remaining < PREFETCH_THRESHOLD && !IsPrefetching && SelectedCategory?.Name != "Recently Played")
             {
-                _ = PrefetchMoreAsync(_prefetchCts.Token);
+                _ = FetchMoreTracksAsync();
             }
         }
         finally
@@ -265,59 +341,103 @@ public class HomeViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Фоновая подгрузка дополнительных треков
-    /// </summary>
-    private async Task PrefetchMoreAsync(CancellationToken ct)
+    private async Task FetchMoreTracksAsync()
     {
+        if (IsPrefetching) return;
+        IsPrefetching = true;
+
         try
         {
-            Debug.WriteLine($"[Home] Prefetching more tracks in background...");
+            Debug.WriteLine($"[Home] Prefetching more tracks...");
+            var sw = Stopwatch.StartNew();
 
-            // Делаем запрос с бо́льшим offset
-            int newFetchCount = _cachedTracks.Count + PREFETCH_COUNT;
+            var existingIds = new HashSet<string>(_cachedTracks.Select(t => t.Id));
+            List<TrackInfo> newTracks;
 
-            List<TrackInfo> moreTracks;
-
-            if (SelectedCategory?.Name == "Trending")
+            // Пробуем Piped
+            var piped = await _piped.SearchAsync(_currentCategoryKey, PREFETCH_COUNT);
+            if (piped.Count > 0)
             {
-                moreTracks = await _youtube.GetTrendingAsync(newFetchCount);
+                newTracks = piped.Where(t => !existingIds.Contains(t.Id)).ToList();
             }
             else
             {
-                moreTracks = await _youtube.SearchAsync(_currentCategoryKey, newFetchCount);
+                // Fallback на yt-dlp
+                var ytdlp = await _youtube.SearchAsync(_currentCategoryKey, _cachedTracks.Count + PREFETCH_COUNT);
+                newTracks = ytdlp.Where(t => !existingIds.Contains(t.Id)).ToList();
             }
-
-            if (ct.IsCancellationRequested) return;
-
-            // Добавляем только новые
-            var existingIds = new HashSet<string>(_cachedTracks.Select(t => t.Id));
-            var newTracks = moreTracks.Where(t => !existingIds.Contains(t.Id)).ToList();
 
             if (newTracks.Count > 0)
             {
                 _cachedTracks.AddRange(newTracks);
                 HasMoreItems = true;
-                Debug.WriteLine($"[Home] Prefetched {newTracks.Count} new tracks. Cache now: {_cachedTracks.Count}");
+                Debug.WriteLine($"[Home] Prefetched {newTracks.Count} tracks in {sw.ElapsedMilliseconds}ms");
+
+                // Обновляем disk cache
+                _ = _searchCache.SetAsync(_currentCategoryKey, _cachedTracks);
+
+                // Предзагрузка изображений
+                var imageUrls = newTracks.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                _ = _imageCache.PrefetchAsync(imageUrls!);
             }
-            else
-            {
-                Debug.WriteLine($"[Home] Prefetch returned 0 new tracks");
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            Debug.WriteLine($"[Home] Prefetch cancelled");
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[Home] Prefetch error: {ex.Message}");
         }
+        finally
+        {
+            IsPrefetching = false;
+        }
+    }
+
+    private async Task RefreshCacheInBackgroundAsync(string query, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(3000, ct); // Ждём 3 сек
+
+            var fresh = await _piped.SearchAsync(query, PREFETCH_COUNT, ct);
+            if (fresh.Count > 0)
+            {
+                var existingIds = new HashSet<string>(_cachedTracks.Select(t => t.Id));
+                var newTracks = fresh.Where(t => !existingIds.Contains(t.Id)).ToList();
+
+                if (newTracks.Count > 0)
+                {
+                    _cachedTracks.AddRange(newTracks);
+                    Debug.WriteLine($"[Home] Background refresh: +{newTracks.Count} tracks");
+                }
+
+                await _searchCache.SetAsync(query, _cachedTracks);
+            }
+        }
+        catch { }
+    }
+
+    private void UpdateStats(string source, long timeMs, int count)
+    {
+        var cacheStats = _searchCache.GetStats();
+        var imgStats = _imageCache.GetStats();
+
+        Stats = new LoadingStats
+        {
+            TotalTracks = _cachedTracks.Count,
+            DisplayedTracks = count,
+            CachedTracks = cacheStats.DiskItems,
+            LastBatchTimeMs = timeMs,
+            Source = source,
+            MemoryUsage = _memoryMonitor.GetFormattedStats()
+        };
+    }
+
+    private void UpdateStatsDisplay()
+    {
+        Stats = Stats with { MemoryUsage = _memoryMonitor.GetFormattedStats() };
     }
 
     private TrackItemViewModel CreateTrackVM(TrackInfo track)
     {
-        // Синхронизация с библиотекой
         if (_library.HasTrack(track.Id))
         {
             var existing = _library.GetTrack(track.Id);
@@ -335,7 +455,6 @@ public class HomeViewModel : ViewModelBase
                 _audio.ClearQueue();
                 _audio.PlayTrack(t);
 
-                // Добавляем остальные в очередь
                 bool found = false;
                 foreach (var vm in ActiveTracks)
                 {
@@ -344,5 +463,11 @@ public class HomeViewModel : ViewModelBase
                 }
                 _library.AddToRecentlyPlayed(t);
             });
+    }
+
+    public void Dispose()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
     }
 }
