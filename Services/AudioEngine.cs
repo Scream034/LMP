@@ -5,9 +5,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-// Alias to avoid conflict with MyLiteMusicPlayer.Models.PlaybackState if you have one, 
-// otherwise NAudio has its own.
-using PlaybackState = NAudio.Wave.PlaybackState; 
+// Alias to avoid conflict
+using PlaybackState = NAudio.Wave.PlaybackState;
 
 namespace MyLiteMusicPlayer.Services;
 
@@ -21,31 +20,23 @@ public class AudioEngine : IDisposable
     private readonly Queue<TrackInfo> _queue = new();
     private readonly List<TrackInfo> _history = new();
     private int _historyIndex = -1;
-    
+
     public TrackInfo? CurrentTrack { get; private set; }
     public bool IsPlaying => _outputDevice.PlaybackState == PlaybackState.Playing;
     public bool IsPaused => _outputDevice.PlaybackState == PlaybackState.Paused;
-    
+
+    // Свойство для UI
+    public bool IsLoading { get; private set; }
+    public event Action<bool>? OnLoadingChanged;
+
     public TimeSpan CurrentPosition
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _audioReader?.CurrentTime ?? TimeSpan.Zero;
-            }
-        }
+        get { lock (_lock) return _audioReader?.CurrentTime ?? TimeSpan.Zero; }
     }
-    
+
     public TimeSpan TotalDuration
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _audioReader?.TotalTime ?? CurrentTrack?.Duration ?? TimeSpan.Zero;
-            }
-        }
+        get { lock (_lock) return _audioReader?.TotalTime ?? CurrentTrack?.Duration ?? TimeSpan.Zero; }
     }
 
     public bool ShuffleEnabled { get; set; }
@@ -64,66 +55,89 @@ public class AudioEngine : IDisposable
         _outputDevice.PlaybackStopped += OnDevicePlaybackStopped;
     }
 
-    public void PlayTrack(TrackInfo track)
+    /// <summary>
+    /// Асинхронный метод воспроизведения. Не блокирует UI.
+    /// </summary>
+    public async Task PlayTrackAsync(TrackInfo track)
     {
-        if (track == null) return; // Fix for null reference warning
+        if (track == null) return;
 
-        lock (_lock)
+        SetLoading(true);
+        try
         {
-            StopInternal(false);
-
-            try
+            // 1. Если ссылки нет, получаем её
+            if (string.IsNullOrEmpty(track.StreamUrl))
             {
-                // Добавляем в историю
-                if (CurrentTrack != null)
+                Console.WriteLine($"[AudioEngine] Resolving URL for: {track.Title}");
+                var url = await _youtube.RefreshStreamUrlAsync(track);
+                if (string.IsNullOrEmpty(url))
+                {
+                    throw new Exception("Не удалось получить ссылку на аудиопоток.");
+                }
+            }
+
+            // 2. Воспроизведение
+            lock (_lock)
+            {
+                StopInternal(false);
+
+                if (CurrentTrack != null && CurrentTrack.Id != track.Id)
                 {
                     if (_historyIndex < _history.Count - 1)
-                    {
                         _history.RemoveRange(_historyIndex + 1, _history.Count - _historyIndex - 1);
-                    }
                     _history.Add(CurrentTrack);
                 }
-                
+
                 CurrentTrack = track;
                 _historyIndex = _history.Count;
-                
-                _audioReader = new MediaFoundationReader(track.StreamUrl);
-                _outputDevice.Init(_audioReader);
-                _outputDevice.Volume = _volume;
-                _outputDevice.Play();
 
-                OnTrackChanged?.Invoke(CurrentTrack);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Audio Error: {ex.Message}");
-                OnError?.Invoke($"Не удалось воспроизвести: {ex.Message}");
-                
-                // Пробуем обновить URL и повторить
-                Task.Run(async () =>
+                try
                 {
-                    var newUrl = await _youtube.RefreshStreamUrlAsync(track);
-                    if (!string.IsNullOrEmpty(newUrl))
-                    {
-                        track.StreamUrl = newUrl;
-                        PlayTrack(track);
-                    }
-                    else
-                    {
-                        PlayNext();
-                    }
-                });
+                    _audioReader = new MediaFoundationReader(track.StreamUrl);
+                    _outputDevice.Init(_audioReader);
+                    _outputDevice.Volume = _volume;
+                    _outputDevice.Play();
+
+                    OnTrackChanged?.Invoke(CurrentTrack);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[AudioEngine] Playback failed: {ex.Message}");
+                    StopInternal(true);
+                    OnError?.Invoke($"Playback error: {ex.Message}");
+                }
             }
         }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[AudioEngine] Resolve failed: {ex.Message}");
+            OnError?.Invoke(ex.Message);
+        }
+        finally
+        {
+            SetLoading(false);
+        }
+    }
+
+    // Обертка для старого кода (fire-and-forget)
+    public void PlayTrack(TrackInfo track)
+    {
+        _ = PlayTrackAsync(track);
+    }
+
+    private void SetLoading(bool loading)
+    {
+        IsLoading = loading;
+        OnLoadingChanged?.Invoke(loading);
     }
 
     public void Enqueue(TrackInfo track)
     {
         lock (_lock)
         {
-            if (_outputDevice.PlaybackState != PlaybackState.Playing && CurrentTrack == null)
+            if (_outputDevice.PlaybackState != PlaybackState.Playing && CurrentTrack == null && !IsLoading)
             {
-                PlayTrack(track);
+                _ = PlayTrackAsync(track);
             }
             else
             {
@@ -136,67 +150,53 @@ public class AudioEngine : IDisposable
     {
         lock (_lock)
         {
-            foreach (var track in tracks)
+            foreach (var track in tracks) _queue.Enqueue(track);
+
+            if (CurrentTrack == null && _queue.Count > 0 && !IsLoading)
             {
-                _queue.Enqueue(track);
-            }
-            
-            if (CurrentTrack == null && _queue.Count > 0)
-            {
-                PlayTrack(_queue.Dequeue());
+                _ = PlayTrackAsync(_queue.Dequeue());
             }
         }
     }
 
-    public void ClearQueue()
-    {
-        lock (_lock)
-        {
-            _queue.Clear();
-        }
-    }
-
-    public void Pause()
-    {
-        lock (_lock)
-        {
-            if (_outputDevice.PlaybackState == PlaybackState.Playing)
-                _outputDevice.Pause();
-        }
-    }
-
+    public void ClearQueue() { lock (_lock) _queue.Clear(); }
+    public void Pause() { lock (_lock) if (_outputDevice.PlaybackState == PlaybackState.Playing) _outputDevice.Pause(); }
     public void Resume()
     {
         lock (_lock)
         {
-            if (_outputDevice.PlaybackState == PlaybackState.Paused)
-                _outputDevice.Play();
-            else if (CurrentTrack != null && _outputDevice.PlaybackState == PlaybackState.Stopped)
-                PlayTrack(CurrentTrack);
+            if (_outputDevice.PlaybackState == PlaybackState.Paused) _outputDevice.Play();
+            else if (CurrentTrack != null && _outputDevice.PlaybackState == PlaybackState.Stopped && !IsLoading)
+                _ = PlayTrackAsync(CurrentTrack);
         }
     }
+    public void TogglePlayPause() { if (IsPlaying) Pause(); else Resume(); }
+    public void Stop() { lock (_lock) StopInternal(true); }
+    public void SetVolume(float vol) { _volume = Math.Clamp(vol, 0f, 1f); _outputDevice.Volume = _volume; }
+    public float GetVolume() => _volume;
 
-    public void TogglePlayPause()
+    private void StopInternal(bool clearCurrent)
     {
-        if (IsPlaying)
-            Pause();
-        else
-            Resume();
+        if (_outputDevice.PlaybackState != PlaybackState.Stopped) _outputDevice.Stop();
+        if (_audioReader != null) { _audioReader.Dispose(); _audioReader = null; }
+        if (clearCurrent) CurrentTrack = null;
     }
 
-    public void PlayNext()
+    public async Task PlayNextAsync()
     {
+        TrackInfo? next = null;
+
         lock (_lock)
         {
             if (RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
             {
-                Seek(TimeSpan.Zero);
-                Resume();
+                if (_audioReader != null && _audioReader.CanSeek)
+                    _audioReader.CurrentTime = TimeSpan.Zero;
+                if (_outputDevice.PlaybackState != PlaybackState.Playing)
+                    _outputDevice.Play();
                 return;
             }
-            
-            TrackInfo? next = null;
-            
+
             if (ShuffleEnabled && _queue.Count > 1)
             {
                 var list = _queue.ToList();
@@ -210,162 +210,62 @@ public class AudioEngine : IDisposable
             {
                 next = queued;
             }
-            
-            if (next != null)
-            {
-                PlayTrack(next);
-            }
             else if (RepeatMode == RepeatMode.RepeatAll && _history.Count > 0)
             {
-                foreach (var track in _history)
-                    _queue.Enqueue(track);
+                foreach (var track in _history) _queue.Enqueue(track);
                 _history.Clear();
                 _historyIndex = -1;
-                
-                if (_queue.TryDequeue(out next))
-                    PlayTrack(next);
+                if (_queue.TryDequeue(out var first)) next = first;
             }
-            else
-            {
-                StopInternal(true);
-                OnPlaybackStopped?.Invoke();
-            }
+        }
+
+        if (next != null)
+        {
+            await PlayTrackAsync(next);
+        }
+        else
+        {
+            lock (_lock) { StopInternal(true); }
+            OnPlaybackStopped?.Invoke();
         }
     }
 
-    public void PlayPrevious()
+    public void PlayNext() => _ = PlayNextAsync();
+
+    public async Task PlayPreviousAsync()
     {
+        TrackInfo? prev = null;
+
         lock (_lock)
         {
-            if (_audioReader != null && _audioReader.CurrentTime.TotalSeconds > 3)
-            {
-                Seek(TimeSpan.Zero);
-                return;
-            }
-            
             if (_historyIndex > 0)
             {
                 _historyIndex--;
-                var previousTrack = _history[_historyIndex];
-                
+                prev = _history[_historyIndex];
+
                 if (CurrentTrack != null)
                 {
-                    var tempQueue = new Queue<TrackInfo>();
-                    tempQueue.Enqueue(CurrentTrack);
-                    while (_queue.TryDequeue(out var t))
-                        tempQueue.Enqueue(t);
+                    var temp = new List<TrackInfo> { CurrentTrack };
+                    temp.AddRange(_queue);
                     _queue.Clear();
-                    while (tempQueue.TryDequeue(out var t))
-                        _queue.Enqueue(t);
-                }
-                
-                CurrentTrack = previousTrack;
-                
-                StopInternal(false);
-                
-                try
-                {
-                    _audioReader = new MediaFoundationReader(previousTrack.StreamUrl);
-                    _outputDevice.Init(_audioReader);
-                    _outputDevice.Volume = _volume;
-                    _outputDevice.Play();
-                    
-                    OnTrackChanged?.Invoke(CurrentTrack);
-                }
-                catch
-                {
-                    PlayNext();
+                    foreach (var t in temp) _queue.Enqueue(t);
                 }
             }
         }
+
+        if (prev != null) await PlayTrackAsync(prev);
     }
 
-    public void Seek(TimeSpan position)
+    public void PlayPrevious() => _ = PlayPreviousAsync();
+
+    private async void OnDevicePlaybackStopped(object? sender, StoppedEventArgs e)
     {
-        lock (_lock)
+        if (CurrentTrack != null && !IsLoading)
         {
-            if (_audioReader != null && _audioReader.CanSeek)
-            {
-                try
-                {
-                    _audioReader.CurrentTime = position;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Seek error: {ex.Message}");
-                }
-            }
+            await PlayNextAsync();
         }
     }
 
-    public void Stop()
-    {
-        lock (_lock)
-        {
-            StopInternal(true);
-        }
-    }
-
-    private void StopInternal(bool clearCurrent)
-    {
-        _outputDevice.Stop();
-        
-        if (_audioReader != null)
-        {
-            _audioReader.Dispose();
-            _audioReader = null;
-        }
-        
-        if (clearCurrent) 
-            CurrentTrack = null;
-    }
-
-    public void SetVolume(float vol)
-    {
-        _volume = Math.Clamp(vol, 0f, 1f);
-        _outputDevice.Volume = _volume;
-    }
-
-    public float GetVolume() => _volume;
-
-    public List<TrackInfo> GetQueueCopy()
-    {
-        lock (_lock)
-        {
-            return _queue.ToList();
-        }
-    }
-
-    public int QueueCount
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _queue.Count;
-            }
-        }
-    }
-
-    private void OnDevicePlaybackStopped(object? sender, StoppedEventArgs e)
-    {
-        if (e.Exception != null)
-        {
-            Console.WriteLine($"Playback error: {e.Exception.Message}");
-            OnError?.Invoke(e.Exception.Message);
-        }
-        
-        if (CurrentTrack != null)
-        {
-            PlayNext();
-        }
-    }
-
-    public void Dispose()
-    {
-        _outputDevice.PlaybackStopped -= OnDevicePlaybackStopped;
-        _outputDevice.Dispose();
-        _audioReader?.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    public void Seek(TimeSpan position) { lock (_lock) if (_audioReader?.CanSeek == true) _audioReader.CurrentTime = position; }
+    public void Dispose() { _outputDevice.Dispose(); _audioReader?.Dispose(); }
 }

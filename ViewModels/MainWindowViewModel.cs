@@ -1,16 +1,18 @@
-﻿// ViewModels/MainWindowViewModel.cs
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System;
+using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Threading.Tasks;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
+/// <summary>
+/// Главная ViewModel управления состоянием всего приложения и навигацией.
+/// </summary>
 public class MainWindowViewModel : ViewModelBase
 {
     private readonly AudioEngine _audio;
@@ -20,18 +22,18 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
     [Reactive] public string? CurrentPageName { get; private set; }
+    
+    // Auth state
     [Reactive] public bool IsAuthenticated { get; private set; }
     [Reactive] public string? UserName { get; private set; }
     [Reactive] public string? UserAvatarUrl { get; private set; }
 
-    // Navigation commands
+    // Commands
     public ReactiveCommand<Unit, Unit> NavigateHomeCommand { get; }
     public ReactiveCommand<Unit, Unit> NavigateSearchCommand { get; }
     public ReactiveCommand<Unit, Unit> NavigateLibraryCommand { get; }
     public ReactiveCommand<Unit, Unit> NavigateSettingsCommand { get; }
     public ReactiveCommand<string, Unit> NavigatePlaylistCommand { get; }
-    public ReactiveCommand<Unit, Unit> LoginCommand { get; }
-    public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
 
     public MainWindowViewModel(
         AudioEngine audio,
@@ -44,60 +46,56 @@ public class MainWindowViewModel : ViewModelBase
         _auth = auth;
         PlayerBar = playerBar;
 
-        UpdateAuthState();
+        Debug.WriteLine("[VM] MainWindowViewModel constructor started.");
 
-        // Subscribe to auth changes
-        Observable.FromEvent(
-                h => _auth.OnAuthStateChanged += h,
-                h => _auth.OnAuthStateChanged -= h)
+        // Подписка на обновление состояния авторизации
+        UpdateAuthState();
+        Observable.FromEvent(h => _auth.OnAuthStateChanged += h, h => _auth.OnAuthStateChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => UpdateAuthState());
 
-        // Navigation commands
-        NavigateHomeCommand = ReactiveCommand.Create(() =>
-        {
-            CurrentPage = Program.Services.GetRequiredService<HomeViewModel>();
-            CurrentPageName = "Home";
+        // Определение команд навигации с логированием
+        NavigateHomeCommand = ReactiveCommand.Create(() => SwitchPage<HomeViewModel>("Home"));
+        NavigateSearchCommand = ReactiveCommand.Create(() => SwitchPage<SearchViewModel>("Search"));
+        NavigateLibraryCommand = ReactiveCommand.Create(() => SwitchPage<LibraryViewModel>("Library"));
+        NavigateSettingsCommand = ReactiveCommand.Create(() => SwitchPage<SettingsViewModel>("Settings"));
+        
+        NavigatePlaylistCommand = ReactiveCommand.Create<string>(id => {
+            Debug.WriteLine($"[NAV] Navigating to Playlist: {id}");
+            try {
+                var vm = Program.Services.GetRequiredService<PlaylistViewModel>();
+                vm.LoadPlaylist(id);
+                CurrentPage = vm;
+                CurrentPageName = "Playlist";
+            } catch (Exception ex) {
+                Debug.WriteLine($"[ERROR] Playlist navigation failed: {ex.Message}");
+            }
         });
 
-        NavigateSearchCommand = ReactiveCommand.Create(() =>
-        {
-            CurrentPage = Program.Services.GetRequiredService<SearchViewModel>();
-            CurrentPageName = "Search";
-        });
-
-        NavigateLibraryCommand = ReactiveCommand.Create(() =>
-        {
-            CurrentPage = Program.Services.GetRequiredService<LibraryViewModel>();
-            CurrentPageName = "Library";
-        });
-
-        NavigateSettingsCommand = ReactiveCommand.Create(() =>
-        {
-            CurrentPage = Program.Services.GetRequiredService<SettingsViewModel>();
-            CurrentPageName = "Settings";
-        });
-
-        NavigatePlaylistCommand = ReactiveCommand.Create<string>(playlistId =>
-        {
-            var vm = Program.Services.GetRequiredService<PlaylistViewModel>();
-            vm.LoadPlaylist(playlistId);
-            CurrentPage = vm;
-            CurrentPageName = "Playlist";
-        });
-
-        LoginCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            await _auth.StartLoginAsync();
-        });
-
-        LogoutCommand = ReactiveCommand.Create(() =>
-        {
-            _auth.Logout();
-        });
-
-        // Start with Home page
+        // Стартовая страница
         NavigateHomeCommand.Execute().Subscribe();
+        Debug.WriteLine("[VM] MainWindowViewModel initialized.");
+    }
+
+    /// <summary>
+    /// Обобщенный метод смены страниц с отладкой
+    /// </summary>
+    private void SwitchPage<T>(string name) where T : ViewModelBase
+    {
+        Debug.WriteLine($"[NAV] Switching to page: {name} (Type: {typeof(T).Name})");
+        try
+        {
+            var stopWatch = Stopwatch.StartNew();
+            var page = Program.Services.GetRequiredService<T>();
+            CurrentPage = page;
+            CurrentPageName = name;
+            stopWatch.Stop();
+            Debug.WriteLine($"[NAV] Successfully switched to {name} in {stopWatch.ElapsedMilliseconds}ms");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ERROR] Navigation to {name} failed: {ex.Message}");
+        }
     }
 
     private void UpdateAuthState()
@@ -105,10 +103,9 @@ public class MainWindowViewModel : ViewModelBase
         IsAuthenticated = _auth.IsAuthenticated;
         UserName = _auth.State.UserName;
         UserAvatarUrl = _auth.State.UserAvatarUrl;
+        Debug.WriteLine($"[AUTH] State updated. Authenticated: {IsAuthenticated}, User: {UserName}");
     }
 
-    public void NavigateToPlaylist(string playlistId)
-    {
-        NavigatePlaylistCommand.Execute(playlistId).Subscribe();
-    }
+    public void NavigateToPlaylist(string playlistId) 
+        => NavigatePlaylistCommand.Execute(playlistId).Subscribe();
 }

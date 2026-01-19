@@ -1,29 +1,133 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="using:MyLiteMusicPlayer"
+             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
              xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
+             xmlns:asyncImage="using:AsyncImageLoader"
+             xmlns:mi="using:Material.Icons.Avalonia"
              x:Class="MyLiteMusicPlayer.App"
              RequestedThemeVariant="Dark">
 
+    <Application.DataTemplates>
+        <!-- 
+           ГЛОБАЛЬНЫЙ ШАБЛОН ДЛЯ ТРЕКА.
+           Теперь, где бы вы ни положили TrackItemViewModel (в ListBox, ContentControl),
+           он будет отображаться красиво, а не как текст.
+        -->
+        <DataTemplate DataType="{x:Type vm:TrackItemViewModel}">
+            <Grid ColumnDefinitions="Auto, *, Auto, Auto, Auto" Background="Transparent" Margin="0,4" Classes="track-grid">
+                <!-- Thumbnail / Play -->
+                <Panel Grid.Column="0" Width="48" Height="48" Margin="0,0,16,0">
+                    <Border CornerRadius="4" ClipToBounds="True">
+                        <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}" Stretch="UniformToFill"/>
+                    </Border>
+                    <!-- Кнопка Play поверх картинки -->
+                    <Button Command="{Binding PlayCommand}" Classes="play-overlay" 
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <mi:MaterialIcon Kind="{Binding IsPlaying, Converter={StaticResource BoolToSelector}, ConverterParameter=Pause|Play}" 
+                                         Width="24" Height="24" Foreground="White"/>
+                    </Button>
+                </Panel>
+
+                <!-- Info -->
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="{Binding Title}" 
+                               Foreground="{Binding IsCurrentTrack, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#FFFFFF'}"
+                               FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Text="{Binding Author}" FontSize="12" 
+                               Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+
+                <!-- Download Status -->
+                <Panel Grid.Column="2" Margin="16,0" VerticalAlignment="Center">
+                    <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16" 
+                                     Foreground="{StaticResource AccentBrush}" IsVisible="{Binding IsDownloaded}"/>
+                    <ProgressBar Value="{Binding DownloadProgress}" Maximum="1" Width="50" Height="4" 
+                                 IsVisible="{Binding IsDownloading}" Foreground="{StaticResource AccentBrush}"/>
+                </Panel>
+
+                <!-- Like -->
+                <Button Grid.Column="3" Classes="icon-btn" Command="{Binding ToggleLikeCommand}" Margin="0,0,16,0">
+                    <mi:MaterialIcon Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
+                                     Width="18" Height="18"
+                                     Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"/>
+                </Button>
+
+                <!-- Duration -->
+                <TextBlock Grid.Column="4" Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}" 
+                           VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}" 
+                           Width="50" TextAlignment="Right" Margin="0,0,16,0"/>
+            </Grid>
+        </DataTemplate>
+        
+        <!-- ГЛОБАЛЬНЫЙ ШАБЛОН ДЛЯ ПЛЕЙЛИСТА (карточка) -->
+        <DataTemplate DataType="{x:Type vm:PlaylistCardViewModel}">
+             <Button Command="{Binding OpenCommand}"
+                    Background="{StaticResource BgElevatedBrush}"
+                    CornerRadius="8"
+                    Padding="16"
+                    Width="180" Height="240"
+                    Margin="0,0,24,24">
+                <StackPanel>
+                    <!-- Cover Image -->
+                    <Border Width="148" Height="148" 
+                            CornerRadius="4" 
+                            ClipToBounds="True"
+                            BoxShadow="0 4 10 0 #40000000"
+                            Margin="0,0,0,16">
+                        <Panel Background="#333">
+                            <mi:MaterialIcon Kind="MusicNote" 
+                                             Width="64" Height="64" 
+                                             Foreground="#555"
+                                             IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"/>
+                            <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
+                                   Stretch="UniformToFill"
+                                   IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}}"/>
+                        </Panel>
+                    </Border>
+
+                    <!-- Title -->
+                    <TextBlock Text="{Binding Name}" 
+                               FontWeight="Bold" 
+                               FontSize="16"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
+
+                    <!-- Subtitle -->
+                    <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks'}" 
+                               FontSize="13" 
+                               Margin="0,4,0,0"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </Button>
+        </DataTemplate>
+    </Application.DataTemplates>
+
     <Application.Styles>
         <FluentTheme />
-        
-        <!-- ИСПРАВЛЕНИЕ 1: Material Icons 2.x+ подключаются так: -->
         <materialIcons:MaterialIconStyles />
-        
-        <!-- ИСПРАВЛЕНИЕ 2: Правильный путь к стилям AsyncImageLoader -->
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
-        
-        <!-- Ваши стили (используем путь от корня /, чтобы избежать ошибок сборки) -->
         <StyleInclude Source="/Styles/SpotifyTheme.axaml" />
-        <StyleInclude Source="/Templates/TrackRowTemplate.axaml" />
-        <StyleInclude Source="/Templates/PlaylistCardTemplate.axaml" />
+        
+        <!-- Стили для оверлея кнопки Play (нужны для DataTemplate выше) -->
+        <Style Selector="Grid.track-grid Button.play-overlay">
+            <Setter Property="Opacity" Value="0"/>
+            <Setter Property="Background" Value="#80000000"/>
+            <Setter Property="Width" Value="48"/>
+            <Setter Property="Height" Value="48"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector="Grid.track-grid:pointerover Button.play-overlay">
+            <Setter Property="Opacity" Value="1"/>
+        </Style>
+        <Style Selector="Grid.track-grid:pointerover">
+            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}"/>
+        </Style>
     </Application.Styles>
 
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <!-- ИСПРАВЛЕНИЕ 3: Локальный путь для конвертеров -->
                 <ResourceInclude Source="/Converters/AppConverters.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

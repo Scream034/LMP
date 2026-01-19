@@ -92,3 +92,5 @@ D:\Projects\CS\MyLiteMusicPlayer\bin\Debug\net10.0\runtimes\win-x86\native\libSk
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMu.56AA2F71.Up2Date
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.genruntimeconfig.cache
 D:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\ref\MyLiteMusicPlayer.dll
+d:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.csproj.Fody.CopyLocal.cache
+d:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net10.0\MyLiteMusicPlayer.csproj.Fody.RuntimeCopyLocal.cache

@@ -43,8 +43,12 @@ public class SearchViewModel : ViewModelBase
         _library = library;
         _downloads = downloads;
 
-        // Инициализация команд сразу
-        SearchCommand = ReactiveCommand.CreateFromTask(ExecuteSearchAsync);
+        // Команда поиска теперь запускается вручную (кнопкой или Enter)
+        // Добавлено условие: строка не должна быть пустой
+        var canSearch = this.WhenAnyValue(x => x.SearchQuery,
+            query => !string.IsNullOrWhiteSpace(query));
+
+        SearchCommand = ReactiveCommand.CreateFromTask(ExecuteSearchAsync, canSearch);
 
         ClearCommand = ReactiveCommand.Create(() =>
         {
@@ -67,16 +71,13 @@ public class SearchViewModel : ViewModelBase
             }
         }, hasResults);
 
-        // Подписка на изменение текста поиска
-        this.WhenAnyValue(x => x.SearchQuery)
-            .Throttle(TimeSpan.FromMilliseconds(500))
-            .Where(q => !string.IsNullOrWhiteSpace(q) && q.Length >= 2)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => SearchCommand.Execute().Subscribe());
+        // ВАЖНО: Мы убрали автоматическую подписку с Throttle.
+        // Теперь поиск происходит только по явному действию пользователя.
     }
 
     private async Task ExecuteSearchAsync()
     {
+        // Отменяем предыдущий поиск, если он был
         _searchCts?.Cancel();
         _searchCts = new CancellationTokenSource();
 
@@ -111,7 +112,7 @@ public class SearchViewModel : ViewModelBase
 
             foreach (var track in tracks)
             {
-                // Sync with library
+                // Синхронизация статуса (лайк/скачано) с библиотекой
                 if (_library.HasTrack(track.Id))
                 {
                     var existing = _library.GetTrack(track.Id);
@@ -129,14 +130,18 @@ public class SearchViewModel : ViewModelBase
             }
 
             HasResults = Results.Count > 0;
+            if (!HasResults)
+            {
+                ErrorMessage = "Ничего не найдено";
+            }
         }
         catch (OperationCanceledException)
         {
-            // Ignore
+            // Поиск отменен, ничего не делаем
         }
         catch (Exception ex)
         {
-            ErrorMessage = $"Search failed: {ex.Message}";
+            ErrorMessage = $"Ошибка поиска: {ex.Message}";
         }
         finally
         {
@@ -144,12 +149,14 @@ public class SearchViewModel : ViewModelBase
         }
     }
 
-    private void PlayTrackWithContext(TrackInfo track)
+    private async void PlayTrackWithContext(TrackInfo track)
     {
         _audio.ClearQueue();
-        _audio.PlayTrack(track);
 
-        // Add remaining tracks to queue
+        // ВАЖНО: Используем Async версию, чтобы UI не зависал, если ссылка требует обновления
+        await _audio.PlayTrackAsync(track);
+
+        // Добавляем остальные треки из результатов в очередь
         bool found = false;
         foreach (var item in Results)
         {

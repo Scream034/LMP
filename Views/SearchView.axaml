@@ -1,37 +1,52 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-             x:Class="MyLiteMusicPlayer.Views.SearchView"
-             x:DataType="vm:SearchViewModel">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    x:Class="MyLiteMusicPlayer.Views.SearchView"
+    x:DataType="vm:SearchViewModel">
 
     <DockPanel>
         <!-- Header -->
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
-            <TextBlock Text="Search" FontSize="32" FontWeight="Bold" Margin="0,0,0,16"/>
-            
-            <TextBox Classes="search-box"
-                     Watermark="What do you want to play?"
-                     Text="{Binding SearchQuery}"
-                     Width="360" HorizontalAlignment="Left"
-                     CornerRadius="20" Padding="15,10"/>
+            <TextBlock Text="Search" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBox Classes="search-box"
+                    Watermark="What do you want to play?"
+                    Text="{Binding SearchQuery}"
+                    Width="360" HorizontalAlignment="Left"
+                    CornerRadius="20" Padding="15,10">
+                    <!-- Обработка нажатия Enter -->
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
+                    </TextBox.KeyBindings>
+                </TextBox>
+
+                <!-- Кнопка поиска -->
+                <Button Command="{Binding SearchCommand}"
+                    Classes="icon-btn"
+                    Width="40" Height="40"
+                    Background="{StaticResource BgElevatedBrush}"
+                    ToolTip.Tip="Search">
+                    <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
+                </Button>
+            </StackPanel>
         </StackPanel>
 
         <!-- Loading State -->
-        <ProgressBar DockPanel.Dock="Top" IsIndeterminate="True" 
-                     IsVisible="{Binding IsLoading}" VerticalAlignment="Top"/>
+        <ProgressBar DockPanel.Dock="Top" IsIndeterminate="True"
+            IsVisible="{Binding IsLoading}" VerticalAlignment="Top" />
 
         <!-- Error State -->
-        <TextBlock DockPanel.Dock="Top" Text="{Binding ErrorMessage}" Foreground="Red" 
-                   IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <TextBlock DockPanel.Dock="Top" Text="{Binding ErrorMessage}" Foreground="Red"
+            IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
         <!-- Results -->
-        <ListBox ItemsSource="{Binding Results}" Background="Transparent">
-            <ListBox.ItemTemplate>
-                <DataTemplate>
-                    <!-- Apply the template we defined in App.axaml styles -->
-                    <ContentControl Content="{Binding}" Classes="track-row"/>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+        <!-- 
+            ItemTemplate здесь больше не нужен, так как DataTemplate определен в App.axaml.
+            Avalonia сама поймет, как рисовать TrackItemViewModel.
+        -->
+        <ListBox ItemsSource="{Binding Results}" Background="Transparent" />
+
     </DockPanel>
 </UserControl>
