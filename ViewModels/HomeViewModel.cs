@@ -1,4 +1,3 @@
-// ViewModels/HomeViewModel.cs
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -20,7 +19,6 @@ public class CategoryItem
 public class HomeViewModel : ViewModelBase, IDisposable
 {
     private readonly YoutubeProvider _youtube;
-    private readonly PipedProvider _piped;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
@@ -60,7 +58,6 @@ public class HomeViewModel : ViewModelBase, IDisposable
 
     public HomeViewModel(
         YoutubeProvider youtube,
-        PipedProvider piped,
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         AudioEngine audio,
@@ -69,7 +66,6 @@ public class HomeViewModel : ViewModelBase, IDisposable
         MemoryMonitor memoryMonitor)
     {
         _youtube = youtube;
-        _piped = piped;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
@@ -96,7 +92,6 @@ public class HomeViewModel : ViewModelBase, IDisposable
                 x => x.WaitingForMore,
                 (l, lm, h, w) => !l && !lm && h && !w));
 
-        // ИСПРАВЛЕНО: Возвращаем Unit, а не bool
         ToggleDebugCommand = ReactiveCommand.Create(() =>
         {
             ShowDebugInfo = !ShowDebugInfo;
@@ -161,8 +156,6 @@ public class HomeViewModel : ViewModelBase, IDisposable
             }
             else
             {
-                // ===== СТРАТЕГИЯ ЗАГРУЗКИ =====
-
                 // 1. Проверяем disk cache
                 var cached = await _searchCache.GetAsync(categoryKey, PREFETCH_COUNT / 2);
 
@@ -177,33 +170,23 @@ public class HomeViewModel : ViewModelBase, IDisposable
                 }
                 else
                 {
-                    // 2. Пробуем Piped (быстро!)
-                    List<TrackInfo> pipedTracks;
+                    // 2. YoutubeExplode - быстрый поиск!
+                    Debug.WriteLine($"[Home] Fetching from YouTube...");
 
                     if (category.Name == "Trending")
-                        pipedTracks = await _piped.GetTrendingAsync("US", PREFETCH_COUNT, ct);
-                    else
-                        pipedTracks = await _piped.SearchAsync(categoryKey, PREFETCH_COUNT, ct);
-
-                    if (pipedTracks.Count > 0)
                     {
-                        _cachedTracks = pipedTracks;
-                        source = $"piped ({sw.ElapsedMilliseconds}ms)";
-
-                        // Сохраняем в кэш
-                        _ = _searchCache.SetAsync(categoryKey, pipedTracks);
+                        _cachedTracks = await _youtube.GetTrendingAsync(PREFETCH_COUNT);
                     }
                     else
                     {
-                        // 3. Fallback на yt-dlp
-                        Debug.WriteLine($"[Home] Piped failed, using yt-dlp");
                         _cachedTracks = await _youtube.SearchAsync(categoryKey, PREFETCH_COUNT);
-                        source = $"yt-dlp ({sw.ElapsedMilliseconds}ms)";
+                    }
 
-                        if (_cachedTracks.Count > 0)
-                        {
-                            _ = _searchCache.SetAsync(categoryKey, _cachedTracks);
-                        }
+                    source = $"youtube ({sw.ElapsedMilliseconds}ms)";
+
+                    if (_cachedTracks.Count > 0)
+                    {
+                        _ = _searchCache.SetAsync(categoryKey, _cachedTracks);
                     }
                 }
             }
@@ -216,7 +199,9 @@ public class HomeViewModel : ViewModelBase, IDisposable
                 IsLoading = false;
 
                 // Предзагрузка изображений
-                var imageUrls = _cachedTracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                var imageUrls = _cachedTracks.Take(20)
+                    .Select(t => t.ThumbnailUrl)
+                    .Where(u => !string.IsNullOrEmpty(u));
                 _ = _imageCache.PrefetchAsync(imageUrls!, ct);
 
                 await ShowNextBatchAsync();
@@ -347,20 +332,15 @@ public class HomeViewModel : ViewModelBase, IDisposable
             var sw = Stopwatch.StartNew();
 
             var existingIds = new HashSet<string>(_cachedTracks.Select(t => t.Id));
-            List<TrackInfo> newTracks;
 
-            // Пробуем Piped
-            var piped = await _piped.SearchAsync(_currentCategoryKey, PREFETCH_COUNT);
-            if (piped.Count > 0)
-            {
-                newTracks = piped.Where(t => !existingIds.Contains(t.Id)).ToList();
-            }
-            else
-            {
-                // Fallback на yt-dlp
-                var ytdlp = await _youtube.SearchAsync(_currentCategoryKey, _cachedTracks.Count + PREFETCH_COUNT);
-                newTracks = ytdlp.Where(t => !existingIds.Contains(t.Id)).ToList();
-            }
+            // YoutubeExplode поиск
+            var newResults = await _youtube.SearchAsync(
+                _currentCategoryKey,
+                _cachedTracks.Count + PREFETCH_COUNT);
+
+            var newTracks = newResults
+                .Where(t => !existingIds.Contains(t.Id))
+                .ToList();
 
             if (newTracks.Count > 0)
             {
@@ -372,7 +352,9 @@ public class HomeViewModel : ViewModelBase, IDisposable
                 _ = _searchCache.SetAsync(_currentCategoryKey, _cachedTracks);
 
                 // Предзагрузка изображений
-                var imageUrls = newTracks.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                var imageUrls = newTracks.Take(10)
+                    .Select(t => t.ThumbnailUrl)
+                    .Where(u => !string.IsNullOrEmpty(u));
                 _ = _imageCache.PrefetchAsync(imageUrls!);
             }
         }
@@ -392,7 +374,7 @@ public class HomeViewModel : ViewModelBase, IDisposable
         {
             await Task.Delay(3000, ct); // Ждём 3 сек
 
-            var fresh = await _piped.SearchAsync(query, PREFETCH_COUNT, ct);
+            var fresh = await _youtube.SearchAsync(query, PREFETCH_COUNT);
             if (fresh.Count > 0)
             {
                 var existingIds = new HashSet<string>(_cachedTracks.Select(t => t.Id));
@@ -413,7 +395,6 @@ public class HomeViewModel : ViewModelBase, IDisposable
     private void UpdateStats(string source, long timeMs, int count)
     {
         var cacheStats = _searchCache.GetStats();
-        var imgStats = _imageCache.GetStats();
 
         Stats = new LoadingStats
         {

@@ -9,7 +9,7 @@
     <Border Background="{StaticResource BgSecondaryBrush}" Height="90"
         BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="0,1,0,0">
         <Grid>
-            <!-- Индикатор загрузки (сверху) -->
+            <!-- Индикатор загрузки -->
             <ProgressBar VerticalAlignment="Top" Height="2"
                 IsIndeterminate="True"
                 Background="Transparent"
@@ -17,12 +17,14 @@
                 IsVisible="{Binding IsLoading}" />
 
             <Grid ColumnDefinitions="3*, 4*, 3*" Margin="16,0">
-                
-                <!-- Лево: Инфо о треке -->
+
+                <!-- Лево: Инфо о треке + Кнопки действий -->
                 <Grid Grid.Column="0" ColumnDefinitions="Auto, *, Auto">
-                    <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4" ClipToBounds="True">
+                    <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4"
+                        ClipToBounds="True">
                         <Panel>
-                            <mi:MaterialIcon Kind="MusicNote" Width="24" Height="24" Foreground="#555"
+                            <mi:MaterialIcon Kind="MusicNote" Width="24" Height="24"
+                                Foreground="#555"
                                 IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
                             <Image asyncImage:ImageLoader.Source="{Binding SafeThumbnail}"
                                 Stretch="UniformToFill"
@@ -31,86 +33,126 @@
                     </Border>
 
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0">
-                        <TextBlock Text="{Binding SafeTitle}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding SafeAuthor}" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding SafeTitle}" FontWeight="SemiBold"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding SafeAuthor}" FontSize="12"
+                            Foreground="{StaticResource TextSecondaryBrush}"
+                            TextTrimming="CharacterEllipsis" />
                     </StackPanel>
 
-                    <Button Grid.Column="2" Classes="icon-btn" Command="{Binding ToggleLikeCommand}">
-                        <mi:MaterialIcon
-                            Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
-                            Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"
-                            Width="16" Height="16" />
-                    </Button>
+                    <!-- Кнопки Лайк и Копировать -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                        <!-- Кнопка Лайк -->
+                        <Button Classes="icon-btn" Command="{Binding ToggleLikeCommand}"
+                            ToolTip.Tip="Нравится">
+                            <mi:MaterialIcon
+                                Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
+                                Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"
+                                Width="18" Height="18" />
+                        </Button>
+
+                        <!-- НОВАЯ КНОПКА: Копировать ссылку -->
+                        <Button Classes="icon-btn" Command="{Binding CopyLinkCommand}"
+                            ToolTip.Tip="Скопировать ссылку">
+                            <mi:MaterialIcon Kind="ContentCopy" Width="16" Height="16"
+                                Foreground="#B3B3B3" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Центр: Управление и Перемотка -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
                         <Button Classes="icon-btn" Command="{Binding ToggleShuffleCommand}">
-                            <mi:MaterialIcon Kind="Shuffle" Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}" />
+                            <mi:MaterialIcon Kind="Shuffle"
+                                Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}" />
                         </Button>
                         <Button Classes="icon-btn" Command="{Binding PreviousCommand}">
                             <mi:MaterialIcon Kind="SkipPrevious" />
                         </Button>
-                        <Button Classes="play-circle" Command="{Binding PlayPauseCommand}" Width="32" Height="32" Background="White">
+                        <Button Classes="play-circle" Command="{Binding PlayPauseCommand}"
+                            Width="32" Height="32" Background="White">
                             <Panel>
-                                <mi:MaterialIcon Kind="Pause" Foreground="Black" Width="20" Height="20" IsVisible="{Binding IsPlaying}" />
-                                <mi:MaterialIcon Kind="Play" Foreground="Black" Width="20" Height="20" IsVisible="{Binding IsPaused}" />
+                                <mi:MaterialIcon Kind="Pause" Foreground="Black" Width="20"
+                                    Height="20" IsVisible="{Binding IsPlaying}" />
+                                <mi:MaterialIcon Kind="Play" Foreground="Black" Width="20"
+                                    Height="20" IsVisible="{Binding IsPaused}" />
                             </Panel>
                         </Button>
                         <Button Classes="icon-btn" Command="{Binding NextCommand}">
                             <mi:MaterialIcon Kind="SkipNext" />
                         </Button>
                         <Button Classes="icon-btn" Command="{Binding ToggleRepeatCommand}">
-                            <mi:MaterialIcon Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <mi:MaterialIcon
+                                Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}"
+                                Foreground="{StaticResource TextSecondaryBrush}" />
                         </Button>
                     </StackPanel>
 
-                    <!-- Полоса перемотки -->
+                    <!-- Полоса перемотки (без изменений) -->
                     <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,4,0,0">
-                        <TextBlock Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Width="40" VerticalAlignment="Center" />
-
+                        <TextBlock
+                            Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}"
+                            FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                            Width="40" VerticalAlignment="Center" />
                         <Grid Grid.Column="1" Height="24" VerticalAlignment="Center">
-                            <!-- 1. Визуал -->
                             <Panel VerticalAlignment="Center">
-                                <Border Height="4" CornerRadius="2" Background="#333" VerticalAlignment="Center" />
-                                <ProgressBar Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding BufferedSeconds}" Height="4" Background="Transparent" Foreground="#5E5E5E" VerticalAlignment="Center" CornerRadius="2" />
-                                <Slider Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding PositionSeconds}" Classes="spotify-slider" IsHitTestVisible="False" VerticalAlignment="Center" />
+                                <Border Height="4" CornerRadius="2" Background="#333"
+                                    VerticalAlignment="Center" />
+                                <ProgressBar Minimum="0" Maximum="{Binding DurationSeconds}"
+                                    Value="{Binding BufferedSeconds}" Height="4"
+                                    Background="Transparent" Foreground="#5E5E5E"
+                                    VerticalAlignment="Center" CornerRadius="2" />
+                                <Slider Minimum="0" Maximum="{Binding DurationSeconds}"
+                                    Value="{Binding PositionSeconds}" Classes="spotify-slider"
+                                    IsHitTestVisible="False" VerticalAlignment="Center" />
                             </Panel>
-
-                            <!-- 2. Хитбокс -->
-                            <Border Name="SeekHitBox" Background="Transparent" Cursor="Hand" 
-                                PointerPressed="OnSeekAreaPressed" PointerMoved="OnSeekAreaMoved" PointerReleased="OnSeekAreaReleased" PointerExited="OnSeekAreaExited" />
-
-                            <!-- 3. Тултип -->
-                            <Border Name="HoverTooltip" Background="#282828" BorderBrush="#333" BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-30,0,0">
-                                <Border.RenderTransform><TranslateTransform /></Border.RenderTransform>
-                                <TextBlock Name="HoverTimeText" Text="0:00" FontSize="11" FontWeight="Bold" Foreground="White" />
+                            <Border Name="SeekHitBox" Background="Transparent" Cursor="Hand"
+                                PointerPressed="OnSeekAreaPressed" PointerMoved="OnSeekAreaMoved"
+                                PointerReleased="OnSeekAreaReleased"
+                                PointerExited="OnSeekAreaExited" />
+                            <Border Name="HoverTooltip" Background="#282828" BorderBrush="#333"
+                                BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False"
+                                HorizontalAlignment="Left" VerticalAlignment="Top"
+                                Margin="0,-30,0,0">
+                                <Border.RenderTransform>
+                                    <TranslateTransform />
+                                </Border.RenderTransform>
+                                <TextBlock Name="HoverTimeText" Text="0:00" FontSize="11"
+                                    FontWeight="Bold" Foreground="White" />
                             </Border>
                         </Grid>
-
-                        <TextBlock Grid.Column="2" Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Width="40" TextAlignment="Right" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2"
+                            Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
+                            FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                            Width="40" TextAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
                 </StackPanel>
 
-                <!-- Право: Громкость -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="8">
+                <!-- Право: Громкость (без изменений) -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                    VerticalAlignment="Center" Spacing="8">
                     <Button Classes="icon-btn" Command="{Binding ToggleMuteCommand}">
-                        <mi:MaterialIcon Kind="{Binding Volume, Converter={StaticResource VolumeIcon}}" Width="20" Height="20" />
+                        <mi:MaterialIcon
+                            Kind="{Binding Volume, Converter={StaticResource VolumeIcon}}"
+                            Width="20" Height="20" />
                     </Button>
-
                     <Grid Width="100" Height="24">
-                        <!-- 1. Визуал громкости -->
-                        <Slider Classes="spotify-slider" Minimum="0" Maximum="1" Value="{Binding Volume}" IsHitTestVisible="False" VerticalAlignment="Center" />
-
-                        <!-- 2. Хитбокс громкости -->
+                        <Slider Classes="spotify-slider" Minimum="0" Maximum="1"
+                            Value="{Binding Volume}" IsHitTestVisible="False"
+                            VerticalAlignment="Center" />
                         <Border Name="VolumeHitBox" Background="Transparent" Cursor="Hand"
-                            PointerPressed="OnVolumeAreaPressed" PointerMoved="OnVolumeAreaMoved" PointerReleased="OnVolumeAreaReleased" PointerExited="OnVolumeAreaExited" />
-
-                        <!-- 3. Тултип громкости -->
-                        <Border Name="VolumeTooltip" Background="#282828" BorderBrush="#333" BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-30,0,0">
-                            <Border.RenderTransform><TranslateTransform /></Border.RenderTransform>
-                            <TextBlock Name="VolumeTooltipText" Text="50%" FontSize="11" FontWeight="Bold" Foreground="White" />
+                            PointerPressed="OnVolumeAreaPressed" PointerMoved="OnVolumeAreaMoved"
+                            PointerReleased="OnVolumeAreaReleased"
+                            PointerExited="OnVolumeAreaExited" />
+                        <Border Name="VolumeTooltip" Background="#282828" BorderBrush="#333"
+                            BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-30,0,0">
+                            <Border.RenderTransform>
+                                <TranslateTransform />
+                            </Border.RenderTransform>
+                            <TextBlock Name="VolumeTooltipText" Text="50%" FontSize="11"
+                                FontWeight="Bold" Foreground="White" />
                         </Border>
                     </Grid>
                 </StackPanel>

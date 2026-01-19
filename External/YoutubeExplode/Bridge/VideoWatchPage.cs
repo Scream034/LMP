@@ -35,13 +35,7 @@ internal partial class VideoWatchPage(IHtmlDocument content)
     public long? LikeCount =>
         content
             .Source.Text.Pipe(s =>
-                Regex
-                    .Match(
-                        s,
-                        """
-                        "\s*:\s*"([\d,\.]+) likes"
-                        """
-                    )
+                MyRegex().Match(s)
                     .Groups[1]
                     .Value
             )
@@ -121,6 +115,12 @@ internal partial class VideoWatchPage(IHtmlDocument content)
             ?.GetStringOrNull()
             ?.Pipe(Json.TryParse)
             ?.Pipe(j => new PlayerResponse(j));
+
+    [GeneratedRegex("""
+                        "\s*:\s*"([\d,\.]+) likes"
+                        """
+    )]
+    private static partial Regex MyRegex();
 }
 
 internal partial class VideoWatchPage

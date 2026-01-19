@@ -12,8 +12,7 @@ internal partial class PlayerSource(string content)
         get
         {
             // Extract the signature timestamp
-            var signatureTimestamp = Regex
-                .Match(content, @"(?:signatureTimestamp|sts):(\d{5})")
+            var signatureTimestamp = MyRegex().Match(content)
                 .Groups[1]
                 .Value.NullIfWhiteSpace();
 
@@ -127,6 +126,9 @@ internal partial class PlayerSource(string content)
             return new CipherManifest(signatureTimestamp, operations);
         }
     }
+
+    [GeneratedRegex(@"(?:signatureTimestamp|sts):(\d{5})")]
+    private static partial Regex MyRegex();
 }
 
 internal partial class PlayerSource

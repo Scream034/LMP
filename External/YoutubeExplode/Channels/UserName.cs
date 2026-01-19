@@ -35,8 +35,7 @@ public partial struct UserName
 
         // Try to extract the user name from the URL
         // https://www.youtube.com/user/TheTyrrr
-        var userName = Regex
-            .Match(userNameOrUrl, @"youtube\..+?/user/(.*?)(?:\?|&|/|$)")
+        var userName = MyRegex().Match(userNameOrUrl)
             .Groups[1]
             .Value.Pipe(WebUtility.UrlDecode);
 
@@ -72,6 +71,9 @@ public partial struct UserName
     /// Converts user name to string.
     /// </summary>
     public static implicit operator string(UserName userName) => userName.ToString();
+
+    [GeneratedRegex(@"youtube\..+?/user/(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex();
 }
 
 public partial struct UserName : IEquatable<UserName>

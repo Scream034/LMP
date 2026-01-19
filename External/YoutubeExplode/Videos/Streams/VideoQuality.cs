@@ -80,7 +80,7 @@ public partial struct VideoQuality
         // - 1080s60 (360° stream, high fps)
         // - 2160p60 HDR (high dynamic range, high fps)
 
-        var match = Regex.Match(label, @"^(\d+)\D(\d+)?");
+        var match = MyRegex().Match(label);
 
         var maxHeight = match.Groups[1].Value.Pipe(s => int.Parse(s, CultureInfo.InvariantCulture));
 
@@ -199,6 +199,9 @@ public partial struct VideoQuality
 
         return new VideoQuality(maxHeight, framerate);
     }
+
+    [GeneratedRegex(@"^(\d+)\D(\d+)?")]
+    private static partial Regex MyRegex();
 }
 
 public partial struct VideoQuality : IComparable<VideoQuality>, IEquatable<VideoQuality>

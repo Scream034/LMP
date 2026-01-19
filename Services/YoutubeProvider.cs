@@ -1,21 +1,29 @@
-using YoutubeDLSharp;
-using YoutubeDLSharp.Options;
+using YoutubeExplode;
+using YoutubeExplode.Common;
+using YoutubeExplode.Exceptions;
+using YoutubeExplode.Playlists;
+using YoutubeExplode.Search;
+using YoutubeExplode.Videos;
+using YoutubeExplode.Videos.Streams;
 using MyLiteMusicPlayer.Models;
 using System.Diagnostics;
-using System.Text;
 using System.Text.RegularExpressions;
+using Playlist = MyLiteMusicPlayer.Models.Playlist;
 
 namespace MyLiteMusicPlayer.Services;
 
 public class YoutubeProvider
 {
-    private readonly YoutubeDL _ytdl;
-    private readonly HttpClient _http;
-    private readonly GoogleAuthService _auth;
-    private readonly string _binFolder;
+    private readonly YoutubeClient _youtube;
     private readonly string _downloadFolder;
 
+    private readonly Dictionary<string, (string Url, DateTime Obtained)> _streamCache = new();
+    private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(4);
+
     public bool IsReady { get; private set; }
+
+    public event Action<string>? OnStatusChanged;
+    public event Action<string>? OnError;
 
     private static readonly Regex YoutubeVideoRegex = new(
         @"(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})",
@@ -29,103 +37,128 @@ public class YoutubeProvider
         @"^[a-zA-Z0-9_-]{11}$",
         RegexOptions.Compiled);
 
-    public YoutubeProvider(GoogleAuthService auth)
+    public YoutubeProvider()
     {
-        _auth = auth;
-        _http = new HttpClient();
-
-        SetupEncoding();
+        _youtube = new YoutubeClient();
 
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var appFolder = Path.Combine(appData, "LiteMusicPlayer");
-        _binFolder = Path.Combine(appFolder, "Bin");
         _downloadFolder = Path.Combine(appFolder, "Downloads");
-
-        Directory.CreateDirectory(_binFolder);
         Directory.CreateDirectory(_downloadFolder);
-
-        _ytdl = new YoutubeDL
-        {
-            YoutubeDLPath = Path.Combine(_binFolder, "yt-dlp.exe"),
-            FFmpegPath = Path.Combine(_binFolder, "ffmpeg.exe"),
-            OutputFolder = _downloadFolder
-        };
     }
 
-    private static void SetupEncoding()
+    public Task InitializeAsync()
     {
+        IsReady = true;
+        Log("✅ Initialized");
+        return Task.CompletedTask;
+    }
+
+    #region ========== RefreshStreamUrlAsync ==========
+
+    public async Task<string?> RefreshStreamUrlAsync(TrackInfo track, CancellationToken ct = default)
+    {
+        string? videoId = ExtractVideoIdFromTrack(track);
+        if (string.IsNullOrEmpty(videoId))
+        {
+            LogError("Could not extract video ID");
+            return null;
+        }
+
+        var sw = Stopwatch.StartNew();
+        Log($"🔄 [{videoId}] Getting stream URL...");
+
+        // 1. Cache
+        if (TryGetFromCache(videoId, out var cachedUrl))
+        {
+            track.StreamUrl = cachedUrl!;
+            return cachedUrl;
+        }
+
+        // 2. YoutubeExplode
         try
         {
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            Environment.SetEnvironmentVariable("PYTHONIOENCODING", "utf-8");
-            Environment.SetEnvironmentVariable("PYTHONUTF8", "1");
-            Environment.SetEnvironmentVariable("LANG", "en_US.UTF-8");
-            Environment.SetEnvironmentVariable("LC_ALL", "en_US.UTF-8");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
 
-            if (OperatingSystem.IsWindows())
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, cts.Token);
+
+            // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: MP4/M4A ПЕРВЫЙ для быстрого старта!
+            // WebM требует полной буферизации, MP4 - нет
+            var audioStream = manifest.GetAudioOnlyStreams()
+                .OrderByDescending(s => s.Container.Name == "mp4" ? 2 : 0)  // MP4 приоритет
+                .ThenByDescending(s => s.Container.Name == "m4a" ? 1 : 0)  // M4A второй
+                .ThenByDescending(s => s.Bitrate.BitsPerSecond)
+                .FirstOrDefault();
+
+            if (audioStream != null)
             {
-                Environment.SetEnvironmentVariable("CHCP", "65001");
+                var url = audioStream.Url;
+                sw.Stop();
+                Log($"✅ [{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}, {audioStream.Bitrate})");
+
+                CacheStreamUrl(videoId, url);
+                track.StreamUrl = url;
+                return url;
             }
 
-            Debug.WriteLine("[YoutubeProvider] Encoding setup complete. PYTHONIOENCODING=utf-8");
+            LogError($"[{videoId}] No audio streams found");
+            return null;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[YoutubeProvider] Encoding setup warning: {ex.Message}");
+            LogError($"[{videoId}] Error: {ex.Message}");
+            return null;
         }
     }
 
-    public async Task InitializeAsync()
+    #endregion
+
+    #region ========== Cache ==========
+
+    private bool TryGetFromCache(string videoId, out string? url)
     {
-        try
+        if (_streamCache.TryGetValue(videoId, out var cached))
         {
-            SetupEncoding();
-
-            if (!File.Exists(_ytdl.YoutubeDLPath))
+            if (DateTime.UtcNow - cached.Obtained < _streamCacheLifetime)
             {
-                Debug.WriteLine("[YoutubeProvider] Downloading yt-dlp...");
-                await YoutubeDLSharp.Utils.DownloadYtDlp(_binFolder);
+                Log($"  ✅ Cache hit");
+                url = cached.Url;
+                return true;
             }
-
-            if (!File.Exists(_ytdl.FFmpegPath))
-            {
-                Debug.WriteLine("[YoutubeProvider] Downloading ffmpeg...");
-                await YoutubeDLSharp.Utils.DownloadFFmpeg(_binFolder);
-            }
-
-            try
-            {
-                Debug.WriteLine("[YoutubeProvider] Updating yt-dlp...");
-                await _ytdl.RunUpdate();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[YoutubeProvider] Update warning: {ex.Message}");
-            }
-
-            IsReady = true;
-            Debug.WriteLine("[YoutubeProvider] Initialized successfully.");
+            _streamCache.Remove(videoId);
         }
-        catch (Exception ex)
+        url = null;
+        return false;
+    }
+
+    private void CacheStreamUrl(string videoId, string url)
+    {
+        _streamCache[videoId] = (url, DateTime.UtcNow);
+
+        if (_streamCache.Count > 200)
         {
-            Debug.WriteLine($"[YoutubeProvider] Init Error: {ex.Message}");
-            IsReady = false;
+            var expired = _streamCache
+                .Where(kv => DateTime.UtcNow - kv.Value.Obtained > _streamCacheLifetime)
+                .Select(kv => kv.Key).ToList();
+            foreach (var key in expired)
+                _streamCache.Remove(key);
         }
     }
+
+    #endregion
+
+    #region ========== Search, Playlist, etc. ==========
 
     public QueryType DetectQueryType(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return QueryType.None;
         query = query.Trim();
-
-        if (YoutubePlaylistRegex.IsMatch(query))
-            return QueryType.Playlist;
-
+        if (YoutubePlaylistRegex.IsMatch(query)) return QueryType.Playlist;
         if (YoutubeVideoRegex.IsMatch(query) ||
             query.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             query.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             return QueryType.DirectUrl;
-
         return QueryType.Search;
     }
 
@@ -133,78 +166,64 @@ public class YoutubeProvider
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         var match = YoutubeVideoRegex.Match(url);
-        return match.Success ? match.Groups[1].Value : null;
+        if (match.Success) return match.Groups[1].Value;
+        try { return VideoId.TryParse(url)?.Value; } catch { return null; }
+    }
+
+    private string? ExtractVideoIdFromTrack(TrackInfo track)
+    {
+        string cleanId = track.Id?.Trim() ?? "";
+        if (cleanId.StartsWith("yt_"))
+        {
+            var rawId = cleanId[3..];
+            var safeId = new string(rawId.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-').ToArray());
+            if (ValidYoutubeId.IsMatch(safeId)) return safeId;
+        }
+        if (!string.IsNullOrWhiteSpace(track.Url))
+            return ExtractVideoId(track.Url);
+        return null;
     }
 
     public async Task<TrackInfo?> GetTrackByUrlAsync(string url)
     {
-        if (!IsReady || string.IsNullOrWhiteSpace(url))
-            return null;
-
+        if (!IsReady || string.IsNullOrWhiteSpace(url)) return null;
         try
         {
-            Debug.WriteLine($"[YoutubeProvider] === GetTrackByUrlAsync START ===");
-            Debug.WriteLine($"[YoutubeProvider] URL: '{url}'");
-
-            var res = await _ytdl.RunVideoDataFetch(url);
-
-            if (!res.Success)
-            {
-                Debug.WriteLine($"[YoutubeProvider] Fetch FAILED!");
-                foreach (var err in res.ErrorOutput ?? Array.Empty<string>())
-                    Debug.WriteLine($"  - {err}");
-                return null;
-            }
-
-            Debug.WriteLine($"[YoutubeProvider] Fetch SUCCESS. Converting to TrackInfo...");
-            var track = ConvertToTrackInfo(res.Data);
-
-            if (track != null)
-            {
-                Debug.WriteLine($"[YoutubeProvider] Track created: ID='{track.Id}', StreamUrl length={track.StreamUrl?.Length ?? 0}");
-            }
-
-            return track;
+            var videoId = VideoId.TryParse(url) ?? VideoId.Parse(ExtractVideoId(url) ?? "");
+            var video = await _youtube.Videos.GetAsync(videoId);
+            return ConvertToTrackInfo(video);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[YoutubeProvider] GetTrackByUrlAsync EXCEPTION: {ex.Message}");
+            Log($"GetTrackByUrlAsync error: {ex.Message}");
             return null;
         }
     }
 
     public async Task<List<TrackInfo>> SearchAsync(string query, int maxResults = 20)
     {
-        if (!IsReady) return [];
+        if (!IsReady || string.IsNullOrWhiteSpace(query)) return [];
+
+        var sw = Stopwatch.StartNew();
 
         try
         {
-            string searchParam = $"ytsearch{maxResults}:{query}";
-            var res = await _ytdl.RunVideoDataFetch(searchParam);
-
-            if (!res.Success) return [];
-
             var results = new List<TrackInfo>();
 
-            if (res.Data.Entries != null)
+            // Используем GetVideosAsync вместо GetResultsAsync чтобы избежать каналов
+            await foreach (var video in _youtube.Search.GetVideosAsync(query))
             {
-                foreach (var entry in res.Data.Entries)
-                {
-                    var track = ConvertToTrackInfo(entry);
-                    if (track != null) results.Add(track);
-                }
-            }
-            else
-            {
-                var track = ConvertToTrackInfo(res.Data);
-                if (track != null) results.Add(track);
+                if (results.Count >= maxResults) break;
+                results.Add(ConvertSearchResultToTrackInfo(video));
             }
 
+            sw.Stop();
+            Log($"Search '{query}': {results.Count} results in {sw.ElapsedMilliseconds}ms");
             return results;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[YoutubeProvider] SearchAsync EXCEPTION: {ex.Message}");
+            Log($"SearchAsync error: {ex.Message}");
             return [];
         }
     }
@@ -214,26 +233,18 @@ public class YoutubeProvider
         if (!IsReady) return null;
         try
         {
-            var res = await _ytdl.RunVideoDataFetch(url);
-            if (!res.Success || res.Data == null) return null;
+            var playlistId = PlaylistId.TryParse(url);
+            if (playlistId == null) return null;
 
-            string playlistName = res.Data.Title ?? "Unknown Playlist";
-            var tracks = new List<TrackInfo>();
+            var playlist = await _youtube.Playlists.GetAsync(playlistId.Value);
+            var videos = await _youtube.Playlists.GetVideosAsync(playlistId.Value).CollectAsync();
 
-            if (res.Data.Entries != null)
-            {
-                foreach (var entry in res.Data.Entries)
-                {
-                    var track = ConvertToTrackInfo(entry);
-                    if (track != null) tracks.Add(track);
-                }
-            }
-
-            return (playlistName, tracks);
+            var tracks = videos.Select(ConvertPlaylistVideoToTrackInfo).ToList();
+            return (playlist.Title, tracks);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[YoutubeProvider] GetPlaylistAsync error: {ex.Message}");
+            Log($"GetPlaylistAsync error: {ex.Message}");
             return null;
         }
     }
@@ -243,12 +254,12 @@ public class YoutubeProvider
         if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url)) return [];
         try
         {
-            string? videoId = ExtractVideoId(sourceTrack.Url);
+            var videoId = ExtractVideoId(sourceTrack.Url);
             if (string.IsNullOrEmpty(videoId)) return [];
-            string mixUrl = $"https://www.youtube.com/watch?v={videoId}&list=RD{videoId}";
+            var mixUrl = $"https://www.youtube.com/watch?v={videoId}&list=RD{videoId}";
             var result = await GetPlaylistAsync(mixUrl);
             var tracks = result?.Tracks.Take(count).ToList() ?? [];
-            foreach (var track in tracks) track.RadioSeedId = sourceTrack.Id;
+            foreach (var t in tracks) t.RadioSeedId = sourceTrack.Id;
             return tracks;
         }
         catch { return []; }
@@ -258,188 +269,108 @@ public class YoutubeProvider
     {
         try
         {
-            string trendingUrl = "https://music.youtube.com/playlist?list=RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs";
-            var result = await GetPlaylistAsync(trendingUrl);
-            return result?.Tracks.Take(count).ToList() ?? [];
+            var url = "https://music.youtube.com/playlist?list=RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs";
+            var result = await GetPlaylistAsync(url);
+            return result?.Tracks.Take(count).ToList() ?? await SearchAsync("top music 2024", count);
         }
         catch { return await SearchAsync("top music 2024", count); }
     }
 
-    public async Task<List<Playlist>> GetUserPlaylistsAsync() => await Task.FromResult(new List<Playlist>());
-    public async Task<List<TrackInfo>> GetPersonalRecommendationsAsync(int count = 20) => await GetTrendingAsync(count);
+    public Task<List<Playlist>> GetUserPlaylistsAsync() => Task.FromResult(new List<Playlist>());
+    public Task<List<TrackInfo>> GetPersonalRecommendationsAsync(int count = 20) => GetTrendingAsync(count);
 
-    public async Task<string?> DownloadTrackAsync(TrackInfo track, IProgress<float>? progress = null, CancellationToken cancellationToken = default)
+    public async Task<string?> DownloadTrackAsync(TrackInfo track, IProgress<float>? progress = null, CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrEmpty(track.Url)) return null;
         try
         {
-            var progressHandler = progress != null ? new Progress<DownloadProgress>(p => progress.Report((float)p.Progress)) : null;
-            var res = await _ytdl.RunAudioDownload(track.Url, AudioConversionFormat.Mp3, progress: progressHandler, ct: cancellationToken);
-            return res.Success ? res.Data : null;
+            var videoId = ExtractVideoId(track.Url);
+            if (string.IsNullOrEmpty(videoId)) return null;
+
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, ct);
+
+            // Для скачивания берём лучшее качество (webm/opus OK - не стримим)
+            var stream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
+            if (stream == null) return null;
+
+            var fileName = SanitizeFileName($"{track.Author} - {track.Title}.{stream.Container.Name}");
+            var filePath = Path.Combine(_downloadFolder, fileName);
+
+            var prog = progress != null ? new Progress<double>(p => progress.Report((float)p)) : null;
+            await _youtube.Videos.Streams.DownloadAsync(stream, filePath, progress: prog, cancellationToken: ct);
+            return filePath;
         }
-        catch { return null; }
-    }
-
-    public async Task<string?> RefreshStreamUrlAsync(TrackInfo track)
-    {
-        Debug.WriteLine($"[YoutubeProvider] === RefreshStreamUrlAsync START ===");
-        Debug.WriteLine($"[YoutubeProvider] Track: '{track.Title}' (ID: {track.Id})");
-
-        // Ждём готовности, если ещё не готов
-        if (!IsReady)
+        catch (Exception ex)
         {
-            Debug.WriteLine("[YoutubeProvider] Not ready, waiting...");
-            for (int i = 0; i < 50 && !IsReady; i++) // макс 5 сек
-            {
-                await Task.Delay(100);
-            }
-            if (!IsReady)
-            {
-                Debug.WriteLine("[YoutubeProvider] Still not ready after waiting!");
-                return null;
-            }
-        }
-
-        string? urlToUse = null;
-        string cleanId = track.Id?.Trim() ?? string.Empty;
-
-        if (cleanId.StartsWith("yt_"))
-        {
-            string rawId = cleanId.Substring(3);
-            var safeIdChars = rawId.Where(c =>
-                (c >= 'a' && c <= 'z') ||
-                (c >= 'A' && c <= 'Z') ||
-                (c >= '0' && c <= '9') ||
-                c == '_' || c == '-').ToArray();
-            string safeId = new string(safeIdChars);
-
-            if (ValidYoutubeId.IsMatch(safeId))
-            {
-                urlToUse = $"https://www.youtube.com/watch?v={safeId}";
-                Debug.WriteLine($"[YoutubeProvider] Reconstructed URL: '{urlToUse}'");
-            }
-        }
-
-        if (string.IsNullOrEmpty(urlToUse) && !string.IsNullOrWhiteSpace(track.Url))
-        {
-            var extractedId = ExtractVideoId(track.Url);
-            if (!string.IsNullOrEmpty(extractedId) && ValidYoutubeId.IsMatch(extractedId))
-            {
-                urlToUse = $"https://www.youtube.com/watch?v={extractedId}";
-            }
-            else
-            {
-                urlToUse = track.Url.Trim();
-            }
-        }
-
-        if (string.IsNullOrEmpty(urlToUse))
-        {
-            Debug.WriteLine($"[YoutubeProvider] CRITICAL: Could not determine URL!");
+            Log($"Download error: {ex.Message}");
             return null;
         }
-
-        var freshTrack = await GetTrackByUrlAsync(urlToUse);
-
-        if (freshTrack != null && !string.IsNullOrEmpty(freshTrack.StreamUrl))
-        {
-            Debug.WriteLine($"[YoutubeProvider] Got fresh stream URL (length: {freshTrack.StreamUrl.Length})");
-
-            track.StreamUrl = freshTrack.StreamUrl;
-            if (freshTrack.Duration.TotalSeconds > 0)
-                track.Duration = freshTrack.Duration;
-            if (string.IsNullOrEmpty(track.Url))
-                track.Url = freshTrack.Url;
-
-            return freshTrack.StreamUrl;
-        }
-
-        Debug.WriteLine($"[YoutubeProvider] FAILED to get stream URL");
-        return null;
     }
 
-    private TrackInfo? ConvertToTrackInfo(YoutubeDLSharp.Metadata.VideoData data)
+    #endregion
+
+    #region ========== Helpers ==========
+
+    private TrackInfo ConvertToTrackInfo(Video video)
     {
-        if (data == null) return null;
-
-        Debug.WriteLine($"[YoutubeProvider] ConvertToTrackInfo:");
-        Debug.WriteLine($"  ID: '{data.ID}', Title: '{data.Title}'");
-
-        string bestStream = string.Empty;
-        string? thumbnailUrl = null;
-
-        // Получаем лучший thumbnail
-        if (!string.IsNullOrEmpty(data.Thumbnail))
-        {
-            thumbnailUrl = data.Thumbnail;
-        }
-        else if (data.Thumbnails != null && data.Thumbnails.Any())
-        {
-            // Берем thumbnail среднего качества
-            var thumb = data.Thumbnails
-                .Where(t => t.Url != null)
-                .OrderByDescending(t => t.Width ?? 0)
-                .Skip(data.Thumbnails.Length / 2)
-                .FirstOrDefault();
-            thumbnailUrl = thumb?.Url;
-        }
-
-        if (data.Formats != null && data.Formats.Any())
-        {
-            // ТОЛЬКО audio-only форматы (без видео)
-            var audioOnlyFormats = data.Formats
-                .Where(f => f.AudioBitrate != null && f.AudioBitrate > 0)
-                .Where(f => f.VideoCodec == "none" || string.IsNullOrEmpty(f.VideoCodec) || f.VideoCodec == "null")
-                .Where(f => !string.IsNullOrEmpty(f.Url))
-                .OrderByDescending(f => f.AudioBitrate)
-                .ToList();
-
-            Debug.WriteLine($"  Audio-only formats: {audioOnlyFormats.Count}");
-            foreach (var fmt in audioOnlyFormats.Take(4))
-            {
-                Debug.WriteLine($"    - {fmt.Extension} abr={fmt.AudioBitrate} acodec={fmt.AudioCodec}");
-            }
-
-            // Предпочитаем webm/opus - лучше для стриминга
-            var bestFormat = audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm" && f.AudioCodec?.Contains("opus") == true)
-                             ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "webm")
-                             ?? audioOnlyFormats.FirstOrDefault(f => f.Extension == "m4a")
-                             ?? audioOnlyFormats.FirstOrDefault();
-
-            if (bestFormat != null)
-            {
-                bestStream = bestFormat.Url ?? string.Empty;
-                Debug.WriteLine($"  Selected: {bestFormat.Extension} abr={bestFormat.AudioBitrate}");
-            }
-        }
-
-        string videoId = data.ID ?? "";
-        if (string.IsNullOrEmpty(videoId) || !ValidYoutubeId.IsMatch(videoId))
-        {
-            var cleanedId = new string((videoId ?? "").Where(c =>
-                (c >= 'a' && c <= 'z') ||
-                (c >= 'A' && c <= 'Z') ||
-                (c >= '0' && c <= '9') ||
-                c == '_' || c == '-').ToArray());
-
-            videoId = cleanedId.Length == 11 ? cleanedId : Guid.NewGuid().ToString("N").Substring(0, 11);
-        }
-
-        string trackUrl = data.WebpageUrl ?? "";
-        if (string.IsNullOrEmpty(trackUrl) && ValidYoutubeId.IsMatch(videoId))
-        {
-            trackUrl = $"https://youtube.com/watch?v={videoId}";
-        }
-
+        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
         return new TrackInfo
         {
-            Id = $"yt_{videoId}",
-            Title = data.Title ?? "Unknown Title",
-            Author = data.Uploader ?? data.Channel ?? "Unknown Artist",
-            Url = trackUrl,
-            StreamUrl = bestStream,
-            Duration = data.Duration != null ? TimeSpan.FromSeconds((double)data.Duration) : TimeSpan.Zero,
-            ThumbnailUrl = thumbnailUrl ?? string.Empty  // Может быть пустым - TrackInfo сам сгенерирует
+            Id = $"yt_{video.Id.Value}",
+            Title = video.Title,
+            Author = video.Author.ChannelTitle,
+            Url = video.Url,
+            Duration = video.Duration ?? TimeSpan.Zero,
+            ThumbnailUrl = thumb?.Url ?? ""
         };
     }
+
+    private TrackInfo ConvertSearchResultToTrackInfo(VideoSearchResult video)
+    {
+        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
+        return new TrackInfo
+        {
+            Id = $"yt_{video.Id.Value}",
+            Title = video.Title,
+            Author = video.Author.ChannelTitle,
+            Url = video.Url,
+            Duration = video.Duration ?? TimeSpan.Zero,
+            ThumbnailUrl = thumb?.Url ?? ""
+        };
+    }
+
+    private TrackInfo ConvertPlaylistVideoToTrackInfo(PlaylistVideo video)
+    {
+        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
+        return new TrackInfo
+        {
+            Id = $"yt_{video.Id.Value}",
+            Title = video.Title,
+            Author = video.Author.ChannelTitle,
+            Url = video.Url,
+            Duration = video.Duration ?? TimeSpan.Zero,
+            ThumbnailUrl = thumb?.Url ?? ""
+        };
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = new string(name.Where(c => !invalid.Contains(c)).ToArray());
+        return sanitized.Length > 200 ? sanitized[..200] : sanitized;
+    }
+
+    private void Log(string message)
+    {
+        Debug.WriteLine($"[YoutubeProvider] {message}");
+        OnStatusChanged?.Invoke(message);
+    }
+
+    private void LogError(string message)
+    {
+        Debug.WriteLine($"[YoutubeProvider] ❌ {message}");
+        OnError?.Invoke(message);
+    }
+
+    #endregion
 }

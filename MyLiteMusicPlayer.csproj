@@ -35,7 +35,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="ReactiveUI.Fody" Version="19.5.41" />
-    <PackageReference Include="YoutubeDLSharp" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup>

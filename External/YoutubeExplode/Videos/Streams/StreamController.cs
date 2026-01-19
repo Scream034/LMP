@@ -4,7 +4,7 @@ using YoutubeExplode.Exceptions;
 
 namespace YoutubeExplode.Videos.Streams;
 
-internal class StreamController(HttpClient http) : VideoController(http)
+internal partial class StreamController(HttpClient http) : VideoController(http)
 {
     public async ValueTask<PlayerSource> GetPlayerSourceAsync(
         CancellationToken cancellationToken = default
@@ -15,7 +15,7 @@ internal class StreamController(HttpClient http) : VideoController(http)
             cancellationToken
         );
 
-        var version = Regex.Match(iframe, @"player\\?/([0-9a-fA-F]{8})\\?/").Groups[1].Value;
+        var version = MyRegex().Match(iframe).Groups[1].Value;
         if (string.IsNullOrWhiteSpace(version))
             throw new YoutubeExplodeException("Failed to extract the player version.");
 
@@ -31,4 +31,6 @@ internal class StreamController(HttpClient http) : VideoController(http)
         string url,
         CancellationToken cancellationToken = default
     ) => DashManifest.Parse(await Http.GetStringAsync(url, cancellationToken));
+    [GeneratedRegex(@"player\\?/([0-9a-fA-F]{8})\\?/")]
+    private static partial Regex MyRegex();
 }

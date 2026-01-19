@@ -1,4 +1,3 @@
-// ViewModels/TrackItemViewModel.cs
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -29,7 +28,6 @@ public class TrackItemViewModel : ViewModelBase
     public string ThumbnailUrl => Track.ThumbnailUrl;
     public bool IsDownloaded => Track.IsDownloaded;
 
-    // Commands
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
@@ -51,15 +49,28 @@ public class TrackItemViewModel : ViewModelBase
 
         IsLiked = track.IsLiked;
 
-        // Subscribe to playback changes
-        // FIX: Проверяем на null, т.к. при остановке может прийти null
+        // СИНХРОНИЗАЦИЯ: Подписка на обновление трека из любого места
+        Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
+                h => _library.OnTrackUpdated += h,
+                h => _library.OnTrackUpdated -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(updatedTrack =>
+            {
+                // Если ID совпадают, обновляем состояние UI
+                if (Track.Id == updatedTrack.Id)
+                {
+                    IsLiked = updatedTrack.IsLiked;
+                    Track.IsLiked = updatedTrack.IsLiked; // Синхронизируем модель
+                }
+            });
+
+        // Подписка на Playback State
         Observable.FromEvent<TrackInfo>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(t =>
             {
-                // FIX: t может быть null при остановке воспроизведения
                 if (t == null)
                 {
                     IsCurrentTrack = false;
@@ -72,7 +83,7 @@ public class TrackItemViewModel : ViewModelBase
                 }
             });
 
-        // Subscribe to download progress
+        // Подписка на загрузку
         Observable.FromEvent<Action<string, float>, (string, float)>(
                 h => (id, p) => h((id, p)),
                 h => _downloads.OnProgress += h,
@@ -85,19 +96,17 @@ public class TrackItemViewModel : ViewModelBase
                 DownloadProgress = x.Item2;
             });
 
-        // Commands
         PlayCommand = ReactiveCommand.Create(() =>
         {
-            if (onPlay != null)
-                onPlay(Track);
-            else
-                _ = _audio.PlayTrackAsync(Track);
+            if (onPlay != null) onPlay(Track);
+            else _ = _audio.PlayTrackAsync(Track);
         });
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>
         {
+            // Теперь это вызовет событие в LibraryService, 
+            // которое поймают и PlayerBar, и этот же ViewModel (в подписке выше)
             _library.ToggleLike(Track);
-            IsLiked = Track.IsLiked;
         });
 
         AddToQueueCommand = ReactiveCommand.Create(() =>
@@ -108,8 +117,7 @@ public class TrackItemViewModel : ViewModelBase
         var canDownload = this.WhenAnyValue(x => x.IsDownloading, d => !d);
         DownloadCommand = ReactiveCommand.Create(() =>
         {
-            if (!Track.IsDownloaded)
-                _downloads.StartDownload(Track);
+            if (!Track.IsDownloaded) _downloads.StartDownload(Track);
         }, canDownload);
 
         StartRadioCommand = ReactiveCommand.Create(() =>

@@ -38,8 +38,7 @@ public partial struct PlaylistId
         // Try to extract the ID from the URL
         // https://www.youtube.com/playlist?list=PLOU2XLYxmsIJGErt5rrCqaSGTMyyqNt2H
         {
-            var id = Regex
-                .Match(playlistIdOrUrl, @"youtube\..+?/playlist.*?list=(.*?)(?:&|/|$)")
+            var id = MyRegex().Match(playlistIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -110,6 +109,9 @@ public partial struct PlaylistId
     /// Converts ID to string.
     /// </summary>
     public static implicit operator string(PlaylistId playlistId) => playlistId.ToString();
+
+    [GeneratedRegex(@"youtube\..+?/playlist.*?list=(.*?)(?:&|/|$)")]
+    private static partial Regex MyRegex();
 }
 
 public partial struct PlaylistId : IEquatable<PlaylistId>

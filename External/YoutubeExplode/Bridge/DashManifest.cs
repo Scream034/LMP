@@ -31,7 +31,7 @@ internal partial class DashManifest(XElement content)
 
 internal partial class DashManifest
 {
-    public class StreamData(XElement content) : IStreamData
+    public partial class StreamData(XElement content) : IStreamData
     {
         public int? Itag => (int?)content.Attribute("id");
 
@@ -45,7 +45,7 @@ internal partial class DashManifest
 
         public long? ContentLength =>
             (long?)content.Attribute("contentLength")
-            ?? Url?.Pipe(s => Regex.Match(s, @"[/\?]clen[/=](\d+)").Groups[1].Value)
+            ?? Url?.Pipe(s => MyRegex().Match(s).Groups[1].Value)
                 .NullIfWhiteSpace()
                 ?.Pipe(s =>
                     long.TryParse(s, CultureInfo.InvariantCulture, out var result)
@@ -79,6 +79,9 @@ internal partial class DashManifest
         public int? VideoHeight => (int?)content.Attribute("height");
 
         public int? VideoFramerate => (int?)content.Attribute("frameRate");
+
+        [GeneratedRegex(@"[/\?]clen[/=](\d+)")]
+        private static partial Regex MyRegex();
     }
 }
 

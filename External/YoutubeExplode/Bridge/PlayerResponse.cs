@@ -104,7 +104,7 @@ internal partial class PlayerResponse(JsonElement content)
             .Replace('_', '/')
             .Pipe(Convert.FromBase64String)
             .Pipe(Encoding.UTF8.GetString)
-            .Pipe(s => Regex.Match(s, @"video_id=(.{11})").Groups[1].Value)
+            .Pipe(s => MyRegex().Match(s).Groups[1].Value)
             .NullIfWhiteSpace();
 
     private JsonElement? StreamingData => content.GetPropertyOrNull("streamingData");
@@ -149,6 +149,9 @@ internal partial class PlayerResponse(JsonElement content)
             ?.EnumerateArrayOrNull()
             ?.Select(j => new ClosedCaptionTrackData(j))
             .ToArray() ?? [];
+
+    [GeneratedRegex(@"video_id=(.{11})")]
+    private static partial Regex MyRegex();
 }
 
 internal partial class PlayerResponse

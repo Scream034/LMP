@@ -34,8 +34,7 @@ public readonly partial struct ChannelSlug
 
         // Try to extract the slug from the URL
         // https://www.youtube.com/c/Tyrrrz
-        var slug = Regex
-            .Match(channelSlugOrUrl, @"youtube\..+?/c/(.*?)(?:\?|&|/|$)")
+        var slug = MyRegex().Match(channelSlugOrUrl)
             .Groups[1]
             .Value.Pipe(WebUtility.UrlDecode);
 
@@ -71,4 +70,7 @@ public readonly partial struct ChannelSlug
     /// Converts channel slug to string.
     /// </summary>
     public static implicit operator string(ChannelSlug channelSlug) => channelSlug.ToString();
+
+    [GeneratedRegex(@"youtube\..+?/c/(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex();
 }

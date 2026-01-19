@@ -11,7 +11,11 @@ public class LibraryService
 
     public LibraryData Data { get; private set; } = new();
 
+    // Оповещение об изменении всей библиотеки (для рефреша списков)
     public event Action? OnDataChanged;
+
+    // НОВОЕ: Оповещение об изменении конкретного трека (для синхронизации лайков)
+    public event Action<TrackInfo>? OnTrackUpdated;
 
     public LibraryService()
     {
@@ -98,6 +102,7 @@ public class LibraryService
 
         if (Data.Tracks.TryGetValue(track.Id, out var existing))
         {
+            // Сохраняем важные пользовательские флаги
             track.IsLiked = existing.IsLiked;
             track.IsDisliked = existing.IsDisliked;
             track.IsDownloaded = existing.IsDownloaded || track.IsDownloaded;
@@ -106,8 +111,12 @@ public class LibraryService
         }
 
         Data.Tracks[track.Id] = track;
-        OnDataChanged?.Invoke();
+
         Save();
+        // ВАЖНО: Не вызываем OnTrackUpdated здесь для всех подряд обновлений, 
+        // только специфические методы (ToggleLike) будут это делать,
+        // либо можно раскомментировать, если нужно реагировать на всё.
+        OnDataChanged?.Invoke();
     }
 
     public TrackInfo? GetTrack(string id) =>
@@ -147,8 +156,10 @@ public class LibraryService
 
     public void ToggleLike(TrackInfo track)
     {
+        // Сначала убеждаемся, что трек есть в базе, чтобы не потерять состояние
         AddOrUpdateTrack(track);
 
+        // Инвертируем
         track.IsLiked = !track.IsLiked;
         track.IsDisliked = false;
 
@@ -172,7 +183,11 @@ public class LibraryService
 
         Data.Tracks[track.Id] = track;
         Save();
+
         OnDataChanged?.Invoke();
+
+        // НОВОЕ: Уведомляем конкретно об изменении этого трека
+        OnTrackUpdated?.Invoke(track);
     }
 
     public void ToggleDislike(TrackInfo track)
@@ -190,16 +205,14 @@ public class LibraryService
 
         Data.Tracks[track.Id] = track;
         Save();
+
         OnDataChanged?.Invoke();
+        OnTrackUpdated?.Invoke(track); // Уведомляем
     }
 
     public Playlist CreatePlaylist(string name)
     {
-        var playlist = new Playlist
-        {
-            Name = name,
-            IsLocal = true
-        };
+        var playlist = new Playlist { Name = name, IsLocal = true };
         Data.Playlists[playlist.Id] = playlist;
         Save();
         OnDataChanged?.Invoke();
@@ -209,7 +222,6 @@ public class LibraryService
     public void RenamePlaylist(string playlistId, string newName)
     {
         if (playlistId == "liked") return;
-
         if (Data.Playlists.TryGetValue(playlistId, out var playlist))
         {
             playlist.Name = newName;
@@ -222,12 +234,10 @@ public class LibraryService
     public void DeletePlaylist(string playlistId)
     {
         if (playlistId == "liked") return;
-
         if (Data.Playlists.Remove(playlistId))
         {
             foreach (var track in Data.Tracks.Values)
                 track.InPlaylists.Remove(playlistId);
-
             Save();
             OnDataChanged?.Invoke();
         }
@@ -236,16 +246,12 @@ public class LibraryService
     public void AddTrackToPlaylist(TrackInfo track, string playlistId)
     {
         AddOrUpdateTrack(track);
-
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist))
-            return;
-
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return;
         if (!playlist.TrackIds.Contains(track.Id))
         {
             playlist.TrackIds.Add(track.Id);
             track.InPlaylists.Add(playlistId);
             playlist.UpdatedAt = DateTime.Now;
-
             Data.Tracks[track.Id] = track;
             Save();
             OnDataChanged?.Invoke();
@@ -254,55 +260,34 @@ public class LibraryService
 
     public void RemoveTrackFromPlaylist(TrackInfo track, string playlistId)
     {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist))
-            return;
-
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return;
         playlist.TrackIds.Remove(track.Id);
         track.InPlaylists.Remove(playlistId);
         playlist.UpdatedAt = DateTime.Now;
-
-        if (Data.Tracks.ContainsKey(track.Id))
-            Data.Tracks[track.Id] = track;
-
+        if (Data.Tracks.ContainsKey(track.Id)) Data.Tracks[track.Id] = track;
         Save();
         OnDataChanged?.Invoke();
     }
 
     public bool IsTrackInPlaylist(string trackId, string playlistId)
     {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist))
-            return false;
-
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return false;
         return playlist.TrackIds.Contains(trackId);
     }
 
     public List<TrackInfo> GetPlaylistTracks(string playlistId)
     {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist))
-            return [];
-
-        return playlist.TrackIds
-            .Select(GetTrack)
-            .Where(t => t != null)
-            .Cast<TrackInfo>()
-            .ToList();
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
+        return playlist.TrackIds.Select(GetTrack).Where(t => t != null).Cast<TrackInfo>().ToList();
     }
 
     public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
-
-    public Playlist? GetPlaylist(string playlistId) =>
-        Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
+    public Playlist? GetPlaylist(string playlistId) => Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
 
     public void MergeAccountPlaylists(IEnumerable<Playlist> accountPlaylists)
     {
         foreach (var playlist in accountPlaylists)
-        {
-            if (!Data.Playlists.ContainsKey(playlist.Id))
-            {
-                Data.Playlists[playlist.Id] = playlist;
-            }
-        }
-
+            if (!Data.Playlists.ContainsKey(playlist.Id)) Data.Playlists[playlist.Id] = playlist;
         Save();
         OnDataChanged?.Invoke();
     }
@@ -316,12 +301,10 @@ public class LibraryService
                 var uri = new Uri(track.Url);
                 var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
                 var videoId = query["v"];
-                if (!string.IsNullOrEmpty(videoId))
-                    return $"yt_{videoId}";
+                if (!string.IsNullOrEmpty(videoId)) return $"yt_{videoId}";
             }
             catch { }
         }
-
         return $"local_{Guid.NewGuid():N}";
     }
 }

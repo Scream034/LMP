@@ -35,8 +35,7 @@ public readonly partial struct ChannelHandle
 
         // Try to extract the handle from the URL
         // https://www.youtube.com/@Tyrrrz
-        var handle = Regex
-            .Match(channelHandleOrUrl, @"youtube\..+?/@(.*?)(?:\?|&|/|$)")
+        var handle = MyRegex().Match(channelHandleOrUrl)
             .Groups[1]
             .Value.Pipe(WebUtility.UrlDecode);
 
@@ -73,4 +72,7 @@ public readonly partial struct ChannelHandle
     /// Converts channel handle to string.
     /// </summary>
     public static implicit operator string(ChannelHandle channelHandle) => channelHandle.ToString();
+
+    [GeneratedRegex(@"youtube\..+?/@(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex();
 }

@@ -149,19 +149,22 @@ public class SearchViewModel : ViewModelBase
         _audio.ClearQueue();
 
         // ВАЖНО: Используем Async версию, чтобы UI не зависал, если ссылка требует обновления
-        await _audio.PlayTrackAsync(track);
-
-        // Добавляем остальные треки из результатов в очередь
-        bool found = false;
-        foreach (var item in Results)
+        await Task.Run(async () =>
         {
-            if (found)
-                _audio.Enqueue(item.Track);
-            if (item.Track.Id == track.Id)
-                found = true;
-        }
+            await _audio.PlayTrackAsync(track);
 
-        _library.AddToRecentlyPlayed(track);
+            // Добавляем остальные треки из результатов в очередь
+            bool found = false;
+            foreach (var item in Results)
+            {
+                if (found)
+                    _audio.Enqueue(item.Track);
+                if (item.Track.Id == track.Id)
+                    found = true;
+            }
+
+            _library.AddToRecentlyPlayed(track);
+        });
     }
 
     private async void StartRadio(TrackInfo track)

@@ -11,7 +11,7 @@ namespace YoutubeExplode.Channels;
 /// <summary>
 /// Operations related to YouTube channels.
 /// </summary>
-public class ChannelClient(HttpClient http)
+public partial class ChannelClient(HttpClient http)
 {
     private readonly ChannelController _controller = new(http);
 
@@ -30,8 +30,7 @@ public class ChannelClient(HttpClient http)
             ?? throw new YoutubeExplodeException("Failed to extract the channel logo URL.");
 
         var logoSize =
-            Regex
-                .Matches(logoUrl, @"\bs(\d+)\b")
+            MyRegex().Matches(logoUrl)
                 .ToArray()
                 .LastOrDefault()
                 ?.Groups[1]
@@ -111,4 +110,7 @@ public class ChannelClient(HttpClient http)
         var playlistId = "UU" + channelId.Value[2..];
         return new PlaylistClient(http).GetVideosAsync(playlistId, cancellationToken);
     }
+
+    [GeneratedRegex(@"\bs(\d+)\b")]
+    private static partial Regex MyRegex();
 }
