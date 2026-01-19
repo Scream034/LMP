@@ -1,0 +1,155 @@
+<!-- Styles/SpotifyTheme.axaml -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Color Palette -->
+    <Style>
+        <Style.Resources>
+            <!-- Background Colors -->
+            <Color x:Key="BgPrimary">#121212</Color>
+            <Color x:Key="BgSecondary">#181818</Color>
+            <Color x:Key="BgElevated">#282828</Color>
+            <Color x:Key="BgHighlight">#333333</Color>
+            <Color x:Key="BgHover">#3E3E3E</Color>
+            
+            <!-- Brand Colors -->
+            <Color x:Key="AccentGreen">#1DB954</Color>
+            <Color x:Key="AccentGreenHover">#1ED760</Color>
+            
+            <!-- Text Colors -->
+            <Color x:Key="TextPrimary">#FFFFFF</Color>
+            <Color x:Key="TextSecondary">#B3B3B3</Color>
+            <Color x:Key="TextMuted">#6A6A6A</Color>
+            
+            <!-- Brushes -->
+            <SolidColorBrush x:Key="BgPrimaryBrush" Color="{StaticResource BgPrimary}" />
+            <SolidColorBrush x:Key="BgSecondaryBrush" Color="{StaticResource BgSecondary}" />
+            <SolidColorBrush x:Key="BgElevatedBrush" Color="{StaticResource BgElevated}" />
+            <SolidColorBrush x:Key="BgHighlightBrush" Color="{StaticResource BgHighlight}" />
+            <SolidColorBrush x:Key="BgHoverBrush" Color="{StaticResource BgHover}" />
+            <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentGreen}" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentGreenHover}" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimary}" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondary}" />
+            <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMuted}" />
+        </Style.Resources>
+    </Style>
+
+    <!-- Window Style -->
+    <Style Selector="Window">
+        <Setter Property="Background" Value="{StaticResource BgPrimaryBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="FontFamily" Value="Inter, Segoe UI, sans-serif" />
+    </Style>
+
+    <!-- Sidebar Button -->
+    <Style Selector="Button.sidebar-btn">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.sidebar-btn:pointerover">
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.sidebar-btn.active">
+        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- Icon Button (circular) -->
+    <Style Selector="Button.icon-btn">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.icon-btn:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+    </Style>
+
+    <!-- Primary Button (Play) -->
+    <Style Selector="Button.primary-btn">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Foreground" Value="#000000" />
+        <Setter Property="Padding" Value="24,12" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.primary-btn:pointerover">
+        <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.04)" />
+    </Style>
+
+    <!-- Play Button (Large Circle) -->
+    <Style Selector="Button.play-circle">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Foreground" Value="#000000" />
+        <Setter Property="Width" Value="56" />
+        <Setter Property="Height" Value="56" />
+        <Setter Property="CornerRadius" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.play-circle:pointerover">
+        <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.06)" />
+    </Style>
+
+    <!-- Slider (Seek/Volume) -->
+    <Style Selector="Slider.spotify-slider">
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+    </Style>
+    <Style Selector="Slider.spotify-slider /template/ Thumb">
+        <Setter Property="Width" Value="12" />
+        <Setter Property="Height" Value="12" />
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="Slider.spotify-slider:pointerover /template/ Thumb">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- TextBox (Search) -->
+    <Style Selector="TextBox.search-box">
+        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="40,10,16,10" />
+        <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="TextBox.search-box:focus">
+        <Setter Property="BorderThickness" Value="2" />
+        <Setter Property="BorderBrush" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- ScrollViewer -->
+    <Style Selector="ScrollViewer">
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
+    </Style>
+
+    <!-- ListBox -->
+    <Style Selector="ListBox">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:selected">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+</Styles>

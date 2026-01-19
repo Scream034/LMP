@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+             x:Class="MyLiteMusicPlayer.Views.SearchView"
+             x:DataType="vm:SearchViewModel">
+
+    <DockPanel>
+        <!-- Header -->
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,20">
+            <TextBlock Text="Search" FontSize="32" FontWeight="Bold" Margin="0,0,0,16"/>
+            
+            <TextBox Classes="search-box"
+                     Watermark="What do you want to play?"
+                     Text="{Binding SearchQuery}"
+                     Width="360" HorizontalAlignment="Left"
+                     CornerRadius="20" Padding="15,10"/>
+        </StackPanel>
+
+        <!-- Loading State -->
+        <ProgressBar DockPanel.Dock="Top" IsIndeterminate="True" 
+                     IsVisible="{Binding IsLoading}" VerticalAlignment="Top"/>
+
+        <!-- Error State -->
+        <TextBlock DockPanel.Dock="Top" Text="{Binding ErrorMessage}" Foreground="Red" 
+                   IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+        <!-- Results -->
+        <ListBox ItemsSource="{Binding Results}" Background="Transparent">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <!-- Apply the template we defined in App.axaml styles -->
+                    <ContentControl Content="{Binding}" Classes="track-row"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</UserControl>

@@ -1,20 +1,132 @@
+<!-- Views/MainWindow.axaml -->
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        xmlns:views="using:MyLiteMusicPlayer.Views"
+        xmlns:mi="using:Material.Icons.Avalonia"
+        xmlns:asyncImage="using:AsyncImageLoader"
         x:Class="MyLiteMusicPlayer.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Icon="/Assets/avalonia-logo.ico"
-        Title="MyLiteMusicPlayer">
+        Title="Lite Music Player"
+        Width="1280" Height="800"
+        MinWidth="1024" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgPrimaryBrush}">
 
-    <Design.DataContext>
-        <!-- This only sets the DataContext for the previewer in an IDE,
-             to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs) -->
-        <vm:MainWindowViewModel/>
-    </Design.DataContext>
+    <Grid RowDefinitions="*, Auto">
+        <!-- Main Content Area -->
+        <Grid Grid.Row="0" ColumnDefinitions="240, *">
+            
+            <!-- Sidebar -->
+            <Border Grid.Column="0" 
+                    Background="{StaticResource BgSecondaryBrush}"
+                    Padding="8">
+                <DockPanel>
+                    <!-- Logo -->
+                    <StackPanel DockPanel.Dock="Top" Margin="16,16,16,24">
+                        <TextBlock Text="♪ Lite Player" 
+                                   FontSize="24" 
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimaryBrush}"/>
+                    </StackPanel>
 
-    <TextBlock Text="{Binding Greeting}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <!-- Navigation -->
+                    <StackPanel DockPanel.Dock="Top" Spacing="4">
+                        <Button Classes="sidebar-btn" Command="{Binding NavigateHomeCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <mi:MaterialIcon Kind="Home" Width="24" Height="24"/>
+                                <TextBlock Text="Home" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
 
+                        <Button Classes="sidebar-btn" Command="{Binding NavigateSearchCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <mi:MaterialIcon Kind="Magnify" Width="24" Height="24"/>
+                                <TextBlock Text="Search" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+
+                        <Button Classes="sidebar-btn" Command="{Binding NavigateLibraryCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24"/>
+                                <TextBlock Text="Library" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Divider -->
+                    <Border DockPanel.Dock="Top" 
+                            Height="1" 
+                            Background="{StaticResource BgHighlightBrush}"
+                            Margin="16,16"/>
+
+                    <!-- User Section at Bottom -->
+                    <Border DockPanel.Dock="Bottom" Padding="8">
+                        <Button Classes="sidebar-btn" Command="{Binding NavigateSettingsCommand}">
+                            <Grid ColumnDefinitions="Auto, *, Auto">
+                                <!-- Avatar or Icon -->
+                                <Border Grid.Column="0" 
+                                        Width="32" Height="32" 
+                                        CornerRadius="16"
+                                        ClipToBounds="True"
+                                        Background="{StaticResource BgElevatedBrush}">
+                                    <Panel>
+                                        <mi:MaterialIcon Kind="Account" 
+                                                         Width="20" Height="20"
+                                                         IsVisible="{Binding UserAvatarUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"/>
+                                        <Image asyncImage:ImageLoader.Source="{Binding UserAvatarUrl}"
+                                               IsVisible="{Binding IsAuthenticated}"/>
+                                    </Panel>
+                                </Border>
+
+                                <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding UserName, FallbackValue='Guest'}"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                                    <TextBlock Text="Settings"
+                                               FontSize="12"
+                                               Foreground="{StaticResource TextMutedBrush}"/>
+                                </StackPanel>
+
+                                <mi:MaterialIcon Grid.Column="2" Kind="Cog" Width="20" Height="20"/>
+                            </Grid>
+                        </Button>
+                    </Border>
+
+                    <!-- Spacer -->
+                    <Border/>
+                </DockPanel>
+            </Border>
+
+            <!-- Content Area -->
+            <Border Grid.Column="1" 
+                    Background="{StaticResource BgPrimaryBrush}"
+                    Padding="24">
+                <ScrollViewer>
+                    <ContentControl Content="{Binding CurrentPage}">
+                        <ContentControl.DataTemplates>
+                            <DataTemplate DataType="vm:HomeViewModel">
+                                <views:HomeView/>
+                            </DataTemplate>
+                            <DataTemplate DataType="vm:SearchViewModel">
+                                <views:SearchView/>
+                            </DataTemplate>
+                            <DataTemplate DataType="vm:LibraryViewModel">
+                                <views:LibraryView/>
+                            </DataTemplate>
+                            <DataTemplate DataType="vm:PlaylistViewModel">
+                                <views:PlaylistView/>
+                            </DataTemplate>
+                            <DataTemplate DataType="vm:SettingsViewModel">
+                                <views:SettingsView/>
+                            </DataTemplate>
+                        </ContentControl.DataTemplates>
+                    </ContentControl>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- Player Bar -->
+        <views:PlayerBarView Grid.Row="1" DataContext="{Binding PlayerBar}"/>
+    </Grid>
 </Window>

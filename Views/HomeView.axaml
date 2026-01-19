@@ -1,0 +1,75 @@
+<!-- Views/HomeView.axaml -->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             x:Class="MyLiteMusicPlayer.Views.HomeView"
+             x:DataType="vm:HomeViewModel">
+
+    <StackPanel Spacing="32">
+        <!-- Greeting -->
+        <TextBlock Text="{Binding Greeting}"
+                   FontSize="32"
+                   FontWeight="Bold"
+                   Foreground="{StaticResource TextPrimaryBrush}"/>
+
+        <!-- Recently Played -->
+        <StackPanel Spacing="16" IsVisible="{Binding RecentTracks.Count}">
+            <TextBlock Text="Recently Played"
+                       FontSize="24"
+                       FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimaryBrush}"/>
+
+            <ItemsControl ItemsSource="{Binding RecentTracks}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TrackItemViewModel">
+                        <ContentControl Content="{Binding}" 
+                                        ContentTemplate="{StaticResource TrackCardTemplate}"
+                                        Margin="0,0,16,16"/>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <!-- Recommendations -->
+        <StackPanel Spacing="16">
+            <TextBlock Text="Made For You"
+                       FontSize="24"
+                       FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimaryBrush}"/>
+
+            <ListBox ItemsSource="{Binding Recommendations}"
+                     Background="Transparent">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TrackItemViewModel">
+                        <ContentControl Content="{Binding}" 
+                                        ContentTemplate="{StaticResource TrackRowTemplate}"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </StackPanel>
+
+        <!-- Trending -->
+        <StackPanel Spacing="16">
+            <TextBlock Text="Trending Now"
+                       FontSize="24"
+                       FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimaryBrush}"/>
+
+            <ListBox ItemsSource="{Binding Trending}"
+                     Background="Transparent">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TrackItemViewModel">
+                        <ContentControl Content="{Binding}" 
+                                        ContentTemplate="{StaticResource TrackRowTemplate}"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

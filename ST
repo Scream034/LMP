@@ -1,0 +1,31 @@
+MyLiteMusicPlayer/
+├── App.axaml
+├── App.axaml.cs
+├── Program.cs
+├── Models/                    (existing)
+├── Services/                  (existing, with minor adaptations)
+├── ViewModels/
+│   ├── ViewModelBase.cs
+│   ├── MainWindowViewModel.cs
+│   ├── PlayerBarViewModel.cs
+│   ├── SearchViewModel.cs
+│   ├── HomeViewModel.cs
+│   ├── LibraryViewModel.cs
+│   ├── PlaylistViewModel.cs
+│   ├── SettingsViewModel.cs
+│   └── TrackItemViewModel.cs
+├── Views/
+│   ├── MainWindow.axaml(.cs)
+│   ├── PlayerBarView.axaml(.cs)
+│   ├── SearchView.axaml(.cs)
+│   ├── HomeView.axaml(.cs)
+│   ├── LibraryView.axaml(.cs)
+│   ├── PlaylistView.axaml(.cs)
+│   └── SettingsView.axaml(.cs)
+├── Styles/
+│   └── SpotifyTheme.axaml
+├── Templates/
+│   ├── TrackRowTemplate.axaml
+│   └── PlaylistCardTemplate.axaml
+└── Converters/
+    └── AppConverters.cs

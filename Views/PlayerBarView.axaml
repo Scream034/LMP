@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             xmlns:asyncImage="using:AsyncImageLoader"
+             x:Class="MyLiteMusicPlayer.Views.PlayerBarView"
+             x:DataType="vm:PlayerBarViewModel">
+
+    <Border Background="{StaticResource BgSecondaryBrush}" Height="90" Padding="16,0">
+        <Grid ColumnDefinitions="3*, 4*, 3*">
+            <!-- Left -->
+            <Grid Grid.Column="0" ColumnDefinitions="Auto, *, Auto" IsVisible="{Binding HasTrack}">
+                <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4" ClipToBounds="True">
+                    <Image asyncImage:ImageLoader.Source="{Binding CurrentTrack.ThumbnailUrl}" Stretch="UniformToFill"/>
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0">
+                    <TextBlock Text="{Binding CurrentTrack.Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Text="{Binding CurrentTrack.Author}" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <Button Grid.Column="2" Classes="icon-btn" Command="{Binding ToggleLikeCommand}">
+                    <!-- ИСПРАВЛЕНО -->
+                    <mi:MaterialIcon Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
+                                     Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"
+                                     Width="16" Height="16"/>
+                </Button>
+            </Grid>
+
+            <!-- Center -->
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
+                    <Button Classes="icon-btn" Command="{Binding ToggleShuffleCommand}">
+                         <!-- ИСПРАВЛЕНО -->
+                        <mi:MaterialIcon Kind="Shuffle" Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"/>
+                    </Button>
+                    <Button Classes="icon-btn" Command="{Binding PreviousCommand}"><mi:MaterialIcon Kind="SkipPrevious"/></Button>
+                    
+                    <Button Classes="play-circle" Command="{Binding PlayPauseCommand}" Width="32" Height="32" Background="White">
+                         <!-- ИСПРАВЛЕНО -->
+                        <mi:MaterialIcon Kind="{Binding IsPlaying, Converter={StaticResource BoolToSelector}, ConverterParameter=Pause|Play}" 
+                                         Foreground="Black" Width="20" Height="20"/>
+                    </Button>
+                    
+                    <Button Classes="icon-btn" Command="{Binding NextCommand}"><mi:MaterialIcon Kind="SkipNext"/></Button>
+                    <Button Classes="icon-btn" Command="{Binding ToggleRepeatCommand}">
+                        <mi:MaterialIcon Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}"
+                                         Foreground="{StaticResource TextSecondaryBrush}"/> 
+                    </Button>
+                </StackPanel>
+                
+                <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,4,0,0">
+                    <TextBlock Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <Slider Grid.Column="1" Classes="spotify-slider" Minimum="0" Maximum="{Binding DurationSeconds}" Value="{Binding PositionSeconds}" PointerPressed="OnSeekStart" PointerReleased="OnSeekEnd"/>
+                    <TextBlock Grid.Column="2" Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                </Grid>
+            </StackPanel>
+
+            <!-- Right -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="8">
+                <Button Classes="icon-btn" Command="{Binding ToggleMuteCommand}">
+                    <mi:MaterialIcon Kind="{Binding Volume, Converter={StaticResource VolumeIcon}}" Width="20" Height="20"/>
+                </Button>
+                <Slider Classes="spotify-slider" Width="100" Minimum="0" Maximum="1" Value="{Binding Volume}"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

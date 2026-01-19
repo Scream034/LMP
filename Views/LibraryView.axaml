@@ -1,0 +1,42 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+             x:Class="MyLiteMusicPlayer.Views.LibraryView"
+             x:DataType="vm:LibraryViewModel">
+
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="16" Margin="0,0,0,24">
+            <TextBlock Text="Your Library" FontSize="32" FontWeight="Bold"/>
+            
+            <Button Command="{Binding CreatePlaylistCommand}" 
+                    Content="New Playlist"
+                    VerticalAlignment="Center"/>
+                    
+            <Button Command="{Binding SyncAccountPlaylistsCommand}" 
+                    Content="Sync YouTube"
+                    VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Создание плейлиста -->
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" 
+                    IsVisible="{Binding NewPlaylistName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBox Text="{Binding NewPlaylistName}" Watermark="Playlist Name" Width="200"/>
+        </StackPanel>
+
+        <!-- Сетка плейлистов -->
+        <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Playlists}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <ContentControl Content="{Binding}" Classes="playlist-card"/>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>
