@@ -1,9 +1,7 @@
 // ViewModels/LibraryViewModel.cs
-using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using System;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;

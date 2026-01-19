@@ -1,15 +1,9 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using MyLiteMusicPlayer.Models;
 
 namespace MyLiteMusicPlayer.Services;
@@ -307,6 +301,7 @@ public class GoogleAuthService : IDisposable
     {
         _listenerCts?.Cancel();
         _listener?.Close();
+        
         _http.Dispose();
         GC.SuppressFinalize(this);
     }

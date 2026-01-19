@@ -1,9 +1,7 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using MyLiteMusicPlayer.ViewModels;
-using System;
 
 namespace MyLiteMusicPlayer.Views;
 

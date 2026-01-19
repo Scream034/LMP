@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using MyLiteMusicPlayer.ViewModels;
-using System;
 using System.Reactive; // Нужно для Unit
 using System.Windows.Input; // Нужно для ICommand
 

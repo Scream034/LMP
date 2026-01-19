@@ -1,5 +1,3 @@
-using System;
-
 namespace MyLiteMusicPlayer.Models;
 
 public class PlaybackState

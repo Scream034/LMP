@@ -5,9 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.ViewModels;
 using MyLiteMusicPlayer.Views;
 using MyLiteMusicPlayer.Services;
-using System;
 using System.Diagnostics;
-using System.Threading.Tasks;
 using AsyncImageLoader;
 
 namespace MyLiteMusicPlayer;

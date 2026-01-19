@@ -1,7 +1,6 @@
 using Avalonia.Data.Converters;
 using Avalonia.Media;
 using MyLiteMusicPlayer.Models;
-using System;
 using System.Globalization;
 using Material.Icons; // Убедитесь, что этот using есть
 

@@ -1,7 +1,6 @@
 // Services/CachedImageLoader.cs
 using AsyncImageLoader;
 using Avalonia.Media.Imaging;
-using System.Threading.Tasks;
 
 namespace MyLiteMusicPlayer.Services;
 

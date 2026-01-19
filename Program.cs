@@ -3,7 +3,6 @@ using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.Services;
 using MyLiteMusicPlayer.ViewModels;
-using System;
 using System.Diagnostics;
 
 namespace MyLiteMusicPlayer;
@@ -58,7 +57,8 @@ class Program
         services.AddSingleton<LibraryService>();
         services.AddSingleton<GoogleAuthService>();
         services.AddSingleton<YoutubeProvider>();
-        services.AddSingleton<IDialogService, DialogService>();
+        services.AddSingleton<IDialogService, Dia
+        logService>();
 
         // --- Fast search & caching ---
         services.AddSingleton<PipedProvider>();        // Быстрый поиск через Piped

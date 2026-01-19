@@ -4,7 +4,6 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using MyLiteMusicPlayer.Views.Dialogs;
-using System.Threading.Tasks;
 
 namespace MyLiteMusicPlayer.Services;
 
