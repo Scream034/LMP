@@ -9,93 +9,131 @@ namespace MyLiteMusicPlayer.Views;
 
 public partial class PlayerBarView : UserControl
 {
-    private bool _isDragging = false;
+    private bool _isDraggingSeek = false;
+    private bool _isDraggingVolume = false;
 
     public PlayerBarView()
     {
         InitializeComponent();
     }
 
-    // Движение мыши: показываем время + (если тянем) обновляем позицию
+    #region Логика перемотки (Seek)
+
     private void OnSeekAreaMoved(object? sender, PointerEventArgs e)
     {
-        if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
-        if (vm.DurationSeconds <= 0) return;
+        if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm || vm.DurationSeconds <= 0) return;
 
-        var point = e.GetCurrentPoint(hitBox);
-        double width = hitBox.Bounds.Width;
-        if (width <= 0) return;
-
-        // Расчет времени под курсором
-        double ratio = Math.Clamp(point.Position.X / width, 0, 1);
+        double ratio = GetClickRatio(hitBox, e);
         double hoverSeconds = ratio * vm.DurationSeconds;
-        var hoverTime = TimeSpan.FromSeconds(hoverSeconds);
 
-        // Обновляем Tooltip
+        // Обновляем текст и позицию тултипа
         HoverTooltip.IsVisible = true;
-        HoverTimeText.Text = hoverTime.TotalHours >= 1
-            ? hoverTime.ToString(@"h\:mm\:ss")
-            : hoverTime.ToString(@"m\:ss");
+        var hoverTime = TimeSpan.FromSeconds(hoverSeconds);
+        HoverTimeText.Text = hoverTime.TotalHours >= 1 ? hoverTime.ToString(@"h\:mm\:ss") : hoverTime.ToString(@"m\:ss");
+        UpdateTooltipPosition(HoverTooltip, hitBox, e);
 
-        // Двигаем Tooltip за мышкой (центрируем)
-        double tooltipX = point.Position.X - (HoverTooltip.Bounds.Width / 2);
-        // Ограничиваем, чтобы не вылезал за края
-        tooltipX = Math.Clamp(tooltipX, 0, width - HoverTooltip.Bounds.Width);
-
-        if (HoverTooltip.RenderTransform is TranslateTransform tr)
-        {
-            tr.X = tooltipX;
-        }
-        else
-        {
-            HoverTooltip.RenderTransform = new TranslateTransform(tooltipX, 0);
-        }
-
-        // Если зажата кнопка (перетаскивание)
-        if (_isDragging)
+        if (_isDraggingSeek)
         {
             vm.PositionSeconds = hoverSeconds;
         }
     }
 
-    // Нажатие: начало перемотки
     private void OnSeekAreaPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
+        var properties = e.GetCurrentPoint(hitBox).Properties;
+        if (!properties.IsLeftButtonPressed) return;
+
+        _isDraggingSeek = true;
+
+        // ВАЖНО: Захватываем указатель, чтобы не терять события вне границ
+        e.Pointer.Capture(hitBox);
+
+        vm.StartSeek();
+        vm.PositionSeconds = GetClickRatio(hitBox, e) * vm.DurationSeconds;
+    }
+
+    private void OnSeekAreaReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_isDraggingSeek) return;
+
+        _isDraggingSeek = false;
+        e.Pointer.Capture(null); // Освобождаем указатель
+
+        if (DataContext is PlayerBarViewModel vm)
+        {
+            vm.EndSeek();
+        }
+    }
+
+    private void OnSeekAreaExited(object? sender, PointerEventArgs e)
+    {
+        if (!_isDraggingSeek) HoverTooltip.IsVisible = false;
+    }
+
+    #endregion
+
+    #region Логика Громкости (Volume)
+
+    private void OnVolumeAreaMoved(object? sender, PointerEventArgs e)
+    {
+        if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
+
+        double ratio = GetClickRatio(hitBox, e);
+
+        VolumeTooltip.IsVisible = true;
+        VolumeTooltipText.Text = $"{(int)(ratio * 100)}%";
+        UpdateTooltipPosition(VolumeTooltip, hitBox, e);
+
+        if (_isDraggingVolume)
+        {
+            vm.Volume = (float)ratio;
+        }
+    }
+
+    private void OnVolumeAreaPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
         if (!e.GetCurrentPoint(hitBox).Properties.IsLeftButtonPressed) return;
 
-        _isDragging = true;
-        vm.StartSeek(); // Останавливаем таймер в VM
+        _isDraggingVolume = true;
+        e.Pointer.Capture(hitBox);
 
-        // Сразу прыгаем в точку клика
+        vm.Volume = (float)GetClickRatio(hitBox, e);
+    }
+
+    private void OnVolumeAreaReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_isDraggingVolume) return;
+        _isDraggingVolume = false;
+        e.Pointer.Capture(null);
+    }
+
+    private void OnVolumeAreaExited(object? sender, PointerEventArgs e)
+    {
+        if (!_isDraggingVolume) VolumeTooltip.IsVisible = false;
+    }
+
+    #endregion
+
+    #region Вспомогательные методы
+
+    private double GetClickRatio(Border hitBox, PointerEventArgs e)
+    {
         var point = e.GetCurrentPoint(hitBox);
-        double width = hitBox.Bounds.Width;
-        if (width > 0)
-        {
-            double ratio = Math.Clamp(point.Position.X / width, 0, 1);
-            vm.PositionSeconds = ratio * vm.DurationSeconds;
-        }
+        return Math.Clamp(point.Position.X / hitBox.Bounds.Width, 0, 1);
     }
 
-    // Отпускание: конец перемотки
-    private void OnSeekAreaReleased(object? sender, PointerReleasedEventArgs e)
+    private void UpdateTooltipPosition(Border tooltip, Border hitBox, PointerEventArgs e)
     {
-        if (!_isDragging) return;
+        var point = e.GetCurrentPoint(hitBox);
+        double tooltipX = point.Position.X - (tooltip.Bounds.Width / 2);
+        tooltipX = Math.Clamp(tooltipX, 0, hitBox.Bounds.Width - tooltip.Bounds.Width);
 
-        _isDragging = false;
-        if (DataContext is PlayerBarViewModel vm)
+        if (tooltip.RenderTransform is TranslateTransform tr)
         {
-            vm.EndSeek(); // Применяем перемотку в движке
+            tr.X = tooltipX;
         }
     }
-
-    // Уход мыши: скрываем тултип
-    private void OnSeekAreaExited(object? sender, PointerEventArgs e)
-    {
-        // Если тащим, не скрываем, пока не отпустим (опционально)
-        if (!_isDragging)
-        {
-            HoverTooltip.IsVisible = false;
-        }
-    }
+    #endregion
 }

@@ -74,7 +74,7 @@ public class AudioEngine : IDisposable
         _library = library;
         _downloadService = downloadService;
         _piped = piped; // Инициализация
-        
+
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "Cache");
         Directory.CreateDirectory(_cacheFolder);
@@ -523,12 +523,25 @@ public class AudioEngine : IDisposable
         {
             try
             {
-                if (_currentProvider is MediaFoundationReader reader && reader.CanSeek)
+                // 1. Ограничиваем позицию рамками трека
+                double targetSeconds = Math.Clamp(position.TotalSeconds, 0, TotalDuration.TotalSeconds);
+                var targetPos = TimeSpan.FromSeconds(targetSeconds);
+
+                // 2. Перематываем конкретный провайдер
+                if (_currentProvider is AudioFileReader fileReader)
                 {
-                    position = TimeSpan.FromSeconds(Math.Clamp(position.TotalSeconds, 0, TotalDuration.TotalSeconds));
-                    reader.CurrentTime = position;
-                    _currentPosition = position;
+                    fileReader.CurrentTime = targetPos;
                 }
+                else if (_currentProvider is MediaFoundationReader mfReader)
+                {
+                    mfReader.CurrentTime = targetPos;
+                }
+
+                // 3. КРИТИЧЕСКИ ВАЖНО: Немедленно обновляем локальную переменную, 
+                // чтобы фоновый поток трекинга или UI не считали старое значение.
+                _currentPosition = targetPos;
+
+                Debug.WriteLine($"[AudioEngine] Seek performed to: {targetPos}");
             }
             catch (Exception ex)
             {
