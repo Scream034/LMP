@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {}
+    "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {}
   },
   "projects": {
-    "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {
+    "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
+        "projectUniqueName": "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
         "projectName": "MyLiteMusicPlayer",
-        "projectPath": "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
+        "projectPath": "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
         "packagesPath": "C:\\Users\\paralax\\.nuget\\packages\\",
-        "outputPath": "d:\\Projects\\CS\\MyLiteMusicPlayer\\obj\\",
+        "outputPath": "D:\\Projects\\CS\\MyLiteMusicPlayer\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\paralax\\AppData\\Roaming\\NuGet\\NuGet.Config"

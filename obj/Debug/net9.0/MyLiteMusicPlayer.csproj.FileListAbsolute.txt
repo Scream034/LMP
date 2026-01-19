@@ -49,3 +49,4 @@ d:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net9.0\MyLiteMusicPlayer.pdb
 d:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net9.0\MyLiteMusicPlayer.genruntimeconfig.cache
 d:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net9.0\ref\MyLiteMusicPlayer.dll
 d:\Projects\CS\MyLiteMusicPlayer\bin\Debug\net9.0\YoutubeDLSharp.dll
+d:\Projects\CS\MyLiteMusicPlayer\obj\Debug\net9.0\MyLiteMusicPlayer.sourcelink.json

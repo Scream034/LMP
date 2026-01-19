@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "fFoKUjvDQdY=",
+  "dgSpecHash": "HFWlv5ObsDw=",
   "success": true,
-  "projectFilePath": "d:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
+  "projectFilePath": "D:\\Projects\\CS\\MyLiteMusicPlayer\\MyLiteMusicPlayer.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\paralax\\.nuget\\packages\\discordrichpresence\\1.6.1.70\\discordrichpresence.1.6.1.70.nupkg.sha512",
     "C:\\Users\\paralax\\.nuget\\packages\\imgui.net\\1.90.8.1\\imgui.net.1.90.8.1.nupkg.sha512",
