@@ -1,21 +1,21 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-             x:Class="MyLiteMusicPlayer.Views.HomeView"
-             x:DataType="vm:HomeViewModel">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+    x:Class="MyLiteMusicPlayer.Views.HomeView"
+    x:DataType="vm:HomeViewModel">
 
     <Grid RowDefinitions="Auto, *">
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,24">
             <TextBlock Text="{Binding Greeting}"
-                       FontSize="32" FontWeight="Bold"
-                       Foreground="{StaticResource TextPrimaryBrush}"
-                       Margin="0,0,0,16" />
+                FontSize="32" FontWeight="Bold"
+                Foreground="{StaticResource TextPrimaryBrush}"
+                Margin="0,0,0,16" />
 
             <!-- Categories -->
             <ListBox ItemsSource="{Binding Categories}"
-                     SelectedItem="{Binding SelectedCategory}"
-                     Background="Transparent" Margin="0,0,0,8">
+                SelectedItem="{Binding SelectedCategory}"
+                Background="Transparent" Margin="0,0,0,8">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel Orientation="Horizontal" Spacing="0" />
@@ -24,7 +24,7 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:CategoryItem">
                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
-                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                            VerticalAlignment="Center" HorizontalAlignment="Center" />
                     </DataTemplate>
                 </ListBox.ItemTemplate>
                 <ListBox.Styles>
@@ -46,77 +46,88 @@
                     </Style>
                 </ListBox.Styles>
             </ListBox>
+
+            <!-- Debug Status (можно убрать в продакшене) -->
+            <TextBlock Text="{Binding LoadingStatus}"
+                FontSize="11"
+                Foreground="#666"
+                Margin="0,8,0,0"
+                IsVisible="{Binding LoadingStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </StackPanel>
 
         <!-- Content -->
         <ScrollViewer Grid.Row="1" x:Name="MainScrollViewer">
             <StackPanel>
-                <!-- Initial Load Spinner (Скрыт, если есть треки) -->
-                <ProgressBar IsIndeterminate="True"
-                             HorizontalAlignment="Center"
-                             IsVisible="{Binding IsLoading}"
-                             Foreground="{StaticResource AccentBrush}"
-                             Height="4" Width="200"
-                             Margin="0,0,0,20">
-                     <!-- Показываем этот бар только если список пуст (первая загрузка) -->
-                     <ProgressBar.IsVisible>
-                         <MultiBinding Converter="{x:Static BoolConverters.And}">
-                             <Binding Path="IsLoading"/>
-                             <Binding Path="!ActiveTracks.Count"/>
-                         </MultiBinding>
-                     </ProgressBar.IsVisible>
-                </ProgressBar>
+                <!-- Initial Load Spinner -->
+                <StackPanel IsVisible="{Binding IsLoading}"
+                    HorizontalAlignment="Center"
+                    Margin="0,40,0,40">
+                    <ProgressBar IsIndeterminate="True"
+                        Foreground="{StaticResource AccentBrush}"
+                        Height="4" Width="200" />
+                    <TextBlock Text="Loading tracks..."
+                        HorizontalAlignment="Center"
+                        Margin="0,12,0,0"
+                        Foreground="{StaticResource TextSecondaryBrush}" />
+                </StackPanel>
 
-                <!-- Track List (Uses Global DataTemplate) -->
-                <ListBox ItemsSource="{Binding ActiveTracks}" 
-                         Background="Transparent"
-                         SelectionMode="Single">
+                <!-- Track List -->
+                <ListBox ItemsSource="{Binding ActiveTracks}"
+                    Background="Transparent"
+                    SelectionMode="Single"
+                    IsVisible="{Binding !IsLoading}">
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem">
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Margin" Value="0"/>
-                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="Background" Value="Transparent" />
                         </Style>
                         <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Background" Value="Transparent" />
                         </Style>
-                         <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                            <Setter Property="Background" Value="Transparent"/>
+                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent" />
                         </Style>
                     </ListBox.Styles>
                 </ListBox>
 
                 <!-- Load More Section -->
-                <StackPanel Margin="0,24,0,40" HorizontalAlignment="Center" 
-                            IsVisible="{Binding HasMoreItems}">
-                    
-                    <!-- Button -->
+                <StackPanel Margin="0,24,0,40" HorizontalAlignment="Center"
+                    IsVisible="{Binding HasMoreItems}">
+
+                    <!-- Button (visible when not loading) -->
                     <Button Command="{Binding LoadMoreCommand}"
-                            Content="Load More"
-                            IsVisible="{Binding !IsLoading}"
-                            HorizontalAlignment="Center"
-                            Background="{StaticResource BgElevatedBrush}"
-                            Foreground="{StaticResource TextPrimaryBrush}"
-                            CornerRadius="20" Padding="32,12"
-                            Cursor="Hand">
+                        Content="Load More"
+                        HorizontalAlignment="Center"
+                        Background="{StaticResource BgElevatedBrush}"
+                        Foreground="{StaticResource TextPrimaryBrush}"
+                        CornerRadius="20" Padding="32,12"
+                        Cursor="Hand">
+                        <Button.IsVisible>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="!IsLoading" />
+                                <Binding Path="!IsLoadingMore" />
+                            </MultiBinding>
+                        </Button.IsVisible>
                         <Button.Styles>
                             <Style Selector="Button:pointerover">
-                                <Setter Property="Background" Value="{StaticResource BgHighlightBrush}"/>
+                                <Setter Property="Background"
+                                    Value="{StaticResource BgHighlightBrush}" />
                             </Style>
                         </Button.Styles>
                     </Button>
 
-                    <!-- Loading Text (Spinner inside) -->
-                    <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding IsLoading}">
-                        <ProgressBar IsIndeterminate="True" Width="20" Height="20" 
-                                     Foreground="{StaticResource AccentBrush}"
-                                     Theme="{StaticResource FluentProgressBar}"/>
-                        <TextBlock Text="Loading..." VerticalAlignment="Center" 
-                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <!-- Loading More indicator -->
+                    <StackPanel Orientation="Horizontal" Spacing="10"
+                        IsVisible="{Binding IsLoadingMore}">
+                        <ProgressBar IsIndeterminate="True" Width="20" Height="20"
+                            Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="Adding tracks..." VerticalAlignment="Center"
+                            Foreground="{StaticResource TextSecondaryBrush}" />
                     </StackPanel>
                 </StackPanel>
 
-                <Panel Height="60" />
+                <Panel Height="80" />
             </StackPanel>
         </ScrollViewer>
     </Grid>
