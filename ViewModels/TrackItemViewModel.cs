@@ -124,5 +124,15 @@ public class TrackItemViewModel : ViewModelBase
         {
             onRadio?.Invoke(Track);
         });
+
+        // Предзагрузка при наведении мыши
+        this.WhenAnyValue(x => x.IsHovered)
+            .Where(h => h)
+            .Throttle(TimeSpan.FromMilliseconds(200)) // Не спамим при быстром движении
+            .Subscribe(__ =>
+            {
+                // Prefetch stream URL в фоне
+                _ = _audio.PrefetchAsync(Track);
+            });
     }
 }
