@@ -1,43 +1,21 @@
-using MyLiteMusicPlayer.UI;
+﻿using Avalonia;
+using System;
 
 namespace MyLiteMusicPlayer;
 
-public static class Program
+sealed class Program
 {
+    // Initialization code. Don't use any Avalonia, third-party APIs or any
+    // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
+    // yet and stuff might break.
     [STAThread]
-    public static void Main(string[] args)
-    {
-        // Настройка для высокого DPI
-        if (OperatingSystem.IsWindows())
-        {
-            SetProcessDPIAware();
-        }
-        
-        try
-        {
-            using var app = new MainWindow();
-            app.Run();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Critical Error: {ex}");
-            
-            // Записываем в лог файл
-            try
-            {
-                string logPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "LiteMusicPlayer", "crash.log");
-                
-                Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-                File.WriteAllText(logPath, $"[{DateTime.Now}]\n{ex}\n\n");
-            }
-            catch { }
-            
-            Environment.Exit(1);
-        }
-    }
-    
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool SetProcessDPIAware();
+    public static void Main(string[] args) => BuildAvaloniaApp()
+        .StartWithClassicDesktopLifetime(args);
+
+    // Avalonia configuration, don't remove; also used by visual designer.
+    public static AppBuilder BuildAvaloniaApp()
+        => AppBuilder.Configure<App>()
+            .UsePlatformDetect()
+            .WithInterFont()
+            .LogToTrace();
 }
