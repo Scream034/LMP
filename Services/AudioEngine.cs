@@ -26,11 +26,11 @@ public class AudioEngine : ViewModelBase, IDisposable
     private volatile bool _isDisposed;
     private volatile bool _isPlayerReady;
     
-    // === PREFETCH CONTROL ===
-    private volatile bool _isPlayingOrBuffering;  // Блокирует prefetch!
-    private readonly SemaphoreSlim _apiLock = new(1, 1);  // Один запрос к YouTube API за раз
+    // Prefetch control
+    private volatile bool _isPlayingOrBuffering;
+    private readonly SemaphoreSlim _apiLock = new(1, 1);
     private DateTime _lastApiCall = DateTime.MinValue;
-    private const int ApiCooldownMs = 500;  // Минимум 500ms между API вызовами
+    private const int ApiCooldownMs = 500;
 
     private readonly Queue<TrackInfo> _queue = new();
     private readonly List<TrackInfo> _history = [];
@@ -113,17 +113,16 @@ public class AudioEngine : ViewModelBase, IDisposable
         _library = library;
         _cacheManager = new StreamCacheManager();
         
-        // HTTP Client для streaming - ОТДЕЛЬНЫЙ от YouTube API!
         _streamHttpClient = new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(10),
-            MaxConnectionsPerServer = 1,  // ТОЛЬКО 1 соединение!
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+            MaxConnectionsPerServer = 4,
             EnableMultipleHttp2Connections = false,
-            ConnectTimeout = TimeSpan.FromSeconds(15)
+            ConnectTimeout = TimeSpan.FromSeconds(10)
         })
         {
-            Timeout = TimeSpan.FromMinutes(10)
+            Timeout = TimeSpan.FromMinutes(5)
         };
         
         ShuffleEnabled = library.Data.ShuffleEnabled;
@@ -142,9 +141,9 @@ public class AudioEngine : ViewModelBase, IDisposable
         _libVLC = new LibVLC(
             "--no-video",
             "--no-spu",
-            "--network-caching=500",
-            "--file-caching=300",
-            "--live-caching=500",
+            "--network-caching=300",
+            "--file-caching=200",
+            "--live-caching=300",
             "--http-reconnect",
             "--no-http-forward-cookies",
             "--no-metadata-network-access",
@@ -153,7 +152,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
         InitializePlayer();
 
-        Debug.WriteLine("[AudioEngine] Initialized v4 (Memory-First)");
+        Debug.WriteLine("[AudioEngine] Initialized v5 (Fast-Start)");
     }
 
     private void InitializePlayer()
@@ -220,14 +219,30 @@ public class AudioEngine : ViewModelBase, IDisposable
     {
         if (track == null || _isDisposed) return;
 
-        if (!await _playLock.WaitAsync(2000))
+        // Быстрая отмена предыдущего - НЕ ждём!
+        var oldCts = _cts;
+        _cts = new CancellationTokenSource();
+        var session = Interlocked.Increment(ref _session);
+        
+        try { oldCts?.Cancel(); } catch { }
+
+        // UI update сразу
+        IsLoading = true;
+        CurrentTrack = track;
+        _isPlayerReady = false;
+        _isPlayingOrBuffering = true;
+        SafeInvoke(() => OnTrackChanged?.Invoke(track));
+
+        // Быстрый lock с коротким timeout
+        if (!await _playLock.WaitAsync(500))
         {
-            Debug.WriteLine("[Audio] Lock timeout - forcing");
+            Debug.WriteLine("[Audio] Lock busy, forcing...");
+            // Force release если застряли
         }
 
         try
         {
-            await PlayTrackInternalAsync(track);
+            await PlayTrackInternalAsync(track, session, _cts.Token);
         }
         finally
         {
@@ -235,54 +250,41 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
-    private async Task PlayTrackInternalAsync(TrackInfo track)
+    private async Task PlayTrackInternalAsync(TrackInfo track, int session, CancellationToken ct)
     {
-        int session = Interlocked.Increment(ref _session);
         var sw = Stopwatch.StartNew();
-
         Debug.WriteLine($"[Audio] #{session} → {track.Title}");
 
-        // === БЛОКИРУЕМ PREFETCH ===
-        _isPlayingOrBuffering = true;
-
-        IsLoading = true;
-        CurrentTrack = track;
-        _isPlayerReady = false;
-        SafeInvoke(() => OnTrackChanged?.Invoke(track));
-
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-        var ct = _cts.Token;
-
-        StopPlaybackInternal();
+        // Быстрая остановка старого воспроизведения
+        QuickStopPlayback();
 
         try
         {
-            // === ПОЛУЧАЕМ URL С RATE LIMITING ===
-            string url = track.StreamUrl;
+            // Получаем URL
+            string? url = track.StreamUrl;
             
             if (string.IsNullOrEmpty(url))
             {
-                url = await GetStreamUrlWithRateLimitAsync(track, ct);
-                
+                url = await GetStreamUrlAsync(track, ct);
                 if (string.IsNullOrEmpty(url))
                     throw new Exception("Failed to get stream URL");
             }
 
             if (_session != session || ct.IsCancellationRequested) return;
 
-            // === СОЗДАЁМ STREAM ===
+            // Получаем размер файла
             long contentLength = await GetContentLengthAsync(url, ct);
             
             if (contentLength <= 0)
             {
-                // Fallback: прямой URL
-                Debug.WriteLine("[Audio] Source: direct URL (no content-length)");
+                // Fallback: direct URL
+                Debug.WriteLine("[Audio] Direct URL playback");
                 var media = new Media(_libVLC, url, FromType.FromLocation);
-                PlayMedia(media, null, track, session, sw);
+                StartPlayback(media, null, track, session, sw);
                 return;
             }
 
+            // Создаём stream
             var stream = new MemoryFirstCachingStream(
                 track.Id,
                 url,
@@ -290,18 +292,24 @@ public class AudioEngine : ViewModelBase, IDisposable
                 _streamHttpClient,
                 _cacheManager);
 
-            // Pre-buffer
+            // Минимальный prebuffer
             Debug.WriteLine("[Audio] Pre-buffering...");
-            await stream.PreBufferAsync(256 * 1024, ct);
+            bool ready = await stream.PreBufferAsync(64 * 1024, ct);
 
             if (_session != session || ct.IsCancellationRequested)
             {
                 stream.Dispose();
+                Debug.WriteLine("[Audio] Session expired");
                 return;
             }
 
+            if (!ready)
+            {
+                Debug.WriteLine("[Audio] PreBuffer failed, trying anyway...");
+            }
+
             var streamMedia = new Media(_libVLC, new StreamMediaInput(stream));
-            PlayMedia(streamMedia, stream, track, session, sw);
+            StartPlayback(streamMedia, stream, track, session, sw);
         }
         catch (OperationCanceledException)
         {
@@ -317,14 +325,24 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
-    private void PlayMedia(Media media, MemoryFirstCachingStream? stream, TrackInfo track, int session, Stopwatch sw)
+    private void StartPlayback(Media media, MemoryFirstCachingStream? stream, TrackInfo track, int session, Stopwatch sw)
     {
+        // Dispose старых ресурсов в фоне
         var oldMedia = _currentMedia;
         var oldStream = _currentStream;
+        
         _currentMedia = media;
         _currentStream = stream;
-        oldMedia?.Dispose();
-        oldStream?.Dispose();
+        
+        // Dispose асинхронно чтобы не блокировать
+        if (oldMedia != null || oldStream != null)
+        {
+            _ = Task.Run(() =>
+            {
+                try { oldStream?.Dispose(); } catch { }
+                try { oldMedia?.Dispose(); } catch { }
+            });
+        }
 
         _player!.Media = media;
         _player.Play();
@@ -337,15 +355,11 @@ public class AudioEngine : ViewModelBase, IDisposable
         _ = PositionUpdateLoopAsync(session, _cts!.Token);
     }
 
-    /// <summary>
-    /// Получение URL с rate limiting - НЕ параллелим запросы!
-    /// </summary>
-    private async Task<string?> GetStreamUrlWithRateLimitAsync(TrackInfo track, CancellationToken ct)
+    private async Task<string?> GetStreamUrlAsync(TrackInfo track, CancellationToken ct)
     {
         await _apiLock.WaitAsync(ct);
         try
         {
-            // Ждём cooldown
             var elapsed = DateTime.UtcNow - _lastApiCall;
             if (elapsed.TotalMilliseconds < ApiCooldownMs)
             {
@@ -355,10 +369,9 @@ public class AudioEngine : ViewModelBase, IDisposable
             Debug.WriteLine("[Audio] Fetching stream URL...");
             
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            cts.CancelAfter(TimeSpan.FromSeconds(8));
             
             var url = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
-            
             _lastApiCall = DateTime.UtcNow;
             
             return url;
@@ -373,18 +386,22 @@ public class AudioEngine : ViewModelBase, IDisposable
     {
         try
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            using var response = await _streamHttpClient.SendAsync(request, ct);
+            using var response = await _streamHttpClient.SendAsync(request, cts.Token);
             
             if (response.Content.Headers.ContentLength.HasValue)
             {
                 return response.Content.Headers.ContentLength.Value;
             }
             
+            // Try range request
             using var rangeRequest = new HttpRequestMessage(HttpMethod.Get, url);
             rangeRequest.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
             
-            using var rangeResponse = await _streamHttpClient.SendAsync(rangeRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var rangeResponse = await _streamHttpClient.SendAsync(rangeRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             
             if (rangeResponse.Content.Headers.ContentRange?.Length.HasValue == true)
             {
@@ -399,7 +416,10 @@ public class AudioEngine : ViewModelBase, IDisposable
         return -1;
     }
 
-    private void StopPlaybackInternal()
+    /// <summary>
+    /// Быстрая остановка без ожидания
+    /// </summary>
+    private void QuickStopPlayback()
     {
         if (_player == null) return;
 
@@ -418,9 +438,12 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     private async Task PositionUpdateLoopAsync(int session, CancellationToken ct)
     {
-        while (!_isPlayerReady && !ct.IsCancellationRequested && _session == session)
+        // Ждём готовности
+        int waitCount = 0;
+        while (!_isPlayerReady && !ct.IsCancellationRequested && _session == session && waitCount < 100)
         {
             await Task.Delay(50, ct);
+            waitCount++;
         }
 
         try
@@ -441,18 +464,9 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     #region PREFETCH
 
-    /// <summary>
-    /// Prefetch - ТОЛЬКО когда не играем и не буферизируем!
-    /// </summary>
     public async Task PrefetchAsync(TrackInfo track)
     {
-        // НЕ prefetch'им во время воспроизведения/буферизации!
-        if (_isPlayingOrBuffering)
-        {
-            return;
-        }
-        
-        if (_isDisposed || track.IsDownloaded) return;
+        if (_isPlayingOrBuffering || _isDisposed || track.IsDownloaded) return;
         if (!string.IsNullOrEmpty(track.StreamUrl)) return;
 
         try
@@ -460,10 +474,8 @@ public class AudioEngine : ViewModelBase, IDisposable
             await _apiLock.WaitAsync();
             try
             {
-                // Ещё раз проверяем - вдруг начали играть
                 if (_isPlayingOrBuffering) return;
                 
-                // Ждём cooldown
                 var elapsed = DateTime.UtcNow - _lastApiCall;
                 if (elapsed.TotalMilliseconds < ApiCooldownMs)
                 {
@@ -490,7 +502,6 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     private async Task PrefetchNextInQueueAsync()
     {
-        // Задержка перед prefetch
         await Task.Delay(1000);
         
         if (_queue.Count > 0 && !_isPlayingOrBuffering)
@@ -501,16 +512,15 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     public void PrefetchRange(IEnumerable<TrackInfo> tracks)
     {
-        // Отложенный prefetch после загрузки
         _ = Task.Run(async () =>
         {
-            await Task.Delay(2000);  // Ждём 2 сек
+            await Task.Delay(2000);
             
             foreach (var track in tracks.Take(2))
             {
                 if (_isPlayingOrBuffering) break;
                 await PrefetchAsync(track);
-                await Task.Delay(500);  // Между prefetch'ами
+                await Task.Delay(500);
             }
         });
     }
@@ -527,10 +537,9 @@ public class AudioEngine : ViewModelBase, IDisposable
         _isPlayerReady = true;
         IsLoading = false;
         
-        // Разрешаем prefetch через 2 секунды после старта
         _ = Task.Run(async () =>
         {
-            await Task.Delay(2000);
+            await Task.Delay(1500);
             _isPlayingOrBuffering = false;
             await PrefetchNextInQueueAsync();
         });
@@ -652,11 +661,15 @@ public class AudioEngine : ViewModelBase, IDisposable
         Interlocked.Increment(ref _session);
         _cts?.Cancel();
 
-        StopPlaybackInternal();
+        QuickStopPlayback();
 
+        // Dispose в фоне
         var stream = _currentStream;
         _currentStream = null;
-        stream?.Dispose();
+        if (stream != null)
+        {
+            _ = Task.Run(() => { try { stream.Dispose(); } catch { } });
+        }
 
         CurrentTrack = null;
         IsLoading = false;

@@ -116,7 +116,7 @@
         <Setter Property="Opacity" Value="0" />
     </Style>
     <Style Selector="Slider.spotify-slider:pointerover /template/ Thumb">
-        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Opacity" Value="0.5" />
     </Style>
 
     <!-- TextBox (Search) -->
