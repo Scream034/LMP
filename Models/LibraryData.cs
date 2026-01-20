@@ -12,18 +12,15 @@ public class LibraryData
 
     // --- Настройки плеера ---
     public float Volume { get; set; } = 0.5f;
+
+    // Для запоминания громкости перед Mute
+    public int LastVolume { get; set; } = 50;
+
     public bool ShuffleEnabled { get; set; }
     public RepeatMode RepeatMode { get; set; } = RepeatMode.None;
 
-    // --- Настройки звука (Новое) ---
-    /// <summary>
-    /// Максимальный предел громкости (100, 200, 300 или 400).
-    /// </summary>
+    // --- Настройки звука ---
     public int MaxVolumeLimit { get; set; } = 100;
-
-    /// <summary>
-    /// Целевое усиление в дБ (нормализация). 0 - без изменений.
-    /// </summary>
     public float TargetGainDb { get; set; } = 0f;
 
     // --- Настройки приложения ---
@@ -38,7 +35,7 @@ public class LibraryData
 
 public enum RepeatMode
 {
-    None,
+    None,      // Исправлено: Было Off в коде, но None в модели
     RepeatOne,
     RepeatAll
 }

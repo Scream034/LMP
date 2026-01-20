@@ -7,7 +7,7 @@
     x:DataType="vm:PlayerBarViewModel">
 
     <UserControl.Styles>
-        <!-- Анимация пульсации для рамки -->
+        <!-- Анимация пульсации для Seek -->
         <Style Selector="Border.seek-busy-indicator">
             <Style.Animations>
                 <Animation Duration="0:0:1.2" IterationCount="Infinite">
@@ -27,67 +27,46 @@
             </Style.Animations>
         </Style>
 
-        <!-- Бегущий градиент (через Offset) -->
-        <Style Selector="Border.seek-gradient-runner">
-            <Style.Animations>
-                <Animation Duration="0:0:1.5" IterationCount="Infinite">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.5" />
-                    </KeyFrame>
-                    <KeyFrame Cue="25%">
-                        <Setter Property="Opacity" Value="1" />
-                    </KeyFrame>
-                    <KeyFrame Cue="50%">
-                        <Setter Property="Opacity" Value="0.5" />
-                    </KeyFrame>
-                    <KeyFrame Cue="75%">
-                        <Setter Property="Opacity" Value="1" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.5" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
+        <!-- Кастомный Слайдер (Spotify Style) -->
+        <Style Selector="Slider.spotify-slider">
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Background" Value="#404040" />
+            <Setter Property="CornerRadius" Value="2" />
         </Style>
-
-        <!-- Стиль для неактивного seek -->
-        <Style Selector="Border.seek-area-disabled">
-            <Setter Property="Opacity" Value="0.5" />
+        <Style Selector="Slider.spotify-slider /template/ Track">
+            <Setter Property="Minimum" Value="{TemplateBinding Minimum}" />
+            <Setter Property="Maximum" Value="{TemplateBinding Maximum}" />
+            <Setter Property="Value" Value="{TemplateBinding Value}" />
+            <Setter Property="Height" Value="4" />
         </Style>
-
-        <Style Selector="Border.seek-area-enabled">
+        <Style Selector="Slider.spotify-slider /template/ Thumb">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="12" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.2" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Slider.spotify-slider:pointerover /template/ Thumb">
             <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <!-- Анимация появления информации -->
-        <Style Selector="StackPanel.stream-info">
-            <Setter Property="Opacity" Value="0.7" />
-            <Style.Animations>
-                <Animation Duration="0:0:0.3">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.7" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
+            <Setter Property="RenderTransform" Value="scale(1.2)" />
         </Style>
     </UserControl.Styles>
 
     <Border Background="{StaticResource BgSecondaryBrush}" Height="94"
         BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="0,1,0,0">
         <Grid>
-            <!-- Индикатор загрузки трека -->
-            <ProgressBar VerticalAlignment="Top" Height="2"
-                IsIndeterminate="True"
-                Background="Transparent"
-                Foreground="{StaticResource AccentBrush}"
+            <!-- Индикатор загрузки -->
+            <ProgressBar VerticalAlignment="Top" Height="2" IsIndeterminate="True"
+                Background="Transparent" Foreground="{StaticResource AccentBrush}"
                 IsVisible="{Binding IsLoading}" />
 
             <Grid ColumnDefinitions="3*, 4*, 3*" Margin="16,0">
 
-                <!-- Лево: Инфо о треке + Кнопки действий -->
+                <!-- ЛЕВО: Инфо -->
                 <Grid Grid.Column="0" ColumnDefinitions="Auto, *, Auto">
                     <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4"
                         ClipToBounds="True">
@@ -100,7 +79,6 @@
                                 IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}}" />
                         </Panel>
                     </Border>
-
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0">
                         <TextBlock Text="{Binding SafeTitle}" FontWeight="SemiBold"
                             TextTrimming="CharacterEllipsis" />
@@ -108,26 +86,21 @@
                             Foreground="{StaticResource TextSecondaryBrush}"
                             TextTrimming="CharacterEllipsis" />
                     </StackPanel>
-
-                    <!-- Кнопки Лайк и Копировать -->
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
-                        <Button Classes="icon-btn" Command="{Binding ToggleLikeCommand}"
-                            ToolTip.Tip="Нравится">
+                        <Button Classes="icon-btn" Command="{Binding ToggleLikeCommand}">
                             <mi:MaterialIcon
                                 Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
                                 Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"
                                 Width="18" Height="18" />
                         </Button>
-
-                        <Button Classes="icon-btn" Command="{Binding CopyLinkCommand}"
-                            ToolTip.Tip="Скопировать ссылку">
+                        <Button Classes="icon-btn" Command="{Binding CopyLinkCommand}">
                             <mi:MaterialIcon Kind="ContentCopy" Width="16" Height="16"
                                 Foreground="#B3B3B3" />
                         </Button>
                     </StackPanel>
                 </Grid>
 
-                <!-- Центр: Управление и Перемотка -->
+                <!-- ЦЕНТР: Управление -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
                         <Button Classes="icon-btn" Command="{Binding ToggleShuffleCommand}">
@@ -156,81 +129,43 @@
                         </Button>
                     </StackPanel>
 
-                    <!-- Полоса перемотки с анимацией -->
+                    <!-- Seek Bar -->
                     <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,4,0,0">
                         <TextBlock
                             Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}"
                             FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                             Width="40" VerticalAlignment="Center" />
-
-                        <!-- Контейнер слайдера -->
                         <Grid Grid.Column="1" Height="24" VerticalAlignment="Center">
-
-                            <!-- Анимированная рамка при загрузке/seek -->
-                            <Border CornerRadius="6"
-                                Margin="-6,-4"
-                                IsVisible="{Binding IsSeekBusy}"
-                                Classes="seek-busy-indicator">
-                                <Border.BorderBrush>
-                                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
-                                        <GradientStop Color="#1DB954" Offset="0" />
-                                        <GradientStop Color="#1DB95466" Offset="0.5" />
-                                        <GradientStop Color="#1DB954" Offset="1" />
-                                    </LinearGradientBrush>
-                                </Border.BorderBrush>
-                            </Border>
-
-                            <!-- Бегущие полоски сверху и снизу -->
-                            <Canvas IsVisible="{Binding IsSeekBusy}" ClipToBounds="False"
-                                Margin="-2,0">
-                                <!-- Верхняя линия -->
-                                <Border Canvas.Top="-2" Width="40" Height="2"
-                                    CornerRadius="1"
-                                    Background="#1DB954"
-                                    Classes="seek-gradient-runner">
-                                    <Border.RenderTransform>
-                                        <TranslateTransform X="0" />
-                                    </Border.RenderTransform>
-                                </Border>
-                                <!-- Нижняя линия -->
-                                <Border Canvas.Bottom="-2" Canvas.Right="0" Width="40" Height="2"
-                                    CornerRadius="1"
-                                    Background="#1DB954"
-                                    Classes="seek-gradient-runner">
-                                    <Border.RenderTransform>
-                                        <TranslateTransform X="0" />
-                                    </Border.RenderTransform>
-                                </Border>
-                            </Canvas>
-
+                            <!-- Busy Indicator -->
+                            <Border CornerRadius="6" Margin="-6,-4" IsVisible="{Binding IsSeekBusy}"
+                                Classes="seek-busy-indicator" BorderBrush="#1DB954" />
                             <Panel VerticalAlignment="Center">
-                                <!-- Фон -->
                                 <Border Height="4" CornerRadius="2" Background="#333"
                                     VerticalAlignment="Center" />
-
-                                <!-- Буфер -->
                                 <ProgressBar Minimum="0" Maximum="{Binding DurationSeconds}"
                                     Value="{Binding BufferedSeconds}" Height="4"
                                     Background="Transparent" Foreground="#5E5E5E"
                                     VerticalAlignment="Center" CornerRadius="2" />
-
-                                <!-- Прогресс -->
                                 <Slider Minimum="0" Maximum="{Binding DurationSeconds}"
-                                    Value="{Binding PositionSeconds}"
-                                    Classes="spotify-slider"
+                                    Value="{Binding PositionSeconds}" Classes="spotify-slider"
                                     IsHitTestVisible="False" VerticalAlignment="Center" />
                             </Panel>
-
-                            <!-- Зона клика -->
-                            <Border Name="SeekHitBox" Background="Transparent"
-                                Cursor="Hand"
-                                Opacity="{Binding HasTrack, Converter={StaticResource BoolToSelector}, ConverterParameter='1|0.5'}"
-                                PointerPressed="OnSeekAreaPressed"
-                                PointerMoved="OnSeekAreaMoved"
+                            <!-- Зона клика (SeekHitBox) -->
+                            <Border Name="SeekHitBox" Background="Transparent" Cursor="Hand"
+                                PointerPressed="OnSeekAreaPressed" PointerMoved="OnSeekAreaMoved"
                                 PointerReleased="OnSeekAreaReleased"
-                                PointerExited="OnSeekAreaExited" />
-
-                            <!-- Тултип времени -->
+                                PointerExited="OnSeekAreaExited"
+                                IsHitTestVisible="{Binding HasTrack}">
+                                <Border.Styles>
+                                    <Style Selector="Border[IsHitTestVisible=False]">
+                                        <Setter Property="Opacity" Value="0.5" />
+                                    </Style>
+                                    <Style Selector="Border[IsHitTestVisible=True]">
+                                        <Setter Property="Opacity" Value="1" />
+                                    </Style>
+                                </Border.Styles>
+                            </Border>
+                            <!-- Tooltip -->
                             <Border Name="HoverTooltip" Background="#282828" BorderBrush="#333"
                                 BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False"
                                 HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -242,127 +177,109 @@
                                     FontWeight="Bold" Foreground="White" />
                             </Border>
                         </Grid>
-
                         <TextBlock Grid.Column="2"
                             Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
                             FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                             Width="40" TextAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
 
-                    <!-- Информация о потоке -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                        Spacing="6" Margin="0,2,0,0"
-                        Classes="stream-info"
-                        IsVisible="{Binding ShowStreamInfo}">
-
-                        <!-- Формат и битрейт -->
-                        <TextBlock Text="{Binding StreamInfo}"
-                            FontSize="9"
-                            Foreground="#555"
+                    <!-- Stream Info -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="6"
+                        Margin="0,2,0,0" IsVisible="{Binding ShowStreamInfo}">
+                        <TextBlock Text="{Binding StreamInfo}" FontSize="9" Foreground="#555"
                             VerticalAlignment="Center" />
-
-                        <!-- Разделитель -->
                         <TextBlock Text="•" FontSize="9" Foreground="#444"
                             IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
                             VerticalAlignment="Center" />
-
-                        <!-- Скорость загрузки -->
-                        <TextBlock Text="{Binding DownloadSpeedText}"
-                            FontSize="9"
+                        <TextBlock Text="{Binding DownloadSpeedText}" FontSize="9"
                             Foreground="#1DB95488"
                             IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
                             VerticalAlignment="Center" />
-
-                        <!-- Индикатор загрузки (три точки) -->
-                        <StackPanel Orientation="Horizontal" Spacing="3"
-                            IsVisible="{Binding IsSeekBusy}"
-                            VerticalAlignment="Center"
-                            Margin="4,0,0,0">
-                            <Ellipse Name="Dot1" Width="4" Height="4" Fill="#1DB954">
-                                <Ellipse.Styles>
-                                    <Style Selector="Ellipse#Dot1">
-                                        <Style.Animations>
-                                            <Animation Duration="0:0:0.8" IterationCount="Infinite"
-                                                Delay="0:0:0">
-                                                <KeyFrame Cue="0%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="33%">
-                                                    <Setter Property="Opacity" Value="1" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="66%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="100%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                            </Animation>
-                                        </Style.Animations>
-                                    </Style>
-                                </Ellipse.Styles>
-                            </Ellipse>
-                            <Ellipse Name="Dot2" Width="4" Height="4" Fill="#1DB954">
-                                <Ellipse.Styles>
-                                    <Style Selector="Ellipse#Dot2">
-                                        <Style.Animations>
-                                            <Animation Duration="0:0:0.8" IterationCount="Infinite"
-                                                Delay="0:0:0.15">
-                                                <KeyFrame Cue="0%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="33%">
-                                                    <Setter Property="Opacity" Value="1" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="66%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="100%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                            </Animation>
-                                        </Style.Animations>
-                                    </Style>
-                                </Ellipse.Styles>
-                            </Ellipse>
-                            <Ellipse Name="Dot3" Width="4" Height="4" Fill="#1DB954">
-                                <Ellipse.Styles>
-                                    <Style Selector="Ellipse#Dot3">
-                                        <Style.Animations>
-                                            <Animation Duration="0:0:0.8" IterationCount="Infinite"
-                                                Delay="0:0:0.3">
-                                                <KeyFrame Cue="0%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="33%">
-                                                    <Setter Property="Opacity" Value="1" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="66%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                                <KeyFrame Cue="100%">
-                                                    <Setter Property="Opacity" Value="0.2" />
-                                                </KeyFrame>
-                                            </Animation>
-                                        </Style.Animations>
-                                    </Style>
-                                </Ellipse.Styles>
-                            </Ellipse>
-                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Право: Громкость -->
+                <!-- ПРАВО: Громкость (Кастомная) -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                    VerticalAlignment="Center" Spacing="8">
-                    <Button Classes="icon-btn" Command="{Binding ToggleMuteCommand}">
-                        <mi:MaterialIcon
-                            Kind="{Binding Volume, Converter={StaticResource VolumeIcon}}"
-                            Width="20" Height="20" />
+                    VerticalAlignment="Center" Spacing="12">
+
+                    <!-- Кнопка с 5 анимированными полосками -->
+                    <Button Classes="icon-btn" Command="{Binding ToggleMuteCommand}" Padding="0"
+                        Width="40">
+                        <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
+                            HorizontalAlignment="Center">
+                            <!-- Бар 1 -->
+                            <Border Width="4" Height="6" CornerRadius="1"
+                                Background="{Binding VolumeBarBrush}"
+                                Opacity="{Binding Bar1Opacity}">
+                                <Border.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </Border.Transitions>
+                            </Border>
+                            <!-- Бар 2 -->
+                            <Border Width="4" Height="9" CornerRadius="1"
+                                Background="{Binding VolumeBarBrush}"
+                                Opacity="{Binding Bar2Opacity}">
+                                <Border.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </Border.Transitions>
+                            </Border>
+                            <!-- Бар 3 -->
+                            <Border Width="4" Height="12" CornerRadius="1"
+                                Background="{Binding VolumeBarBrush}"
+                                Opacity="{Binding Bar3Opacity}">
+                                <Border.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </Border.Transitions>
+                            </Border>
+                            <!-- Бар 4 -->
+                            <Border Width="4" Height="15" CornerRadius="1"
+                                Background="{Binding VolumeBarBrush}"
+                                Opacity="{Binding Bar4Opacity}">
+                                <Border.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </Border.Transitions>
+                            </Border>
+                            <!-- Бар 5 (Толстеющий) -->
+                            <Border Width="{Binding Bar5Thickness}" Height="18" CornerRadius="1"
+                                Background="{Binding VolumeBarBrush}"
+                                Opacity="{Binding Bar5Opacity}">
+                                <Border.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                                        <DoubleTransition Property="Width" Duration="0:0:0.2"
+                                            Easing="BackEaseOut" />
+                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </Border.Transitions>
+                            </Border>
+                        </StackPanel>
                     </Button>
-                    <Grid Width="100" Height="24">
+
+                    <!-- Слайдер с анимированной шириной -->
+                    <Grid Width="{Binding VolumeSliderWidth}" Height="24">
+                        <Grid.Transitions>
+                            <Transitions>
+                                <DoubleTransition Property="Width" Duration="0:0:0.4"
+                                    Easing="CubicEaseOut" />
+                            </Transitions>
+                        </Grid.Transitions>
+
                         <Slider Classes="spotify-slider" Minimum="0" Maximum="{Binding MaxVolume}"
                             Value="{Binding Volume}" IsHitTestVisible="False"
                             VerticalAlignment="Center" />
+
                         <Border Name="VolumeHitBox" Background="Transparent" Cursor="Hand"
                             PointerPressed="OnVolumeAreaPressed" PointerMoved="OnVolumeAreaMoved"
                             PointerReleased="OnVolumeAreaReleased"

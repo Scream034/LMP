@@ -24,7 +24,6 @@ public partial class PlayerBarView : UserControl
         double ratio = GetClickRatio(hitBox, e);
         double hoverSeconds = ratio * vm.DurationSeconds;
 
-        // Обновляем тултип
         HoverTooltip.IsVisible = true;
         var hoverTime = TimeSpan.FromSeconds(hoverSeconds);
         HoverTimeText.Text = hoverTime.TotalHours >= 1
@@ -32,26 +31,17 @@ public partial class PlayerBarView : UserControl
             : hoverTime.ToString(@"m\:ss");
         UpdateTooltipPosition(HoverTooltip, hitBox, e);
 
-        // Обновляем позицию при перетаскивании
-        if (_isDraggingSeek)
-        {
-            vm.UpdateSeekPosition(hoverSeconds);
-        }
+        if (_isDraggingSeek) vm.UpdateSeekPosition(hoverSeconds);
     }
 
     private void OnSeekAreaPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
-
-        var properties = e.GetCurrentPoint(hitBox).Properties;
-        if (!properties.IsLeftButtonPressed) return;
-
-        // Проверяем есть ли трек
+        if (!e.GetCurrentPoint(hitBox).Properties.IsLeftButtonPressed) return;
         if (!vm.HasTrack) return;
 
         _isDraggingSeek = true;
         e.Pointer.Capture(hitBox);
-
         vm.StartSeek();
 
         double ratio = GetClickRatio(hitBox, e);
@@ -61,22 +51,14 @@ public partial class PlayerBarView : UserControl
     private void OnSeekAreaReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (!_isDraggingSeek) return;
-
         _isDraggingSeek = false;
         e.Pointer.Capture(null);
-
-        if (DataContext is PlayerBarViewModel vm)
-        {
-            vm.EndSeek();
-        }
+        if (DataContext is PlayerBarViewModel vm) vm.EndSeek();
     }
 
     private void OnSeekAreaExited(object? sender, PointerEventArgs e)
     {
-        if (!_isDraggingSeek)
-        {
-            HoverTooltip.IsVisible = false;
-        }
+        if (!_isDraggingSeek) HoverTooltip.IsVisible = false;
     }
 
     #endregion
@@ -94,10 +76,7 @@ public partial class PlayerBarView : UserControl
         VolumeTooltipText.Text = $"{volumePercent}%";
         UpdateTooltipPosition(VolumeTooltip, hitBox, e);
 
-        if (_isDraggingVolume)
-        {
-            vm.Volume = volumePercent;
-        }
+        if (_isDraggingVolume) vm.Volume = volumePercent;
     }
 
     private void OnVolumeAreaPressed(object? sender, PointerPressedEventArgs e)
@@ -109,7 +88,7 @@ public partial class PlayerBarView : UserControl
         e.Pointer.Capture(hitBox);
 
         double ratio = GetClickRatio(hitBox, e);
-        vm.Volume = (float)(ratio * vm.MaxVolume);
+        vm.Volume = (int)(ratio * vm.MaxVolume);
     }
 
     private void OnVolumeAreaReleased(object? sender, PointerReleasedEventArgs e)
@@ -117,14 +96,14 @@ public partial class PlayerBarView : UserControl
         if (!_isDraggingVolume) return;
         _isDraggingVolume = false;
         e.Pointer.Capture(null);
+
+        // Важно: Сохраняем настройки только при отпускании мыши, чтобы не спамить I/O
+        if (DataContext is PlayerBarViewModel vm) vm.OnVolumeChangeComplete();
     }
 
     private void OnVolumeAreaExited(object? sender, PointerEventArgs e)
     {
-        if (!_isDraggingVolume)
-        {
-            VolumeTooltip.IsVisible = false;
-        }
+        if (!_isDraggingVolume) VolumeTooltip.IsVisible = false;
     }
 
     #endregion
@@ -142,11 +121,7 @@ public partial class PlayerBarView : UserControl
         var point = e.GetCurrentPoint(hitBox);
         double tooltipX = point.Position.X - (tooltip.Bounds.Width / 2);
         tooltipX = Math.Clamp(tooltipX, 0, hitBox.Bounds.Width - tooltip.Bounds.Width);
-
-        if (tooltip.RenderTransform is TranslateTransform tr)
-        {
-            tr.X = tooltipX;
-        }
+        if (tooltip.RenderTransform is TranslateTransform tr) tr.X = tooltipX;
     }
 
     #endregion

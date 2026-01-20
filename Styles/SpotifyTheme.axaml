@@ -6,11 +6,12 @@
     <Style>
         <Style.Resources>
             <!-- Background Colors -->
+            <!-- Немного высветлил базовые цвета для лучшего контраста -->
             <Color x:Key="BgPrimary">#121212</Color>
-            <Color x:Key="BgSecondary">#181818</Color>
-            <Color x:Key="BgElevated">#282828</Color>
-            <Color x:Key="BgHighlight">#333333</Color>
-            <Color x:Key="BgHover">#3E3E3E</Color>
+            <Color x:Key="BgSecondary">#1E1E1E</Color>
+            <Color x:Key="BgElevated">#2A2A2A</Color>
+            <Color x:Key="BgHighlight">#404040</Color>
+            <Color x:Key="BgHover">#505050</Color>
 
             <!-- Brand Colors -->
             <Color x:Key="AccentGreen">#1DB954</Color>
@@ -19,7 +20,7 @@
             <!-- Text Colors -->
             <Color x:Key="TextPrimary">#FFFFFF</Color>
             <Color x:Key="TextSecondary">#B3B3B3</Color>
-            <Color x:Key="TextMuted">#6A6A6A</Color>
+            <Color x:Key="TextMuted">#888888</Color>
 
             <!-- Brushes -->
             <SolidColorBrush x:Key="BgPrimaryBrush" Color="{StaticResource BgPrimary}" />
@@ -50,6 +51,12 @@
         <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="Button.sidebar-btn:pointerover">
         <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
@@ -69,10 +76,18 @@
         <Setter Property="CornerRadius" Value="16" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="Button.icon-btn:pointerover">
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
         <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.1)" />
     </Style>
 
     <!-- Primary Button (Play) -->
@@ -83,6 +98,12 @@
         <Setter Property="CornerRadius" Value="20" />
         <Setter Property="FontWeight" Value="Bold" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="Button.primary-btn:pointerover">
         <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
@@ -98,6 +119,12 @@
         <Setter Property="CornerRadius" Value="28" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="Button.play-circle:pointerover">
         <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
@@ -107,16 +134,32 @@
     <!-- Slider (Seek/Volume) -->
     <Style Selector="Slider.spotify-slider">
         <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-        <!-- Background ставим Transparent, чтобы видеть ProgressBar снизу -->
-        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Background" Value="#404040" />
+        <Setter Property="CornerRadius" Value="2" />
     </Style>
+
+    <Style Selector="Slider.spotify-slider /template/ Track">
+        <Setter Property="Minimum" Value="{TemplateBinding Minimum}" />
+        <Setter Property="Maximum" Value="{TemplateBinding Maximum}" />
+        <Setter Property="Value" Value="{TemplateBinding Value}" />
+        <!-- Высота трека чуть больше -->
+        <Setter Property="Height" Value="4" />
+    </Style>
+
     <Style Selector="Slider.spotify-slider /template/ Thumb">
         <Setter Property="Width" Value="12" />
         <Setter Property="Height" Value="12" />
         <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.2" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="Slider.spotify-slider:pointerover /template/ Thumb">
-        <Setter Property="Opacity" Value="0.5" />
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="RenderTransform" Value="scale(1.2)" />
     </Style>
 
     <!-- TextBox (Search) -->
@@ -127,10 +170,19 @@
         <Setter Property="CornerRadius" Value="20" />
         <Setter Property="Padding" Value="40,10,16,10" />
         <Setter Property="FontSize" Value="14" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
     </Style>
     <Style Selector="TextBox.search-box:focus">
         <Setter Property="BorderThickness" Value="2" />
         <Setter Property="BorderBrush" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+    </Style>
+    <Style Selector="TextBox.search-box:pointerover">
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
     </Style>
 
     <!-- ScrollViewer -->

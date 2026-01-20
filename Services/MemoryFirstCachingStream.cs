@@ -55,7 +55,6 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly object _downloadLock = new();
     private int _downloadGeneration;
     private CancellationTokenSource? _downloadCts;
-    private Task? _downloadTask;
     private readonly Stopwatch _downloadStopwatch = new();
     private DateTime _lastDownloadStart = DateTime.MinValue;
 
@@ -163,7 +162,7 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         if (_disposed) return false;
 
-        // ✅ АДАПТИВНЫЙ PREBUFFER - для больших файлов меньше
+        // АДАПТИВНЫЙ PREBUFFER - для больших файлов меньше
         int minBytes = _isLargeFile
             ? _effectiveBlockSize                          // 64KB для больших
             : MinPreBufferBlocks * _effectiveBlockSize;    // 128KB для маленьких
@@ -205,7 +204,7 @@ public sealed class MemoryFirstCachingStream : Stream
                     long downloaded = Volatile.Read(ref _downloadedBytes);
                     int ramBlocks = _ramBlocks.Count;
 
-                    // ✅ ДЛЯ БОЛЬШИХ ФАЙЛОВ - стартуем если есть хоть что-то
+                    // ДЛЯ БОЛЬШИХ ФАЙЛОВ - стартуем если есть хоть что-то
                     bool hasEnough = _isLargeFile
                         ? downloaded >= _effectiveBlockSize || ramBlocks >= 1
                         : downloaded >= _effectiveBlockSize * 2 || ramBlocks >= 2;
@@ -464,13 +463,13 @@ public sealed class MemoryFirstCachingStream : Stream
         Volatile.Write(ref _downloadPosition, startPos);
         _downloadStopwatch.Restart();
 
-        _downloadTask = Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
             try
             {
                 if (_isLargeFile)
                 {
-                    // ✅ ДЛЯ БОЛЬШИХ ФАЙЛОВ - СРАЗУ ПАРАЛЛЕЛЬНЫЙ CHUNKED
+                    // ДЛЯ БОЛЬШИХ ФАЙЛОВ - СРАЗУ ПАРАЛЛЕЛЬНЫЙ CHUNKED
                     // Не тратим время на throttling detection
                     Debug.WriteLine($"[MemoryFirst] Large file detected, using parallel chunked download");
                     await ParallelChunkedDownloadAsync(startPos, myGeneration, ct);
@@ -518,7 +517,7 @@ public sealed class MemoryFirstCachingStream : Stream
                 continue;
             }
 
-            // ✅ Проверяем поколение БЕЗ await
+            // Проверяем поколение БЕЗ await
             bool shouldReturn = false;
             lock (_downloadLock)
             {
@@ -530,7 +529,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
             if (shouldReturn)
             {
-                // ✅ await ВНЕ lock
+                // await ВНЕ lock
                 await Task.WhenAll(activeTasks);
                 return;
             }
@@ -630,7 +629,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
                 while (chunkPosition <= chunkEnd && !ct.IsCancellationRequested && !_disposing)
                 {
-                    // ✅ Проверяем поколение БЕЗ await
+                    // Проверяем поколение БЕЗ await
                     bool shouldReturn = false;
                     lock (_downloadLock)
                     {
@@ -670,7 +669,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
                         downloaded += totalRead;
 
-                        // ✅ Atomic update позиции
+                        // Atomic update позиции
                         long currentMax = Volatile.Read(ref _downloadPosition);
                         long newPos = chunkPosition + totalRead;
                         while (newPos > currentMax)

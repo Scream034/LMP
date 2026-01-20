@@ -12,6 +12,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly LibraryService _library;
     private readonly GoogleAuthService _auth;
     private readonly IDialogService _dialog;
+    private readonly AudioEngine _audio; // Добавлен AudioEngine
 
     // === НАСТРОЙКИ ===
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
@@ -38,36 +39,32 @@ public class SettingsViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> LoginCommand { get; }
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
 
-    // Свойство для отображения Email или текста "Не вошел"
     public string DisplayEmail => string.IsNullOrWhiteSpace(UserEmail)
         ? L["Auth_NotSignedIn"]
         : UserEmail;
 
-    // Свойство для статуса авторизации
     public string AuthStatusText => IsAuthenticated
         ? L["Auth_LoggedIn"]
         : L["Auth_Guest"];
 
-    public SettingsViewModel(LibraryService library, GoogleAuthService auth, IDialogService dialog)
+    public SettingsViewModel(LibraryService library, GoogleAuthService auth, IDialogService dialog, AudioEngine audio)
     {
         _library = library;
         _auth = auth;
         _dialog = dialog;
+        _audio = audio;
 
-        // Загружаем настройки
         LoadSettings();
         UpdateAuthState();
 
-        // === ПОДПИСКИ НА ИЗМЕНЕНИЯ ===
+        // === ПОДПИСКИ ===
 
-        // Магия: когда меняется язык или статус входа, уведомляем интерфейс об обновлении
         LocalizationService.Instance.LanguageChanged += (s, e) =>
         {
             this.RaisePropertyChanged(nameof(DisplayEmail));
             this.RaisePropertyChanged(nameof(AuthStatusText));
         };
 
-        // Если IsAuthenticated меняется, тоже обновляем текст
         this.WhenAnyValue(x => x.IsAuthenticated, x => x.UserEmail)
             .Subscribe(_ =>
             {
@@ -75,7 +72,6 @@ public class SettingsViewModel : ViewModelBase
                 this.RaisePropertyChanged(nameof(AuthStatusText));
             });
 
-        // Язык
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1)
             .WhereNotNull()
@@ -87,17 +83,27 @@ public class SettingsViewModel : ViewModelBase
                 _library.Save();
             });
 
-        // Настройки звука
+        // Настройки звука - применяем мгновенно
         this.WhenAnyValue(x => x.MaxVolumeLimit)
             .Skip(1)
-            .Subscribe(v => { _library.Data.MaxVolumeLimit = v; _library.Save(); });
+            .Subscribe(v =>
+            {
+                _library.Data.MaxVolumeLimit = v;
+                _library.Save();
+                // При обновлении макс громкости, можно обновить интерфейс или пересчитать текущую
+                _audio.UpdateAudioSettings();
+            });
 
         this.WhenAnyValue(x => x.TargetGainDb)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(300))
-            .Subscribe(v => { _library.Data.TargetGainDb = v; _library.Save(); });
+            .Subscribe(v =>
+            {
+                _library.Data.TargetGainDb = v;
+                _library.Save();
+                _audio.UpdateAudioSettings(); // Мгновенное применение усиления
+            });
 
-        // Общие настройки
         this.WhenAnyValue(x => x.EnableSmoothLoading)
             .Skip(1)
             .Subscribe(v => { _library.Data.EnableSmoothLoading = v; _library.Save(); });
@@ -138,7 +144,7 @@ public class SettingsViewModel : ViewModelBase
             if (confirmed)
             {
                 _library.Reset();
-                LoadSettings(); // Перезагружаем все настройки в UI
+                LoadSettings();
                 await _dialog.ShowInfoAsync(loc["Dialog_Done"], loc["Dialog_ResetComplete"]);
             }
         });
@@ -174,7 +180,6 @@ public class SettingsViewModel : ViewModelBase
         MaxVolumeLimit = _library.Data.MaxVolumeLimit;
         TargetGainDb = _library.Data.TargetGainDb;
 
-        // Установка языка
         SelectedLanguage = Languages.FirstOrDefault(x => x.Code == _library.Data.LanguageCode)
                            ?? Languages[0];
     }
