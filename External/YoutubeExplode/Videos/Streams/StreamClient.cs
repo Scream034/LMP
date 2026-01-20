@@ -32,9 +32,8 @@ public class StreamClient(HttpClient http)
             ?? throw new YoutubeExplodeException("Failed to extract the cipher manifest.");
     }
 
-    // ОПТИМИЗАЦИЯ: Убираем проверку content length при построении списка
-    // Проверим только когда реально будем качать/стримить
-    private async IAsyncEnumerable<IStreamInfo> GetStreamInfosFastAsync(
+    // ИСПРАВЛЕНИЕ: Добавляем проверку content-length для надёжности
+    private async IAsyncEnumerable<IStreamInfo> GetStreamInfosAsync(
         IEnumerable<IStreamData> streamDatas,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
@@ -58,12 +57,15 @@ public class StreamClient(HttpClient http)
                 );
             }
 
-            // ОПТИМИЗАЦИЯ: Используем content length из метаданных без проверки
-            // Если его нет - ставим 0, проверим позже при необходимости
+            // Используем content length из метаданных
             var contentLength = streamData.ContentLength ?? 0;
 
-            // Пропускаем только если явно 0 в метаданных (битый stream)
-            if (streamData.ContentLength == 0) continue;
+            // КРИТИЧНО: Если content-length = 0, это битый stream — пропускаем
+            if (contentLength == 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"[YTE] Skipping stream {itag} - no content length");
+                continue;
+            }
 
             var container = streamData.Container?.Pipe(s => new Container(s));
             if (container is null) continue;
@@ -166,9 +168,8 @@ public class StreamClient(HttpClient http)
 
         var streamInfos = new List<IStreamInfo>();
 
-        // Extract streams from the player response (FAST - no HTTP calls)
         System.Diagnostics.Debug.WriteLine($"[YTE] Extracting streams from player response... ({sw.ElapsedMilliseconds}ms)");
-        await foreach (var stream in GetStreamInfosFastAsync(playerResponse.Streams, cancellationToken))
+        await foreach (var stream in GetStreamInfosAsync(playerResponse.Streams, cancellationToken))
         {
             streamInfos.Add(stream);
         }

@@ -13,14 +13,13 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
-    private readonly IClipboardService _clipboard; // Новый сервис
+    private readonly IClipboardService _clipboard;
     private readonly DispatcherTimer _positionTimer;
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
     private float _volumeBeforeMute;
 
-    // ... (Все свойства Reactive Properties остаются без изменений) ...
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
     [Reactive] public bool IsLoading { get; private set; }
     [Reactive] public bool IsPlaying { get; private set; }
@@ -42,7 +41,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     public string SafeAuthor => CurrentTrack?.Author ?? "Неизвестный исполнитель";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
 
-    // ... (Команды) ...
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
@@ -50,14 +48,13 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ToggleRepeatCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleMuteCommand { get; }
-    // НОВАЯ КОМАНДА
     public ReactiveCommand<Unit, Unit> CopyLinkCommand { get; }
 
     public PlayerBarViewModel(
         AudioEngine audio,
         LibraryService library,
         DownloadService downloads,
-        IClipboardService clipboard) // Внедряем clipboard
+        IClipboardService clipboard)
     {
         _audio = audio;
         _library = library;
@@ -65,36 +62,44 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _clipboard = clipboard;
 
         MaxVolume = _library.Data.MaxVolumeLimit;
-        Volume = _audio.GetVolume() * 100f;
+
+        // ИСПРАВЛЕНО: GetVolume() уже возвращает 0-100
+        Volume = _audio.GetVolume();
+        _volumeBeforeMute = Volume > 5 ? Volume : 50;
+
         ShuffleEnabled = _audio.ShuffleEnabled;
         RepeatMode = _audio.RepeatMode;
 
+        // Position timer
         _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _positionTimer.Tick += (_, _) => UpdatePositionFromEngine();
         _positionTimer.Start();
 
-        // Подписки на AudioEngine
-        _audio.OnLoadingChanged += loading => IsLoading = loading;
-        _audio.OnTrackChanged += track => Dispatcher.UIThread.Post(() => HandleTrackChanged(track));
-        _audio.OnPlaybackStopped += () => UpdatePlayState();
+        // Engine events
+        _audio.OnLoadingChanged += loading =>
+            Dispatcher.UIThread.Post(() => IsLoading = loading);
 
-        // Подписка на изменение данных трека в библиотеке (СИНХРОНИЗАЦИЯ ЛАЙКА)
+        _audio.OnTrackChanged += track =>
+            Dispatcher.UIThread.Post(() => HandleTrackChanged(track));
+
+        _audio.OnPlaybackStopped += () =>
+            Dispatcher.UIThread.Post(UpdatePlayState);
+
+        // Like sync
         Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
             h => _library.OnTrackUpdated += h,
             h => _library.OnTrackUpdated -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(updatedTrack =>
             {
-                // Если обновленный трек играет прямо сейчас, обновляем состояние лайка в UI
                 if (CurrentTrack != null && CurrentTrack.Id == updatedTrack.Id)
                 {
                     IsLiked = updatedTrack.IsLiked;
-                    // Обновляем ссылку на сам объект трека, чтобы данные были актуальны
                     CurrentTrack.IsLiked = updatedTrack.IsLiked;
                 }
             });
 
-        // Подписка на прогресс загрузки
+        // Download progress
         Observable.FromEvent<Action<string, float>, (string, float)>(
             h => (id, p) => h((id, p)),
             h => _downloads.OnProgress += h,
@@ -106,19 +111,20 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
                     BufferedSeconds = DurationSeconds * x.Item2;
             });
 
-        // Громкость
-        this.WhenAnyValue(x => x.Volume).Subscribe(v =>
-        {
-            _audio.SetVolume(v / 100f);
-            IsMuted = v <= 0.01f;
-        });
-        this.WhenAnyValue(x => x.Volume).Throttle(TimeSpan.FromSeconds(1)).Subscribe(v =>
-        {
-            _library.Data.Volume = v / 100f;
-            _library.Save();
-        });
+        // ИСПРАВЛЕНО: Volume — передаём напрямую 0-100
+        this.WhenAnyValue(x => x.Volume)
+            .Throttle(TimeSpan.FromMilliseconds(30))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(v =>
+            {
+                _audio.SetVolume(v); // v уже 0-100
+                IsMuted = v < 1;
+            });
 
-        Observable.FromEvent(h => _library.OnDataChanged += h, h => _library.OnDataChanged -= h)
+        // Data changed
+        Observable.FromEvent(
+            h => _library.OnDataChanged += h,
+            h => _library.OnDataChanged -= h)
             .Subscribe(_ =>
             {
                 MaxVolume = _library.Data.MaxVolumeLimit;
@@ -133,8 +139,11 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             UpdatePlayState();
         }, canExecute);
 
-        PreviousCommand = ReactiveCommand.CreateFromTask(() => _audio.PlayPreviousAsync(), canExecute);
-        NextCommand = ReactiveCommand.CreateFromTask(() => _audio.PlayNextAsync(), canExecute);
+        PreviousCommand = ReactiveCommand.CreateFromTask(
+            () => _audio.PlayPreviousAsync(), canExecute);
+
+        NextCommand = ReactiveCommand.CreateFromTask(
+            () => _audio.PlayNextAsync(), canExecute);
 
         ToggleShuffleCommand = ReactiveCommand.Create(() =>
         {
@@ -161,19 +170,23 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         {
             if (CurrentTrack != null)
             {
-                // LibraryService теперь сам вызовет OnTrackUpdated, 
-                // на который мы подписаны выше, поэтому IsLiked обновится автоматически
                 _library.ToggleLike(CurrentTrack);
             }
         }, canExecute);
 
         ToggleMuteCommand = ReactiveCommand.Create(() =>
         {
-            if (IsMuted) Volume = _volumeBeforeMute > 5f ? _volumeBeforeMute : 50f;
-            else { _volumeBeforeMute = Volume; Volume = 0; }
+            if (IsMuted || Volume < 1)
+            {
+                Volume = _volumeBeforeMute > 5 ? _volumeBeforeMute : 50;
+            }
+            else
+            {
+                _volumeBeforeMute = Volume;
+                Volume = 0;
+            }
         });
 
-        // РЕАЛИЗАЦИЯ КОПИРОВАНИЯ ССЫЛКИ
         CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             if (CurrentTrack != null && !string.IsNullOrEmpty(CurrentTrack.Url))
@@ -200,9 +213,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             Position = TimeSpan.Zero;
             PositionSeconds = 0;
 
-            if (track.IsDownloaded) BufferedSeconds = DurationSeconds;
-            else if (_downloads.IsDownloading(track.Id)) BufferedSeconds = DurationSeconds * _downloads.GetProgress(track.Id);
-            else BufferedSeconds = 0;
+            BufferedSeconds = track.IsDownloaded ? DurationSeconds : 0;
         }
         else
         {
@@ -210,21 +221,26 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             PositionSeconds = 0;
             BufferedSeconds = 0;
         }
+
         UpdatePlayState();
     }
 
-    // ... (Методы UpdatePositionFromEngine, UpdatePlayState, Seek Logic без изменений) ...
     private void UpdatePositionFromEngine()
     {
         if (!HasTrack || _isSeeking || _justFinishedSeeking) return;
+
         var currentPos = _audio.CurrentPosition;
         Position = currentPos;
         PositionSeconds = currentPos.TotalSeconds;
-        if (_audio.TotalDuration.TotalSeconds > 0 && Math.Abs(DurationSeconds - _audio.TotalDuration.TotalSeconds) > 1)
+
+        var engineDuration = _audio.TotalDuration;
+        if (engineDuration.TotalSeconds > 0 &&
+            Math.Abs(DurationSeconds - engineDuration.TotalSeconds) > 1)
         {
-            Duration = _audio.TotalDuration;
+            Duration = engineDuration;
             DurationSeconds = Duration.TotalSeconds;
         }
+
         UpdatePlayState();
     }
 
@@ -234,21 +250,33 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         IsPaused = _audio.IsPaused;
     }
 
-    public void StartSeek() { _isSeeking = true; _justFinishedSeeking = false; }
+    public void StartSeek()
+    {
+        _isSeeking = true;
+        _justFinishedSeeking = false;
+    }
 
     public async void EndSeek()
     {
-        if (HasTrack)
+        if (!HasTrack)
         {
-            _audio.Seek(TimeSpan.FromSeconds(PositionSeconds));
-            Position = TimeSpan.FromSeconds(PositionSeconds);
             _isSeeking = false;
-            _justFinishedSeeking = true;
-            await Task.Delay(500);
-            _justFinishedSeeking = false;
+            return;
         }
-        else { _isSeeking = false; }
+
+        var targetSeconds = PositionSeconds;
+        _isSeeking = false;
+        _justFinishedSeeking = true;
+
+        _audio.Seek(TimeSpan.FromSeconds(targetSeconds));
+        Position = TimeSpan.FromSeconds(targetSeconds);
+
+        await Task.Delay(300);
+        _justFinishedSeeking = false;
     }
 
-    public void Dispose() => _positionTimer.Stop();
+    public void Dispose()
+    {
+        _positionTimer.Stop();
+    }
 }

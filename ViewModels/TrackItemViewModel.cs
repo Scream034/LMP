@@ -49,23 +49,22 @@ public class TrackItemViewModel : ViewModelBase
 
         IsLiked = track.IsLiked;
 
-        // СИНХРОНИЗАЦИЯ: Подписка на обновление трека из любого места
+        // Подписка на обновление трека
         Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
                 h => _library.OnTrackUpdated += h,
                 h => _library.OnTrackUpdated -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(updatedTrack =>
             {
-                // Если ID совпадают, обновляем состояние UI
                 if (Track.Id == updatedTrack.Id)
                 {
                     IsLiked = updatedTrack.IsLiked;
-                    Track.IsLiked = updatedTrack.IsLiked; // Синхронизируем модель
+                    Track.IsLiked = updatedTrack.IsLiked;
                 }
             });
 
-        // Подписка на Playback State
-        Observable.FromEvent<TrackInfo>(
+        // Подписка на состояние воспроизведения
+        Observable.FromEvent<TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -96,16 +95,21 @@ public class TrackItemViewModel : ViewModelBase
                 DownloadProgress = x.Item2;
             });
 
-        PlayCommand = ReactiveCommand.Create(() =>
+        // ИСПРАВЛЕНО: CreateFromTask блокирует повторные вызовы пока выполняется
+        PlayCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            if (onPlay != null) onPlay(Track);
-            else _ = _audio.PlayTrackAsync(Track);
+            if (onPlay != null)
+            {
+                onPlay(Track);
+            }
+            else
+            {
+                await _audio.PlayTrackAsync(Track);
+            }
         });
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>
         {
-            // Теперь это вызовет событие в LibraryService, 
-            // которое поймают и PlayerBar, и этот же ViewModel (в подписке выше)
             _library.ToggleLike(Track);
         });
 
@@ -125,13 +129,13 @@ public class TrackItemViewModel : ViewModelBase
             onRadio?.Invoke(Track);
         });
 
-        // Предзагрузка при наведении мыши
+        // Предзагрузка при наведении
         this.WhenAnyValue(x => x.IsHovered)
             .Where(h => h)
-            .Throttle(TimeSpan.FromMilliseconds(200)) // Не спамим при быстром движении
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(__ =>
             {
-                // Prefetch stream URL в фоне
                 _ = _audio.PrefetchAsync(Track);
             });
     }
