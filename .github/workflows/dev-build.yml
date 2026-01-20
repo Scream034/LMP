@@ -1,0 +1,63 @@
+name: Dev Auto Build
+
+# ЗАПУСК:
+# Срабатывает при ЛЮБОМ пуше в ЛЮБУЮ ветку
+on:
+  push:
+  workflow_dispatch: # Кнопка ручного запуска
+
+permissions:
+  contents: write # Разрешение создавать релизы
+
+jobs:
+  build-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Настройка .NET 10 (включая Preview версии)
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          include-prerelease: true 
+
+      - name: Restore dependencies
+        run: dotnet restore MyLiteMusicPlayer.csproj
+
+      # Сборка EXE
+      # Версия берется из номера запуска GitHub (1, 2, 3...)
+      - name: Build Single File EXE
+        run: |
+          $ver = "0.0.${{ github.run_number }}"
+          echo "Building Version: $ver"
+          
+          dotnet publish MyLiteMusicPlayer.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:Version=$ver `
+            -p:AssemblyVersion=$ver `
+            -p:FileVersion=$ver `
+            -o ./publish
+
+      # Переименовываем файл, добавляя номер билда
+      - name: Rename Output
+        run: |
+          Rename-Item ./publish/MyLiteMusicPlayer.exe ./publish/MyLiteMusicPlayer-Build-${{ github.run_number }}.exe
+
+      # Создаем Релиз на GitHub
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Build #${{ github.run_number }}"
+          body: "Автоматическая сборка для ветки: ${{ github.ref_name }}"
+          prerelease: true
+          files: ./publish/*.exe
