@@ -138,16 +138,18 @@ public class AudioEngine : ViewModelBase, IDisposable
 
         Core.Initialize();
 
+        // В AudioEngine constructor:
         _libVLC = new LibVLC(
             "--no-video",
             "--no-spu",
-            "--network-caching=300",
-            "--file-caching=200",
-            "--live-caching=300",
+            "--network-caching=100",        // ✅ УМЕНЬШЕНО с 300
+            "--file-caching=100",           // ✅ УМЕНЬШЕНО с 200
+            "--live-caching=100",           // ✅ УМЕНЬШЕНО с 300
             "--http-reconnect",
             "--no-http-forward-cookies",
             "--no-metadata-network-access",
-            "--no-auto-preparse"
+            "--no-auto-preparse",
+            "--prefetch-read-size=65536"    // ✅ ДОБАВЛЕНО - 64KB prefetch
         );
 
         InitializePlayer();
@@ -271,14 +273,20 @@ public class AudioEngine : ViewModelBase, IDisposable
             }
             else
             {
-                // Если URL уже есть - пробуем получить размер быстро
-                result = (track.StreamUrl, await TryGetContentLengthFastAsync(track.StreamUrl, ct));
+                // Если URL уже есть - используем его сразу (не тратим время на проверку размера)
+                result = (track.StreamUrl, -1); // ✅ РАЗМЕР ПОЛУЧИМ ИЗ ПЕРВОГО RESPONSE
             }
 
             if (_session != session || ct.IsCancellationRequested) return;
 
             string url = result.Value.Url;
             long contentLength = result.Value.Size;
+
+            // ✅ Если размер неизвестен - быстрая проверка
+            if (contentLength <= 0)
+            {
+                contentLength = await TryGetContentLengthFastAsync(url, ct);
+            }
 
             if (contentLength <= 0)
             {
@@ -297,9 +305,13 @@ public class AudioEngine : ViewModelBase, IDisposable
                 _streamHttpClient,
                 _cacheManager);
 
-            // ✅ МИНИМАЛЬНЫЙ PREBUFFER (64KB достаточно для MP4!)
-            Debug.WriteLine("[Audio] Pre-buffering...");
-            bool ready = await stream.PreBufferAsync(64 * 1024, ct);
+            // ✅ АДАПТИВНЫЙ PREBUFFER
+            int prebufferSize = contentLength > 20 * 1024 * 1024
+                ? 64 * 1024   // 64KB для больших файлов
+                : 128 * 1024; // 128KB для маленьких
+
+            Debug.WriteLine($"[Audio] Pre-buffering {prebufferSize / 1024}KB...");
+            bool ready = await stream.PreBufferAsync(prebufferSize, ct);
 
             if (_session != session || ct.IsCancellationRequested)
             {
@@ -391,7 +403,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(2)); // ✅ КОРОТКИЙ TIMEOUT
+            cts.CancelAfter(TimeSpan.FromSeconds(1)); // ✅ 1 СЕКУНДА МАКС
 
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
             using var response = await _streamHttpClient.SendAsync(request, cts.Token);
