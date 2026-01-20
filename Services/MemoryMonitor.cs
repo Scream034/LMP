@@ -66,11 +66,11 @@ public class MemoryMonitor
 
     public void ForceGarbageCollection()
     {
-        Debug.WriteLine("[Memory] Forcing garbage collection...");
+        Log.Info("Forcing garbage collection...");
         GC.Collect(2, GCCollectionMode.Aggressive, true, true);
         GC.WaitForPendingFinalizers();
         GC.Collect();
-        Debug.WriteLine($"[Memory] After GC: {GC.GetTotalMemory(true) / (1024 * 1024)}MB");
+        Log.Info($"After GC: {GC.GetTotalMemory(true) / (1024 * 1024)}MB");
     }
 
     public string GetFormattedStats()

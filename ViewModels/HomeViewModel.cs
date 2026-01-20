@@ -100,7 +100,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         // Берём только новые (после текущего offset)
         var result = newTracks.Skip(TotalCount).ToList();
 
-        Debug.WriteLine($"[Home] Fetched {result.Count} more tracks in {sw.ElapsedMilliseconds}ms");
+        Log.Info($"Fetched {result.Count} more tracks in {sw.ElapsedMilliseconds}ms");
 
         // Обновляем кэш
         if (result.Count > 0)
@@ -150,7 +150,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
                 {
                     tracks = cached;
                     source = $"cache ({cached.Count})";
-                    Debug.WriteLine($"[Home] Loaded from cache: {cached.Count} tracks");
+                    Log.Info($"Loaded from cache: {cached.Count} tracks");
 
                     // Обновляем кэш в фоне
                     _ = RefreshCacheInBackgroundAsync();
@@ -177,12 +177,12 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
                 await InitializeItemsAsync(tracks, canFetchMore: true);
             }
 
-            Debug.WriteLine($"[Home] Loaded {tracks.Count} tracks from {source}");
+            Log.Info($"Loaded {tracks.Count} tracks from {source}");
             UpdateStats();
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Home] Load error: {ex.Message}");
+            Log.Info($"Load error: {ex.Message}");
         }
         finally
         {
@@ -202,13 +202,13 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
             {
                 AppendItems(fresh); // Добавит только новые (дедупликация по ID)
                 await _searchCache.SetAsync(_currentQuery, AllItems.ToList());
-                Debug.WriteLine($"[Home] Background refresh complete");
+                Log.Info($"Background refresh complete");
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Home] Background refresh error: {ex.Message}");
+            Log.Info($"Background refresh error: {ex.Message}");
         }
     }
 

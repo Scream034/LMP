@@ -44,7 +44,7 @@ public class MainWindowViewModel : ViewModelBase
         _auth = auth;
         PlayerBar = playerBar;
 
-        Debug.WriteLine("[VM] MainWindowViewModel constructor started.");
+        Log.Info("MainWindowViewModel constructor started.");
 
         // Подписка на обновление состояния авторизации
         UpdateAuthState();
@@ -59,20 +59,20 @@ public class MainWindowViewModel : ViewModelBase
         NavigateSettingsCommand = ReactiveCommand.Create(() => SwitchPage<SettingsViewModel>("Settings"));
         
         NavigatePlaylistCommand = ReactiveCommand.Create<string>(id => {
-            Debug.WriteLine($"[NAV] Navigating to Playlist: {id}");
+            Log.Info($"Navigating to Playlist: {id}");
             try {
                 var vm = Program.Services.GetRequiredService<PlaylistViewModel>();
                 vm.LoadPlaylist(id);
                 CurrentPage = vm;
                 CurrentPageName = "Playlist";
             } catch (Exception ex) {
-                Debug.WriteLine($"[ERROR] Playlist navigation failed: {ex.Message}\n{ex.StackTrace}");
+                Log.Info($"Playlist navigation failed: {ex.Message}\n{ex.StackTrace}");
             }
         });
 
         // Стартовая страница
         NavigateHomeCommand.Execute().Subscribe();
-        Debug.WriteLine("[VM] MainWindowViewModel initialized.");
+        Log.Info("MainWindowViewModel initialized.");
     }
 
     /// <summary>
@@ -80,7 +80,7 @@ public class MainWindowViewModel : ViewModelBase
     /// </summary>
     private void SwitchPage<T>(string name) where T : ViewModelBase
     {
-        Debug.WriteLine($"[NAV] Switching to page: {name} (Type: {typeof(T).Name})");
+        Log.Info($"Switching to page: {name} (Type: {typeof(T).Name})");
         try
         {
             var stopWatch = Stopwatch.StartNew();
@@ -88,11 +88,11 @@ public class MainWindowViewModel : ViewModelBase
             CurrentPage = page;
             CurrentPageName = name;
             stopWatch.Stop();
-            Debug.WriteLine($"[NAV] Successfully switched to {name} in {stopWatch.ElapsedMilliseconds}ms");
+            Log.Info($"Successfully switched to {name} in {stopWatch.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[ERROR] Navigation to {name} failed: {ex.Message}\n{ex.StackTrace}");
+            Log.Info($"Navigation to {name} failed: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -101,7 +101,7 @@ public class MainWindowViewModel : ViewModelBase
         IsAuthenticated = _auth.IsAuthenticated;
         UserName = _auth.State.UserName;
         UserAvatarUrl = _auth.State.UserAvatarUrl;
-        Debug.WriteLine($"[AUTH] State updated. Authenticated: {IsAuthenticated}, User: {UserName}");
+        Log.Info($"State updated. Authenticated: {IsAuthenticated}, User: {UserName}");
     }
 
     public void NavigateToPlaylist(string playlistId) 

@@ -1,5 +1,4 @@
 // Services/SearchCacheService.cs
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -48,7 +47,7 @@ public class SearchCacheService
         {
             if (DateTime.UtcNow - memResult.CachedAt < _cacheTtl && memResult.Tracks.Count >= minCount)
             {
-                Debug.WriteLine($"[Cache] Memory HIT for '{query}' ({memResult.Tracks.Count} tracks)");
+                Log.Info($"Memory HIT for '{query}' ({memResult.Tracks.Count} tracks)");
                 TouchLru(key);
                 return memResult.Tracks;
             }
@@ -69,18 +68,18 @@ public class SearchCacheService
             // Проверяем TTL
             if (DateTime.UtcNow - cached.CachedAt > _cacheTtl)
             {
-                Debug.WriteLine($"[Cache] Disk EXPIRED for '{query}'");
+                Log.Info($"Disk EXPIRED for '{query}'");
                 File.Delete(filePath);
                 return null;
             }
 
             if (cached.Tracks.Count < minCount)
             {
-                Debug.WriteLine($"[Cache] Disk has only {cached.Tracks.Count} tracks, need {minCount}");
+                Log.Info($"Disk has only {cached.Tracks.Count} tracks, need {minCount}");
                 return null;
             }
 
-            Debug.WriteLine($"[Cache] Disk HIT for '{query}' ({cached.Tracks.Count} tracks)");
+            Log.Info($"Disk HIT for '{query}' ({cached.Tracks.Count} tracks)");
 
             // Добавляем в память
             AddToMemoryCache(key, cached);
@@ -89,7 +88,7 @@ public class SearchCacheService
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Cache] Read error: {ex.Message}");
+            Log.Info($"Read error: {ex.Message}");
             return null;
         }
         finally
@@ -123,11 +122,11 @@ public class SearchCacheService
             var filePath = Path.Combine(_cacheFolder, $"{key}.json");
             var json = JsonSerializer.Serialize(cached, new JsonSerializerOptions { WriteIndented = false });
             await File.WriteAllTextAsync(filePath, json);
-            Debug.WriteLine($"[Cache] Saved '{query}' to disk ({tracks.Count} tracks)");
+            Log.Info($"Saved '{query}' to disk ({tracks.Count} tracks)");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Cache] Write error: {ex.Message}");
+            Log.Info($"Write error: {ex.Message}");
         }
         finally
         {
@@ -191,7 +190,7 @@ public class SearchCacheService
             foreach (var file in files.Skip(_maxCacheFiles))
             {
                 file.Delete();
-                Debug.WriteLine($"[Cache] Deleted old cache: {file.Name}");
+                Log.Info($"Deleted old cache: {file.Name}");
             }
 
             // Удаляем просроченные

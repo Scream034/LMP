@@ -2,7 +2,6 @@
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
 
@@ -118,7 +117,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
         {
             HasMoreItems = true;
             ReachedEnd = false;
-            Debug.WriteLine($"[Paginated] Appended {added} new items, total: {_allItems.Count}");
+            Log.Info($"Appended {added} new items, total: {_allItems.Count}");
         }
     }
 
@@ -154,7 +153,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
             {
                 HasMoreItems = false;
                 ReachedEnd = true;
-                Debug.WriteLine($"[Paginated] Reached end of list");
+                Log.Info($"Reached end of list");
                 return;
             }
         }
@@ -186,7 +185,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
             int remaining = _allItems.Count - _displayedCount;
             HasMoreItems = remaining > 0;
 
-            Debug.WriteLine($"[Paginated] Displayed {_displayedCount}/{_allItems.Count}, remaining: {remaining}");
+            Log.Info($"Displayed {_displayedCount}/{_allItems.Count}, remaining: {remaining}");
 
             // Prefetch если осталось мало
             if (remaining < PrefetchThreshold && remaining > 0)
@@ -196,7 +195,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
         }
         catch (OperationCanceledException)
         {
-            Debug.WriteLine($"[Paginated] Load cancelled");
+            Log.Info($"Load cancelled");
         }
         finally
         {
@@ -209,7 +208,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
         if (IsFetchingFromNetwork) return;
 
         IsFetchingFromNetwork = true;
-        Debug.WriteLine($"[Paginated] Fetching more from network...");
+        Log.Info($"Fetching more from network...");
 
         try
         {
@@ -221,7 +220,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
             }
             else
             {
-                Debug.WriteLine($"[Paginated] No more items from network");
+                Log.Info($"No more items from network");
             }
         }
         catch (OperationCanceledException)
@@ -230,7 +229,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Paginated] Fetch error: {ex.Message}");
+            Log.Info($"Fetch error: {ex.Message}");
         }
         finally
         {

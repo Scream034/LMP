@@ -1,6 +1,5 @@
 using YoutubeExplode;
 using YoutubeExplode.Common;
-using YoutubeExplode.Exceptions;
 using YoutubeExplode.Playlists;
 using YoutubeExplode.Search;
 using YoutubeExplode.Videos;
@@ -50,7 +49,7 @@ public class YoutubeProvider
     public Task InitializeAsync()
     {
         IsReady = true;
-        Log("✅ Initialized");
+        NotifyStatus(" Initialized");
         return Task.CompletedTask;
     }
 
@@ -61,21 +60,19 @@ public class YoutubeProvider
         string? videoId = ExtractVideoIdFromTrack(track);
         if (string.IsNullOrEmpty(videoId))
         {
-            LogError("Could not extract video ID");
+            NotifyError("Could not extract video ID");
             return null;
         }
 
         var sw = Stopwatch.StartNew();
-        Log($"🔄 [{videoId}] Getting stream URL...");
+        NotifyStatus($"🔄 [{videoId}] Getting stream URL...");
 
-        // 1. Cache - ИЗМЕНЕНО: кэшируем и размер
         if (TryGetFromCache(videoId, out var cachedUrl, out var cachedSize))
         {
             track.StreamUrl = cachedUrl!;
             return (cachedUrl!, cachedSize);
         }
 
-        // 2. YoutubeExplode
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -92,21 +89,21 @@ public class YoutubeProvider
             if (audioStream != null)
             {
                 var url = audioStream.Url;
-                var size = audioStream.Size.Bytes; // ✅ ПОЛУЧАЕМ РАЗМЕР ИЗ MANIFEST
+                var size = audioStream.Size.Bytes;
                 sw.Stop();
-                Log($"✅ [{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}, {audioStream.Bitrate}, {size / 1024 / 1024}MB)");
+                NotifyStatus($"[{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}, {audioStream.Bitrate}, {size / 1024 / 1024}MB)");
 
-                CacheStreamUrl(videoId, url, size); // ✅ КЭШИРУЕМ РАЗМЕР
+                CacheStreamUrl(videoId, url, size);
                 track.StreamUrl = url;
                 return (url, size);
             }
 
-            LogError($"[{videoId}] No audio streams found");
+            NotifyError($"[{videoId}] No audio streams found");
             return null;
         }
         catch (Exception ex)
         {
-            LogError($"[{videoId}] Error: {ex.Message}");
+            NotifyError($"[{videoId}] Error: {ex.Message}");
             return null;
         }
     }
@@ -115,14 +112,13 @@ public class YoutubeProvider
 
     #region ========== Cache ==========
 
-
     private bool TryGetFromCache(string videoId, out string? url, out long size)
     {
         if (_streamCache.TryGetValue(videoId, out var cached))
         {
             if (DateTime.UtcNow - cached.Obtained < _streamCacheLifetime)
             {
-                Log($"  ✅ Cache hit");
+                NotifyStatus($"  Cache hit");
                 url = cached.Url;
                 size = cached.Size;
                 return true;
@@ -197,7 +193,7 @@ public class YoutubeProvider
         }
         catch (Exception ex)
         {
-            Log($"GetTrackByUrlAsync error: {ex.Message}");
+            NotifyError($"GetTrackByUrlAsync error: {ex.Message}");
             return null;
         }
     }
@@ -212,7 +208,6 @@ public class YoutubeProvider
         {
             var results = new List<TrackInfo>();
 
-            // Используем GetVideosAsync вместо GetResultsAsync чтобы избежать каналов
             await foreach (var video in _youtube.Search.GetVideosAsync(query))
             {
                 if (results.Count >= maxResults) break;
@@ -220,12 +215,12 @@ public class YoutubeProvider
             }
 
             sw.Stop();
-            Log($"Search '{query}': {results.Count} results in {sw.ElapsedMilliseconds}ms");
+            NotifyStatus($"Search '{query}': {results.Count} results in {sw.ElapsedMilliseconds}ms");
             return results;
         }
         catch (Exception ex)
         {
-            Log($"SearchAsync error: {ex.Message}");
+            NotifyError($"SearchAsync error: {ex.Message}");
             return [];
         }
     }
@@ -246,7 +241,7 @@ public class YoutubeProvider
         }
         catch (Exception ex)
         {
-            Log($"GetPlaylistAsync error: {ex.Message}");
+            NotifyError($"GetPlaylistAsync error: {ex.Message}");
             return null;
         }
     }
@@ -291,7 +286,6 @@ public class YoutubeProvider
 
             var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, ct);
 
-            // Для скачивания берём лучшее качество (webm/opus OK - не стримим)
             var stream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
             if (stream == null) return null;
 
@@ -304,7 +298,7 @@ public class YoutubeProvider
         }
         catch (Exception ex)
         {
-            Log($"Download error: {ex.Message}");
+            NotifyError($"Download error: {ex.Message}");
             return null;
         }
     }
@@ -362,15 +356,15 @@ public class YoutubeProvider
         return sanitized.Length > 200 ? sanitized[..200] : sanitized;
     }
 
-    private void Log(string message)
+    private void NotifyStatus(string message)
     {
-        Debug.WriteLine($"[YoutubeProvider] {message}");
+        Log.Info(message); // Теперь Log указывает на твой Logger
         OnStatusChanged?.Invoke(message);
     }
 
-    private void LogError(string message)
+    private void NotifyError(string message)
     {
-        Debug.WriteLine($"[YoutubeProvider] ❌ {message}");
+        Log.Error(message); // Теперь Log указывает на твой Logger
         OnError?.Invoke(message);
     }
 

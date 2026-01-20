@@ -137,7 +137,7 @@ public class AudioEngine : ViewModelBase, IDisposable
             : (int)Math.Round(savedVolume);
 
         _volumePercent = Math.Clamp(_volumePercent, 0, 500);
-        Log($"Loaded Volume: {_volumePercent} (Raw saved: {savedVolume})");
+        Log.Info($"Loaded Volume: {_volumePercent} (Raw saved: {savedVolume})");
 
         Core.Initialize();
 
@@ -158,7 +158,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
         _ = VolumeSaveLoopAsync();
 
-        Log($"[AudioEngine] Initialized. Ready.");
+        Log.Info($"Initialized. Ready.");
     }
 
     private void InitializePlayer()
@@ -202,13 +202,13 @@ public class AudioEngine : ViewModelBase, IDisposable
         {
             _volumeSavePending = false;
             _library.Save();
-            Log("Volume saved to disk.");
+            Log.Info("Volume saved to disk.");
         }
     }
 
     public void UpdateAudioSettings()
     {
-        Log("Updating audio settings (MaxVol/Gain)...");
+        Log.Info("Updating audio settings (MaxVol/Gain)...");
         SafeInvoke(() => OnMaxVolumeChanged?.Invoke(_library.Data.MaxVolumeLimit));
         Task.Run(ApplyVolumeImmediate);
     }
@@ -229,11 +229,11 @@ public class AudioEngine : ViewModelBase, IDisposable
 
             _player.Volume = finalVolume;
 
-            Log($"[Vol] Base: {_volumePercent}%, Gain: {dbGain}dB, Final VLC: {finalVolume}");
+            Log.Info($"Base: {_volumePercent}%, Gain: {dbGain}dB, Final VLC: {finalVolume}");
         }
         catch (Exception ex)
         {
-            Log($"[Vol] Error: {ex.Message}");
+            Log.Info($"Error: {ex.Message}");
         }
     }
 
@@ -256,7 +256,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     public async Task PlayTrackAsync(TrackInfo track)
     {
         if (track == null || _isDisposed) return;
-        Log($"PlayTrackAsync requested: {track.Title} ({track.Id})");
+        Log.Info($"PlayTrackAsync requested: {track.Title} ({track.Id})");
 
         var oldCts = _cts;
         _cts = new CancellationTokenSource();
@@ -271,9 +271,9 @@ public class AudioEngine : ViewModelBase, IDisposable
 
         SafeInvoke(() => OnTrackChanged?.Invoke(track));
 
-        Log("Waiting for _loadLock...");
+        Log.Info("Waiting for _loadLock...");
         bool lockAcquired = await _loadLock.WaitAsync(500);
-        Log($"_loadLock acquired: {lockAcquired}");
+        Log.Info($"_loadLock acquired: {lockAcquired}");
         try
         {
             await PlayTrackInternalAsync(track, session, _cts.Token);
@@ -311,13 +311,13 @@ public class AudioEngine : ViewModelBase, IDisposable
             // Если размер неизвестен или очень маленький - играем напрямую
             if (size <= 0)
             {
-                Log($"Playing direct URL (size unknown): {url}");
+                Log.Info($"Playing direct URL (size unknown): {url}");
                 var media = new Media(_libVLC, url, FromType.FromLocation);
                 StartPlayback(media, null, track, session);
                 return;
             }
 
-            Log($"Starting MemoryFirst stream. Size: {size / 1024}KB");
+            Log.Info($"Starting MemoryFirst stream. Size: {size / 1024}KB");
             var stream = new MemoryFirstCachingStream(track.Id, url, size, _streamHttpClient, _cacheManager);
 
             int prebuffer = size > 20 * 1024 * 1024 ? 64 * 1024 : 128 * 1024;
@@ -334,12 +334,12 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
         catch (OperationCanceledException)
         {
-            Log("Playback cancelled");
+            Log.Info("Playback cancelled");
             _isPlayingOrBuffering = false;
         }
         catch (Exception ex)
         {
-            Log($"[Audio] Error in PlayTrackInternal: {ex.Message}");
+            Log.Info($"Error in PlayTrackInternal: {ex.Message}");
             SafeInvoke(() => OnError?.Invoke(ex.Message));
             IsLoading = false;
             _isPlayingOrBuffering = false;
@@ -348,7 +348,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     private void StartPlayback(Media media, MemoryFirstCachingStream? stream, TrackInfo track, int session)
     {
-        Log("StartPlayback called. Swapping media...");
+        Log.Info("StartPlayback called. Swapping media...");
         var oldMedia = _currentMedia;
         var oldStream = _currentStream;
 
@@ -369,7 +369,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         ApplyVolumeImmediate();
 
         var res = _player.Play();
-        Log($"_player.Play() result: {res}");
+        Log.Info($"_player.Play() result: {res}");
 
         AddToHistory(track);
     }
@@ -381,7 +381,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         {
             if (_player.State != VLCState.Stopped)
             {
-                Log("QuickStopPlayback: Stopping VLC...");
+                Log.Info("QuickStopPlayback: Stopping VLC...");
                 _player.Stop();
             }
         }
@@ -407,8 +407,8 @@ public class AudioEngine : ViewModelBase, IDisposable
     {
         if (_isDisposed || _player == null) return;
 
-        Log($"[CMD] SetPlaybackStateAsync: {(shouldPlay ? "PLAY" : "PAUSE")} requested.");
-        Log($"[CMD] Pre-Lock State -> VLC: {VlcStateString}, IsPlaying: {IsPlaying}");
+        Log.Info($"SetPlaybackStateAsync: {(shouldPlay ? "PLAY" : "PAUSE")} requested.");
+        Log.Info($"Pre-Lock State -> VLC: {VlcStateString}, IsPlaying: {IsPlaying}");
 
         await _commandLock.WaitAsync();
         try
@@ -416,37 +416,37 @@ public class AudioEngine : ViewModelBase, IDisposable
             await Task.Run(() =>
             {
                 var currentState = _player.State;
-                Log($"[CMD] Inside Lock. Current VLC State: {currentState}");
+                Log.Info($"Inside Lock. Current VLC State: {currentState}");
 
                 if (shouldPlay)
                 {
                     // Хотим ИГРАТЬ
                     if (currentState == VLCState.Playing)
                     {
-                        Log("[CMD] Already playing. Doing nothing.");
+                        Log.Info("Already playing. Doing nothing.");
                     }
                     else if (currentState == VLCState.Paused)
                     {
-                        Log("[CMD] State is Paused. Calling SetPause(false)...");
+                        Log.Info("State is Paused. Calling SetPause(false)...");
                         _player.SetPause(false);
                     }
                     else if (currentState == VLCState.Stopped || currentState == VLCState.Ended || currentState == VLCState.Error)
                     {
-                        Log($"[CMD] State is {currentState}. Needs restart or full Play().");
+                        Log.Info($"State is {currentState}. Needs restart or full Play().");
                         if (CurrentTrack != null)
                         {
-                            Log("[CMD] Restarting track via PlayTrackAsync...");
+                            Log.Info("Restarting track via PlayTrackAsync...");
                             _ = PlayTrackAsync(CurrentTrack);
                         }
                         else
                         {
-                            Log("[CMD] Calling _player.Play() fallback...");
+                            Log.Info("Calling _player.Play() fallback...");
                             _player.Play();
                         }
                     }
                     else
                     {
-                        Log($"[CMD] State is {currentState} (Buffering/Opening). Calling Play() to be safe.");
+                        Log.Info($"State is {currentState} (Buffering/Opening). Calling Play() to be safe.");
                         _player.Play();
                     }
                 }
@@ -455,24 +455,24 @@ public class AudioEngine : ViewModelBase, IDisposable
                     // Хотим ПАУЗУ
                     if (currentState == VLCState.Playing || currentState == VLCState.Buffering || currentState == VLCState.Opening)
                     {
-                        Log("[CMD] Calling SetPause(true)...");
+                        Log.Info("Calling SetPause(true)...");
                         _player.Pause();
                     }
                     else
                     {
-                        Log($"[CMD] Already not playing ({currentState}). Doing nothing.");
+                        Log.Info($"Already not playing ({currentState}). Doing nothing.");
                     }
                 }
             });
         }
         catch (Exception ex)
         {
-            Log($"[CMD] SetState error: {ex.Message}");
+            Log.Info($"SetState error: {ex.Message}");
         }
         finally
         {
             _commandLock.Release();
-            Log($"[CMD] SetPlaybackStateAsync FINISHED. Post-State: {VlcStateString}");
+            Log.Info($"SetPlaybackStateAsync FINISHED. Post-State: {VlcStateString}");
         }
     }
 
@@ -480,7 +480,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     {
         if (_player == null || !_isPlayerReady || _isDisposed) return;
 
-        Log($"[Seek] To {position}");
+        Log.Info($"To {position}");
 
         await _commandLock.WaitAsync();
         try
@@ -493,7 +493,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            Log($"[Seek] Error: {ex.Message}");
+            Log.Info($"Error: {ex.Message}");
         }
         finally
         {
@@ -503,7 +503,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     public void Stop()
     {
-        Log("Stop requested.");
+        Log.Info("Stop requested.");
         Interlocked.Increment(ref _session);
         _cts?.Cancel();
 
@@ -520,7 +520,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     private void OnVlcPlaying(object? sender, EventArgs e)
     {
-        Log("[VLC Event] Playing");
+        Log.Info("Playing");
         if (_isDisposed) return;
         _isPlayerReady = true;
         IsLoading = false;
@@ -536,18 +536,18 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     private void OnVlcPaused(object? sender, EventArgs e)
     {
-        Log("[VLC Event] Paused");
+        Log.Info("Paused");
     }
 
     private void OnVlcStopped(object? sender, EventArgs e)
     {
-        Log("[VLC Event] Stopped");
+        Log.Info("Stopped");
         _isPlayerReady = false;
     }
 
     private void OnVlcEndReached(object? sender, EventArgs e)
     {
-        Log("[VLC Event] EndReached");
+        Log.Info("EndReached");
         if (_isDisposed) return;
         _ = Task.Run(async () =>
         {
@@ -558,7 +558,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     private void OnVlcError(object? sender, EventArgs e)
     {
-        Log("[VLC Event] ERROR");
+        Log.Info("ERROR");
         SafeInvoke(() => OnError?.Invoke("VLC Error"));
         IsLoading = false;
     }
@@ -566,7 +566,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcBuffering(object? sender, MediaPlayerBufferingEventArgs e)
     {
         // Слишком много спама, если логировать каждое изменение буфера
-        // Log($"[VLC Event] Buffering {e.NewCache}%");
+        // Log.Info($"Buffering {e.NewCache}%");
     }
 
     private void OnVlcTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
@@ -684,11 +684,6 @@ public class AudioEngine : ViewModelBase, IDisposable
     #endregion
 
     private static void SafeInvoke(Action action) { try { action(); } catch { } }
-
-    private static void Log(string message)
-    {
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [AudioEngine] {message}");
-    }
 
     public void Dispose()
     {

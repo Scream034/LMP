@@ -1,6 +1,5 @@
 using Avalonia.Platform;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 
@@ -30,7 +29,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
         {
             if (_currentLanguage != value && AvailableLanguages.Any(l => l.Code == value))
             {
-                Debug.WriteLine($"[Localization] Changing language: {_currentLanguage} → {value}");
+                Log.Info($"Changing language: {_currentLanguage} → {value}");
                 _currentLanguage = value;
                 LoadLanguage(value);
 
@@ -45,7 +44,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
     {
         // Загружаем английский как fallback
         LoadLanguage("en");
-        Debug.WriteLine("[Localization] Service created with default language: en");
+        Log.Info("Service created with default language: en");
     }
 
     /// <summary>
@@ -62,7 +61,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
             AvailableLanguages.Any(l => l.Code == savedLanguageCode))
         {
             langToUse = savedLanguageCode;
-            Debug.WriteLine($"[Localization] Using saved language: {langToUse}");
+            Log.Info($"Using saved language: {langToUse}");
         }
         // 2. Fallback: системная локаль
         else
@@ -71,11 +70,11 @@ public sealed class LocalizationService : INotifyPropertyChanged
             if (AvailableLanguages.Any(l => l.Code == sysLang))
             {
                 langToUse = sysLang;
-                Debug.WriteLine($"[Localization] Using system language: {langToUse}");
+                Log.Info($"Using system language: {langToUse}");
             }
             else
             {
-                Debug.WriteLine($"[Localization] System language '{sysLang}' not supported, using: en");
+                Log.Info($"System language '{sysLang}' not supported, using: en");
             }
         }
 
@@ -96,17 +95,17 @@ public sealed class LocalizationService : INotifyPropertyChanged
                 var json = reader.ReadToEnd();
                 _resources = JsonSerializer.Deserialize<Dictionary<string, string>>(json)
                              ?? new Dictionary<string, string>();
-                Debug.WriteLine($"[Localization] Loaded {langCode}.json ({_resources.Count} keys)");
+                Log.Info($"Loaded {langCode}.json ({_resources.Count} keys)");
             }
             else
             {
-                Debug.WriteLine($"[Localization] File not found: {uri}");
+                Log.Info($"File not found: {uri}");
                 if (langCode != "en") LoadLanguage("en");
             }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Localization] Error loading '{langCode}': {ex.Message}");
+            Log.Info($"Error loading '{langCode}': {ex.Message}");
             if (langCode != "en") LoadLanguage("en");
         }
     }
@@ -121,7 +120,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
             if (_resources.TryGetValue(key, out var value))
                 return value;
 
-            Debug.WriteLine($"[Localization] Missing key: {key}");
+            Log.Info($"Missing key: {key}");
             return $"[{key}]";
         }
     }

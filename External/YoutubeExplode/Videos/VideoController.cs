@@ -87,7 +87,7 @@ internal class VideoController(HttpClient http)
         CancellationToken cancellationToken = default
     )
     {
-        System.Diagnostics.Debug.WriteLine($"[YTE-HTTP] GetPlayerResponse START: {videoId}");
+        Log.Info($"GetPlayerResponse START: {videoId}");
 
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
@@ -135,9 +135,9 @@ internal class VideoController(HttpClient http)
             "com.google.android.youtube/20.10.38 (Linux; U; ANDROID 11) gzip"
         );
 
-        System.Diagnostics.Debug.WriteLine($"[YTE-HTTP] Requesting: {request.RequestUri?.AbsoluteUri}");
+        Log.Info($"Requesting: {request.RequestUri?.AbsoluteUri}");
         using var response = await Http.SendAsync(request, cancellationToken);
-        System.Diagnostics.Debug.WriteLine($"[YTE-HTTP] Response: {response.StatusCode}");
+        Log.Info($"Response: {response.StatusCode}");
         response.EnsureSuccessStatusCode();
 
         var playerResponse = PlayerResponse.Parse(

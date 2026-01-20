@@ -174,7 +174,7 @@ public class SearchClient(HttpClient http)
             {
                 if (searchFilter is not SearchFilter.None and not SearchFilter.Channel)
                 {
-                    Debug.WriteLine("[YTE] Skipping channel in search results");
+                    Log.Info("Skipping channel in search results");
                     break;
                 }
 

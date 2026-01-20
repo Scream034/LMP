@@ -3,7 +3,6 @@ using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.Services;
 using MyLiteMusicPlayer.ViewModels;
-using System.Diagnostics;
 
 namespace MyLiteMusicPlayer;
 
@@ -19,7 +18,10 @@ class Program
 
         try
         {
-            Debug.WriteLine("[LIFECYCLE] LiteMusicPlayer starting...!");
+            Console.WriteLine("Logger initializing...");
+            Log.Initialize();
+
+            Log.Info("LiteMusicPlayer starting...!");
 
             var services = new ServiceCollection();
             ConfigureServices(services);
@@ -29,9 +31,7 @@ class Program
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[CRITICAL] Global crash: {ex.Message}\n{ex.StackTrace}");
-            string logMsg = $"[CRITICAL] Global crash: {ex.Message}\n{ex.StackTrace}";
-            System.IO.File.WriteAllText("crash.txt", logMsg);
+            Log.Fatal($"Global crash: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -44,7 +44,7 @@ class Program
 
     private static void ConfigureServices(IServiceCollection services)
     {
-        Debug.WriteLine("[DI] Configuring services...");
+        Log.Info("Configuring services...");
 
         // --- Core Services ---
         services.AddSingleton<LibraryService>();
@@ -72,6 +72,6 @@ class Program
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<PlayerBarViewModel>();
 
-        Debug.WriteLine("[DI] Services registered successfully.");
+        Log.Info("Services registered successfully.");
     }
 }

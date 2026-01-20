@@ -149,7 +149,7 @@ public sealed class MemoryFirstCachingStream : Stream
         _diskWriterTask = Task.Run(DiskWriterLoopAsync);
 
         long cachedKB = _diskRanges.DownloadedBytes / 1024;
-        Debug.WriteLine($"[MemoryFirst] Opened {trackId}, size: {contentLength / 1024 / 1024}MB, " +
+        Log.Info($"Opened {trackId}, size: {contentLength / 1024 / 1024}MB, " +
                         $"disk cache: {cachedKB}KB, large: {_isLargeFile}, block: {_effectiveBlockSize / 1024}KB");
     }
 
@@ -170,7 +170,7 @@ public sealed class MemoryFirstCachingStream : Stream
         // Проверяем disk cache
         if (_diskRanges.IsRangeComplete(0, minBytes))
         {
-            Debug.WriteLine($"[MemoryFirst] PreBuffer: disk cache hit ({_diskRanges.DownloadedBytes / 1024}KB)");
+            Log.Info($"PreBuffer: disk cache hit ({_diskRanges.DownloadedBytes / 1024}KB)");
 
             if (!IsFullyDownloaded)
             {
@@ -187,7 +187,7 @@ public sealed class MemoryFirstCachingStream : Stream
         StartContinuousDownload(0);
 
         var sw = Stopwatch.StartNew();
-        Debug.WriteLine($"[MemoryFirst] PreBuffer: waiting for {minBytes / 1024}KB...");
+        Log.Info($"PreBuffer: waiting for {minBytes / 1024}KB...");
 
         try
         {
@@ -195,7 +195,7 @@ public sealed class MemoryFirstCachingStream : Stream
             {
                 if (HasDataInRange(0, minBytes))
                 {
-                    Debug.WriteLine($"[MemoryFirst] PreBuffer OK in {sw.ElapsedMilliseconds}ms");
+                    Log.Info($"PreBuffer OK in {sw.ElapsedMilliseconds}ms");
                     return true;
                 }
 
@@ -209,7 +209,7 @@ public sealed class MemoryFirstCachingStream : Stream
                         ? downloaded >= _effectiveBlockSize || ramBlocks >= 1
                         : downloaded >= _effectiveBlockSize * 2 || ramBlocks >= 2;
 
-                    Debug.WriteLine($"[MemoryFirst] PreBuffer timeout ({sw.ElapsedMilliseconds}ms), " +
+                    Log.Info($"PreBuffer timeout ({sw.ElapsedMilliseconds}ms), " +
                                     $"downloaded: {downloaded / 1024}KB, blocks: {ramBlocks}, " +
                                     $"starting anyway: {hasEnough}");
                     return hasEnough;
@@ -313,7 +313,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (waitAttempts >= maxWaitAttempts && totalRead == 0)
         {
-            Debug.WriteLine($"[MemoryFirst] READ TIMEOUT at {pos / 1024}KB");
+            Log.Info($"READ TIMEOUT at {pos / 1024}KB");
         }
 
         Interlocked.Add(ref _position, totalRead);
@@ -471,7 +471,7 @@ public sealed class MemoryFirstCachingStream : Stream
                 {
                     // ДЛЯ БОЛЬШИХ ФАЙЛОВ - СРАЗУ ПАРАЛЛЕЛЬНЫЙ CHUNKED
                     // Не тратим время на throttling detection
-                    Debug.WriteLine($"[MemoryFirst] Large file detected, using parallel chunked download");
+                    Log.Info($"Large file detected, using parallel chunked download");
                     await ParallelChunkedDownloadAsync(startPos, myGeneration, ct);
                 }
                 else
@@ -497,7 +497,7 @@ public sealed class MemoryFirstCachingStream : Stream
     private async Task ParallelChunkedDownloadAsync(long startPosition, int generation, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        Debug.WriteLine($"[MemoryFirst] PARALLEL CHUNKED download starting from {startPosition / 1024}KB");
+        Log.Info($"PARALLEL CHUNKED download starting from {startPosition / 1024}KB");
 
         long position = startPosition;
         var activeTasks = new List<Task>();
@@ -566,7 +566,7 @@ public sealed class MemoryFirstCachingStream : Stream
                             double elapsed = sw.Elapsed.TotalSeconds + 0.001;
                             double speed = current / 1024.0 / elapsed;
                             double progress = (double)(chunkStart + downloaded) / _contentLength * 100;
-                            Debug.WriteLine($"[MemoryFirst] {current / 1024}KB @ {speed:F0}KB/s ({progress:F1}%)");
+                            Log.Info($"{current / 1024}KB @ {speed:F0}KB/s ({progress:F1}%)");
                             Interlocked.Exchange(ref lastLogBytes, current);
                         }
                     }
@@ -590,7 +590,7 @@ public sealed class MemoryFirstCachingStream : Stream
         {
             double elapsed = sw.Elapsed.TotalSeconds + 0.001;
             double speed = totalDownloaded / 1024.0 / elapsed;
-            Debug.WriteLine($"[MemoryFirst] Parallel download done: {totalDownloaded / 1024}KB ({speed:F0}KB/s)");
+            Log.Info($"Parallel download done: {totalDownloaded / 1024}KB ({speed:F0}KB/s)");
         }
     }
 
@@ -723,7 +723,7 @@ public sealed class MemoryFirstCachingStream : Stream
         {
             try
             {
-                Debug.WriteLine($"[MemoryFirst] Download starting from {startPosition / 1024}KB");
+                Log.Info($"Download starting from {startPosition / 1024}KB");
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, _url);
                 request.Headers.Range = new RangeHeaderValue(startPosition + bytesDownloaded, null);
@@ -797,7 +797,7 @@ public sealed class MemoryFirstCachingStream : Stream
                         {
                             double elapsed = _downloadStopwatch.Elapsed.TotalSeconds + 0.001;
                             double speed = bytesDownloaded / 1024.0 / elapsed;
-                            Debug.WriteLine($"[MemoryFirst] Downloaded {bytesDownloaded / 1024}KB @ {speed:F0}KB/s");
+                            Log.Info($"Downloaded {bytesDownloaded / 1024}KB @ {speed:F0}KB/s");
                             lastLogBytes = bytesDownloaded;
                         }
 
@@ -815,20 +815,20 @@ public sealed class MemoryFirstCachingStream : Stream
                 {
                     double elapsed = _downloadStopwatch.Elapsed.TotalSeconds + 0.001;
                     double speed = bytesDownloaded / 1024.0 / elapsed;
-                    Debug.WriteLine($"[MemoryFirst] Download complete: {bytesDownloaded / 1024}KB ({speed:F0}KB/s)");
+                    Log.Info($"Download complete: {bytesDownloaded / 1024}KB ({speed:F0}KB/s)");
                 }
                 return;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 retryCount++;
-                Debug.WriteLine($"[MemoryFirst] Request timeout, retry {retryCount}/{maxRetries}");
+                Log.Info($"Request timeout, retry {retryCount}/{maxRetries}");
                 await Task.Delay(300 * retryCount, ct);
             }
             catch (HttpRequestException ex)
             {
                 retryCount++;
-                Debug.WriteLine($"[MemoryFirst] HTTP error: {ex.Message}, retry {retryCount}/{maxRetries}");
+                Log.Info($"HTTP error: {ex.Message}, retry {retryCount}/{maxRetries}");
                 await Task.Delay(500 * retryCount, ct);
             }
         }
@@ -948,7 +948,7 @@ public sealed class MemoryFirstCachingStream : Stream
         if (_disposed) return;
         _disposing = true;
 
-        Debug.WriteLine($"[MemoryFirst] Disposing ({DownloadProgress:F1}% buffered)");
+        Log.Info($"Disposing ({DownloadProgress:F1}% buffered)");
 
         if (disposing)
         {

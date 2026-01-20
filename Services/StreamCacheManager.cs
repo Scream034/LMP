@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -84,7 +83,7 @@ public class StreamCacheManager : IDisposable
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[CacheManager] Failed to load metadata: {ex.Message}");
+                Log.Info($"Failed to load metadata: {ex.Message}");
             }
         }
 
@@ -123,7 +122,7 @@ public class StreamCacheManager : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[CacheManager] Failed to save metadata: {ex.Message}");
+            Log.Info($"Failed to save metadata: {ex.Message}");
         }
     }
 
@@ -212,7 +211,7 @@ public class StreamCacheManager : IDisposable
             if (totalSize <= _maxCacheSizeBytes)
                 return;
 
-            Debug.WriteLine($"[CacheManager] Cache size {totalSize / 1024 / 1024}MB exceeds limit, cleaning...");
+            Log.Info($"Cache size {totalSize / 1024 / 1024}MB exceeds limit, cleaning...");
 
             // Сортируем по времени последнего доступа
             var metaFiles = files
@@ -238,12 +237,12 @@ public class StreamCacheManager : IDisposable
                     item.CacheFile.Delete();
                     if (item.MetaFile.Exists) item.MetaFile.Delete();
                     deleted += size;
-                    Debug.WriteLine($"[CacheManager] Deleted {item.CacheFile.Name}");
+                    Log.Info($"Deleted {item.CacheFile.Name}");
                 }
                 catch { }
             }
 
-            Debug.WriteLine($"[CacheManager] Cleaned {deleted / 1024 / 1024}MB");
+            Log.Info($"Cleaned {deleted / 1024 / 1024}MB");
         }
         finally
         {
@@ -301,7 +300,7 @@ public class StreamCacheManager : IDisposable
             {
                 File.Delete(file);
             }
-            Debug.WriteLine("[CacheManager] All cache cleared");
+            Log.Info("All cache cleared");
         }
         catch { }
     }

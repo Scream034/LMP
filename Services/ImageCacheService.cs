@@ -1,6 +1,5 @@
 // Services/ImageCacheService.cs
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media.Imaging;
@@ -174,7 +173,7 @@ public class ImageCacheService : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[ImageCache] Download failed: {ex.Message}");
+            Log.Info($"Download failed: {ex.Message}");
             return null;
         }
         finally
@@ -224,7 +223,7 @@ public class ImageCacheService : IDisposable
                 total += new FileInfo(file).Length;
             }
             Interlocked.Exchange(ref _currentDiskCacheBytes, total);
-            Debug.WriteLine($"[ImageCache] Disk cache size: {total / 1024 / 1024}MB");
+            Log.Info($"Disk cache size: {total / 1024 / 1024}MB");
         }
         catch { }
     }
@@ -233,7 +232,7 @@ public class ImageCacheService : IDisposable
     {
         try
         {
-            Debug.WriteLine($"[ImageCache] Cleaning up disk cache...");
+            Log.Info($"Cleaning up disk cache...");
             
             var files = Directory.GetFiles(_cacheFolder)
                 .Select(f => new FileInfo(f))
@@ -258,7 +257,7 @@ public class ImageCacheService : IDisposable
             }
 
             Interlocked.Add(ref _currentDiskCacheBytes, -deleted);
-            Debug.WriteLine($"[ImageCache] Deleted {deleted / 1024 / 1024}MB");
+            Log.Info($"Deleted {deleted / 1024 / 1024}MB");
         }
         catch { }
     }
@@ -286,7 +285,7 @@ public class ImageCacheService : IDisposable
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
-        Debug.WriteLine($"[ImageCache] Memory cache cleared");
+        Log.Info($"Memory cache cleared");
     }
 
     public void ClearAllCache()
@@ -303,7 +302,7 @@ public class ImageCacheService : IDisposable
         }
         catch { }
 
-        Debug.WriteLine($"[ImageCache] All cache cleared");
+        Log.Info($"All cache cleared");
     }
 
     public (int MemoryItems, long DiskSizeMb) GetStats()

@@ -1,4 +1,3 @@
-using System.Net;
 using System.Runtime.CompilerServices;
 using YoutubeExplode.Bridge;
 using YoutubeExplode.Bridge.Cipher;
@@ -63,7 +62,7 @@ public class StreamClient(HttpClient http)
             // КРИТИЧНО: Если content-length = 0, это битый stream — пропускаем
             if (contentLength == 0)
             {
-                System.Diagnostics.Debug.WriteLine($"[YTE] Skipping stream {itag} - no content length");
+                Log.Info($"Skipping stream {itag} - no content length");
                 continue;
             }
 
@@ -146,7 +145,7 @@ public class StreamClient(HttpClient http)
         CancellationToken cancellationToken = default
     )
     {
-        System.Diagnostics.Debug.WriteLine($"[YTE] GetStreamInfosAsync for player response: {videoId}");
+        Log.Info($"GetStreamInfosAsync for player response: {videoId}");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         // Video is pay-to-play
@@ -168,12 +167,12 @@ public class StreamClient(HttpClient http)
 
         var streamInfos = new List<IStreamInfo>();
 
-        System.Diagnostics.Debug.WriteLine($"[YTE] Extracting streams from player response... ({sw.ElapsedMilliseconds}ms)");
+        Log.Info($"Extracting streams from player response... ({sw.ElapsedMilliseconds}ms)");
         await foreach (var stream in GetStreamInfosAsync(playerResponse.Streams, cancellationToken))
         {
             streamInfos.Add(stream);
         }
-        System.Diagnostics.Debug.WriteLine($"[YTE] Got {streamInfos.Count} streams from player ({sw.ElapsedMilliseconds}ms)");
+        Log.Info($"Got {streamInfos.Count} streams from player ({sw.ElapsedMilliseconds}ms)");
 
         // ОПТИМИЗАЦИЯ: Пропускаем DASH manifest для audio-only запросов
         // DASH обычно содержит те же audio streams, но требует дополнительный HTTP запрос
@@ -183,7 +182,7 @@ public class StreamClient(HttpClient http)
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[YTE] Fetching DASH manifest... ({sw.ElapsedMilliseconds}ms)");
+                Log.Info($"Fetching DASH manifest... ({sw.ElapsedMilliseconds}ms)");
                 var dashManifest = await _controller.GetDashManifestAsync(
                     playerResponse.DashManifestUrl,
                     cancellationToken
@@ -193,7 +192,7 @@ public class StreamClient(HttpClient http)
                 {
                     streamInfos.Add(stream);
                 }
-                System.Diagnostics.Debug.WriteLine($"[YTE] Got {streamInfos.Count} total streams after DASH ({sw.ElapsedMilliseconds}ms)");
+                Log.Info($"Got {streamInfos.Count} total streams after DASH ({sw.ElapsedMilliseconds}ms)");
             }
             catch (HttpRequestException) { }
         }
@@ -206,7 +205,7 @@ public class StreamClient(HttpClient http)
             );
         }
 
-        System.Diagnostics.Debug.WriteLine($"[YTE] GetStreamInfosAsync DONE: {streamInfos.Count} streams in {sw.ElapsedMilliseconds}ms");
+        Log.Info($"GetStreamInfosAsync DONE: {streamInfos.Count} streams in {sw.ElapsedMilliseconds}ms");
         return streamInfos;
     }
 
@@ -216,23 +215,23 @@ public class StreamClient(HttpClient http)
     )
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        System.Diagnostics.Debug.WriteLine($"[YTE] GetStreamInfosAsync START: {videoId}");
+        Log.Info($"GetStreamInfosAsync START: {videoId}");
 
         try
         {
-            System.Diagnostics.Debug.WriteLine($"[YTE] Getting player response... ({sw.ElapsedMilliseconds}ms)");
+            Log.Info($"Getting player response... ({sw.ElapsedMilliseconds}ms)");
             var playerResponse = await _controller.GetPlayerResponseAsync(
                 videoId,
                 cancellationToken
             );
-            System.Diagnostics.Debug.WriteLine($"[YTE] Player response received ({sw.ElapsedMilliseconds}ms)");
+            Log.Info($"Player response received ({sw.ElapsedMilliseconds}ms)");
 
             return await GetStreamInfosAsync(videoId, playerResponse, cancellationToken);
         }
         catch (VideoUnplayableException ex)
             when (ex is not VideoUnavailableException)
         {
-            System.Diagnostics.Debug.WriteLine($"[YTE] Retrying with cipher... ({sw.ElapsedMilliseconds}ms)");
+            Log.Info($"Retrying with cipher... ({sw.ElapsedMilliseconds}ms)");
             var cipherManifest = await ResolveCipherManifestAsync(cancellationToken);
 
             var playerResponse = await _controller.GetPlayerResponseAsync(
@@ -254,7 +253,7 @@ public class StreamClient(HttpClient http)
     )
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        System.Diagnostics.Debug.WriteLine($"[YTE] GetManifestAsync START: {videoId}");
+        Log.Info($"GetManifestAsync START: {videoId}");
 
         // ОПТИМИЗАЦИЯ: Уменьшаем retries с 5 до 2
         for (var retriesRemaining = 2; ; retriesRemaining--)
@@ -262,13 +261,13 @@ public class StreamClient(HttpClient http)
             try
             {
                 var streams = await GetStreamInfosAsync(videoId, cancellationToken);
-                System.Diagnostics.Debug.WriteLine($"[YTE] GetManifestAsync DONE in {sw.ElapsedMilliseconds}ms");
+                Log.Info($"GetManifestAsync DONE in {sw.ElapsedMilliseconds}ms");
                 return new StreamManifest(streams);
             }
             catch (Exception ex)
                 when (ex is HttpRequestException or IOException && retriesRemaining > 0)
             {
-                System.Diagnostics.Debug.WriteLine($"[YTE] Retry {retriesRemaining} after error: {ex.Message}");
+                Log.Info($"Retry {retriesRemaining} after error: {ex.Message}");
             }
         }
     }

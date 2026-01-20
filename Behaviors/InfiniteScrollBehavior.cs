@@ -2,7 +2,6 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Xaml.Interactivity;
-using System.Diagnostics;
 using System.Windows.Input;
 
 namespace MyLiteMusicPlayer.Behaviors;
@@ -70,7 +69,7 @@ public class InfiniteScrollBehavior : Behavior<ScrollViewer>
 
         if (distanceToEnd <= Threshold && Command.CanExecute(null))
         {
-            Debug.WriteLine($"[Scroll] Loading more (distance: {distanceToEnd:F0}px)");
+            Log.Info($"Loading more (distance: {distanceToEnd:F0}px)");
             ExecuteWithGuard();
         }
     }

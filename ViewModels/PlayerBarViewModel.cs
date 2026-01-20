@@ -1,9 +1,5 @@
-using System;
-using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Avalonia.Threading;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
@@ -110,7 +106,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         RepeatMode = _audio.RepeatMode;
 
         UpdateVolumeBars();
-        Log($"ViewModel initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
+        Log.Info($"ViewModel initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
         // ---------------- ПОДПИСКИ ----------------
 
@@ -175,7 +171,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         // === LOGGED PLAY/PAUSE ===
         PlayPauseCommand = ReactiveCommand.Create(() =>
         {
-            Log($"[UI] PlayPause Clicked. VM State: Play={IsPlaying}, Pause={IsPaused}");
+            Log.Info($"PlayPause Clicked. VM State: Play={IsPlaying}, Pause={IsPaused}");
 
             _playPauseCts?.Cancel();
             _playPauseCts = new CancellationTokenSource();
@@ -197,7 +193,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
                 IsPaused = false;
                 wantsToPlay = true;
             }
-            Log($"[UI] Optimistic Update -> IsPlaying={IsPlaying}, sending {wantsToPlay} to engine");
+            Log.Info($"Optimistic Update -> IsPlaying={IsPlaying}, sending {wantsToPlay} to engine");
 
             Task.Run(async () =>
             {
@@ -210,7 +206,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
                     {
                         if (token.IsCancellationRequested) return;
 
-                        Log($"[UI] Executing Command -> SetPlaybackStateAsync({wantsToPlay})");
+                        Log.Info($"Executing Command -> SetPlaybackStateAsync({wantsToPlay})");
                         await _audio.SetPlaybackStateAsync(wantsToPlay);
 
                         // Даем чуть-чуть времени движку на смену статуса
@@ -386,7 +382,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         // Если состояние изменилось - логируем
         if (IsPlaying != enginePlaying || IsPaused != enginePaused)
         {
-            // Debug.WriteLine($"[UI] Sync State: Play={enginePlaying}, Pause={enginePaused}");
+            // Log.Info($"Sync State: Play={enginePlaying}, Pause={enginePaused}");
         }
 
         IsPlaying = enginePlaying;
@@ -424,7 +420,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
         _lastSeekTime = DateTime.UtcNow;
         IsSeekBusy = true;
-        Log($"[UI] Seek End -> {target}s");
+        Log.Info($"Seek End -> {target}s");
 
         await _audio.SeekAsync(TimeSpan.FromSeconds(target));
 
@@ -435,13 +431,8 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     public void OnVolumeChangeComplete()
     {
-        Log($"[UI] Volume Drag End. Saving.");
+        Log.Info($"Volume Drag End. Saving.");
         _audio.SaveVolumeNow();
-    }
-
-    private void Log(string message)
-    {
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [PlayerBarVM] {message}");
     }
 
     public void Dispose()

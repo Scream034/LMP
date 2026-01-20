@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.ViewModels;
 using MyLiteMusicPlayer.Views;
 using MyLiteMusicPlayer.Services;
-using System.Diagnostics;
 using AsyncImageLoader;
 
 namespace MyLiteMusicPlayer;
@@ -19,7 +18,7 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        Debug.WriteLine("[LIFECYCLE] Framework initialization completed.");
+        Log.Info("Framework initialization completed.");
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -34,7 +33,7 @@ public partial class App : Application
                 DataContext = mainWindowVM
             };
 
-            Debug.WriteLine("[UI] Main window created and shown.");
+            Log.Info("Main window created and shown.");
 
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
@@ -44,14 +43,14 @@ public partial class App : Application
             {
                 try
                 {
-                    Debug.WriteLine("[SERVICE] Starting background services initialization...");
+                    Log.Info("Starting background services initialization...");
                     var youtube = Program.Services.GetRequiredService<YoutubeProvider>();
                     await youtube.InitializeAsync();
-                    Debug.WriteLine("[SERVICE] YouTube provider is ready.");
+                    Log.Info("YouTube provider is ready.");
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ERROR] Background initialization failed: {ex.Message}");
+                    Log.Info($"Background initialization failed: {ex.Message}");
                 }
             });
         }

@@ -73,7 +73,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         var newTracks = await _youtube.SearchAsync(_currentQuery, TotalCount + 50);
         var result = newTracks.Skip(TotalCount).ToList();
 
-        Debug.WriteLine($"[Search] Fetched {result.Count} more in {sw.ElapsedMilliseconds}ms");
+        Log.Info($"Fetched {result.Count} more in {sw.ElapsedMilliseconds}ms");
 
         if (result.Count > 0)
         {
@@ -121,7 +121,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
                 if (cached != null && cached.Count > 0)
                 {
                     tracks = cached;
-                    Debug.WriteLine($"[Search] From cache: {cached.Count}");
+                    Log.Info($"From cache: {cached.Count}");
                 }
                 else
                 {
@@ -148,12 +148,12 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
                 ErrorMessage = L["Search_NoResults"];
             }
 
-            Debug.WriteLine($"[Search] '{_currentQuery}': {tracks.Count} results in {sw.ElapsedMilliseconds}ms");
+            Log.Info($"'{_currentQuery}': {tracks.Count} results in {sw.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
             ErrorMessage = ex.Message;
-            Debug.WriteLine($"[Search] Error: {ex.Message}");
+            Log.Info($"Error: {ex.Message}");
         }
         finally
         {
