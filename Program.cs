@@ -19,7 +19,7 @@ class Program
 
         try
         {
-            Debug.WriteLine("[LIFECYCLE] LiteMusicPlayer starting...");
+            Debug.WriteLine("[LIFECYCLE] LiteMusicPlayer starting...!");
 
             var services = new ServiceCollection();
             ConfigureServices(services);
