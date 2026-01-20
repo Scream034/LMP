@@ -30,6 +30,8 @@ class Program
         catch (Exception ex)
         {
             Debug.WriteLine($"[CRITICAL] Global crash: {ex.Message}\n{ex.StackTrace}");
+            string logMsg = $"[CRITICAL] Global crash: {ex.Message}\n{ex.StackTrace}";
+            System.IO.File.WriteAllText("crash.txt", logMsg);
         }
     }
 
