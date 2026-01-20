@@ -2,11 +2,9 @@ name: Dev Auto Build
 
 on:
   push:
-    # 1. Сборка только из основных веток (main или master)
     branches: 
-      - avalonia
+      - avalonia # Твоя ветка
     
-    # 2. Сборка только если изменились файлы исходного кода
     paths:
       - '**.cs'
       - '**.csproj'
@@ -14,9 +12,8 @@ on:
       - '**.xaml'
       - '**.manifest'
       - '**.xml'
-      # Можно добавить другие расширения, если нужно
 
-  workflow_dispatch: # Кнопка ручного запуска (работает всегда)
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -30,9 +27,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          # По умолчанию checkout берет ту ветку, в которую был push.
-          # Так как мы ограничили триггер ветками main/master выше,
-          # код будет браться именно из них.
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -48,6 +42,7 @@ jobs:
           $ver = "0.0.${{ github.run_number }}"
           echo "Building Version: $ver"
           
+          # Мы собираем проект в папку publish
           dotnet publish MyLiteMusicPlayer.csproj `
             -c Release `
             -r win-x64 `
@@ -59,18 +54,27 @@ jobs:
             -p:FileVersion=$ver `
             -o ./publish
 
-      # 3. Переименовываем EXE
+      # Переименовываем EXE для красоты
       - name: Rename EXE
         run: |
           Rename-Item -Path "./publish/MyLiteMusicPlayer.exe" -NewName "MyLiteMusicPlayer-Dev.exe"
 
-      # 4. Упаковываем в 7z (Максимальное сжатие -mx9)
-      - name: Pack to 7z
+      # Удаляем лишние PDB файлы (отладка), чтобы не мусорить в архиве
+      - name: Cleanup PDBs
         run: |
-          # 7z уже установлен на windows-latest
-          7z a -t7z "./publish/MyLiteMusicPlayer-Build-${{ github.run_number }}.7z" "./publish/MyLiteMusicPlayer-Dev.exe" -mx9
+          if (Test-Path ./publish/*.pdb) { Remove-Item ./publish/*.pdb }
+          if (Test-Path ./publish/YoutubeExplode.xml) { Remove-Item ./publish/YoutubeExplode.xml }
 
-      # 5. Выкладываем ТОЛЬКО .7z архив
+      # Упаковываем ВСЁ содержимое папки publish
+      - name: Pack entire folder to 7z
+        run: |
+          # Переходим в папку publish, чтобы в архиве файлы лежали в корне, а не в папке "publish/"
+          cd publish
+          
+          # "." означает "всё в текущей папке"
+          # -r означает рекурсивно (обязательно захватит папку libvlc)
+          7z a -t7z "../MyLiteMusicPlayer-Build-${{ github.run_number }}.7z" . -mx9 -r
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -78,6 +82,7 @@ jobs:
           name: "Dev Build #${{ github.run_number }}"
           body: |
             Автоматическая сборка из ветки **${{ github.ref_name }}**.
-            Изменения в файлах кода обнаружены.
+            В архиве находится EXE и необходимые библиотеки (libvlc).
+            Распакуйте весь архив перед запуском.
           prerelease: true
-          files: ./publish/*.7z
+          files: ./*.7z
