@@ -129,14 +129,14 @@ public class TrackItemViewModel : ViewModelBase
             onRadio?.Invoke(Track);
         });
 
-        // Предзагрузка при наведении
-        this.WhenAnyValue(x => x.IsHovered)
-            .Where(h => h)
-            .Throttle(TimeSpan.FromMilliseconds(300))
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(__ =>
-            {
-                _ = _audio.PrefetchAsync(Track);
-            });
+        // // Предзагрузка при наведении
+        // this.WhenAnyValue(x => x.IsHovered)
+        //     .Where(h => h)
+        //     .Throttle(TimeSpan.FromMilliseconds(300))
+        //     .ObserveOn(RxApp.MainThreadScheduler)
+        //     .Subscribe(__ =>
+        //     {
+        //         _ = _audio.PrefetchAsync(Track);
+        //     });
     }
 }
