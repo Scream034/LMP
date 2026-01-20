@@ -50,7 +50,7 @@ jobs:
       # Переименовываем файл, добавляя номер билда
       - name: Rename Output
         run: |
-          Rename-Item ./publish/MyLiteMusicPlayer.exe ./publish/MyLiteMusicPlayer-Build-${{ github.run_number }}.exe
+          Rename-Item -Path "./publish/MyLiteMusicPlayer.exe" -NewName "MyLiteMusicPlayer-Build-${{ github.run_number }}.exe"
 
       # Создаем Релиз на GitHub
       - name: Create Release
