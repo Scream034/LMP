@@ -16,7 +16,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private readonly LibVLC _libVLC;
     private MediaPlayer? _player;
     private Media? _currentMedia;
-    
+
     private MemoryFirstCachingStream? _currentStream;
 
     private readonly SemaphoreSlim _playLock = new(1, 1);
@@ -25,12 +25,12 @@ public class AudioEngine : ViewModelBase, IDisposable
     private int _volumePercent;
     private volatile bool _isDisposed;
     private volatile bool _isPlayerReady;
-    
+
     // Prefetch control
     private volatile bool _isPlayingOrBuffering;
     private readonly SemaphoreSlim _apiLock = new(1, 1);
     private DateTime _lastApiCall = DateTime.MinValue;
-    private const int ApiCooldownMs = 500;
+    private const int ApiCooldownMs = 200;
 
     private readonly Queue<TrackInfo> _queue = new();
     private readonly List<TrackInfo> _history = [];
@@ -112,7 +112,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         _youtube = youtube;
         _library = library;
         _cacheManager = new StreamCacheManager();
-        
+
         _streamHttpClient = new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(15),
@@ -124,13 +124,13 @@ public class AudioEngine : ViewModelBase, IDisposable
         {
             Timeout = TimeSpan.FromMinutes(5)
         };
-        
+
         ShuffleEnabled = library.Data.ShuffleEnabled;
         RepeatMode = library.Data.RepeatMode;
 
         float savedVolume = library.Data.Volume;
-        _volumePercent = savedVolume <= 1.0f 
-            ? (int)Math.Round(savedVolume * 100f) 
+        _volumePercent = savedVolume <= 1.0f
+            ? (int)Math.Round(savedVolume * 100f)
             : (int)Math.Round(savedVolume);
         _volumePercent = Math.Clamp(_volumePercent, 0, 200);
 
@@ -173,8 +173,8 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     public void SetVolume(float value)
     {
-        int percent = value <= 1.0f 
-            ? (int)Math.Round(value * 100f) 
+        int percent = value <= 1.0f
+            ? (int)Math.Round(value * 100f)
             : (int)Math.Round(value);
 
         _volumePercent = Math.Clamp(percent, 0, 200);
@@ -223,7 +223,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         var oldCts = _cts;
         _cts = new CancellationTokenSource();
         var session = Interlocked.Increment(ref _session);
-        
+
         try { oldCts?.Cancel(); } catch { }
 
         // UI update сразу
@@ -255,30 +255,35 @@ public class AudioEngine : ViewModelBase, IDisposable
         var sw = Stopwatch.StartNew();
         Debug.WriteLine($"[Audio] #{session} → {track.Title}");
 
-        // Быстрая остановка старого воспроизведения
+        // ✅ БЫСТРАЯ ОСТАНОВКА С DISPOSE
         QuickStopPlayback();
 
         try
         {
-            // Получаем URL
-            string? url = track.StreamUrl;
-            
-            if (string.IsNullOrEmpty(url))
+            // Получаем URL и размер
+            (string Url, long Size)? result = null;
+
+            if (string.IsNullOrEmpty(track.StreamUrl))
             {
-                url = await GetStreamUrlAsync(track, ct);
-                if (string.IsNullOrEmpty(url))
+                result = await GetStreamUrlWithSizeAsync(track, ct);
+                if (!result.HasValue)
                     throw new Exception("Failed to get stream URL");
+            }
+            else
+            {
+                // Если URL уже есть - пробуем получить размер быстро
+                result = (track.StreamUrl, await TryGetContentLengthFastAsync(track.StreamUrl, ct));
             }
 
             if (_session != session || ct.IsCancellationRequested) return;
 
-            // Получаем размер файла
-            long contentLength = await GetContentLengthAsync(url, ct);
-            
+            string url = result.Value.Url;
+            long contentLength = result.Value.Size;
+
             if (contentLength <= 0)
             {
                 // Fallback: direct URL
-                Debug.WriteLine("[Audio] Direct URL playback");
+                Debug.WriteLine("[Audio] Direct URL playback (unknown size)");
                 var media = new Media(_libVLC, url, FromType.FromLocation);
                 StartPlayback(media, null, track, session, sw);
                 return;
@@ -292,20 +297,19 @@ public class AudioEngine : ViewModelBase, IDisposable
                 _streamHttpClient,
                 _cacheManager);
 
-            // Минимальный prebuffer
+            // ✅ МИНИМАЛЬНЫЙ PREBUFFER (64KB достаточно для MP4!)
             Debug.WriteLine("[Audio] Pre-buffering...");
             bool ready = await stream.PreBufferAsync(64 * 1024, ct);
 
             if (_session != session || ct.IsCancellationRequested)
             {
                 stream.Dispose();
-                Debug.WriteLine("[Audio] Session expired");
                 return;
             }
 
             if (!ready)
             {
-                Debug.WriteLine("[Audio] PreBuffer failed, trying anyway...");
+                Debug.WriteLine("[Audio] PreBuffer timeout, starting anyway...");
             }
 
             var streamMedia = new Media(_libVLC, new StreamMediaInput(stream));
@@ -330,10 +334,10 @@ public class AudioEngine : ViewModelBase, IDisposable
         // Dispose старых ресурсов в фоне
         var oldMedia = _currentMedia;
         var oldStream = _currentStream;
-        
+
         _currentMedia = media;
         _currentStream = stream;
-        
+
         // Dispose асинхронно чтобы не блокировать
         if (oldMedia != null || oldStream != null)
         {
@@ -355,7 +359,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         _ = PositionUpdateLoopAsync(session, _cts!.Token);
     }
 
-    private async Task<string?> GetStreamUrlAsync(TrackInfo track, CancellationToken ct)
+    private async Task<(string Url, long Size)?> GetStreamUrlWithSizeAsync(TrackInfo track, CancellationToken ct)
     {
         await _apiLock.WaitAsync(ct);
         try
@@ -367,18 +371,36 @@ public class AudioEngine : ViewModelBase, IDisposable
             }
 
             Debug.WriteLine("[Audio] Fetching stream URL...");
-            
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(8));
-            
-            var url = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
+
+            var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
             _lastApiCall = DateTime.UtcNow;
-            
-            return url;
+
+            return result;
         }
         finally
         {
             _apiLock.Release();
+        }
+    }
+
+    private async Task<long> TryGetContentLengthFastAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2)); // ✅ КОРОТКИЙ TIMEOUT
+
+            using var request = new HttpRequestMessage(HttpMethod.Head, url);
+            using var response = await _streamHttpClient.SendAsync(request, cts.Token);
+
+            return response.Content.Headers.ContentLength ?? -1;
+        }
+        catch
+        {
+            return -1;
         }
     }
 
@@ -388,21 +410,21 @@ public class AudioEngine : ViewModelBase, IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(5));
-            
+
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
             using var response = await _streamHttpClient.SendAsync(request, cts.Token);
-            
+
             if (response.Content.Headers.ContentLength.HasValue)
             {
                 return response.Content.Headers.ContentLength.Value;
             }
-            
+
             // Try range request
             using var rangeRequest = new HttpRequestMessage(HttpMethod.Get, url);
             rangeRequest.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
-            
+
             using var rangeResponse = await _streamHttpClient.SendAsync(rangeRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-            
+
             if (rangeResponse.Content.Headers.ContentRange?.Length.HasValue == true)
             {
                 return rangeResponse.Content.Headers.ContentRange.Length.Value;
@@ -412,7 +434,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         {
             Debug.WriteLine($"[Audio] GetContentLength error: {ex.Message}");
         }
-        
+
         return -1;
     }
 
@@ -432,6 +454,18 @@ public class AudioEngine : ViewModelBase, IDisposable
             }
         }
         catch { }
+
+        // ✅ DISPOSE STREAM СРАЗУ
+        var oldStream = _currentStream;
+        _currentStream = null;
+        if (oldStream != null)
+        {
+            _ = Task.Run(() =>
+            {
+                try { oldStream.Dispose(); } catch { }
+                Debug.WriteLine("[Audio] Old stream disposed");
+            });
+        }
 
         _isPlayerReady = false;
     }
@@ -475,7 +509,7 @@ public class AudioEngine : ViewModelBase, IDisposable
             try
             {
                 if (_isPlayingOrBuffering) return;
-                
+
                 var elapsed = DateTime.UtcNow - _lastApiCall;
                 if (elapsed.TotalMilliseconds < ApiCooldownMs)
                 {
@@ -483,11 +517,14 @@ public class AudioEngine : ViewModelBase, IDisposable
                 }
 
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await _youtube.RefreshStreamUrlAsync(track, cts.Token);
-                
+                var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token); // ✅ Теперь возвращает (url, size)
+
                 _lastApiCall = DateTime.UtcNow;
-                
-                Debug.WriteLine($"[Audio] Prefetched URL: {track.Title}");
+
+                if (result.HasValue)
+                {
+                    Debug.WriteLine($"[Audio] Prefetched: {track.Title} ({result.Value.Size / 1024 / 1024}MB)");
+                }
             }
             finally
             {
@@ -503,7 +540,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private async Task PrefetchNextInQueueAsync()
     {
         await Task.Delay(1000);
-        
+
         if (_queue.Count > 0 && !_isPlayingOrBuffering)
         {
             await PrefetchAsync(_queue.Peek());
@@ -515,7 +552,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         _ = Task.Run(async () =>
         {
             await Task.Delay(2000);
-            
+
             foreach (var track in tracks.Take(2))
             {
                 if (_isPlayingOrBuffering) break;
@@ -536,7 +573,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         Debug.WriteLine("[Audio] VLC: Playing");
         _isPlayerReady = true;
         IsLoading = false;
-        
+
         _ = Task.Run(async () =>
         {
             await Task.Delay(1500);

@@ -21,13 +21,13 @@ public sealed class MemoryFirstCachingStream : Stream
 
     private const int BlockSize = 128 * 1024;                    // 128KB блоки
     private const int SmallBlockSize = 64 * 1024;                // 64KB для больших файлов
-    private const int MinPreBufferBlocks = 4;                    // 512KB минимум для старта
+    private const int MinPreBufferBlocks = 2;                       // 128KB для MP4 (было 4)
     private const int MaxRamBlocks = 256;                        // 32MB в RAM макс
     private const int ReadAheadBytes = 8 * 1024 * 1024;          // 8MB read-ahead (TRUE STREAMING!)
     private const int ReadWaitTimeoutMs = 8000;                  // 8 сек макс ожидание в Read
-    private const int PreBufferTimeoutMs = 10000;                // 10 сек на prebuffer
-    private const int LargeFileThreshold = 10 * 1024 * 1024;     // 10MB = большой файл
-    private const int ChunkSize = 2 * 1024 * 1024;               // 2MB chunks для YouTube
+    private const int PreBufferTimeoutMs = 5000;                    // 5 сек (было 10)
+    private const int LargeFileThreshold = 15 * 1024 * 1024;        // 15MB (было 10MB)
+    private const int ChunkSize = 5 * 1024 * 1024;                  // 5MB chunks (было 2MB) - меньше запросов!
 
     #endregion
 
@@ -457,32 +457,174 @@ public sealed class MemoryFirstCachingStream : Stream
         _downloadStopwatch.Restart();
 
         _downloadTask = Task.Run(async () =>
+  {
+      try
+      {
+          // ✅ ДЛЯ БОЛЬШИХ ФАЙЛОВ - СНАЧАЛА ПРОБУЕМ ОБЫЧНЫЙ DOWNLOAD
+          if (_isLargeFile)
+          {
+              // Пробуем обычный download сначала
+              bool success = await TryContinuousDownloadAsync(startPos, myGeneration, ct);
+
+              // Если не работает (throttling) - переключаемся на chunked
+              if (!success)
+              {
+                  Debug.WriteLine("[MemoryFirst] Switching to CHUNKED mode (throttling detected)");
+                  await ChunkedDownloadLoopAsync(startPos, myGeneration, ct);
+              }
+          }
+          else
+          {
+              await ContinuousDownloadLoopAsync(startPos, myGeneration, ct);
+          }
+      }
+      finally
+      {
+          lock (_downloadLock)
+          {
+              if (_downloadGeneration == myGeneration)
+              {
+                  _downloadActive = false;
+              }
+          }
+          _dataAvailable.Set();
+      }
+  });
+    }
+
+    private async Task<bool> TryContinuousDownloadAsync(long startPosition, int generation, CancellationToken ct)
+    {
+        try
         {
-            try
+            Debug.WriteLine($"[MemoryFirst] Trying continuous download from {startPosition / 1024}KB");
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, _url);
+            request.Headers.Range = new RangeHeaderValue(startPosition, null);
+
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            requestCts.CancelAfter(TimeSpan.FromSeconds(3)); // ✅ КОРОТКИЙ TIMEOUT для проверки
+
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCts.Token);
+
+            if (!response.IsSuccessStatusCode) return false;
+
+            // ✅ ПРОВЕРЯЕМ НЕТ ЛИ THROTTLING
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+
+            var buffer = new byte[_effectiveBlockSize];
+            var testSw = Stopwatch.StartNew();
+
+            // Читаем первый блок для проверки скорости
+            int testRead = await stream.ReadAsync(buffer, 0, _effectiveBlockSize, ct);
+            testSw.Stop();
+
+            if (testRead > 0)
             {
-                if (_isLargeFile)
+                double speed = testRead / 1024.0 / (testSw.Elapsed.TotalSeconds + 0.001);
+                Debug.WriteLine($"[MemoryFirst] Download speed test: {speed:F0}KB/s");
+
+                // Если слишком медленно - throttling
+                if (speed < 50) // <50KB/s = throttling
                 {
-                    // Для больших файлов - chunked download
-                    await ChunkedDownloadLoopAsync(startPos, myGeneration, ct);
+                    Debug.WriteLine("[MemoryFirst] Throttling detected!");
+                    return false;
                 }
-                else
-                {
-                    // Для маленьких - обычный streaming
-                    await ContinuousDownloadLoopAsync(startPos, myGeneration, ct);
-                }
-            }
-            finally
-            {
-                lock (_downloadLock)
-                {
-                    if (_downloadGeneration == myGeneration)
-                    {
-                        _downloadActive = false;
-                    }
-                }
+
+                // Сохраняем первый блок
+                long blockIndex = startPosition / _effectiveBlockSize;
+                var blockData = new byte[testRead];
+                Buffer.BlockCopy(buffer, 0, blockData, 0, testRead);
+                _ramBlocks[blockIndex] = blockData;
+                _blockSizes[blockIndex] = testRead;
+                _diskChannel.Writer.TryWrite((startPosition, blockData, testRead));
                 _dataAvailable.Set();
+
+                Interlocked.Add(ref _downloadedBytes, testRead);
+                Volatile.Write(ref _downloadPosition, startPosition + testRead);
+
+                // ✅ ПРОДОЛЖАЕМ ОБЫЧНЫЙ DOWNLOAD
+                await ContinuousDownloadLoopFromStreamAsync(stream, startPosition + testRead, generation, ct);
+                return true;
             }
-        });
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task ContinuousDownloadLoopFromStreamAsync(Stream stream, long startPosition, int generation, CancellationToken ct)
+    {
+        long bytesDownloaded = startPosition - (startPosition / _effectiveBlockSize * _effectiveBlockSize);
+        long lastLogBytes = bytesDownloaded;
+
+        var buffer = new byte[_effectiveBlockSize];
+        long position = startPosition;
+
+        while (!ct.IsCancellationRequested && !_disposing && position < _contentLength)
+        {
+            long readPos = Volatile.Read(ref _position);
+            long aheadBytes = position - readPos;
+
+            if (aheadBytes > ReadAheadBytes && position > readPos)
+            {
+                await Task.Delay(100, ct);
+                continue;
+            }
+
+            lock (_downloadLock)
+            {
+                if (_downloadGeneration != generation) return;
+            }
+
+            int toRead = (int)Math.Min(_effectiveBlockSize, _contentLength - position);
+            int totalRead = 0;
+
+            while (totalRead < toRead && !ct.IsCancellationRequested)
+            {
+                int read = await stream.ReadAsync(buffer.AsMemory(totalRead, toRead - totalRead), ct);
+                if (read == 0) break;
+                totalRead += read;
+            }
+
+            if (totalRead > 0)
+            {
+                long blockIndex = position / _effectiveBlockSize;
+                var blockData = new byte[totalRead];
+                Buffer.BlockCopy(buffer, 0, blockData, 0, totalRead);
+
+                _ramBlocks[blockIndex] = blockData;
+                _blockSizes[blockIndex] = totalRead;
+
+                if (!_disposing)
+                {
+                    _diskChannel.Writer.TryWrite((position, blockData, totalRead));
+                }
+
+                _dataAvailable.Set();
+
+                bytesDownloaded += totalRead;
+                Volatile.Write(ref _downloadPosition, position + totalRead);
+                Interlocked.Add(ref _downloadedBytes, totalRead);
+
+                if (bytesDownloaded - lastLogBytes >= 1024 * 1024)
+                {
+                    double progress = (double)position / _contentLength * 100;
+                    Debug.WriteLine($"[MemoryFirst] {bytesDownloaded / 1024}KB ({progress:F1}%)");
+                    lastLogBytes = bytesDownloaded;
+                }
+
+                if (_ramBlocks.Count > MaxRamBlocks)
+                {
+                    TrimRamCache();
+                }
+            }
+
+            position += totalRead;
+            if (totalRead < toRead) break;
+        }
     }
 
     /// <summary>

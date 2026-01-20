@@ -17,7 +17,7 @@ public class YoutubeProvider
     private readonly YoutubeClient _youtube;
     private readonly string _downloadFolder;
 
-    private readonly Dictionary<string, (string Url, DateTime Obtained)> _streamCache = new();
+    private readonly Dictionary<string, (string Url, long Size, DateTime Obtained)> _streamCache = new();
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(4);
 
     public bool IsReady { get; private set; }
@@ -56,7 +56,7 @@ public class YoutubeProvider
 
     #region ========== RefreshStreamUrlAsync ==========
 
-    public async Task<string?> RefreshStreamUrlAsync(TrackInfo track, CancellationToken ct = default)
+    public async Task<(string Url, long Size)?> RefreshStreamUrlAsync(TrackInfo track, CancellationToken ct = default)
     {
         string? videoId = ExtractVideoIdFromTrack(track);
         if (string.IsNullOrEmpty(videoId))
@@ -68,11 +68,11 @@ public class YoutubeProvider
         var sw = Stopwatch.StartNew();
         Log($"🔄 [{videoId}] Getting stream URL...");
 
-        // 1. Cache
-        if (TryGetFromCache(videoId, out var cachedUrl))
+        // 1. Cache - ИЗМЕНЕНО: кэшируем и размер
+        if (TryGetFromCache(videoId, out var cachedUrl, out var cachedSize))
         {
             track.StreamUrl = cachedUrl!;
-            return cachedUrl;
+            return (cachedUrl!, cachedSize);
         }
 
         // 2. YoutubeExplode
@@ -83,23 +83,22 @@ public class YoutubeProvider
 
             var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, cts.Token);
 
-            // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: MP4/M4A ПЕРВЫЙ для быстрого старта!
-            // WebM требует полной буферизации, MP4 - нет
             var audioStream = manifest.GetAudioOnlyStreams()
-                .OrderByDescending(s => s.Container.Name == "mp4" ? 2 : 0)  // MP4 приоритет
-                .ThenByDescending(s => s.Container.Name == "m4a" ? 1 : 0)  // M4A второй
+                .OrderByDescending(s => s.Container.Name == "mp4" ? 2 : 0)
+                .ThenByDescending(s => s.Container.Name == "m4a" ? 1 : 0)
                 .ThenByDescending(s => s.Bitrate.BitsPerSecond)
                 .FirstOrDefault();
 
             if (audioStream != null)
             {
                 var url = audioStream.Url;
+                var size = audioStream.Size.Bytes; // ✅ ПОЛУЧАЕМ РАЗМЕР ИЗ MANIFEST
                 sw.Stop();
-                Log($"✅ [{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}, {audioStream.Bitrate})");
+                Log($"✅ [{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}, {audioStream.Bitrate}, {size / 1024 / 1024}MB)");
 
-                CacheStreamUrl(videoId, url);
+                CacheStreamUrl(videoId, url, size); // ✅ КЭШИРУЕМ РАЗМЕР
                 track.StreamUrl = url;
-                return url;
+                return (url, size);
             }
 
             LogError($"[{videoId}] No audio streams found");
@@ -116,7 +115,8 @@ public class YoutubeProvider
 
     #region ========== Cache ==========
 
-    private bool TryGetFromCache(string videoId, out string? url)
+
+    private bool TryGetFromCache(string videoId, out string? url, out long size)
     {
         if (_streamCache.TryGetValue(videoId, out var cached))
         {
@@ -124,17 +124,19 @@ public class YoutubeProvider
             {
                 Log($"  ✅ Cache hit");
                 url = cached.Url;
+                size = cached.Size;
                 return true;
             }
             _streamCache.Remove(videoId);
         }
         url = null;
+        size = 0;
         return false;
     }
 
-    private void CacheStreamUrl(string videoId, string url)
+    private void CacheStreamUrl(string videoId, string url, long size)
     {
-        _streamCache[videoId] = (url, DateTime.UtcNow);
+        _streamCache[videoId] = (url, size, DateTime.UtcNow);
 
         if (_streamCache.Count > 200)
         {
