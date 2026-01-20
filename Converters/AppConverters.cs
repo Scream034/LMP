@@ -2,7 +2,8 @@ using Avalonia.Data.Converters;
 using Avalonia.Media;
 using MyLiteMusicPlayer.Models;
 using System.Globalization;
-using Material.Icons; // Убедитесь, что этот using есть
+using Material.Icons;
+using Avalonia.Input; // Убедитесь, что этот using есть
 
 namespace MyLiteMusicPlayer.Converters;
 
@@ -105,6 +106,32 @@ public class BoolToSelectorConverter : IValueConverter
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}
+
+public class BoolToCursorConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is bool boolValue && parameter is string param)
+        {
+            var parts = param.Split('|');
+            if (parts.Length == 2)
+            {
+                var cursorName = boolValue ? parts[0] : parts[1];
+                return cursorName switch
+                {
+                    "Hand" => new Cursor(StandardCursorType.Hand),
+                    "Arrow" => new Cursor(StandardCursorType.Arrow),
+                    "Wait" => new Cursor(StandardCursorType.Wait),
+                    _ => Cursor.Default
+                };
+            }
+        }
+        return Cursor.Default;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotImplementedException();
 }
 
 /// <summary>

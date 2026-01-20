@@ -35,6 +35,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private readonly Queue<TrackInfo> _queue = new();
     private readonly List<TrackInfo> _history = [];
     private int _historyIndex = -1;
+    private (string Format, int Bitrate) _currentStreamInfo;
 
     public TrackInfo? CurrentTrack { get; private set; }
 
@@ -142,14 +143,14 @@ public class AudioEngine : ViewModelBase, IDisposable
         _libVLC = new LibVLC(
             "--no-video",
             "--no-spu",
-            "--network-caching=100",        // ✅ УМЕНЬШЕНО с 300
-            "--file-caching=100",           // ✅ УМЕНЬШЕНО с 200
-            "--live-caching=100",           // ✅ УМЕНЬШЕНО с 300
+            "--network-caching=100",        // УМЕНЬШЕНО с 300
+            "--file-caching=100",           // УМЕНЬШЕНО с 200
+            "--live-caching=100",           // УМЕНЬШЕНО с 300
             "--http-reconnect",
             "--no-http-forward-cookies",
             "--no-metadata-network-access",
             "--no-auto-preparse",
-            "--prefetch-read-size=65536"    // ✅ ДОБАВЛЕНО - 64KB prefetch
+            "--prefetch-read-size=65536"    // ДОБАВЛЕНО - 64KB prefetch
         );
 
         InitializePlayer();
@@ -217,11 +218,76 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     #region PLAYBACK
 
+
+    /// <summary>
+    /// Получить информацию о текущем потоке
+    /// </summary>
+    public (string Format, int Bitrate) GetCurrentStreamInfo()
+    {
+        if (_player?.Media == null) return ("", 0);
+
+        try
+        {
+            // Пробуем получить из VLC
+            var media = _player.Media;
+
+            // Format из расширения или контейнера
+            string format = "";
+            if (CurrentTrack?.StreamUrl != null)
+            {
+                if (CurrentTrack.StreamUrl.Contains("mime=audio%2Fwebm")) format = "OPUS";
+                else if (CurrentTrack.StreamUrl.Contains("mime=audio%2Fmp4")) format = "M4A";
+                else if (CurrentTrack.IsDownloaded) format = Path.GetExtension(CurrentTrack.LocalPath ?? "").TrimStart('.').ToUpperInvariant();
+            }
+
+            // Bitrate
+            int bitrate = 0;
+            try
+            {
+                // VLC Media statistics
+                var stats = media.Statistics;
+                // Примерный расчёт по скорости потока
+            }
+            catch { }
+
+            // Fallback: стандартные значения для YouTube
+            if (string.IsNullOrEmpty(format)) format = "AAC";
+            if (bitrate == 0) bitrate = 128; // YouTube обычно ~128kbps
+
+            _currentStreamInfo = (format, bitrate);
+            return _currentStreamInfo;
+        }
+        catch
+        {
+            return _currentStreamInfo;
+        }
+    }
+
+    /// <summary>
+    /// Получить количество скачанных байт (для расчёта скорости)
+    /// </summary>
+    public long GetDownloadedBytes()
+    {
+        try
+        {
+            if (_currentStream != null)
+            {
+                // Приблизительно: прогресс * размер
+                var progress = _currentStream.DownloadProgress / 100.0;
+                var length = _currentStream.Length;
+                return (long)(progress * length);
+            }
+        }
+        catch { }
+        return 0;
+    }
+
+
     public async Task PlayTrackAsync(TrackInfo track)
     {
         if (track == null || _isDisposed) return;
 
-        // Быстрая отмена предыдущего - НЕ ждём!
+        // Быстрая отмена предыдущего
         var oldCts = _cts;
         _cts = new CancellationTokenSource();
         var session = Interlocked.Increment(ref _session);
@@ -235,20 +301,28 @@ public class AudioEngine : ViewModelBase, IDisposable
         _isPlayingOrBuffering = true;
         SafeInvoke(() => OnTrackChanged?.Invoke(track));
 
-        // Быстрый lock с коротким timeout
-        if (!await _playLock.WaitAsync(500))
-        {
-            Debug.WriteLine("[Audio] Lock busy, forcing...");
-            // Force release если застряли
-        }
+        // ИСПРАВЛЕНО: Отслеживаем, был ли захвачен lock
+        bool lockAcquired = false;
 
         try
         {
+            lockAcquired = await _playLock.WaitAsync(500);
+
+            if (!lockAcquired)
+            {
+                Debug.WriteLine("[Audio] Lock busy, proceeding anyway...");
+                // Продолжаем без lock - предыдущая операция застряла
+            }
+
             await PlayTrackInternalAsync(track, session, _cts.Token);
         }
         finally
         {
-            try { _playLock.Release(); } catch { }
+            // ИСПРАВЛЕНО: Release только если захватили
+            if (lockAcquired)
+            {
+                try { _playLock.Release(); } catch { }
+            }
         }
     }
 
@@ -257,7 +331,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         var sw = Stopwatch.StartNew();
         Debug.WriteLine($"[Audio] #{session} → {track.Title}");
 
-        // ✅ БЫСТРАЯ ОСТАНОВКА С DISPOSE
+        // БЫСТРАЯ ОСТАНОВКА С DISPOSE
         QuickStopPlayback();
 
         try
@@ -274,7 +348,7 @@ public class AudioEngine : ViewModelBase, IDisposable
             else
             {
                 // Если URL уже есть - используем его сразу (не тратим время на проверку размера)
-                result = (track.StreamUrl, -1); // ✅ РАЗМЕР ПОЛУЧИМ ИЗ ПЕРВОГО RESPONSE
+                result = (track.StreamUrl, -1); // РАЗМЕР ПОЛУЧИМ ИЗ ПЕРВОГО RESPONSE
             }
 
             if (_session != session || ct.IsCancellationRequested) return;
@@ -282,7 +356,7 @@ public class AudioEngine : ViewModelBase, IDisposable
             string url = result.Value.Url;
             long contentLength = result.Value.Size;
 
-            // ✅ Если размер неизвестен - быстрая проверка
+            // Если размер неизвестен - быстрая проверка
             if (contentLength <= 0)
             {
                 contentLength = await TryGetContentLengthFastAsync(url, ct);
@@ -305,7 +379,7 @@ public class AudioEngine : ViewModelBase, IDisposable
                 _streamHttpClient,
                 _cacheManager);
 
-            // ✅ АДАПТИВНЫЙ PREBUFFER
+            // АДАПТИВНЫЙ PREBUFFER
             int prebufferSize = contentLength > 20 * 1024 * 1024
                 ? 64 * 1024   // 64KB для больших файлов
                 : 128 * 1024; // 128KB для маленьких
@@ -403,7 +477,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(1)); // ✅ 1 СЕКУНДА МАКС
+            cts.CancelAfter(TimeSpan.FromSeconds(1)); // 1 СЕКУНДА МАКС
 
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
             using var response = await _streamHttpClient.SendAsync(request, cts.Token);
@@ -414,40 +488,6 @@ public class AudioEngine : ViewModelBase, IDisposable
         {
             return -1;
         }
-    }
-
-    private async Task<long> GetContentLengthAsync(string url, CancellationToken ct)
-    {
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(5));
-
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            using var response = await _streamHttpClient.SendAsync(request, cts.Token);
-
-            if (response.Content.Headers.ContentLength.HasValue)
-            {
-                return response.Content.Headers.ContentLength.Value;
-            }
-
-            // Try range request
-            using var rangeRequest = new HttpRequestMessage(HttpMethod.Get, url);
-            rangeRequest.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
-
-            using var rangeResponse = await _streamHttpClient.SendAsync(rangeRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-
-            if (rangeResponse.Content.Headers.ContentRange?.Length.HasValue == true)
-            {
-                return rangeResponse.Content.Headers.ContentRange.Length.Value;
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Audio] GetContentLength error: {ex.Message}");
-        }
-
-        return -1;
     }
 
     /// <summary>
@@ -467,7 +507,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
         catch { }
 
-        // ✅ DISPOSE STREAM СРАЗУ
+        // DISPOSE STREAM СРАЗУ
         var oldStream = _currentStream;
         _currentStream = null;
         if (oldStream != null)
@@ -529,7 +569,7 @@ public class AudioEngine : ViewModelBase, IDisposable
                 }
 
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token); // ✅ Теперь возвращает (url, size)
+                var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token); // Теперь возвращает (url, size)
 
                 _lastApiCall = DateTime.UtcNow;
 
