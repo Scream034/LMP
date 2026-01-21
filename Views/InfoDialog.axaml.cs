@@ -41,7 +41,7 @@ public partial class InfoDialog : Window
     public InfoDialog()
     {
         InitializeComponent();
-        CloseCommand = ReactiveCommand.Create(() => Close());
+        CloseCommand = ReactiveCommand.Create(Close);
         DataContext = this;
     }
 

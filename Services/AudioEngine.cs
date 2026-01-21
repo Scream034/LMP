@@ -413,7 +413,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             var track = list[idx];
             list.RemoveAt(idx);
             _queue.Clear();
-            list.ForEach(t => _queue.Enqueue(t));
+            list.ForEach(_queue.Enqueue);
             return track;
         }
         return _queue.TryDequeue(out var t) ? t : null;
@@ -607,16 +607,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (_player != null)
         {
-            Try(() => _player.Stop());
-            Try(() => _player.Dispose());
+            Try(_player.Stop);
+            Try(_player.Dispose);
         }
 
-        Try(() => _libVLC.Dispose());
-        Try(() => _loadLock.Dispose());
-        Try(() => _commandLock.Dispose());
-        Try(() => _apiLock.Dispose());
-        Try(() => _httpClient.Dispose());
-        Try(() => _cacheManager.Dispose());
+        Try(_libVLC.Dispose);
+        Try(_loadLock.Dispose);
+        Try(_commandLock.Dispose);
+        Try(_apiLock.Dispose);
+        Try(_httpClient.Dispose);
+        Try(_cacheManager.Dispose);
 
         Log.Info("[AudioEngine] Disposed");
     }

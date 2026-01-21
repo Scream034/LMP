@@ -423,9 +423,9 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (disposing)
         {
-            Try(() => _disposeCts.Cancel());
-            Try(() => _cts.Cancel());
-            Try(() => _dataAvailable.Set());
+            Try(_disposeCts.Cancel);
+            Try(_cts.Cancel);
+            Try(_dataAvailable.Set);
             Try(() => _diskChannel.Writer.TryComplete());
             Try(() => _diskWriterTask.Wait(1000));
             Try(() => _downloadLoop?.Wait(500));
@@ -443,11 +443,11 @@ public sealed class MemoryFirstCachingStream : Stream
             _chunks.Clear();
             _pendingDownloads.Clear();
 
-            Try(() => _dataAvailable.Dispose());
-            Try(() => _fileLock.Dispose());
-            Try(() => _disposeCts.Dispose());
-            Try(() => _cts.Dispose());
-            Try(() => _downloadSemaphore.Dispose());
+            Try(_dataAvailable.Dispose);
+            Try(_fileLock.Dispose);
+            Try(_disposeCts.Dispose);
+            Try(_cts.Dispose);
+            Try(_downloadSemaphore.Dispose);
         }
 
         _disposed = true;
