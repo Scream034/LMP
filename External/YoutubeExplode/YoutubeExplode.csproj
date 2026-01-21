@@ -19,10 +19,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AngleSharp" Version="1.1.0" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\MyLiteMusicPlayer.Logging\MyLiteMusicPlayer.Logging.csproj" />
   </ItemGroup>
 </Project>

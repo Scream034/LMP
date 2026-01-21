@@ -49,8 +49,7 @@ public partial struct PlaylistId
         // Try to extract the ID from the URL (playlist + video)
         // https://www.youtube.com/watch?v=b8m9zhNAgKs&list=PL9tY0BWXOZFuFEG_GtOBZ8-8wbkH-NVAr
         {
-            var id = Regex
-                .Match(playlistIdOrUrl, @"youtube\..+?/watch.*?list=(.*?)(?:&|/|$)")
+            var id = MyRegex1().Match(playlistIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -61,8 +60,7 @@ public partial struct PlaylistId
         // Try to extract the ID from the URL (playlist + video, shortened)
         // https://youtu.be/b8m9zhNAgKs/?list=PL9tY0BWXOZFuFEG_GtOBZ8-8wbkH-NVAr
         {
-            var id = Regex
-                .Match(playlistIdOrUrl, @"youtu\.be/.*?/.*?list=(.*?)(?:&|/|$)")
+            var id = MyRegex2().Match(playlistIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -73,8 +71,7 @@ public partial struct PlaylistId
         // Try to extract the ID from the URL (playlist + video, embedded)
         // https://www.youtube.com/embed/b8m9zhNAgKs/?list=PL9tY0BWXOZFuFEG_GtOBZ8-8wbkH-NVAr
         {
-            var id = Regex
-                .Match(playlistIdOrUrl, @"youtube\..+?/embed/.*?/.*?list=(.*?)(?:&|/|$)")
+            var id = MyRegex3().Match(playlistIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -112,6 +109,12 @@ public partial struct PlaylistId
 
     [GeneratedRegex(@"youtube\..+?/playlist.*?list=(.*?)(?:&|/|$)")]
     private static partial Regex MyRegex();
+    [GeneratedRegex(@"youtube\..+?/watch.*?list=(.*?)(?:&|/|$)")]
+    private static partial Regex MyRegex1();
+    [GeneratedRegex(@"youtu\.be/.*?/.*?list=(.*?)(?:&|/|$)")]
+    private static partial Regex MyRegex2();
+    [GeneratedRegex(@"youtube\..+?/embed/.*?/.*?list=(.*?)(?:&|/|$)")]
+    private static partial Regex MyRegex3();
 }
 
 public partial struct PlaylistId : IEquatable<PlaylistId>

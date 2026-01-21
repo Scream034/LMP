@@ -12,7 +12,8 @@ public class VideoSearchResult(
     string title,
     Author author,
     TimeSpan? duration,
-    IReadOnlyList<Thumbnail> thumbnails
+    IReadOnlyList<Thumbnail> thumbnails,
+    bool isOfficialArtist
 ) : ISearchResult, IVideo
 {
     /// <inheritdoc />
@@ -26,6 +27,8 @@ public class VideoSearchResult(
 
     /// <inheritdoc />
     public Author Author { get; } = author;
+
+    public bool IsOfficialArtist { get; } = isOfficialArtist;
 
     /// <inheritdoc />
     public TimeSpan? Duration { get; } = duration;

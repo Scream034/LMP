@@ -57,7 +57,7 @@ internal partial class DashManifest
 
         public string? Container =>
             Url
-                ?.Pipe(s => Regex.Match(s, @"mime[/=]\w*%2F([\w\d]*)").Groups[1].Value)
+                ?.Pipe(s => MyRegex1().Match(s).Groups[1].Value)
                 .Pipe(WebUtility.UrlDecode);
 
         private bool IsAudioOnly => content.Element("AudioChannelConfiguration") is not null;
@@ -82,6 +82,8 @@ internal partial class DashManifest
 
         [GeneratedRegex(@"[/\?]clen[/=](\d+)")]
         private static partial Regex MyRegex();
+        [GeneratedRegex(@"mime[/=]\w*%2F([\w\d]*)")]
+        private static partial Regex MyRegex1();
     }
 }
 

@@ -52,7 +52,7 @@ public class LibraryViewModel : ViewModelBase
             if (!_auth.IsAuthenticated) return;
 
             IsLoading = true;
-            var accountPlaylists = await _youtube.GetUserPlaylistsAsync();
+            var accountPlaylists = await YoutubeProvider.GetUserPlaylistsAsync();
             _library.MergeAccountPlaylists(accountPlaylists);
             LoadPlaylists();
             IsLoading = false;

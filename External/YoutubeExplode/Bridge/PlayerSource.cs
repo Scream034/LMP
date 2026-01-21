@@ -20,14 +20,7 @@ internal partial class PlayerSource(string content)
                 return null;
 
             // Find where the player calls the cipher functions
-            var cipherCallsite = Regex
-                .Match(
-                    content,
-                    """
-                    [$_\w]+=function\([$_\w]+\){([$_\w]+)=\1\.split\(['"]{2}\);.*?return \1\.join\(['"]{2}\)}
-                    """,
-                    RegexOptions.Singleline
-                )
+            var cipherCallsite = MyRegex1().Match(content)
                 .Groups[0]
                 .Value.NullIfWhiteSpace();
 
@@ -35,8 +28,7 @@ internal partial class PlayerSource(string content)
                 return null;
 
             // Find the object that defines the cipher functions
-            var cipherContainerName = Regex
-                .Match(cipherCallsite, @"([$_\w]+)\.[$_\w]+\([$_\w]+,\d+\);")
+            var cipherContainerName = MyRegex2().Match(cipherCallsite)
                 .Groups[1]
                 .Value;
 
@@ -59,12 +51,7 @@ internal partial class PlayerSource(string content)
                 return null;
 
             // Identify the swap cipher function
-            var swapFuncName = Regex
-                .Match(
-                    cipherDefinition,
-                    @"([$_\w]+):function\([$_\w]+,[$_\w]+\){+[^}]*?%[^}]*?}",
-                    RegexOptions.Singleline
-                )
+            var swapFuncName = MyRegex3().Match(cipherDefinition)
                 .Groups[1]
                 .Value.NullIfWhiteSpace();
 
@@ -129,6 +116,16 @@ internal partial class PlayerSource(string content)
 
     [GeneratedRegex(@"(?:signatureTimestamp|sts):(\d{5})")]
     private static partial Regex MyRegex();
+    [GeneratedRegex("""
+                    [$_\w]+=function\([$_\w]+\){([$_\w]+)=\1\.split\(['"]{2}\);.*?return \1\.join\(['"]{2}\)}
+                    """, RegexOptions.Singleline
+    )]
+    private static partial Regex MyRegex1();
+    [GeneratedRegex(@"([$_\w]+)\.[$_\w]+\([$_\w]+,\d+\);")]
+    private static partial Regex MyRegex2();
+    [GeneratedRegex(@"([$_\w]+):function\([$_\w]+,[$_\w]+\){+[^}]*?%[^}]*?}", RegexOptions.Singleline
+    )]
+    private static partial Regex MyRegex3();
 }
 
 internal partial class PlayerSource

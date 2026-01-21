@@ -47,8 +47,7 @@ public partial struct VideoId
         // Try to extract the ID from the URL (partially shortened)
         // https://youtu.be/watch?v=Fcds0_MrgNU
         {
-            var id = Regex
-                .Match(videoIdOrUrl, @"youtu\.be/watch.*?v=(.*?)(?:\?|&|/|$)")
+            var id = MyRegex1().Match(videoIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -59,8 +58,7 @@ public partial struct VideoId
         // Try to extract the ID from the URL (shortened)
         // https://youtu.be/yIVRs6YSbOM
         {
-            var id = Regex
-                .Match(videoIdOrUrl, @"youtu\.be/(.*?)(?:\?|&|/|$)")
+            var id = MyRegex2().Match(videoIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -71,8 +69,7 @@ public partial struct VideoId
         // Try to extract the ID from the URL (embedded)
         // https://www.youtube.com/embed/yIVRs6YSbOM
         {
-            var id = Regex
-                .Match(videoIdOrUrl, @"youtube\..+?/embed/(.*?)(?:\?|&|/|$)")
+            var id = MyRegex3().Match(videoIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -135,6 +132,12 @@ public partial struct VideoId
 
     [GeneratedRegex(@"youtube\..+?/watch.*?v=(.*?)(?:&|/|$)")]
     private static partial Regex MyRegex();
+    [GeneratedRegex(@"youtu\.be/watch.*?v=(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex1();
+    [GeneratedRegex(@"youtu\.be/(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex2();
+    [GeneratedRegex(@"youtube\..+?/embed/(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex3();
 }
 
 public partial struct VideoId : IEquatable<VideoId>

@@ -73,6 +73,19 @@ internal partial class SearchResponse
                 ?.EnumerateArrayOrNull()
                 ?.ElementAtOrNull(0);
 
+        public bool IsOfficialArtist =>
+            content.GetPropertyOrNull("ownerBadges")
+                ?.EnumerateArrayOrNull()
+                ?.Any(b =>
+                    b.GetPropertyOrNull("metadataBadgeRenderer")
+                        ?.GetPropertyOrNull("style")
+                        ?.GetStringOrNull() == "BADGE_STYLE_TYPE_VERIFIED_ARTIST"
+                    ||
+                    b.GetPropertyOrNull("metadataBadgeRenderer")
+                        ?.GetPropertyOrNull("tooltip")
+                        ?.GetStringOrNull() == "Official Artist Channel"
+                ) ?? false;
+
         public string? Author => AuthorDetails?.GetPropertyOrNull("text")?.GetStringOrNull();
 
         public string? ChannelId =>

@@ -1,32 +1,33 @@
-using AngleSharp.Html.Dom;
-using YoutubeExplode.Utils;
+using System.Text.RegularExpressions;
 using YoutubeExplode.Utils.Extensions;
 
 namespace YoutubeExplode.Bridge;
 
-internal partial class ChannelPage(IHtmlDocument content)
+internal partial class ChannelPage(string content)
 {
     public string? Url =>
-        content.QuerySelector("meta[property=\"og:url\"]")?.GetAttribute("content");
+        MyRegex().Match(content).Groups[1].Value.NullIfWhiteSpace();
 
     public string? Id => Url?.SubstringAfter("channel/", StringComparison.OrdinalIgnoreCase);
 
     public string? Title =>
-        content.QuerySelector("meta[property=\"og:title\"]")?.GetAttribute("content");
+        MyRegex1().Match(content).Groups[1].Value.NullIfWhiteSpace();
 
     public string? LogoUrl =>
-        content.QuerySelector("meta[property=\"og:image\"]")?.GetAttribute("content");
-}
+        MyRegex2().Match(content).Groups[1].Value.NullIfWhiteSpace();
 
-internal partial class ChannelPage
-{
     public static ChannelPage? TryParse(string raw)
     {
-        var content = Html.Parse(raw);
-
-        if (content.QuerySelector("meta[property=\"og:url\"]") is null)
+        if (!raw.Contains("og:url") || !raw.Contains("channel/"))
             return null;
 
-        return new ChannelPage(content);
+        return new ChannelPage(raw);
     }
+
+    [GeneratedRegex(@"<meta property=""og:url"" content=""(.*?)""")]
+    private static partial Regex MyRegex();
+    [GeneratedRegex(@"<meta property=""og:title"" content=""(.*?)""")]
+    private static partial Regex MyRegex1();
+    [GeneratedRegex(@"<meta property=""og:image"" content=""(.*?)""")]
+    private static partial Regex MyRegex2();
 }

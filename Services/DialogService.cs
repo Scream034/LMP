@@ -16,7 +16,7 @@ public interface IDialogService
 
 public class DialogService : IDialogService
 {
-    private Window? GetMainWindow()
+    private static Window? GetMainWindow()
     {
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             return desktop.MainWindow;

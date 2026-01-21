@@ -46,7 +46,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private DateTime _lastVolumeChange = DateTime.MinValue;
     private bool _volumeSavePending;
 
-    // === Properties ===
+    // Properties
     public TrackInfo? CurrentTrack { get; private set; }
 
     // Безопасный доступ к состоянию
@@ -101,7 +101,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
-    // === Events ===
+    // Events
     public event Action<bool>? OnLoadingChanged;
     public event Action<TrackInfo?>? OnTrackChanged;
     public event Action? OnPlaybackStopped;
@@ -131,34 +131,57 @@ public class AudioEngine : ViewModelBase, IDisposable
         RepeatMode = library.Data.RepeatMode;
 
         float savedVolume = library.Data.Volume;
-        // Исправление загрузки громкости (если сохранено 0.5 -> 50)
         _volumePercent = savedVolume <= 1.0f && savedVolume > 0
             ? (int)Math.Round(savedVolume * 100f)
             : (int)Math.Round(savedVolume);
-
         _volumePercent = Math.Clamp(_volumePercent, 0, 500);
         Log.Info($"Loaded Volume: {_volumePercent} (Raw saved: {savedVolume})");
 
         Core.Initialize();
 
+        // МАКСИМАЛЬНОЕ КАЧЕСТВО ЗВУКА
         _libVLC = new LibVLC(
+            // Отключаем ненужное
             "--no-video",
             "--no-spu",
-            "--network-caching=150",
-            "--file-caching=100",
-            "--live-caching=150",
+            "--no-osd",
+            "--no-stats",
+
+            // Буферизация для стабильности
+            "--network-caching=1500",
+            "--file-caching=1000",
+            "--live-caching=1000",
+
+            // Стриминг
             "--http-reconnect",
+            "--http-continuous",
             "--no-http-forward-cookies",
             "--no-metadata-network-access",
             "--no-auto-preparse",
-            "--prefetch-read-size=65536"
+
+            // Увеличенный prefetch
+            "--prefetch-read-size=262144",
+            "--prefetch-buffer-size=262144",
+
+            // Качество аудио
+            "--audio-resampler=soxr",
+            "--no-audio-time-stretch",
+
+            // Декодер - не пропускать ничего
+            "--avcodec-skiploopfilter=0",
+            "--avcodec-skip-frame=0",
+            "--avcodec-skip-idct=0",
+
+            // Синхронизация
+            "--clock-jitter=0",
+            "--no-drop-late-frames",
+            "--no-skip-frames"
         );
 
         InitializePlayer();
-
         _ = VolumeSaveLoopAsync();
 
-        Log.Info($"Initialized. Ready.");
+        Log.Info("Initialized with HIGH QUALITY audio settings.");
     }
 
     private void InitializePlayer()

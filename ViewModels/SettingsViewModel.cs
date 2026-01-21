@@ -24,7 +24,7 @@ public class SettingsViewModel : ViewModelBase
     [Reactive] public bool AutoPlayOnPaste { get; set; }
 
     // === ЯЗЫКИ ===
-    public List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
+    public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
 
     // === АВТОРИЗАЦИЯ ===

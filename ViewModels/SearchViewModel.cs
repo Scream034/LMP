@@ -96,7 +96,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
         try
         {
-            var queryType = _youtube.DetectQueryType(_currentQuery);
+            var queryType = YoutubeProvider.DetectQueryType(_currentQuery);
             List<TrackInfo> tracks;
 
             if (queryType == QueryType.DirectUrl)

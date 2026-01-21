@@ -250,7 +250,7 @@ public class StreamCacheManager : IDisposable
         }
     }
 
-    private DateTime GetLastAccessTime(string metaPath)
+    private static DateTime GetLastAccessTime(string metaPath)
     {
         try
         {

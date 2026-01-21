@@ -64,7 +64,7 @@ public class MemoryMonitor
         catch { }
     }
 
-    public void ForceGarbageCollection()
+    public static void ForceGarbageCollection()
     {
         Log.Info("Forcing garbage collection...");
         GC.Collect(2, GCCollectionMode.Aggressive, true, true);

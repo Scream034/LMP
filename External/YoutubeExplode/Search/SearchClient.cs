@@ -98,7 +98,8 @@ public class SearchClient(HttpClient http)
                     videoTitle,
                     new Author(videoChannelId, videoChannelTitle),
                     videoData.Duration,
-                    videoThumbnails
+                    videoThumbnails,
+                    videoData.IsOfficialArtist
                 );
 
                 results.Add(video);

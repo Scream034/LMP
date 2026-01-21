@@ -1,6 +1,5 @@
 using YoutubeExplode.Common;
 using YoutubeExplode.Exceptions;
-using YoutubeExplode.Videos.ClosedCaptions;
 using YoutubeExplode.Videos.Streams;
 
 namespace YoutubeExplode.Videos;
@@ -16,11 +15,6 @@ public class VideoClient(HttpClient http)
     /// Operations related to media streams of YouTube videos.
     /// </summary>
     public StreamClient Streams { get; } = new(http);
-
-    /// <summary>
-    /// Operations related to closed captions of YouTube videos.
-    /// </summary>
-    public ClosedCaptionClient ClosedCaptions { get; } = new(http);
 
     /// <summary>
     /// Gets the metadata associated with the specified video.
@@ -77,21 +71,23 @@ public class VideoClient(HttpClient http)
             .Concat(Thumbnail.GetDefaultSet(videoId))
             .ToArray();
 
+        // Извлекаем ViewCount из JSON
+        long viewCount = playerResponse.ViewCount ?? 0;
+
+        // Извлекаем LikeCount. 
+        // ВНИМАНИЕ: YouTube часто скрывает точное число лайков в PlayerResponse.
+        // Иногда оно есть в VideoDetails, иногда только в UI.
+        // Пока возьмем из watchPage (если мы восстановим парсинг там) или поставим 0.
+        long likeCount = watchPage.LikeCount ?? 0;
+
         return new Video(
             videoId,
             title,
             new Author(channelId, channelTitle),
-            uploadDate,
-            playerResponse.Description ?? "",
             playerResponse.Duration,
             thumbnails,
-            playerResponse.Keywords,
-            // Engagement statistics may be hidden
-            new Engagement(
-                playerResponse.ViewCount ?? 0,
-                watchPage.LikeCount ?? 0,
-                watchPage.DislikeCount ?? 0
-            )
+            viewCount,
+            likeCount
         );
     }
 }

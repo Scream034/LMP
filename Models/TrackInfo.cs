@@ -5,6 +5,7 @@ public class TrackInfo
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Author { get; set; } = string.Empty;
+    public bool IsOfficialArtist { get; set; } = false;
     public string Url { get; set; } = string.Empty;
     public string StreamUrl { get; set; } = string.Empty;
     public TimeSpan Duration { get; set; }
@@ -59,7 +60,7 @@ public class TrackInfo
         IsDisliked = IsDisliked,
         IsDownloaded = IsDownloaded,
         LocalPath = LocalPath,
-        InPlaylists = new HashSet<string>(InPlaylists),
+        InPlaylists = [.. InPlaylists],
         RadioSeedId = RadioSeedId
     };
 }

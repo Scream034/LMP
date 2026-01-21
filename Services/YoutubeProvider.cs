@@ -11,7 +11,7 @@ using Playlist = MyLiteMusicPlayer.Models.Playlist;
 
 namespace MyLiteMusicPlayer.Services;
 
-public class YoutubeProvider
+public partial class YoutubeProvider
 {
     private readonly YoutubeClient _youtube;
     private readonly string _downloadFolder;
@@ -24,17 +24,11 @@ public class YoutubeProvider
     public event Action<string>? OnStatusChanged;
     public event Action<string>? OnError;
 
-    private static readonly Regex YoutubeVideoRegex = new(
-        @"(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex YoutubeVideoRegex = _YoutubeVideoRegex();
 
-    private static readonly Regex YoutubePlaylistRegex = new(
-        @"(?:youtube\.com\/.*[?&]list=)([a-zA-Z0-9_-]+)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
 
-    private static readonly Regex ValidYoutubeId = new(
-        @"^[a-zA-Z0-9_-]{11}$",
-        RegexOptions.Compiled);
+    private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
     public YoutubeProvider()
     {
@@ -53,7 +47,7 @@ public class YoutubeProvider
         return Task.CompletedTask;
     }
 
-    #region ========== RefreshStreamUrlAsync ==========
+    #region RefreshStreamUrlAsync
 
     public async Task<(string Url, long Size)?> RefreshStreamUrlAsync(TrackInfo track, CancellationToken ct = default)
     {
@@ -80,18 +74,24 @@ public class YoutubeProvider
 
             var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, cts.Token);
 
+            // Явно ищем AAC (MP4), fallback на любой с максимальным битрейтом
             var audioStream = manifest.GetAudioOnlyStreams()
-                .OrderByDescending(s => s.Container.Name == "mp4" ? 2 : 0)
-                .ThenByDescending(s => s.Container.Name == "m4a" ? 1 : 0)
-                .ThenByDescending(s => s.Bitrate.BitsPerSecond)
-                .FirstOrDefault();
+                .Where(s => s.Container.Name.Equals("mp4", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(s => s.Bitrate.BitsPerSecond)
+                .FirstOrDefault()
+                ?? manifest.GetAudioOnlyStreams()
+                    .OrderByDescending(s => s.Bitrate.BitsPerSecond)
+                    .FirstOrDefault();
 
             if (audioStream != null)
             {
                 var url = audioStream.Url;
                 var size = audioStream.Size.Bytes;
+
+                // Логируем, что именно выбрали
+                var codec = audioStream.AudioCodec; // opus или mp4a
                 sw.Stop();
-                NotifyStatus($"[{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}, {audioStream.Bitrate}, {size / 1024 / 1024}MB)");
+                NotifyStatus($"[{videoId}] Got stream in {sw.ElapsedMilliseconds}ms ({audioStream.Container.Name}/{codec}, {audioStream.Bitrate}, {size / 1024 / 1024}MB)");
 
                 CacheStreamUrl(videoId, url, size);
                 track.StreamUrl = url;
@@ -110,7 +110,7 @@ public class YoutubeProvider
 
     #endregion
 
-    #region ========== Cache ==========
+    #region Cache
 
     private bool TryGetFromCache(string videoId, out string? url, out long size)
     {
@@ -146,9 +146,9 @@ public class YoutubeProvider
 
     #endregion
 
-    #region ========== Search, Playlist, etc. ==========
+    #region Search, Playlist, etc.
 
-    public QueryType DetectQueryType(string query)
+    public static QueryType DetectQueryType(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return QueryType.None;
         query = query.Trim();
@@ -160,7 +160,7 @@ public class YoutubeProvider
         return QueryType.Search;
     }
 
-    public string? ExtractVideoId(string url)
+    public static string? ExtractVideoId(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         var match = YoutubeVideoRegex.Match(url);
@@ -168,7 +168,7 @@ public class YoutubeProvider
         try { return VideoId.TryParse(url)?.Value; } catch { return null; }
     }
 
-    private string? ExtractVideoIdFromTrack(TrackInfo track)
+    private static string? ExtractVideoIdFromTrack(TrackInfo track)
     {
         string cleanId = track.Id?.Trim() ?? "";
         if (cleanId.StartsWith("yt_"))
@@ -273,7 +273,7 @@ public class YoutubeProvider
         catch { return await SearchAsync("top music 2024", count); }
     }
 
-    public Task<List<Playlist>> GetUserPlaylistsAsync() => Task.FromResult(new List<Playlist>());
+    public static Task<List<Playlist>> GetUserPlaylistsAsync() => Task.FromResult(new List<Playlist>());
     public Task<List<TrackInfo>> GetPersonalRecommendationsAsync(int count = 20) => GetTrendingAsync(count);
 
     public async Task<string?> DownloadTrackAsync(TrackInfo track, IProgress<float>? progress = null, CancellationToken ct = default)
@@ -305,11 +305,11 @@ public class YoutubeProvider
 
     #endregion
 
-    #region ========== Helpers ==========
+    #region Helpers
 
-    private TrackInfo ConvertToTrackInfo(Video video)
+    private static TrackInfo ConvertToTrackInfo(Video video)
     {
-        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
+        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault(); // Берем самый большой сразу
         return new TrackInfo
         {
             Id = $"yt_{video.Id.Value}",
@@ -321,7 +321,7 @@ public class YoutubeProvider
         };
     }
 
-    private TrackInfo ConvertSearchResultToTrackInfo(VideoSearchResult video)
+    private static TrackInfo ConvertSearchResultToTrackInfo(VideoSearchResult video)
     {
         var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
         return new TrackInfo
@@ -331,7 +331,8 @@ public class YoutubeProvider
             Author = video.Author.ChannelTitle,
             Url = video.Url,
             Duration = video.Duration ?? TimeSpan.Zero,
-            ThumbnailUrl = thumb?.Url ?? ""
+            ThumbnailUrl = thumb?.Url ?? "",
+            IsOfficialArtist = video.IsOfficialArtist
         };
     }
 
@@ -367,6 +368,13 @@ public class YoutubeProvider
         Log.Error(message); // Теперь Log указывает на твой Logger
         OnError?.Invoke(message);
     }
+
+    [GeneratedRegex(@"(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})", RegexOptions.IgnoreCase | RegexOptions.Compiled, "ru-RU")]
+    private static partial Regex _YoutubeVideoRegex();
+    [GeneratedRegex(@"(?:youtube\.com\/.*[?&]list=)([a-zA-Z0-9_-]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled, "ru-RU")]
+    private static partial Regex _YoutubePlaylistRegex();
+    [GeneratedRegex(@"^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled)]
+    private static partial Regex _ValidYoutubeId();
 
     #endregion
 }
