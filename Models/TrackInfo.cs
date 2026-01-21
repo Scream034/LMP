@@ -65,6 +65,19 @@ public class TrackInfo
     /// </summary>
     public int PreferredBitrate { get; set; }
 
+    /// <summary>
+    /// Временный выбор контейнера для текущей сессии (ручное переключение).
+    /// Имеет приоритет над сохраненным. Не сохраняется на диск.
+    /// </summary>
+    [JsonIgnore]
+    public string? TransientContainer { get; set; }
+
+    /// <summary>
+    /// Временный выбор битрейта для текущей сессии.
+    /// </summary>
+    [JsonIgnore]
+    public int TransientBitrate { get; set; }
+
     /// <summary>Закэшированный кодек (Opus/AAC/etc)</summary>
     [JsonIgnore]
     public string CachedCodec { get; set; } = "";

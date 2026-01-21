@@ -136,7 +136,6 @@ public partial class YoutubeProvider
         CancellationToken ct = default)
     {
         string? videoId = ExtractVideoIdFromTrack(track);
-
         if (string.IsNullOrEmpty(videoId))
         {
             NotifyError("[YouTube] Could not extract video ID");
@@ -146,8 +145,25 @@ public partial class YoutubeProvider
         var sw = Stopwatch.StartNew();
         NotifyStatus($"[YouTube] [{videoId}] Getting stream URL...");
 
-        // Генерируем ключ кэша с учетом предпочтительного контейнера
-        string cacheKey = GenerateCacheKey(videoId, track.PreferredContainer, track.PreferredBitrate);
+        // ОПРЕДЕЛЕНИЕ ФОРМАТА:
+        // 1. Сначала проверяем временный выбор (если пользователь только что переключил качество вручную)
+        string? targetContainer = track.TransientContainer;
+        int targetBitrate = track.TransientBitrate;
+
+        // 2. Если временного нет, проверяем сохраненный, НО только если включена настройка
+        if (string.IsNullOrEmpty(targetContainer))
+        {
+            if (_libraryService?.Data.RememberTrackFormat == true)
+            {
+                targetContainer = track.PreferredContainer;
+                targetBitrate = track.PreferredBitrate;
+            }
+            // Если RememberTrackFormat == false, то targetContainer останется null,
+            // что приведет к использованию Auto режима (SelectBestStream выберет по умолчанию)
+        }
+
+        // Генерируем ключ кэша с учетом выбранного (или авто) контейнера
+        string cacheKey = GenerateCacheKey(videoId, targetContainer, targetBitrate);
 
         // Проверяем кэш
         if (TryGetFromCache(cacheKey, out var cached))
@@ -174,7 +190,8 @@ public partial class YoutubeProvider
                 return null;
             }
 
-            AudioOnlyStreamInfo? selectedStream = SelectBestStream(audioStreams, track.PreferredContainer, track.PreferredBitrate);
+            // Передаем определенный нами targetContainer (который может быть null для Авто)
+            AudioOnlyStreamInfo? selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
 
             if (selectedStream == null)
             {
@@ -196,7 +213,6 @@ public partial class YoutubeProvider
             CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
 
             track.StreamUrl = url;
-
             return (url, size, bitrate, codec, container);
         }
         catch (OperationCanceledException)
