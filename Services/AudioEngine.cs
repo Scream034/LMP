@@ -467,9 +467,8 @@ public class AudioEngine : ViewModelBase, IDisposable
                 return;
             }
 
-            Log.Info($"[AudioEngine] Starting MemoryFirst stream. Size: {size / 1024}KB, Format: {streamDetails.Codec}/{streamDetails.Bitrate}kbps");
+            Log.Info($"[AudioEngine] Starting stream. Size: {size / 1024}KB, Format: {streamDetails.Codec}/{streamDetails.Bitrate}kbps");
 
-            // Создаем поток. Теперь файл точно свободен благодаря StopPlaybackAsync.
             var stream = new MemoryFirstCachingStream(
                 track.Id,
                 url,
@@ -478,9 +477,7 @@ public class AudioEngine : ViewModelBase, IDisposable
                 _cacheManager
             );
 
-            // Предбуферизация
-            int prebuffer = size > 20 * 1024 * 1024 ? 64 * 1024 : 128 * 1024;
-            await stream.PreBufferAsync(prebuffer, ct);
+            await stream.PreBufferAsync(ct);
 
             if (_session != session || ct.IsCancellationRequested)
             {
