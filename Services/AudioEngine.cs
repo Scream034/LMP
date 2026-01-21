@@ -141,6 +141,8 @@ public class AudioEngine : ViewModelBase, IDisposable
     public event Action? OnStreamInfoReady;
     public event Action<bool, bool>? OnPlaybackStateChanged;
 
+    private TaskCompletionSource<bool>? _playbackStartedTcs;
+
     // КОНСТРУКТОР И ИНИЦИАЛИЗАЦИЯ
 
     public AudioEngine(YoutubeProvider youtube, LibraryService library)
@@ -178,7 +180,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         Core.Initialize();
         _libVLC = new LibVLC(
             "--no-video", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
-            "--network-caching=2048", "--file-caching=1024", "--live-caching=1024",
+            "--network-caching=1024", "--file-caching=512", "--live-caching=512",
             "--http-reconnect", "--http-continuous",
             "--audio-resampler=speex", "--aout=wasapi",
             "--clock-jitter=0", "--clock-synchro=0",
@@ -281,45 +283,66 @@ public class AudioEngine : ViewModelBase, IDisposable
         Log.Info($"[AudioEngine] Switching quality to {container}/{targetBitrate}kbps...");
 
         var position = CurrentPosition;
+        var trackToPlay = CurrentTrack;
 
-        // 1. Устанавливаем временные параметры (для мгновенного действия в текущей сессии)
-        CurrentTrack.TransientContainer = container;
-        CurrentTrack.TransientBitrate = targetBitrate;
+        // 1. Устанавливаем временные параметры
+        trackToPlay.TransientContainer = container;
+        trackToPlay.TransientBitrate = targetBitrate;
 
-        // 2. Если включено запоминание, сохраняем в библиотеку и на диск
+        // 2. Если включено запоминание, сохраняем в библиотеку
         if (_library.Data.RememberTrackFormat)
         {
-            CurrentTrack.PreferredContainer = container;
-            CurrentTrack.PreferredBitrate = targetBitrate;
+            trackToPlay.PreferredContainer = container;
+            trackToPlay.PreferredBitrate = targetBitrate;
 
-            // ОБНОВЛЕНИЕ БИБЛИОТЕКИ: Гарантируем, что трек с настройками сохранен в базе
-            if (_library.Data.Tracks.TryGetValue(CurrentTrack.Id, out var savedTrack))
+            if (_library.Data.Tracks.TryGetValue(trackToPlay.Id, out var savedTrack))
             {
                 savedTrack.PreferredContainer = container;
                 savedTrack.PreferredBitrate = targetBitrate;
             }
             else
             {
-                // Если трека не было в библиотеке, добавляем его, чтобы сохранить настройки
-                // (При этом он может не быть "Лайкнут", но настройки будут помниться)
-                _library.Data.Tracks[CurrentTrack.Id] = CurrentTrack.Clone();
+                _library.Data.Tracks[trackToPlay.Id] = trackToPlay.Clone();
             }
             _library.Save();
         }
 
-        // 3. Сбрасываем текущий URL, чтобы PlayTrack запросил новый
-        CurrentTrack.StreamUrl = string.Empty;
+        // 3. Сбрасываем URL
+        trackToPlay.StreamUrl = string.Empty;
 
-        // 4. Перезапускаем трек
-        await PlayTrackAsync(CurrentTrack);
+        // 4. Создаём TaskCompletionSource для ожидания Playing
+        _playbackStartedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // 5. Восстанавливаем позицию
-        await Task.Delay(800);
+        // 5. Запускаем воспроизведение
+        await PlayTrackAsync(trackToPlay);
+
+        // 6. Ждём события Playing (с таймаутом)
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await _playbackStartedTcs.Task.WaitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Warn("[AudioEngine] Timeout waiting for playback start during quality switch");
+        }
+        finally
+        {
+            _playbackStartedTcs = null;
+        }
+
+        // 7. Восстанавливаем позицию
         if (position.TotalSeconds > 1)
         {
+            // Небольшая задержка чтобы VLC стабилизировался
+            await Task.Delay(200);
             await SeekAsync(position);
+            Log.Info($"[AudioEngine] Quality switched to {container}/{targetBitrate}kbps, position restored to {position}");
         }
-        Log.Info($"[AudioEngine] Quality switched to {container}/{targetBitrate}kbps, position restored to {position}");
+        else
+        {
+            Log.Info($"[AudioEngine] Quality switched to {container}/{targetBitrate}kbps");
+        }
     }
 
     /// <summary>
@@ -354,7 +377,7 @@ public class AudioEngine : ViewModelBase, IDisposable
 
         SafeInvoke(() => OnTrackChanged?.Invoke(track));
 
-        // Выносим всю тяжелую работу в фоновый поток ★★★
+        // Выносим всю тяжелую работу в фоновый поток
         // Это гарантирует, что UI освобождается мгновенно после установки флага IsLoading.
         // VLC Stop() и сетевые запросы будут выполняться в ThreadPool.
         _ = Task.Run(async () =>
@@ -643,15 +666,22 @@ public class AudioEngine : ViewModelBase, IDisposable
         SafeInvoke(() => OnPlaybackStateChanged?.Invoke(isPlaying, isPaused));
     }
 
-    // Обработчики VLC
+    /// <summary>
+    /// Обработчики VLC
+    /// </summary>
     private void OnVlcPlaying(object? sender, EventArgs e)
     {
         Log.Info("[AudioEngine] VLC Event: Playing");
         if (_isDisposed) return;
+
         _isPlayerReady = true;
         IsLoading = false;
         ApplyVolumeImmediate();
         NotifyPlaybackStateChanged();
+
+        // Сигнализируем о готовности
+        _playbackStartedTcs?.TrySetResult(true);
+
         _ = Task.Run(async () =>
         {
             await Task.Delay(1500);
