@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Threading;
+using DynamicData.Binding;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -156,11 +157,12 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
         _audio.OnTrackChanged += t => Dispatcher.UIThread.Post(() => HandleTrackChanged(t));
 
-        _audio.OnLoadingChanged += l => Dispatcher.UIThread.Post(() =>
-        {
-            IsLoading = l;
-            IsSeekBusy = l;
-        });
+        _audio.WhenValueChanged(x => x.IsLoading)
+            .Subscribe(l =>
+            {
+                IsLoading = l;
+                IsSeekBusy = l;
+            });
 
         _audio.OnStreamInfoReady += () => Dispatcher.UIThread.Post(UpdateStreamInfo);
 

@@ -33,7 +33,7 @@
 
 ## ⚙️ Технические "фишки"
 
-### Memory-First Caching Stream v7
+### Memory-First Caching Stream
 В отличие от обычных плееров, MyLiteMusicPlayer использует кастомный поток для аудио:
 1.  **Chunked requests:** Загрузка большими блоками для обхода ограничений скорости YouTube.
 2.  **Adaptive Buffer:** Автоматическая пауза загрузки, если буфер заполнен, и возобновление при необходимости.
@@ -83,6 +83,16 @@ dotnet run
 - [ ] Улучшенная синхронизация с Google Account.
 - [ ] Радио на основе текущего трека (Mixes).
 - [ ] Эквалайзер.
+
+---
+
+## Настройка Google OAuth
+
+1. Создайте проект в [Google Cloud Console](https://console.cloud.google.com/)
+2. Включите YouTube Data API v3
+3. Создайте OAuth 2.0 credentials (Desktop App)
+4. Скопируйте `appsecrets.template` и переименуйте в `appsecrets.json`
+5. Вставьте свои Client ID и Client Secret
 
 ---
 

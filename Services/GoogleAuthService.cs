@@ -10,10 +10,8 @@ namespace MyLiteMusicPlayer.Services;
 
 public class GoogleAuthService : IDisposable
 {
-    // !!! ВСТАВЬТЕ СЮДА СВОИ ДАННЫЕ ИЗ GOOGLE CLOUD CONSOLE !!!
-    // Тип приложения при создании Credentials выбирайте "Desktop App"
-    private const string ClientId = "ВАШ_CLIENT_ID.apps.googleusercontent.com";
-    private const string ClientSecret = "ВАШ_CLIENT_SECRET";
+    private readonly string _clientId;
+    private readonly string _clientSecret;
 
     // Порт должен совпадать с тем, что слушает HttpListener
     private const string RedirectUri = "http://127.0.0.1:8765/";
@@ -37,6 +35,11 @@ public class GoogleAuthService : IDisposable
         string appFolder = Path.Combine(appData, "LiteMusicPlayer");
         Directory.CreateDirectory(appFolder);
         _tokenPath = Path.Combine(appFolder, "auth.json");
+
+        // Загружаем секреты
+        var secrets = SecretsLoader.Load();
+        _clientId = secrets.Google.ClientId;
+        _clientSecret = secrets.Google.ClientSecret;
 
         LoadTokens();
     }
@@ -93,7 +96,7 @@ public class GoogleAuthService : IDisposable
 
             // 2. Формирование URL
             string authUrl = $"https://accounts.google.com/o/oauth2/v2/auth?" +
-                $"client_id={Uri.EscapeDataString(ClientId)}&" +
+                $"client_id={Uri.EscapeDataString(_clientId)}&" +
                 $"redirect_uri={Uri.EscapeDataString(RedirectUri)}&" +
                 $"response_type=code&" +
                 $"scope={Uri.EscapeDataString(Scope)}&" +
@@ -161,8 +164,8 @@ public class GoogleAuthService : IDisposable
         {
             var content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["client_id"] = ClientId,
-                ["client_secret"] = ClientSecret,
+                ["client_id"] = _clientId,
+                ["client_secret"] = _clientSecret,
                 ["code"] = code,
                 ["code_verifier"] = codeVerifier,
                 ["grant_type"] = "authorization_code",
@@ -219,8 +222,8 @@ public class GoogleAuthService : IDisposable
         {
             var content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["client_id"] = ClientId,
-                ["client_secret"] = ClientSecret,
+                ["client_id"] = _clientId,
+                ["client_secret"] = _clientSecret,
                 ["refresh_token"] = State.RefreshToken,
                 ["grant_type"] = "refresh_token"
             });

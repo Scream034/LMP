@@ -14,26 +14,24 @@ public class PlaylistCardViewModel : ViewModelBase
     public string Name => Playlist.Name;
     public string? ThumbnailUrl => Playlist.ThumbnailUrl;
     public int TrackCount => Playlist.TrackCount;
+
+    // Используем новые хелперы
     public bool IsLocal => Playlist.IsLocal;
-    public bool IsLiked => Playlist.Id == "liked";
+    public bool IsSynced => Playlist.IsFromAccount; // Иконка облака
+    public bool IsReadOnly => !Playlist.IsEditable; // Иконка замка
 
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
-
-    // Локализованная строка количества треков
     public string FormattedTrackCount => LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
     public PlaylistCardViewModel(Playlist playlist, Action<string> onOpen)
     {
         Playlist = playlist;
-
-        // Команда открытия вызывает экшн навигации, переданный из родителя
         OpenCommand = ReactiveCommand.Create(() => onOpen(playlist.Id));
 
-        // Обновляем текст при изменении количества треков или смене языка
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)));
 
-        LocalizationService.Instance.LanguageChanged += (s, e) =>
+        LocalizationService.Instance.LanguageChanged += (_, _) =>
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
 }

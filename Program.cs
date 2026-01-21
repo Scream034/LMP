@@ -49,7 +49,9 @@ class Program
         // --- Core Services ---
         services.AddSingleton<LibraryService>();
         services.AddSingleton<GoogleAuthService>();
-        services.AddSingleton<YoutubeProvider>();  // YoutubeExplode - единственный провайдер!
+        services.AddSingleton<YoutubeProvider>();
+        services.AddSingleton<YoutubeUserDataService>();
+        services.AddSingleton<MusicLibraryManager>();
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
 

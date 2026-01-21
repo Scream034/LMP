@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -7,136 +8,123 @@ using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
-public class TrackItemViewModel : ViewModelBase
+public class TrackItemViewModel : ViewModelBase, IDisposable
 {
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
+    private readonly MusicLibraryManager _manager;
+
+    private readonly CompositeDisposable _disposables = new();
 
     public TrackInfo Track { get; }
 
-    [Reactive] public bool IsPlaying { get; set; }
-    [Reactive] public bool IsCurrentTrack { get; set; }
+    // Реактивные свойства состояния
+    [Reactive] public bool IsActive { get; private set; }
+    [Reactive] public bool IsPlaying { get; private set; }
     [Reactive] public bool IsLiked { get; set; }
+    [Reactive] public bool IsDownloaded { get; set; }
     [Reactive] public bool IsDownloading { get; set; }
     [Reactive] public float DownloadProgress { get; set; }
-    [Reactive] public bool IsHovered { get; set; }
 
-    public string Title => Track.Title;
-    public string Author => Track.Author;
-    public TimeSpan Duration => Track.Duration;
-    public string ThumbnailUrl => Track.ThumbnailUrl;
-    public bool IsDownloaded => Track.IsDownloaded;
+    // Статические свойства (не меняются) - без [Reactive] для экономии памяти
+    public string Title { get; }
+    public string Author { get; }
+    public TimeSpan Duration { get; }
+    public string ThumbnailUrl { get; }
 
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
-    public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
-    public ReactiveCommand<Unit, Unit> DownloadCommand { get; }
-    public ReactiveCommand<Unit, Unit> StartRadioCommand { get; }
 
     public TrackItemViewModel(
         TrackInfo track,
         AudioEngine audio,
         LibraryService library,
         DownloadService downloads,
-        Action<TrackInfo>? onPlay = null,
-        Action<TrackInfo>? onRadio = null)
+        MusicLibraryManager manager,
+        Action<TrackInfo>? onPlay = null)
     {
         Track = track;
         _audio = audio;
         _library = library;
         _downloads = downloads;
+        _manager = manager;
 
+        // Инициализируем статические свойства один раз
+        Title = track.Title;
+        Author = track.Author;
+        Duration = track.Duration;
+        ThumbnailUrl = track.ThumbnailUrl;
+
+        IsDownloaded = track.IsDownloaded;
         IsLiked = track.IsLiked;
 
-        // Подписка на обновление трека
+        // 1. Подписка на обновление (Лайки)
         Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
                 h => _library.OnTrackUpdated += h,
                 h => _library.OnTrackUpdated -= h)
+            .Where(t => t.Id == Track.Id)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(updatedTrack =>
             {
-                if (Track.Id == updatedTrack.Id)
-                {
-                    IsLiked = updatedTrack.IsLiked;
-                    Track.IsLiked = updatedTrack.IsLiked;
-                }
-            });
+                IsLiked = updatedTrack.IsLiked;
+                Track.IsLiked = updatedTrack.IsLiked;
+            })
+            .DisposeWith(_disposables);
 
-        // Подписка на состояние воспроизведения
-        Observable.FromEvent<TrackInfo?>(
-                h => _audio.OnTrackChanged += h,
-                h => _audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(t =>
+        // 2. Подписка на состояние плеера
+        _audio.WhenAnyValue(x => x.CurrentTrack, x => x.IsPlaying)
+            .Select(t =>
             {
-                if (t == null)
-                {
-                    IsCurrentTrack = false;
-                    IsPlaying = false;
-                }
-                else
-                {
-                    IsCurrentTrack = t.Id == Track.Id;
-                    IsPlaying = IsCurrentTrack && _audio.IsPlaying;
-                }
-            });
+                var (current, playing) = t;
+                bool isMe = current?.Id == Track.Id;
+                return (IsActive: isMe, IsPlaying: isMe && playing);
+            })
+            .DistinctUntilChanged()
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(state =>
+            {
+                IsActive = state.IsActive;
+                IsPlaying = state.IsPlaying;
+            })
+            .DisposeWith(_disposables);
 
-        // Подписка на загрузку
+        // 3. Загрузки
         Observable.FromEvent<Action<string, float>, (string, float)>(
                 h => (id, p) => h((id, p)),
                 h => _downloads.OnProgress += h,
                 h => _downloads.OnProgress -= h)
             .Where(x => x.Item1 == Track.Id)
+            .Sample(TimeSpan.FromMilliseconds(100)) // Ограничиваем частоту обновления прогресса
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(x =>
             {
-                IsDownloading = true;
+                IsDownloading = x.Item2 < 1.0f;
                 DownloadProgress = x.Item2;
-            });
+                if (x.Item2 >= 1.0f)
+                {
+                    IsDownloaded = true;
+                }
+            })
+            .DisposeWith(_disposables);
 
-        // ИСПРАВЛЕНО: CreateFromTask блокирует повторные вызовы пока выполняется
         PlayCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             if (onPlay != null)
-            {
                 onPlay(Track);
-            }
             else
-            {
                 await _audio.PlayTrackAsync(Track);
-            }
         });
 
-        ToggleLikeCommand = ReactiveCommand.Create(() =>
+        ToggleLikeCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            _library.ToggleLike(Track);
+            await _manager.ToggleLikeAsync(Track);
+            IsLiked = Track.IsLiked;
         });
+    }
 
-        AddToQueueCommand = ReactiveCommand.Create(() =>
-        {
-            _audio.Enqueue(Track);
-        });
-
-        var canDownload = this.WhenAnyValue(x => x.IsDownloading, d => !d);
-        DownloadCommand = ReactiveCommand.Create(() =>
-        {
-            if (!Track.IsDownloaded) _downloads.StartDownload(Track);
-        }, canDownload);
-
-        StartRadioCommand = ReactiveCommand.Create(() =>
-        {
-            onRadio?.Invoke(Track);
-        });
-
-        // // Предзагрузка при наведении
-        // this.WhenAnyValue(x => x.IsHovered)
-        //     .Where(h => h)
-        //     .Throttle(TimeSpan.FromMilliseconds(300))
-        //     .ObserveOn(RxApp.MainThreadScheduler)
-        //     .Subscribe(__ =>
-        //     {
-        //         _ = _audio.PrefetchAsync(Track);
-        //     });
+    public void Dispose()
+    {
+        _disposables.Dispose();
     }
 }

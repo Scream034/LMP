@@ -3,6 +3,7 @@ using LibVLCSharp.Shared;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.ViewModels;
 using ReactiveUI;
+using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.Services;
 
@@ -51,9 +52,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     // === Properties ===
 
-    public TrackInfo? CurrentTrack { get; private set; }
-    public bool IsPlaying => _player?.IsPlaying ?? false;
-    public bool IsPaused => _player?.State == VLCState.Paused;
+    [Reactive] public TrackInfo? CurrentTrack { get; private set; }
+    [Reactive] public bool IsPlaying { get; private set; }
+    [Reactive] public bool IsPaused { get; private set; }
+    [Reactive] public bool IsLoading { get; private set; }
+
     public string VlcStateString => _player?.State.ToString() ?? "NULL";
     public double BufferProgress => _currentStream?.DownloadProgress ?? 0;
     public bool ShuffleEnabled { get; set; }
@@ -67,16 +70,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             ? TimeSpan.FromMilliseconds(len)
             : CurrentTrack?.Duration ?? TimeSpan.Zero);
 
-    private bool _isLoading;
-    public bool IsLoading
-    {
-        get => _isLoading;
-        private set => SetProperty(ref _isLoading, value, () => RaiseEvent(() => OnLoadingChanged?.Invoke(value)));
-    }
-
     // === Events ===
 
-    public event Action<bool>? OnLoadingChanged;
     public event Action<TrackInfo?>? OnTrackChanged;
     public event Action? OnPlaybackStopped;
     public event Action<string>? OnError;
@@ -99,7 +94,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
             MaxConnectionsPerServer = 4,
             ConnectTimeout = TimeSpan.FromSeconds(5)
-        }) { Timeout = TimeSpan.FromMinutes(5) };
+        })
+        { Timeout = TimeSpan.FromMinutes(5) };
 
         ShuffleEnabled = library.Data.ShuffleEnabled;
         RepeatMode = library.Data.RepeatMode;
@@ -124,8 +120,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         _player = new MediaPlayer(_libVLC);
         _player.Playing += (_, _) => OnVlcPlaying();
-        _player.Paused += (_, _) => NotifyPlaybackState();
-        _player.Stopped += (_, _) => { _isPlayerReady = false; NotifyPlaybackState(); };
+        _player.Paused += OnVlcPaused;
+        _player.Stopped += OnVlcStopped;
         _player.EndReached += (_, _) => OnVlcEndReached();
         _player.EncounteredError += (_, _) => OnVlcError();
         _player.TimeChanged += (_, e) => OnVlcTimeChanged(e.Time);
@@ -184,7 +180,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         Math.Clamp(saved is <= 1f and > 0 ? (int)(saved * 100) : (int)saved, 0, 500);
 
     // === Playback ===
-
     public async Task PlayTrackAsync(TrackInfo track)
     {
         if (track == null || _isDisposed) return;
@@ -198,8 +193,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         Try(() => oldCts?.Cancel());
 
         ResetStreamInfo();
+
         IsLoading = true;
         CurrentTrack = track;
+
         _isPlayerReady = false;
         _isPlayingOrBuffering = true;
 
@@ -334,22 +331,32 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             {
                 switch (state)
                 {
-                    case VLCState.Playing: break;
-                    case VLCState.Paused: _player.SetPause(false); break;
-                    case VLCState.Stopped or VLCState.Ended or VLCState.Error:
-                        if (CurrentTrack != null) _ = PlayTrackAsync(CurrentTrack);
-                        else _player.Play();
+                    case VLCState.Playing:
                         break;
-                    default: _player.Play(); break;
+                    case VLCState.Paused:
+                        _player.SetPause(false);
+                        IsPlaying = true;
+                        IsPaused = false;
+                        break;
+                    case VLCState.Stopped or VLCState.Ended or VLCState.Error:
+                        if (CurrentTrack != null)
+                            _ = PlayTrackAsync(CurrentTrack);
+                        else
+                            _player.Play();
+                        break;
+                    default:
+                        _player.Play();
+                        break;
                 }
             }
             else if (state is VLCState.Playing or VLCState.Buffering or VLCState.Opening)
             {
                 _player.Pause();
+                IsPlaying = false;
+                IsPaused = true;
             }
         }));
     }
-
     public async Task SeekAsync(TimeSpan position)
     {
         if (_player == null || !_isPlayerReady || _isDisposed) return;
@@ -365,8 +372,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _ = StopPlaybackAsync();
 
         ResetStreamInfo();
+
         CurrentTrack = null;
         IsLoading = false;
+        IsPlaying = false;
+        IsPaused = false;
+
         _isPlayingOrBuffering = false;
 
         RaiseEvent(() => OnTrackChanged?.Invoke(null));
@@ -513,23 +524,55 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
         _isPlayerReady = true;
+
         IsLoading = false;
+        IsPlaying = true;
+        IsPaused = false;
+
         ApplyVolume();
         NotifyPlaybackState();
         _playbackStartedTcs?.TrySetResult(true);
     }
 
+    private void OnVlcPaused(object? sender, EventArgs e)
+    {
+        if (_isDisposed) return;
+
+        IsPlaying = false;
+        IsPaused = true;
+
+        NotifyPlaybackState();
+    }
+
+    private void OnVlcStopped(object? sender, EventArgs e)
+    {
+        if (_isDisposed) return;
+        _isPlayerReady = false;
+
+        IsPlaying = false;
+        IsPaused = false;
+
+        NotifyPlaybackState();
+    }
+
     private void OnVlcEndReached()
     {
         if (_isDisposed) return;
+
+        IsPlaying = false;
+        IsPaused = false;
+
         NotifyPlaybackState();
         _ = Task.Run(async () => { await Task.Delay(50); if (!_isDisposed) await PlayNextAsync(); });
     }
 
     private void OnVlcError()
     {
-        RaiseEvent(() => OnError?.Invoke("VLC playback error"));
         IsLoading = false;
+        IsPlaying = false;
+        IsPaused = false;
+
+        RaiseEvent(() => OnError?.Invoke("VLC playback error"));
         NotifyPlaybackState();
     }
 
@@ -566,14 +609,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             _library.Data.Tracks[track.Id] = track.Clone();
         }
         _library.Save();
-    }
-
-    private void SetProperty<T>(ref T field, T value, Action? onChange = null)
-    {
-        if (EqualityComparer<T>.Default.Equals(field, value)) return;
-        field = value;
-        this.RaisePropertyChanged();
-        onChange?.Invoke();
     }
 
     private static void RaiseEvent(Action action) => Try(action);

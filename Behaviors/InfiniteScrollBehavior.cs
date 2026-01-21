@@ -1,19 +1,20 @@
-// Behaviors/InfiniteScrollBehavior.cs
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.VisualTree;
 using Avalonia.Xaml.Interactivity;
 using System.Windows.Input;
 
 namespace MyLiteMusicPlayer.Behaviors;
 
 /// <summary>
-/// Behavior для автоматической подгрузки при прокрутке к концу списка.
-/// Прикрепляется к ScrollViewer.
+/// Behavior для автоматической подгрузки.
+/// Можно вешать на ScrollViewer или на ListBox (найдет ScrollViewer внутри).
 /// </summary>
-public class InfiniteScrollBehavior : Behavior<ScrollViewer>
+public class InfiniteScrollBehavior : Behavior<Control>
 {
     private IDisposable? _offsetSubscription;
     private bool _isExecuting;
+    private ScrollViewer? _scrollViewer;
 
     public static readonly StyledProperty<ICommand?> CommandProperty =
         AvaloniaProperty.Register<InfiniteScrollBehavior, ICommand?>(nameof(Command));
@@ -37,12 +38,37 @@ public class InfiniteScrollBehavior : Behavior<ScrollViewer>
     {
         base.OnAttached();
 
+        // Пытаемся найти ScrollViewer сразу или после загрузки
+        if (AssociatedObject is ScrollViewer sv)
+        {
+            AttachToScrollViewer(sv);
+        }
+        else if (AssociatedObject != null)
+        {
+            // Если прицеплен к ListBox, ждем пока он загрузится, чтобы найти внутри шаблонный ScrollViewer
+            AssociatedObject.Loaded += OnAssociatedObjectLoaded;
+        }
+    }
+
+    private void OnAssociatedObjectLoaded(object? sender, global::Avalonia.Interactivity.RoutedEventArgs e)
+    {
         if (AssociatedObject != null)
         {
-            _offsetSubscription = AssociatedObject
-                .GetObservable(ScrollViewer.OffsetProperty)
-                .Subscribe(OnOffsetChanged);
+            AssociatedObject.Loaded -= OnAssociatedObjectLoaded;
+            // Ищем ScrollViewer в визуальном дереве контрола
+            var scroll = AssociatedObject.FindDescendantOfType<ScrollViewer>();
+            if (scroll != null)
+            {
+                AttachToScrollViewer(scroll);
+            }
         }
+    }
+
+    private void AttachToScrollViewer(ScrollViewer sv)
+    {
+        _scrollViewer = sv;
+        _offsetSubscription = sv.GetObservable(ScrollViewer.OffsetProperty)
+            .Subscribe(OnOffsetChanged);
     }
 
     protected override void OnDetaching()
@@ -50,18 +76,20 @@ public class InfiniteScrollBehavior : Behavior<ScrollViewer>
         base.OnDetaching();
         _offsetSubscription?.Dispose();
         _offsetSubscription = null;
+        _scrollViewer = null;
     }
 
     private void OnOffsetChanged(Vector offset)
     {
-        if (AssociatedObject is not ScrollViewer sv || Command == null)
+        if (_scrollViewer == null || Command == null || _isExecuting)
             return;
 
-        if (_isExecuting) return;
+        var sv = _scrollViewer;
 
         if (sv.Viewport.Height <= 0 || sv.Extent.Height <= 0)
             return;
 
+        // Если контент меньше вьюпорта - не грузим (или грузим сразу, зависит от логики, тут не грузим)
         if (sv.Extent.Height <= sv.Viewport.Height)
             return;
 
@@ -77,11 +105,10 @@ public class InfiniteScrollBehavior : Behavior<ScrollViewer>
     private async void ExecuteWithGuard()
     {
         _isExecuting = true;
-
         try
         {
             Command?.Execute(null);
-            await Task.Delay(100);
+            await Task.Delay(500); // Небольшая задержка перед следующим срабатыванием
         }
         finally
         {

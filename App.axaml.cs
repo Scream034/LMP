@@ -53,6 +53,22 @@ public partial class App : Application
                     Log.Info($"Background initialization failed: {ex.Message}");
                 }
             });
+
+            // 4. Фоновая инициализация лайкнутых треков
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    Log.Info("Starting liked tracks sync...");
+                    var musicLibraryManager = Program.Services.GetRequiredService<MusicLibraryManager>();
+                    await musicLibraryManager.SyncLikedTracksAsync();
+                    Log.Info("Liked tracks sync completed.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Info($"Liked tracks sync failed: {ex.Message}");
+                }
+            });
         }
 
         base.OnFrameworkInitializationCompleted();

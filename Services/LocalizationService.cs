@@ -139,16 +139,33 @@ public sealed class LocalizationService : INotifyPropertyChanged
 
     public string GetPlural(string key, int number)
     {
-        var forms = this[key].Split('|', StringSplitOptions.RemoveEmptyEntries);
-        if (forms.Length < 3) return forms[0]; // Fallback
+        if (!_resources.TryGetValue(key, out var val)) return key;
 
-        // Правила для русского языка
-        int n = Math.Abs(number) % 100;
-        int n1 = n % 10;
-        if (n > 10 && n < 20) return $"{number} {forms[2]}";
-        if (n1 > 1 && n1 < 5) return $"{number} {forms[1]}";
-        if (n1 == 1) return $"{number} {forms[0]}";
-        return $"{number} {forms[2]}";
+        var forms = val.Split('|', StringSplitOptions.RemoveEmptyEntries);
+        int n = Math.Abs(number);
+
+        // Логика для Русского (3 формы: 1 трек, 2 трека, 5 треков)
+        if (_currentLanguage == "ru")
+        {
+            if (forms.Length < 3) return $"{number} {forms[0]}";
+
+            int n100 = n % 100;
+            int n10 = n % 10;
+
+            if (n100 > 10 && n100 < 20) return $"{number} {forms[2]}";
+            if (n10 > 1 && n10 < 5) return $"{number} {forms[1]}";
+            if (n10 == 1) return $"{number} {forms[0]}";
+            return $"{number} {forms[2]}";
+        }
+
+        // Логика для Английского (2 формы: 1 track, 2 tracks)
+        // И общий фоллбек
+        if (forms.Length >= 2)
+        {
+            return n == 1 ? $"{number} {forms[0]}" : $"{number} {forms[1]}";
+        }
+
+        return $"{number} {forms[0]}";
     }
 }
 

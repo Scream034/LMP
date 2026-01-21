@@ -6,7 +6,9 @@ using Material.Icons;
 using Avalonia.Input;
 using MyLiteMusicPlayer.Services; // Убедитесь, что этот using есть
 using static System.Net.Mime.MediaTypeNames;
-using Avalonia.Controls; // Убедитесь, что этот using есть
+using Avalonia.Controls;
+using Avalonia.Platform;
+using Avalonia.Media.Imaging; // Убедитесь, что этот using есть
 
 namespace MyLiteMusicPlayer.Converters;
 
@@ -191,6 +193,88 @@ public sealed class AudioQualityToStringConverter : IValueConverter
             };
         }
         return value?.ToString();
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+
+/// <summary>
+/// Конвертирует строку avares://... в Bitmap.
+/// Возвращает null, если это HTTP ссылка (чтобы её обработал AsyncImageLoader).
+/// </summary>
+public class BitmapAssetValueConverter : IValueConverter
+{
+    public static readonly BitmapAssetValueConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is string uriStr && !string.IsNullOrEmpty(uriStr))
+        {
+            // Если это веб-ссылка, возвращаем null (пусть другой Image контрол с AsyncLoader'ом её подхватит)
+            if (uriStr.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            // Если это ресурс avalonia
+            if (uriStr.StartsWith("avares://"))
+            {
+                try
+                {
+                    return new Bitmap(AssetLoader.Open(new Uri(uriStr)));
+                }
+                catch (Exception)
+                {
+                    // Логируем или возвращаем null при ошибке
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+public class StringStartsWithConverter : IValueConverter
+{
+    public static readonly StringStartsWithConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is string s && parameter is string prefix)
+        {
+            return s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+/// <summary>
+/// Возвращает строку, только если она начинается с http/https.
+/// Иначе возвращает null. Спасает AsyncImageLoader от краша на avares:// ссылках.
+/// </summary>
+public class WebUrlConverter : IValueConverter
+{
+    public static readonly WebUrlConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is string url && url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
+            return url;
+        }
+        return null;
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

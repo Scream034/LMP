@@ -87,9 +87,16 @@ public class LibraryService
             {
                 Id = "liked",
                 Name = "Любимое",
-                IsLocal = true
+                SyncMode = PlaylistSyncMode.LocalOnly, // Изначально локальный, менеджер может изменить на Sync
+                ThumbnailUrl = "avares://MyLiteMusicPlayer/Assets/liked-cover.png" // Можно заглушку поставить
             };
         }
+    }
+
+    public Playlist GetLikedPlaylist()
+    {
+        EnsureLikedPlaylist();
+        return Data.Playlists["liked"];
     }
 
     public void AddOrUpdateTrack(TrackInfo track)
@@ -108,7 +115,7 @@ public class LibraryService
 
         Data.Tracks[track.Id] = track;
         Save();
-        OnDataChanged?.Invoke();
+        // Уведомление вызываем снаружи или точечно, чтобы не спамить при массовом апдейте
     }
 
     /// <summary>
@@ -118,10 +125,11 @@ public class LibraryService
     {
         if (Data.Playlists.TryGetValue(playlist.Id, out var existing))
         {
-            // Обновляем существующий, чтобы сохранить свежесть данных
             existing.Name = playlist.Name;
             existing.ThumbnailUrl = playlist.ThumbnailUrl;
-            existing.TrackIds = playlist.TrackIds; // Полностью заменяем список треков
+            existing.TrackIds = playlist.TrackIds;
+            existing.YoutubeId = playlist.YoutubeId;
+            existing.SyncMode = playlist.SyncMode;
             existing.UpdatedAt = DateTime.Now;
         }
         else
@@ -132,9 +140,6 @@ public class LibraryService
         OnDataChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Объединяет треки из одного плейлиста в другой.
-    /// </summary>
     public bool MergePlaylists(string sourceId, string targetId)
     {
         if (!Data.Playlists.TryGetValue(sourceId, out var sourcePlaylist) ||
@@ -143,7 +148,6 @@ public class LibraryService
             return false;
         }
 
-        // Объединять можно только в локальные плейлисты
         if (!targetPlaylist.IsLocal) return false;
 
         var targetTrackIds = new HashSet<string>(targetPlaylist.TrackIds);
@@ -154,7 +158,6 @@ public class LibraryService
             if (targetTrackIds.Add(trackId))
             {
                 newTracksCount++;
-                // Обновляем метаданные трека
                 if (Data.Tracks.TryGetValue(trackId, out var track))
                 {
                     track.InPlaylists.Add(targetId);
@@ -251,11 +254,20 @@ public class LibraryService
 
     public Playlist CreatePlaylist(string name)
     {
-        var playlist = new Playlist { Name = name, IsLocal = true };
+        var playlist = new Playlist { Name = name, SyncMode = PlaylistSyncMode.LocalOnly };
         Data.Playlists[playlist.Id] = playlist;
         Save();
         OnDataChanged?.Invoke();
         return playlist;
+    }
+
+    public void RemovePlaylist(string playlistId)
+    {
+        if (Data.Playlists.Remove(playlistId))
+        {
+            Save();
+            OnDataChanged?.Invoke();
+        }
     }
 
     public void RenamePlaylist(string playlistId, string newName)
@@ -355,7 +367,6 @@ public class LibraryService
         Data.FakeAccountName = name;
         Data.FakeAccountAvatarUrl = avatarUrl;
         Save();
-        // Вызываем событие, чтобы UI обновился
         OnDataChanged?.Invoke();
     }
 

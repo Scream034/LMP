@@ -12,5 +12,8 @@
     <conv:BoolToCursorConverter x:Key="BoolToCursor" />
     <conv:ToUpperConverter x:Key="ToUpper" />
     <conv:AudioQualityToStringConverter x:Key="AudioQualityToString" />
+    <conv:BitmapAssetValueConverter x:Key="BitmapAssetConverter" />
+    <conv:StringStartsWithConverter x:Key="StringStartsWithConverter" />
+    <conv:WebUrlConverter x:Key="WebUrlConverter" />
 
 </ResourceDictionary>

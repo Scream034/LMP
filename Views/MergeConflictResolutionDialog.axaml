@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+        x:Class="MyLiteMusicPlayer.Views.MergeConflictResolutionDialog"
+        x:DataType="vm:MergeConflictResolutionViewModel"
+        Title="Разрешение конфликтов"
+        Width="600" Height="500"
+        WindowStartupLocation="CenterOwner"
+        SystemDecorations="BorderOnly"
+        Background="{StaticResource BgBaseBrush}">
+
+    <Border BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+        <Grid RowDefinitions="Auto, Auto, *, Auto">
+            
+            <TextBlock Grid.Row="0" Text="{Binding L[Conflict_Header]}" FontSize="20" FontWeight="Bold" Margin="0,0,0,16"/>
+            
+            <!-- Глобальные кнопки -->
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,16">
+                <Button Content="Пропустить все" Command="{Binding SetAllSkipCommand}"/>
+                <Button Content="Дублировать все" Command="{Binding SetAllDuplicateCommand}"/>
+                <Button Content="Объединить все" Command="{Binding SetAllMergeCommand}" Classes="accent"/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="2">
+                <ItemsControl ItemsSource="{Binding Conflicts}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="6" Padding="12" Margin="0,0,0,8">
+                                <Grid ColumnDefinitions="*, Auto">
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding PlaylistName}" FontWeight="Bold" FontSize="16"/>
+                                        <TextBlock Text="Этот плейлист уже существует локально." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">
+                                        <RadioButton Content="{Binding L[Conflict_Skip]}" IsChecked="{Binding IsSkip}"/>
+                                        <RadioButton Content="{Binding L[Conflict_Duplicate]}" IsChecked="{Binding IsDuplicate}"/>
+                                        <RadioButton Content="{Binding L[Conflict_Merge]}" IsChecked="{Binding IsMerge}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <Button Grid.Row="3" Content="Применить" Command="{Binding ConfirmCommand}" 
+                    Classes="accent" HorizontalAlignment="Right" Margin="0,16,0,0"/>
+        </Grid>
+    </Border>
+</Window>

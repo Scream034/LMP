@@ -26,9 +26,18 @@
                                         Width="64" Height="64"
                                         Foreground="{StaticResource TextMutedBrush}"
                                         IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
-                                    <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
+
+                                    <!-- ИСПРАВЛЕНИЕ: Используем WebUrlConverter -->
+                                    <Image
+                                        asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
                                         Stretch="UniformToFill"
-                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}}" />
+                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
+
+                                    <!-- ИСПРАВЛЕНИЕ: Поддержка локальных картинок -->
+                                    <Image
+                                        Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
+                                        Stretch="UniformToFill"
+                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
                                 </Panel>
                             </Border>
 
@@ -42,7 +51,7 @@
                                 Foreground="{StaticResource TextPrimaryBrush}" />
 
                             <!-- Subtitle -->
-                            <TextBlock Text="{Binding TrackCount, StringFormat='{}{0} tracks'}"
+                            <TextBlock Text="{Binding FormattedTrackCount}"
                                 FontSize="12"
                                 Margin="0,4,0,0"
                                 Foreground="{StaticResource TextSecondaryBrush}" />

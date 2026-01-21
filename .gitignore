@@ -1,3 +1,8 @@
+# Секреты
+appsecrets.json
+appsecrets.*.json
+!appsecrets.template.json
+
 ## --- [ Общие артефакты компиляции ] ---
 [Bb]in/
 [Oo]bj/

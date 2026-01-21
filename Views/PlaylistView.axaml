@@ -8,72 +8,105 @@
     x:Class="MyLiteMusicPlayer.Views.PlaylistView"
     x:DataType="vm:PlaylistViewModel">
 
-    <ScrollViewer>
-        <i:Interaction.Behaviors>
-            <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="150" />
-        </i:Interaction.Behaviors>
+    <!-- ИСПРАВЛЕНО: Grid с 3 строками для размещения лоадера внизу -->
+    <Grid RowDefinitions="Auto, *, Auto">
+        
+        <!-- Row 0: ШАПКА -->
+        <Border Grid.Row="0" Padding="0,0,0,16" BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="0,0,0,1">
+            <StackPanel>
+                <Grid ColumnDefinitions="Auto, *" Margin="0,0,0,24">
+                    <Border Grid.Column="0" Width="160" Height="160" CornerRadius="4"
+                        ClipToBounds="True" Background="{StaticResource BgSkeletonBrush}">
+                        <Panel>
+                            <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
+                                Foreground="{StaticResource TextMutedBrush}"
+                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
+                            
+                            <!-- Картинки -->
+                            <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
+                                Stretch="UniformToFill"
+                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
+                            <Image Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
+                                Stretch="UniformToFill"
+                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
+                        </Panel>
+                    </Border>
 
-        <DockPanel>
-            <!-- Header -->
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto, *" Margin="0,0,0,32">
-                <Border Grid.Column="0" Width="200" Height="200" CornerRadius="4"
-                    ClipToBounds="True" Background="{StaticResource BgSkeletonBrush}">
-                    <Panel>
-                        <mi:MaterialIcon Kind="MusicNote" Width="80" Height="80"
-                            Foreground="{StaticResource TextMutedBrush}"
-                            IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
-                        <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
-                            Stretch="UniformToFill" />
-                    </Panel>
-                </Border>
-
-                <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
-                    <TextBlock Text="{Binding L[Playlist_Type]}" FontSize="12" FontWeight="Bold"
-                        Foreground="{StaticResource TextSecondaryBrush}" />
-                    <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black"
-                        Margin="0,4,0,16" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding FormattedTrackCount}"
+                    <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
+                        <TextBlock Text="{Binding L[Playlist_Type]}" FontSize="12" FontWeight="Bold"
                             Foreground="{StaticResource TextSecondaryBrush}" />
-                        <TextBlock Text="{Binding TotalDuration, StringFormat='{}{0:h}h {0:m}m'}"
-                            Foreground="{StaticResource TextSecondaryBrush}" />
+                        <TextBlock Text="{Binding PlaylistName}" FontSize="32" FontWeight="Black"
+                            Margin="0,4,0,12" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="{Binding FormattedTrackCount}"
+                                Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="•" Foreground="{StaticResource TextSecondaryBrush}" />
+                            <TextBlock Text="{Binding FormattedDuration}"
+                                Foreground="{StaticResource TextSecondaryBrush}" />
+                        </StackPanel>
                     </StackPanel>
+                </Grid>
+
+                <!-- Actions -->
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="48" Height="48">
+                        <mi:MaterialIcon Kind="Play" Width="24" Height="24" Foreground="{StaticResource TextDarkBrush}" />
+                    </Button>
+                    <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}" ToolTip.Tip="Shuffle">
+                        <mi:MaterialIcon Kind="Shuffle" Width="24" Height="24" />
+                    </Button>
+                    <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}" ToolTip.Tip="Download All">
+                        <mi:MaterialIcon Kind="Download" Width="24" Height="24" />
+                    </Button>
+                    <Button Classes="icon-btn" Command="{Binding RefreshPlaylistCommand}" IsVisible="{Binding IsCloud}" ToolTip.Tip="Refresh">
+                        <mi:MaterialIcon Kind="Sync" Width="24" Height="24" />
+                    </Button>
                 </StackPanel>
-            </Grid>
-
-            <!-- Actions -->
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="24" Margin="0,0,0,24">
-                <Button Classes="play-circle" Command="{Binding PlayAllCommand}">
-                    <mi:MaterialIcon Kind="Play" Width="28" Height="28"
-                        Foreground="{StaticResource TextDarkBrush}" />
-                </Button>
-                <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}"
-                    ToolTip.Tip="Shuffle">
-                    <mi:MaterialIcon Kind="Shuffle" Width="24" Height="24" />
-                </Button>
-                <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}"
-                    ToolTip.Tip="Download All">
-                    <mi:MaterialIcon Kind="Download" Width="24" Height="24" />
-                </Button>
             </StackPanel>
+        </Border>
+        
+        <!-- Загрузка (начальная) -->
+        <ContentControl Grid.Row="1" Classes="loading-initial" 
+                        IsVisible="{Binding IsLoading}" 
+                        VerticalAlignment="Center"/>
 
-            <!-- Loading -->
-            <ContentControl DockPanel.Dock="Top" Classes="loading-initial"
-                IsVisible="{Binding IsLoading}" />
+        <!-- Row 1: СПИСОК -->
+        <ListBox Grid.Row="1" 
+                 ItemsSource="{Binding Items}" 
+                 Background="Transparent" 
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 IsVisible="{Binding !IsLoading}">
+            
+            <i:Interaction.Behaviors>
+                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
+            </i:Interaction.Behaviors>
 
-            <!-- Tracks -->
-            <StackPanel DockPanel.Dock="Top" IsVisible="{Binding !IsLoading}">
-                <ItemsControl ItemsSource="{Binding Items}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <ContentControl Content="{Binding}" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+            <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="Margin" Value="0,0,0,4"/>
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                </Style>
+                <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+                    <Setter Property="Background" Value="Transparent"/>
+                </Style>
+                <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                    <Setter Property="Background" Value="Transparent"/>
+                </Style>
+            </ListBox.Styles>
+            
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <ContentControl Content="{Binding}" />
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
 
-                <!-- Скелеты подгрузки -->
-                <ContentControl Classes="loading-skeletons" IsVisible="{Binding IsLoadingMore}" />
-            </StackPanel>
-        </DockPanel>
-    </ScrollViewer>
+        <!-- Row 2: СКЕЛЕТОНЫ ПОДГРУЗКИ (ИСПРАВЛЕНО: Вынесено из ListBox) -->
+        <ContentControl Grid.Row="2" 
+                        Classes="loading-skeletons" 
+                        IsVisible="{Binding IsLoadingMore}"
+                        Margin="0,8,0,0"/>
+    </Grid>
 </UserControl>

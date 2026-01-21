@@ -17,6 +17,7 @@ using Playlist = MyLiteMusicPlayer.Models.Playlist;
 using System.Text.Json;
 using System.Net.Http.Headers;
 using YoutubeExplode.Channels;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MyLiteMusicPlayer.Services;
 
@@ -658,6 +659,12 @@ public partial class YoutubeProvider
         }
     }
 
+    public async Task<List<MyLiteMusicPlayer.Models.Playlist>> GetUserPlaylistsByAuthAsync()
+    {
+        var userDataService = Program.Services.GetRequiredService<YoutubeUserDataService>();
+        return await userDataService.GetMyPlaylistsAsync();
+    }
+
     /// <summary>
     /// Превращает результат поиска (без треков) в полноценный Playlist (с треками)
     /// </summary>
@@ -670,15 +677,13 @@ public partial class YoutubeProvider
 
             var newPlaylist = new Playlist
             {
-                Id = $"yt_{ytPlaylist.Id}", // Используем ID YouTube
-                YoutubePlaylistId = ytPlaylist.Id,
+                Id = $"yt_{ytPlaylist.Id}",
+                YoutubeId = ytPlaylist.Id, // БЫЛО: YoutubePlaylistId
                 Name = ytPlaylist.Title,
                 Author = ytPlaylist.Author?.ChannelTitle,
                 ThumbnailUrl = ytPlaylist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault()?.Url,
-                IsLocal = false, // Это сетевой плейлист
-                IsFromAccount = isAccountSync,
-                AllowNetwork = true,
-                AllowOffline = true
+
+                SyncMode = isAccountSync ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.CloudPublic,
             };
 
             // Сразу добавляем треки в базу, чтобы они не потерялись
@@ -773,12 +778,13 @@ public partial class YoutubeProvider
                 resultPlaylists.Add(new Playlist
                 {
                     Id = $"yt_{pl.Id}",
-                    YoutubePlaylistId = pl.Id,
+                    YoutubeId = pl.Id,
                     Name = pl.Title,
-                    Author = channel.Title, // Мы точно знаем автора, т.к. сканируем его канал
-                    IsLocal = false,
-                    IsFromAccount = false,
-                    ThumbnailUrl = pl.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
+                    Author = channel.Title,
+                    ThumbnailUrl = pl.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url,
+
+                    // Это публичный плейлист (Фейк), мы его не редактируем
+                    SyncMode = PlaylistSyncMode.CloudPublic
                 });
             }
 
@@ -790,72 +796,6 @@ public partial class YoutubeProvider
         {
             NotifyError($"[YouTube] Ошибка при получении плейлистов канала: {ex.Message}");
             return null;
-        }
-    }
-
-    /// <summary>
-    /// ИСПРАВЛЕНО: Получает плейлисты (включая приватные) для текущего пользователя.
-    /// </summary>
-    public async Task<List<Playlist>> GetUserPlaylistsAsync(CancellationToken ct = default)
-    {
-        if (_authService is null || !_authService.IsAuthenticated)
-        {
-            NotifyError("[YouTube] Аутентификация не пройдена.");
-            return [];
-        }
-
-        var accessToken = await _authService.GetValidAccessTokenAsync();
-        if (string.IsNullOrEmpty(accessToken)) return [];
-
-        try
-        {
-            var requestUri = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&mine=true&maxResults=50";
-            using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
-            var response = await _httpClient.SendAsync(request, ct);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var error = await response.Content.ReadAsStringAsync(ct);
-                NotifyError($"[YouTube] API Ошибка: {error}");
-                return [];
-            }
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            var result = new List<Playlist>();
-            using var doc = JsonDocument.Parse(json);
-
-            if (!doc.RootElement.TryGetProperty("items", out var items)) return [];
-
-            foreach (var item in items.EnumerateArray())
-            {
-                var snippet = item.GetProperty("snippet");
-                string? thumbUrl = null;
-                if (snippet.TryGetProperty("thumbnails", out var thumbs) && thumbs.TryGetProperty("default", out var defThumb))
-                {
-                    thumbUrl = defThumb.GetProperty("url").GetString();
-                }
-
-                var newPlaylist = new Playlist
-                {
-                    Id = $"yt_{item.GetProperty("id").GetString()}",
-                    YoutubePlaylistId = item.GetProperty("id").GetString(),
-                    Name = snippet.GetProperty("title").GetString()!,
-                    Author = snippet.GetProperty("channelTitle").GetString(),
-                    ThumbnailUrl = thumbUrl,
-                    IsLocal = false,
-                    IsFromAccount = true,
-                };
-                result.Add(newPlaylist);
-            }
-            NotifyStatus($"[YouTube] Загружено {result.Count} плейлистов с аккаунта.");
-            return result;
-        }
-        catch (Exception ex)
-        {
-            NotifyError($"[YouTube] Исключение при получении плейлистов: {ex.Message}");
-            return [];
         }
     }
 

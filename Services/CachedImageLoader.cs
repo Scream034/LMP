@@ -7,14 +7,9 @@ namespace MyLiteMusicPlayer.Services;
 /// <summary>
 /// Кастомный загрузчик для AsyncImageLoader с поддержкой нашего кэша
 /// </summary>
-public class CachedImageLoader : IAsyncImageLoader
+public class CachedImageLoader(ImageCacheService cache) : IAsyncImageLoader
 {
-    private readonly ImageCacheService _cache;
-
-    public CachedImageLoader(ImageCacheService cache)
-    {
-        _cache = cache;
-    }
+    private readonly ImageCacheService _cache = cache;
 
     public void Dispose()
     {
@@ -23,6 +18,13 @@ public class CachedImageLoader : IAsyncImageLoader
 
     public async Task<Bitmap?> ProvideImageAsync(string url)
     {
+        // ИСПРАВЛЕНИЕ: Игнорируем локальные ресурсы и пустые строки, 
+        // чтобы HttpClient не падал с ошибкой "Scheme not supported"
+        if (string.IsNullOrEmpty(url) || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         return await _cache.GetImageAsync(url);
     }
 }

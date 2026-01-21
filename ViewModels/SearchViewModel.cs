@@ -1,10 +1,8 @@
-// ViewModels/SearchViewModel.cs
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Reactive;
 
 namespace MyLiteMusicPlayer.ViewModels;
@@ -17,6 +15,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
+    private readonly MusicLibraryManager _manager; // <--- Добавлено
 
     private string _currentQuery = "";
 
@@ -35,7 +34,8 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         ImageCacheService imageCache,
         AudioEngine audio,
         LibraryService library,
-        DownloadService downloads)
+        DownloadService downloads,
+        MusicLibraryManager manager) // <--- Инъекция
     {
         _youtube = youtube;
         _searchCache = searchCache;
@@ -43,6 +43,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         _audio = audio;
         _library = library;
         _downloads = downloads;
+        _manager = manager; // <--- Сохранение
 
         var canSearch = this.WhenAnyValue(x => x.SearchQuery, q => !string.IsNullOrWhiteSpace(q));
         SearchCommand = ReactiveCommand.CreateFromTask(ExecuteSearchAsync, canSearch);
@@ -60,7 +61,8 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
             }
         }
 
-        return new TrackItemViewModel(track, _audio, _library, _downloads, PlayTrackWithContext);
+        // <--- Передаем _manager
+        return new TrackItemViewModel(track, _audio, _library, _downloads, _manager, PlayTrackWithContext);
     }
 
     protected override string GetItemId(TrackInfo item) => item.Id;
@@ -68,19 +70,13 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
         if (string.IsNullOrEmpty(_currentQuery)) return [];
-
-        var sw = Stopwatch.StartNew();
         var newTracks = await _youtube.SearchAsync(_currentQuery, TotalCount + 50);
         var result = newTracks.Skip(TotalCount).ToList();
-
-        Log.Info($"Fetched {result.Count} more in {sw.ElapsedMilliseconds}ms");
-
         if (result.Count > 0)
         {
             var allTracks = AllItems.Concat(result).ToList();
             _ = _searchCache.SetAsync(_currentQuery, allTracks);
         }
-
         return result;
     }
 
@@ -92,7 +88,6 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         ClearItems();
 
         _currentQuery = SearchQuery.Trim();
-        var sw = Stopwatch.StartNew();
 
         try
         {
@@ -115,45 +110,30 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
             }
             else
             {
-                // Проверяем кэш
                 var cached = await _searchCache.GetAsync(_currentQuery, 20);
-
                 if (cached != null && cached.Count > 0)
                 {
                     tracks = cached;
-                    Log.Info($"From cache: {cached.Count}");
                 }
                 else
                 {
                     IsFetchingFromNetwork = true;
                     tracks = await _youtube.SearchAsync(_currentQuery, 100);
                     IsFetchingFromNetwork = false;
-
-                    if (tracks.Count > 0)
-                    {
-                        _ = _searchCache.SetAsync(_currentQuery, tracks);
-                    }
+                    if (tracks.Count > 0) _ = _searchCache.SetAsync(_currentQuery, tracks);
                 }
 
-                // Предзагрузка изображений
                 var imageUrls = tracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
                 _ = _imageCache.PrefetchAsync(imageUrls!);
-
                 await InitializeItemsAsync(tracks, canFetchMore: true);
             }
 
             HasResults = tracks.Count > 0;
-            if (!HasResults)
-            {
-                ErrorMessage = L["Search_NoResults"];
-            }
-
-            Log.Info($"'{_currentQuery}': {tracks.Count} results in {sw.ElapsedMilliseconds}ms");
+            if (!HasResults) ErrorMessage = L["Search_NoResults"];
         }
         catch (Exception ex)
         {
             ErrorMessage = ex.Message;
-            Log.Info($"Error: {ex.Message}");
         }
         finally
         {
@@ -166,7 +146,6 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     {
         _audio.ClearQueue();
         _ = _audio.PlayTrackAsync(track);
-
         bool found = false;
         foreach (var item in Items)
         {

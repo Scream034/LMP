@@ -74,6 +74,11 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
         CancelLoading();
         _loadCts = new CancellationTokenSource();
 
+        foreach (var oldItem in Items)
+        {
+            if (oldItem is IDisposable d) d.Dispose();
+        }
+
         Items.Clear();
         _allItems.Clear();
         _loadedIds.Clear();
@@ -125,6 +130,12 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
     protected void ClearItems()
     {
         CancelLoading();
+
+        foreach (var item in Items)
+        {
+            if (item is IDisposable d) d.Dispose();
+        }
+
         Items.Clear();
         _allItems.Clear();
         _loadedIds.Clear();

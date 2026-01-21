@@ -14,12 +14,12 @@ public class ImageCacheService : IDisposable
     private readonly HttpClient _http;
     private readonly string _cacheFolder;
     private readonly SemaphoreSlim _downloadSemaphore = new(5); // Макс 5 параллельных загрузок
-    
+
     // LRU memory cache
     private readonly ConcurrentDictionary<string, CachedImage> _memoryCache = new();
     private readonly LinkedList<string> _lruOrder = new();
     private readonly object _lruLock = new();
-    
+
     private const int MaxMemoryCacheItems = 100;
     private const int MaxDiskCacheMb = 200;
     private long _currentDiskCacheBytes = 0;
@@ -61,9 +61,11 @@ public class ImageCacheService : IDisposable
         {
             try
             {
-                var bitmap = new Bitmap(diskPath);
-                AddToMemoryCache(key, bitmap);
-                return bitmap;
+                return await Task.Run(() =>
+                {
+                    using var stream = File.OpenRead(diskPath);
+                    return Bitmap.DecodeToWidth(stream, 300);
+                });
             }
             catch
             {
@@ -96,10 +98,10 @@ public class ImageCacheService : IDisposable
     public string? GetCachedPath(string url)
     {
         if (string.IsNullOrEmpty(url)) return null;
-        
+
         var key = GetCacheKey(url);
         var diskPath = GetDiskPath(key);
-        
+
         return File.Exists(diskPath) ? diskPath : null;
     }
 
@@ -123,9 +125,9 @@ public class ImageCacheService : IDisposable
 
             var bytes = await _http.GetByteArrayAsync(url, ct);
             await File.WriteAllBytesAsync(diskPath, bytes, ct);
-            
+
             Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
-            
+
             // Проверяем лимит
             if (_currentDiskCacheBytes > MaxDiskCacheMb * 1024 * 1024)
             {
@@ -147,7 +149,7 @@ public class ImageCacheService : IDisposable
     private async Task<Bitmap?> DownloadAndCacheAsync(string url, string key, CancellationToken ct)
     {
         await _downloadSemaphore.WaitAsync(ct);
-        
+
         try
         {
             // Повторная проверка после получения семафора
@@ -163,13 +165,11 @@ public class ImageCacheService : IDisposable
             await File.WriteAllBytesAsync(diskPath, bytes, ct);
             Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
 
-            // Создаём Bitmap
-            using var stream = new MemoryStream(bytes);
-            var bitmap = new Bitmap(stream);
-
-            AddToMemoryCache(key, bitmap);
-
-            return bitmap;
+            return await Task.Run(() =>
+            {
+                using var stream = new MemoryStream(bytes);
+                return Bitmap.DecodeToWidth(stream, 300);
+            });
         }
         catch (Exception ex)
         {
@@ -191,7 +191,7 @@ public class ImageCacheService : IDisposable
             {
                 var oldest = _lruOrder.Last!.Value;
                 _lruOrder.RemoveLast();
-                
+
                 if (_memoryCache.TryRemove(oldest, out var removed))
                 {
                     removed.Bitmap?.Dispose();
@@ -233,7 +233,7 @@ public class ImageCacheService : IDisposable
         try
         {
             Log.Info($"Cleaning up disk cache...");
-            
+
             var files = Directory.GetFiles(_cacheFolder)
                 .Select(f => new FileInfo(f))
                 .OrderBy(f => f.LastAccessTime)
