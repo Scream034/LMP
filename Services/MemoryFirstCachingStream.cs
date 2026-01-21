@@ -1,4 +1,3 @@
-// Services/MemoryFirstCachingStream.cs
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Headers;
@@ -8,25 +7,17 @@ using MyLiteMusicPlayer.Models;
 namespace MyLiteMusicPlayer.Services;
 
 /// <summary>
-/// Adaptive Streaming Buffer v13 - Priority-based downloading.
-/// Ключевая идея: VLC говорит нам что ему нужно через Read/Seek, мы качаем это приоритетно.
+/// Adaptive Streaming Buffer с приоритетной загрузкой по запросам VLC.
 /// </summary>
 public sealed class MemoryFirstCachingStream : Stream
 {
-    #region Constants
-
-    private const int ChunkSize = 128 * 1024;         // 128KB - один HTTP запрос
-    private const int MinPreBuffer = 128 * 1024;      // Только один чанк для старта
-    private const int ReadAheadChunks = 3;            // Только 3 чанка вперёд (384KB)
-    private const int MaxConcurrentDownloads = 3;     // Меньше параллелизма
-    private const int ReadTimeoutMs = 5000;           // 5 секунд
-    private const int MaxRamChunks = 128;             // 16MB в RAM (достаточно)
-    private const int ChunkDownloadTimeoutMs = 20000; // 20 секунд - единый таймаут на скачивание
-    private const int ProgressLogIntervalBytes = 6 * 1024 * 1024; // Логировать каждые 6MB
-
-    #endregion
-
-    #region State
+    private const int ChunkSize = 128 * 1024;          // 128KB
+    private const int ReadAheadChunks = 3;
+    private const int MaxConcurrentDownloads = 3;
+    private const int ReadTimeoutMs = 5000;
+    private const int MaxRamChunks = 128;              // ~16MB
+    private const int ChunkDownloadTimeoutMs = 20000;
+    private const int ProgressLogIntervalBytes = 6 * 1024 * 1024;
 
     private readonly string _trackId;
     private readonly string _url;
@@ -37,38 +28,28 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly RangeMap _diskRanges;
     private readonly int _totalChunks;
 
-    // Sparse storage - только загруженные чанки в памяти
     private readonly ConcurrentDictionary<int, byte[]> _chunks = new();
     private readonly ConcurrentDictionary<int, Task> _pendingDownloads = new();
     private readonly SemaphoreSlim _downloadSemaphore;
-
-    // Приоритетная очередь для скачивания (меньше = выше приоритет)
     private readonly PriorityQueue<int, int> _downloadQueue = new();
-    private readonly object _queueLock = new();
     private readonly HashSet<int> _queuedChunks = new();
+    private readonly object _queueLock = new();
 
-    // Disk I/O
-    private FileStream? _cacheFile;
     private readonly ReaderWriterLockSlim _fileLock = new(LockRecursionPolicy.NoRecursion);
-    private readonly Channel<(long Position, byte[] Data, int Length)> _diskChannel;
+    private readonly Channel<(long Pos, byte[] Data, int Len)> _diskChannel;
+    private readonly ManualResetEventSlim _dataAvailable = new(false);
+    private readonly CancellationTokenSource _disposeCts = new();
+    private CancellationTokenSource _cts;
+
     private readonly Task _diskWriterTask;
     private Task? _downloadLoop;
+    private FileStream? _cacheFile;
 
-    // Состояние
     private long _position;
     private long _bytesDownloaded;
     private volatile bool _downloadComplete;
-    private CancellationTokenSource _cts;
-    private readonly CancellationTokenSource _disposeCts = new();
     private volatile bool _disposed;
     private volatile bool _disposing;
-
-    // Сигнализация о новых данных
-    private readonly ManualResetEventSlim _dataAvailable = new(false);
-
-    #endregion
-
-    #region Properties
 
     public override bool CanRead => !_disposed;
     public override bool CanSeek => !_disposed;
@@ -81,28 +62,14 @@ public sealed class MemoryFirstCachingStream : Stream
         set => Seek(value, SeekOrigin.Begin);
     }
 
-    public double DownloadProgress
-    {
-        get
-        {
-            if (_contentLength <= 0) return 0;
-            long bytes = Volatile.Read(ref _bytesDownloaded);
-            return Math.Min((double)bytes / _contentLength * 100, 100);
-        }
-    }
+    public double DownloadProgress => _contentLength <= 0 ? 0 :
+        Math.Min((double)Volatile.Read(ref _bytesDownloaded) / _contentLength * 100, 100);
 
     public bool IsFullyDownloaded => _downloadComplete;
 
-    #endregion
-
-    #region Constructor
-
     public MemoryFirstCachingStream(
-        string trackId,
-        string url,
-        long contentLength,
-        HttpClient http,
-        StreamCacheManager cacheManager)
+        string trackId, string url, long contentLength,
+        HttpClient http, StreamCacheManager cacheManager)
     {
         _trackId = trackId;
         _url = url;
@@ -111,102 +78,59 @@ public sealed class MemoryFirstCachingStream : Stream
         _cacheManager = cacheManager;
         _cachePath = cacheManager.GetCachePath(trackId);
         _cts = new CancellationTokenSource();
-        _downloadSemaphore = new SemaphoreSlim(MaxConcurrentDownloads, MaxConcurrentDownloads);
+        _downloadSemaphore = new SemaphoreSlim(MaxConcurrentDownloads);
         _totalChunks = (int)((_contentLength + ChunkSize - 1) / ChunkSize);
 
-        // Загружаем метаданные или создаем новые, если их нет
         var meta = cacheManager.LoadOrCreateMetadata(trackId, url, contentLength);
-        // Десериализуем карту скачанных диапазонов из метаданных
         _diskRanges = RangeMap.Deserialize(meta.RangesJson);
 
-        _cacheFile = new FileStream(
-            _cachePath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.Read,
-            bufferSize: 65536,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        _cacheFile = new FileStream(_cachePath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+            FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.RandomAccess);
 
         if (_cacheFile.Length < _contentLength)
-        {
             _cacheFile.SetLength(_contentLength);
-        }
 
         _diskChannel = Channel.CreateBounded<(long, byte[], int)>(
-            new BoundedChannelOptions(512)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true
-            });
+            new BoundedChannelOptions(512) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
 
         _diskWriterTask = Task.Run(DiskWriterLoopAsync);
-
-        // Подсчитываем уже скачанные байты из кэша
         _bytesDownloaded = _diskRanges.DownloadedBytes;
 
-        long cachedKB = _diskRanges.DownloadedBytes / 1024;
-        Log.Info($"Opened {trackId}, size: {contentLength / 1024 / 1024}MB, disk cache: {cachedKB}KB");
+        Log.Info($"Opened {trackId}: {contentLength / 1024 / 1024}MB, cached: {_diskRanges.DownloadedBytes / 1024}KB");
     }
-
-    #endregion
-
-    #region === PRE-BUFFER ===
 
     public async Task<bool> PreBufferAsync(CancellationToken ct)
     {
         if (_disposed) return false;
 
-        // Сразу запускаем фоновый цикл обработки очереди
-        StartDownloadLoop();
+        _downloadLoop ??= Task.Run(() => DownloadLoopAsync(_cts.Token), _cts.Token);
 
-        // Если первый чанк уже есть на диске - отлично, ничего не ждем
-        if (HasChunk(0))
-        {
-            Log.Info("PreBuffer: first chunk found in disk cache.");
-            return true;
-        }
+        if (HasChunk(0)) return true;
 
-        Log.Info($"PreBuffer: downloading first chunk ({ChunkSize / 1024}KB)...");
         var sw = Stopwatch.StartNew();
-
-        // Ставим задачу на скачивание первого чанка
         EnqueueUrgent(0);
 
-        // Теперь ждем, пока он не скачается
         while (!HasChunk(0))
         {
-            // Ждем сигнала о поступлении НОВЫХ данных
-            if (!_dataAvailable.Wait(1000, ct)) // Ждем до 1 секунды
+            if (!_dataAvailable.Wait(1000, ct))
             {
-                // Если сигнала не было, проверяем общий таймаут
                 if (sw.ElapsedMilliseconds > ChunkDownloadTimeoutMs)
                 {
-                    Log.Error($"PreBuffer timed out after {sw.ElapsedMilliseconds}ms waiting for chunk 0.");
+                    Log.Error($"PreBuffer timeout after {sw.ElapsedMilliseconds}ms");
                     return false;
                 }
             }
-            // Сбрасываем сигнал, чтобы ждать следующего поступления данных
             _dataAvailable.Reset();
         }
 
-        sw.Stop();
         Log.Info($"PreBuffer OK in {sw.ElapsedMilliseconds}ms");
         return true;
     }
 
-    private void StartDownloadLoop()
-    {
-        if (_downloadLoop != null) return;
-        _downloadLoop = Task.Run(() => DownloadLoopAsync(_cts.Token), _cts.Token);
-    }
-
-    #endregion
-
-    #region === READ ===
-
     public override int Read(byte[] buffer, int offset, int count)
     {
         if (_disposed) return 0;
+
         long pos = Volatile.Read(ref _position);
         if (pos >= _contentLength) return 0;
 
@@ -219,63 +143,66 @@ public sealed class MemoryFirstCachingStream : Stream
 
         var sw = Stopwatch.StartNew();
 
-        // Цикл ожидания: ждем, пока нужный чанк не появится
         while (!HasChunk(chunkIndex))
         {
-            // 1. Ставим чанк в приоритетную очередь
             EnqueueUrgent(chunkIndex);
-
-            // 2. Ждем сигнала о том, что какой-то чанк скачался
-            if (!_dataAvailable.Wait(1000, _disposeCts.Token)) // Ждем до 1 секунды
+            if (!_dataAvailable.Wait(1000, _disposeCts.Token))
             {
-                // 3. Если долго нет данных, выходим по таймауту, чтобы не вешать VLC
                 if (sw.ElapsedMilliseconds > ReadTimeoutMs)
                 {
-                    Log.Error($"READ TIMEOUT while waiting for chunk {chunkIndex} at pos {pos}");
+                    Log.Error($"Read timeout for chunk {chunkIndex}");
                     return 0;
                 }
             }
             _dataAvailable.Reset();
         }
 
-        // К этому моменту чанк ГАРАНТИРОВАННО есть либо в RAM, либо на диске
         int bytesRead = TryReadChunk(chunkIndex, offsetInChunk, buffer, offset, toRead);
-
         if (bytesRead > 0)
         {
             Interlocked.Add(ref _position, bytesRead);
-            EnqueueReadAhead(chunkIndex); // Планируем опережающую загрузку
+            EnqueueReadAhead(chunkIndex);
         }
 
         return bytesRead;
     }
 
-    private int TryReadChunk(int chunkIndex, int offsetInChunk, byte[] buffer, int bufferOffset, int count)
+    public override long Seek(long offset, SeekOrigin origin)
     {
-        // 1. Пробуем RAM
-        if (_chunks.TryGetValue(chunkIndex, out var chunk))
+        if (_disposed) return 0;
+
+        long newPos = origin switch
         {
-            int available = Math.Min(count, chunk.Length - offsetInChunk);
-            if (available > 0)
-            {
-                Buffer.BlockCopy(chunk, offsetInChunk, buffer, bufferOffset, available);
-                return available;
-            }
-        }
+            SeekOrigin.Begin => offset,
+            SeekOrigin.Current => Position + offset,
+            SeekOrigin.End => _contentLength + offset,
+            _ => throw new ArgumentException("Invalid origin", nameof(origin))
+        };
 
-        // 2. Пробуем диск
-        long chunkStart = (long)chunkIndex * ChunkSize;
-        long chunkEnd = Math.Min(chunkStart + ChunkSize, _contentLength);
+        newPos = Math.Clamp(newPos, 0, _contentLength);
+        int newChunk = (int)(newPos / ChunkSize);
 
-        if (_diskRanges.IsRangeComplete(chunkStart, chunkEnd))
-        {
-            return ReadFromDisk(chunkStart + offsetInChunk, buffer, bufferOffset, count);
-        }
-
-        return 0;
+        EnqueueUrgent(newChunk);
+        Volatile.Write(ref _position, newPos);
+        return newPos;
     }
 
-    private int ReadFromDisk(long position, byte[] buffer, int offset, int count)
+    private int TryReadChunk(int idx, int off, byte[] buf, int bufOff, int count)
+    {
+        if (_chunks.TryGetValue(idx, out var chunk))
+        {
+            int available = Math.Min(count, chunk.Length - off);
+            if (available > 0) Buffer.BlockCopy(chunk, off, buf, bufOff, available);
+            return available;
+        }
+
+        long start = (long)idx * ChunkSize;
+        return _diskRanges.IsRangeComplete(start, Math.Min(start + ChunkSize, _contentLength))
+            ? ReadFromDisk(start + off, buf, bufOff, count)
+            : 0;
+    }
+
+    private int ReadFromDisk(long pos, byte[] buf, int off, int count)
     {
         if (_cacheFile == null || _disposing) return 0;
 
@@ -285,324 +212,176 @@ public sealed class MemoryFirstCachingStream : Stream
             try
             {
                 if (_cacheFile == null) return 0;
-                _cacheFile.Seek(position, SeekOrigin.Begin);
-                return _cacheFile.Read(buffer, offset, count);
+                _cacheFile.Seek(pos, SeekOrigin.Begin);
+                return _cacheFile.Read(buf, off, count);
             }
-            finally
-            {
-                _fileLock.ExitReadLock();
-            }
+            finally { _fileLock.ExitReadLock(); }
         }
-        catch
-        {
-            return 0;
-        }
+        catch { return 0; }
     }
 
-    #endregion
-
-    #region === SEEK ===
-
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        if (_disposed) return 0;
-
-        long newPosition = origin switch
-        {
-            SeekOrigin.Begin => offset,
-            SeekOrigin.Current => Position + offset,
-            SeekOrigin.End => _contentLength + offset,
-            _ => throw new ArgumentException("Invalid SeekOrigin", nameof(origin))
-        };
-
-        newPosition = Math.Clamp(newPosition, 0, _contentLength);
-        long oldPosition = Volatile.Read(ref _position);
-
-        int oldChunk = (int)(oldPosition / ChunkSize);
-        int newChunk = (int)(newPosition / ChunkSize);
-
-        if (Math.Abs(newChunk - oldChunk) > 4)
-        {
-            Log.Debug($"VLC Seek: {oldPosition / 1024}KB → {newPosition / 1024}KB");
-        }
-
-        // Приоритетно качаем новый регион
-        EnqueueUrgent(newChunk);
-
-        Volatile.Write(ref _position, newPosition);
-        return newPosition;
-    }
-
-    #endregion
-
-    #region === PRIORITY QUEUE ===
-
-    /// <summary>
-    /// Срочная загрузка - VLC запросил эти данные прямо сейчас
-    /// </summary>
-    private void EnqueueUrgent(int chunkIndex)
+    private void EnqueueUrgent(int idx)
     {
         lock (_queueLock)
         {
-            // Добавляем текущий чанк с НАИВЫСШИМ приоритетом
-            if (!HasChunk(chunkIndex) && !_pendingDownloads.ContainsKey(chunkIndex))
-            {
-                if (_queuedChunks.Add(chunkIndex))
-                {
-                    _downloadQueue.Enqueue(chunkIndex, 0); // Приоритет 0 = максимальный
-                }
-            }
-
-            // Следующие 4 чанка тоже приоритетны
-            for (int i = 1; i <= 4; i++)
-            {
-                int chunk = chunkIndex + i;
-                if (chunk >= _totalChunks) break;
-                if (HasChunk(chunk)) continue;
-                if (_pendingDownloads.ContainsKey(chunk)) continue;
-
-                if (_queuedChunks.Add(chunk))
-                {
-                    _downloadQueue.Enqueue(chunk, i); // Приоритет 1-4
-                }
-            }
+            TryEnqueue(idx, 0);
+            for (int i = 1; i <= 4 && idx + i < _totalChunks; i++)
+                TryEnqueue(idx + i, i);
         }
     }
 
-    /// <summary>
-    /// Опережающая загрузка - качаем вперёд от текущей позиции
-    /// </summary>
-    private void EnqueueReadAhead(int currentChunk)
+    private void EnqueueReadAhead(int current)
     {
         lock (_queueLock)
         {
-            for (int i = 1; i <= ReadAheadChunks; i++)
-            {
-                int chunk = currentChunk + i;
-                if (chunk >= _totalChunks) break;
-                if (HasChunk(chunk)) continue;
-                if (_pendingDownloads.ContainsKey(chunk)) continue;
-
-                if (_queuedChunks.Add(chunk))
-                {
-                    _downloadQueue.Enqueue(chunk, 100 + i); // Lower priority
-                }
-            }
+            for (int i = 1; i <= ReadAheadChunks && current + i < _totalChunks; i++)
+                TryEnqueue(current + i, 100 + i);
         }
     }
 
-    private bool HasChunk(int chunkIndex)
+    private void TryEnqueue(int idx, int priority)
     {
-        if (_chunks.ContainsKey(chunkIndex)) return true;
-
-        long chunkStart = (long)chunkIndex * ChunkSize;
-        long chunkEnd = Math.Min(chunkStart + ChunkSize, _contentLength);
-        return _diskRanges.IsRangeComplete(chunkStart, chunkEnd);
+        if (HasChunk(idx) || _pendingDownloads.ContainsKey(idx)) return;
+        if (_queuedChunks.Add(idx)) _downloadQueue.Enqueue(idx, priority);
     }
 
-    #endregion
+    private bool HasChunk(int idx)
+    {
+        if (_chunks.ContainsKey(idx)) return true;
+        long start = (long)idx * ChunkSize;
+        return _diskRanges.IsRangeComplete(start, Math.Min(start + ChunkSize, _contentLength));
+    }
 
-    #region === DOWNLOAD LOOP ===
     private async Task DownloadLoopAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        long lastLogBytes = 0;
+        long lastLog = 0;
 
         while (!ct.IsCancellationRequested && !_disposing)
         {
-            int chunkToDownload = -1;
+            int chunk = -1;
 
-            // 1. Всегда берем задачу из приоритетной очереди
             lock (_queueLock)
             {
                 while (_downloadQueue.Count > 0)
                 {
-                    var candidate = _downloadQueue.Dequeue();
-                    _queuedChunks.Remove(candidate);
-
-                    if (!HasChunk(candidate) && !_pendingDownloads.ContainsKey(candidate))
-                    {
-                        chunkToDownload = candidate;
-                        break;
-                    }
+                    var c = _downloadQueue.Dequeue();
+                    _queuedChunks.Remove(c);
+                    if (!HasChunk(c) && !_pendingDownloads.ContainsKey(c)) { chunk = c; break; }
                 }
             }
 
-            // 2. Если в очереди нет задач, просто ждем
-            if (chunkToDownload < 0)
+            if (chunk < 0)
             {
                 if (IsAllDownloaded())
                 {
                     _downloadComplete = true;
-                    // Не логируем для маленьких файлов, которые скачались мгновенно
                     if (sw.Elapsed.TotalSeconds > 1)
                         Log.Info($"Download complete in {sw.Elapsed.TotalSeconds:F1}s");
-                    break; // Выходим из цикла
+                    break;
                 }
 
-                // Ждем появления новых запросов на скачивание
-                try
-                {
-                    await Task.Delay(100, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    break; // Выходим, если стрим закрывается
-                }
+                try { await Task.Delay(100, ct); } catch { break; }
                 continue;
             }
 
-            // 4. Скачиваем чанк (с ограничением параллелизма)
             await _downloadSemaphore.WaitAsync(ct);
-            _ = DownloadChunkWithReleaseAsync(chunkToDownload, ct);
+            _ = DownloadChunkSafeAsync(chunk, ct);
 
-            // 5. Логирование прогресса
-            long currentBytes = Volatile.Read(ref _bytesDownloaded);
-            if (currentBytes - lastLogBytes >= ProgressLogIntervalBytes)
+            long bytes = Volatile.Read(ref _bytesDownloaded);
+            if (bytes - lastLog >= ProgressLogIntervalBytes)
             {
-                lastLogBytes = currentBytes;
-                double progress = (double)currentBytes / _contentLength * 100;
-                // Скорость считаем по времени с начала загрузки
-                double speed = currentBytes / 1024.0 / Math.Max(0.001, sw.Elapsed.TotalSeconds);
-                Log.Info($"Download: {currentBytes / 1024}KB @ {speed:F0}KB/s ({progress:F1}%)");
+                lastLog = bytes;
+                double speed = bytes / 1024.0 / Math.Max(0.001, sw.Elapsed.TotalSeconds);
+                Log.Info($"Download: {bytes / 1024}KB @ {speed:F0}KB/s ({bytes * 100.0 / _contentLength:F1}%)");
             }
         }
     }
 
-    private bool IsAllDownloaded()
+    private async Task DownloadChunkSafeAsync(int idx, CancellationToken ct)
     {
-        for (int i = 0; i < _totalChunks; i++)
-        {
-            if (!HasChunk(i)) return false;
-        }
-        return true;
+        try { await DownloadChunkAsync(idx, ct); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Log.Warn($"Chunk {idx} failed: {ex.Message}"); }
+        finally { _downloadSemaphore.Release(); }
     }
 
-    private async Task DownloadChunkWithReleaseAsync(int index, CancellationToken ct)
+    private async Task DownloadChunkAsync(int idx, CancellationToken ct)
     {
-        try
-        {
-            await DownloadChunkAsync(index, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            // Это ожидаемое исключение при смене трека, игнорируем его
-        }
-        catch (Exception ex)
-        {
-            // Логируем только неожиданные ошибки
-            Log.Warn($"[MemoryFirstCachingStream] Chunk download failed ({index}): {ex.Message}");
-        }
-        finally
-        {
-            _downloadSemaphore.Release();
-        }
-    }
-
-    private async Task DownloadChunkAsync(int index, CancellationToken ct)
-    {
-        if (HasChunk(index)) return;
+        if (HasChunk(idx)) return;
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_pendingDownloads.TryAdd(index, tcs.Task))
+        if (!_pendingDownloads.TryAdd(idx, tcs.Task))
         {
-            // Кто-то уже качает - ждём
-            if (_pendingDownloads.TryGetValue(index, out var existing))
-            {
-                try { await existing.WaitAsync(ct); } catch { }
-            }
+            if (_pendingDownloads.TryGetValue(idx, out var t))
+                try { await t.WaitAsync(ct); } catch { }
             return;
         }
 
         try
         {
-            long start = (long)index * ChunkSize;
+            long start = (long)idx * ChunkSize;
             long end = Math.Min(start + ChunkSize - 1, _contentLength - 1);
-            using var request = new HttpRequestMessage(HttpMethod.Get, _url);
-            request.Headers.Range = new RangeHeaderValue(start, end);
+
+            using var req = new HttpRequestMessage(HttpMethod.Get, _url);
+            req.Headers.Range = new RangeHeaderValue(start, end);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromMilliseconds(ChunkDownloadTimeoutMs));
+            cts.CancelAfter(ChunkDownloadTimeoutMs);
 
-            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-            response.EnsureSuccessStatusCode();
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            resp.EnsureSuccessStatusCode();
 
-            var data = await response.Content.ReadAsByteArrayAsync(cts.Token);
+            var data = await resp.Content.ReadAsByteArrayAsync(cts.Token);
 
-            if (!_chunks.ContainsKey(index))
+            if (!_chunks.ContainsKey(idx))
             {
-                _chunks[index] = data;
+                _chunks[idx] = data;
                 Interlocked.Add(ref _bytesDownloaded, data.Length);
                 _dataAvailable.Set();
 
-                // Записываем на диск
-                if (!_disposing)
-                {
-                    _diskChannel.Writer.TryWrite((start, data, data.Length));
-                }
-
-                // Очистка RAM если слишком много чанков
-                if (_chunks.Count > MaxRamChunks)
-                {
-                    TrimRamCache();
-                }
+                if (!_disposing) _diskChannel.Writer.TryWrite((start, data, data.Length));
+                if (_chunks.Count > MaxRamChunks) TrimRamCache();
             }
 
             tcs.SetResult();
         }
-        catch (OperationCanceledException)
-        {
-            tcs.TrySetCanceled();
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"Chunk {index} failed: {ex.Message}");
-            tcs.TrySetException(ex);
-        }
-        finally
-        {
-            _pendingDownloads.TryRemove(index, out _);
-        }
+        catch (OperationCanceledException) { tcs.TrySetCanceled(); }
+        catch (Exception ex) { tcs.TrySetException(ex); }
+        finally { _pendingDownloads.TryRemove(idx, out _); }
     }
 
     private void TrimRamCache()
     {
         if (_chunks.Count <= MaxRamChunks / 2) return;
 
-        long currentPos = Volatile.Read(ref _position);
-        int currentChunk = (int)(currentPos / ChunkSize);
+        int current = (int)(Volatile.Read(ref _position) / ChunkSize);
 
         var toRemove = _chunks.Keys
-            .Where(idx =>
+            .Where(i => i < current - 4 || i > current + ReadAheadChunks * 2)
+            .Where(i =>
             {
-                // Не удаляем близкие к текущей позиции
-                if (idx >= currentChunk - 4 && idx <= currentChunk + ReadAheadChunks * 2)
-                    return false;
-
-                // Удаляем только если есть на диске
-                long chunkStart = (long)idx * ChunkSize;
-                long chunkEnd = Math.Min(chunkStart + ChunkSize, _contentLength);
-                return _diskRanges.IsRangeComplete(chunkStart, chunkEnd);
+                long s = (long)i * ChunkSize;
+                return _diskRanges.IsRangeComplete(s, Math.Min(s + ChunkSize, _contentLength));
             })
-            .OrderByDescending(idx => Math.Abs(idx - currentChunk))
-            .Take(_chunks.Count / 3)
-            .ToList();
+            .OrderByDescending(i => Math.Abs(i - current))
+            .Take(_chunks.Count / 3);
 
-        foreach (var idx in toRemove)
-        {
-            _chunks.TryRemove(idx, out _);
-        }
+        foreach (var i in toRemove) _chunks.TryRemove(i, out _);
     }
 
-    #endregion
-
-    #region === DISK WRITER ===
+    private bool IsAllDownloaded()
+    {
+        for (int i = 0; i < _totalChunks; i++)
+            if (!HasChunk(i)) return false;
+        return true;
+    }
 
     private async Task DiskWriterLoopAsync()
     {
         try
         {
-            await foreach (var (position, data, length) in _diskChannel.Reader.ReadAllAsync(_disposeCts.Token))
+            await foreach (var (pos, data, len) in _diskChannel.Reader.ReadAllAsync(_disposeCts.Token))
             {
                 if (_disposing || _cacheFile == null) continue;
 
@@ -612,15 +391,12 @@ public sealed class MemoryFirstCachingStream : Stream
                     try
                     {
                         if (_cacheFile == null) continue;
-                        _cacheFile.Seek(position, SeekOrigin.Begin);
-                        _cacheFile.Write(data, 0, length);
+                        _cacheFile.Seek(pos, SeekOrigin.Begin);
+                        _cacheFile.Write(data, 0, len);
                     }
-                    finally
-                    {
-                        _fileLock.ExitWriteLock();
-                    }
+                    finally { _fileLock.ExitWriteLock(); }
 
-                    _diskRanges.MarkComplete(position, position + length);
+                    _diskRanges.MarkComplete(pos, pos + len);
                 }
                 catch { }
             }
@@ -628,23 +404,11 @@ public sealed class MemoryFirstCachingStream : Stream
         catch (OperationCanceledException) { }
         catch (ChannelClosedException) { }
 
-        // Финальное сохранение
-        if (!_disposing)
-        {
-            try
-            {
-                _fileLock.EnterWriteLock();
-                try { _cacheFile?.Flush(); } finally { _fileLock.ExitWriteLock(); }
-            }
-            catch { }
+        if (_disposing) return;
 
-            try { _cacheManager.UpdateRanges(_trackId, _diskRanges); } catch { }
-        }
+        Try(() => { _fileLock.EnterWriteLock(); try { _cacheFile?.Flush(); } finally { _fileLock.ExitWriteLock(); } });
+        Try(() => _cacheManager.UpdateRanges(_trackId, _diskRanges));
     }
-
-    #endregion
-
-    #region === DISPOSE ===
 
     public override void Flush() { }
     public override void SetLength(long value) => throw new NotSupportedException();
@@ -659,42 +423,36 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (disposing)
         {
-            try { _disposeCts.Cancel(); } catch { }
-            try { _cts.Cancel(); } catch { }
-            try { _dataAvailable.Set(); } catch { }
-            try { _diskChannel.Writer.TryComplete(); } catch { }
-            try { _diskWriterTask.Wait(1000); } catch { }
-            try { _downloadLoop?.Wait(500); } catch { }
-            try { _cacheManager.UpdateRanges(_trackId, _diskRanges); } catch { }
+            Try(() => _disposeCts.Cancel());
+            Try(() => _cts.Cancel());
+            Try(() => _dataAvailable.Set());
+            Try(() => _diskChannel.Writer.TryComplete());
+            Try(() => _diskWriterTask.Wait(1000));
+            Try(() => _downloadLoop?.Wait(500));
+            Try(() => _cacheManager.UpdateRanges(_trackId, _diskRanges));
 
             _fileLock.EnterWriteLock();
             try
             {
-                if (_cacheFile != null)
-                {
-                    try { _cacheFile.Flush(); } catch { }
-                    try { _cacheFile.Dispose(); } catch { }
-                    _cacheFile = null;
-                }
+                Try(() => _cacheFile?.Flush());
+                Try(() => _cacheFile?.Dispose());
+                _cacheFile = null;
             }
-            finally
-            {
-                _fileLock.ExitWriteLock();
-            }
+            finally { _fileLock.ExitWriteLock(); }
 
             _chunks.Clear();
             _pendingDownloads.Clear();
 
-            try { _dataAvailable.Dispose(); } catch { }
-            try { _fileLock.Dispose(); } catch { }
-            try { _disposeCts.Dispose(); } catch { }
-            try { _cts.Dispose(); } catch { }
-            try { _downloadSemaphore.Dispose(); } catch { }
+            Try(() => _dataAvailable.Dispose());
+            Try(() => _fileLock.Dispose());
+            Try(() => _disposeCts.Dispose());
+            Try(() => _cts.Dispose());
+            Try(() => _downloadSemaphore.Dispose());
         }
 
         _disposed = true;
         base.Dispose(disposing);
     }
 
-    #endregion
+    private static void Try(Action a) { try { a(); } catch { } }
 }
