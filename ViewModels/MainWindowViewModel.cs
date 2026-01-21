@@ -20,9 +20,10 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
     [Reactive] public string? CurrentPageName { get; private set; }
-    
-    // Auth state
-    [Reactive] public bool IsAuthenticated { get; private set; }
+
+    // Auth / User State
+    [Reactive] public bool IsAuthenticated { get; private set; } // Real Auth
+    [Reactive] public bool IsRestrictedAccess { get; private set; } // Fake Account
     [Reactive] public string? UserName { get; private set; }
     [Reactive] public string? UserAvatarUrl { get; private set; }
 
@@ -48,7 +49,13 @@ public class MainWindowViewModel : ViewModelBase
 
         // Подписка на обновление состояния авторизации
         UpdateAuthState();
+        // Подписка на AuthState
         Observable.FromEvent(h => _auth.OnAuthStateChanged += h, h => _auth.OnAuthStateChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => UpdateAuthState());
+
+        // Подписка на изменения в Library (для Fake Account)
+        Observable.FromEvent(h => _library.OnDataChanged += h, h => _library.OnDataChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => UpdateAuthState());
 
@@ -57,15 +64,19 @@ public class MainWindowViewModel : ViewModelBase
         NavigateSearchCommand = ReactiveCommand.Create(() => SwitchPage<SearchViewModel>("Search"));
         NavigateLibraryCommand = ReactiveCommand.Create(() => SwitchPage<LibraryViewModel>("Library"));
         NavigateSettingsCommand = ReactiveCommand.Create(() => SwitchPage<SettingsViewModel>("Settings"));
-        
-        NavigatePlaylistCommand = ReactiveCommand.Create<string>(id => {
+
+        NavigatePlaylistCommand = ReactiveCommand.Create<string>(id =>
+        {
             Log.Info($"Navigating to Playlist: {id}");
-            try {
+            try
+            {
                 var vm = Program.Services.GetRequiredService<PlaylistViewModel>();
                 vm.LoadPlaylist(id);
                 CurrentPage = vm;
                 CurrentPageName = "Playlist";
-            } catch (Exception ex) {
+            }
+            catch (Exception ex)
+            {
                 Log.Info($"Playlist navigation failed: {ex.Message}\n{ex.StackTrace}");
             }
         });
@@ -98,12 +109,32 @@ public class MainWindowViewModel : ViewModelBase
 
     private void UpdateAuthState()
     {
-        IsAuthenticated = _auth.IsAuthenticated;
-        UserName = _auth.State.UserName;
-        UserAvatarUrl = _auth.State.UserAvatarUrl;
-        Log.Info($"State updated. Authenticated: {IsAuthenticated}, User: {UserName}");
+        // 1. Приоритет: Настоящий вход
+        if (_auth.IsAuthenticated)
+        {
+            IsAuthenticated = true;
+            IsRestrictedAccess = false;
+            UserName = _auth.State.UserName;
+            UserAvatarUrl = _auth.State.UserAvatarUrl;
+        }
+        // 2. Фейковый аккаунт (синхронизация по ссылке)
+        else if (_library.HasFakeAccount)
+        {
+            IsAuthenticated = false; // Технически не залогинен
+            IsRestrictedAccess = true; // Показываем метку
+            UserName = _library.Data.FakeAccountName;
+            UserAvatarUrl = _library.Data.FakeAccountAvatarUrl;
+        }
+        // 3. Гость
+        else
+        {
+            IsAuthenticated = false;
+            IsRestrictedAccess = false;
+            UserName = "Guest";
+            UserAvatarUrl = null;
+        }
     }
 
-    public void NavigateToPlaylist(string playlistId) 
+    public void NavigateToPlaylist(string playlistId)
         => NavigatePlaylistCommand.Execute(playlistId).Subscribe();
 }

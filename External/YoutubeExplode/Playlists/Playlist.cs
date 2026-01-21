@@ -13,7 +13,7 @@ public class Playlist(
     string description,
     int? count,
     IReadOnlyList<Thumbnail> thumbnails
-) : IPlaylist
+) : IPlaylist, IBatchItem // <--- Добавляем IBatchItem сюда
 {
     /// <inheritdoc />
     public PlaylistId Id { get; } = id;

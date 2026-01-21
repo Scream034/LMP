@@ -10,12 +10,14 @@ public class LibraryData
     public List<string> LikedTrackIds { get; set; } = [];
     public List<string> RecentlyPlayedIds { get; set; } = [];
 
+    // --- Fake Account / Public Sync ---
+    public string? FakeAccountChannelUrl { get; set; }
+    public string? FakeAccountName { get; set; }
+    public string? FakeAccountAvatarUrl { get; set; }
+
     // --- Настройки плеера ---
     public float Volume { get; set; } = 0.5f;
-
-    // Для запоминания громкости перед Mute
     public int LastVolume { get; set; } = 50;
-
     public bool ShuffleEnabled { get; set; }
     public RepeatMode RepeatMode { get; set; } = RepeatMode.None;
 
@@ -33,7 +35,7 @@ public class LibraryData
     public bool EnableSmoothLoading { get; set; } = true;
 
     public AudioQualityPreference QualityPreference { get; set; } = AudioQualityPreference.BestAvailable;
-    public bool RememberTrackFormat { get; set; } = true; // Запоминать ли выбор формата для треков
+    public bool RememberTrackFormat { get; set; } = true;
 }
 
 public enum RepeatMode

@@ -14,6 +14,9 @@ using MyLiteMusicPlayer.Models;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Playlist = MyLiteMusicPlayer.Models.Playlist;
+using System.Text.Json;
+using System.Net.Http.Headers;
+using YoutubeExplode.Channels;
 
 namespace MyLiteMusicPlayer.Services;
 
@@ -38,6 +41,8 @@ public partial class YoutubeProvider
     private readonly YoutubeClient _youtube;
     private readonly string _downloadFolder;
     private readonly LibraryService? _libraryService;
+    private readonly HttpClient _httpClient = new();
+    private readonly GoogleAuthService? _authService;
 
     // КЭШИРОВАНИЕ ПОТОКОВ
 
@@ -90,18 +95,18 @@ public partial class YoutubeProvider
     /// <summary>
     /// Создает провайдер YouTube (базовый конструктор)
     /// </summary>
-    public YoutubeProvider() : this(null)
+    public YoutubeProvider() : this(null, null)
     {
     }
 
     /// <summary>
     /// Создает провайдер YouTube с доступом к настройкам библиотеки
     /// </summary>
-    /// <param name="libraryService">Сервис библиотеки для доступа к настройкам качества</param>
-    public YoutubeProvider(LibraryService? libraryService)
+    public YoutubeProvider(LibraryService? libraryService, GoogleAuthService? authService)
     {
         _youtube = new YoutubeClient();
         _libraryService = libraryService;
+        _authService = authService; // Сохраняем зависимость
 
         // Настройка папки загрузок
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -535,7 +540,17 @@ public partial class YoutubeProvider
             var videoId = VideoId.TryParse(url) ?? VideoId.Parse(ExtractVideoId(url) ?? "");
             var video = await _youtube.Videos.GetAsync(videoId);
 
-            return ConvertToTrackInfo(video);
+            var track = ConvertToTrackInfo(video);
+
+            // Используем новое свойство для пометки
+            // Можно, например, сохранить это в теги или отображать иконку
+            if (video.IsMusic)
+            {
+                Log.Info($"[YouTube] Track detected as YT Music: {video.Title}");
+                track.IsMusic = true; // Если у TrackInfo есть такое поле
+            }
+
+            return track;
         }
         catch (Exception ex)
         {
@@ -604,6 +619,243 @@ public partial class YoutubeProvider
         {
             NotifyError($"[YouTube] GetPlaylistAsync error: {ex.Message}");
             return null;
+        }
+    }
+
+    public async Task<(string ChannelName, List<PlaylistSearchResult> Playlists)?> GetChannelPlaylistsForSyncAsync(string channelUrl, CancellationToken ct = default)
+    {
+        // 1. Получаем ID канала и базовое инфо
+        var channel = await GetChannelFromUrlAsync(channelUrl, ct);
+        if (channel is null) return null;
+
+        NotifyStatus($"[YouTube] Загрузка плейлистов со страницы канала: {channel.Title}...");
+
+        try
+        {
+            var results = new List<PlaylistSearchResult>();
+
+            // 2. ИСПОЛЬЗУЕМ НОВЫЙ МЕТОД GetPlaylistsAsync
+            // Он ходит прямо на вкладку плейлистов через browseId + params
+            await foreach (var pl in _youtube.Channels.GetPlaylistsAsync(channel.Id, ct))
+            {
+                // Конвертируем Playlist -> PlaylistSearchResult для совместимости с вашим UI
+                results.Add(new PlaylistSearchResult(
+                    pl.Id,
+                    pl.Title,
+                    pl.Author,
+                    pl.Thumbnails
+                ));
+            }
+
+            NotifyStatus($"[YouTube] Найдено {results.Count} плейлистов.");
+            return (channel.Title, results);
+        }
+        catch (Exception ex)
+        {
+            NotifyError($"[YouTube] Ошибка парсинга плейлистов канала: {ex.Message}");
+            // Возвращаем пустой список, чтобы не крашить приложение
+            return (channel.Title, []);
+        }
+    }
+
+    /// <summary>
+    /// Превращает результат поиска (без треков) в полноценный Playlist (с треками)
+    /// </summary>
+    public async Task<Playlist?> ImportPlaylistAsync(string playlistId, bool isAccountSync = false, CancellationToken ct = default)
+    {
+        try
+        {
+            var ytPlaylist = await _youtube.Playlists.GetAsync(playlistId, ct);
+            var videos = await _youtube.Playlists.GetVideosAsync(playlistId, ct).CollectAsync();
+
+            var newPlaylist = new Playlist
+            {
+                Id = $"yt_{ytPlaylist.Id}", // Используем ID YouTube
+                YoutubePlaylistId = ytPlaylist.Id,
+                Name = ytPlaylist.Title,
+                Author = ytPlaylist.Author?.ChannelTitle,
+                ThumbnailUrl = ytPlaylist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault()?.Url,
+                IsLocal = false, // Это сетевой плейлист
+                IsFromAccount = isAccountSync,
+                AllowNetwork = true,
+                AllowOffline = true
+            };
+
+            // Сразу добавляем треки в базу, чтобы они не потерялись
+            foreach (var video in videos)
+            {
+                var trackInfo = ConvertPlaylistVideoToTrackInfo(video);
+                _libraryService?.AddOrUpdateTrack(trackInfo);
+                newPlaylist.TrackIds.Add(trackInfo.Id);
+            }
+
+            return newPlaylist;
+        }
+        catch (Exception ex)
+        {
+            NotifyError($"Error importing playlist {playlistId}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Получает информацию о канале по URL (для настройки Fake Account).
+    /// </summary>
+    public async Task<(string Name, string AvatarUrl)?> GetChannelInfoAsync(string url, CancellationToken ct = default)
+    {
+        var channel = await GetChannelFromUrlAsync(url, ct);
+        if (channel == null) return null;
+
+        return (channel.Title, channel.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault()?.Url ?? "");
+    }
+
+    /// <summary>
+    /// Получает канал по URL, используя доступные методы.
+    /// </summary>
+    private async Task<Channel?> GetChannelFromUrlAsync(string url, CancellationToken ct = default)
+    {
+        try
+        {
+            var handleMatch = Regex.Match(url, @"/@([\w.-]+)");
+            if (handleMatch.Success)
+            {
+                return await _youtube.Channels.GetByHandleAsync(handleMatch.Groups[1].Value, ct);
+            }
+
+            var userMatch = Regex.Match(url, @"/user/(\w+)");
+            if (userMatch.Success)
+            {
+                return await _youtube.Channels.GetByUserAsync(userMatch.Groups[1].Value, ct);
+            }
+
+            var slugMatch = Regex.Match(url, @"/c/(\w+)");
+            if (slugMatch.Success)
+            {
+                return await _youtube.Channels.GetBySlugAsync(slugMatch.Groups[1].Value, ct);
+            }
+
+            var idMatch = Regex.Match(url, @"/channel/([\w-]+)");
+            if (idMatch.Success)
+            {
+                return await _youtube.Channels.GetAsync(idMatch.Groups[1].Value, ct);
+            }
+
+            NotifyError("[YouTube] Не удалось распознать формат URL канала.");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            NotifyError($"[YouTube] Ошибка при получении канала по URL: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ИСПРАВЛЕНО: Получает плейлисты по URL канала (реальные плейлисты, а не Uploads).
+    /// </summary>
+    public async Task<(Channel Channel, List<Playlist> Playlists)?> GetPlaylistsFromChannelUrlAsync(string url, CancellationToken ct = default)
+    {
+        var channel = await GetChannelFromUrlAsync(url, ct);
+        if (channel is null) return null;
+
+        try
+        {
+            NotifyStatus($"[YouTube] Получение плейлистов для канала: {channel.Title}");
+
+            var resultPlaylists = new List<Playlist>();
+
+            // 1. Сначала пытаемся получить созданные плейлисты через новый метод
+            await foreach (var pl in _youtube.Channels.GetPlaylistsAsync(channel.Id, ct))
+            {
+                // Фильтруем "Загрузки", если YouTube их отдает в общем списке (редко, но бывает)
+                if (pl.Title.Equals("Uploads", StringComparison.OrdinalIgnoreCase)) continue;
+
+                resultPlaylists.Add(new Playlist
+                {
+                    Id = $"yt_{pl.Id}",
+                    YoutubePlaylistId = pl.Id,
+                    Name = pl.Title,
+                    Author = channel.Title, // Мы точно знаем автора, т.к. сканируем его канал
+                    IsLocal = false,
+                    IsFromAccount = false,
+                    ThumbnailUrl = pl.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
+                });
+            }
+
+            NotifyStatus($"[YouTube] Найдено {resultPlaylists.Count} плейлистов для '{channel.Title}'");
+
+            return (channel, resultPlaylists);
+        }
+        catch (Exception ex)
+        {
+            NotifyError($"[YouTube] Ошибка при получении плейлистов канала: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ИСПРАВЛЕНО: Получает плейлисты (включая приватные) для текущего пользователя.
+    /// </summary>
+    public async Task<List<Playlist>> GetUserPlaylistsAsync(CancellationToken ct = default)
+    {
+        if (_authService is null || !_authService.IsAuthenticated)
+        {
+            NotifyError("[YouTube] Аутентификация не пройдена.");
+            return [];
+        }
+
+        var accessToken = await _authService.GetValidAccessTokenAsync();
+        if (string.IsNullOrEmpty(accessToken)) return [];
+
+        try
+        {
+            var requestUri = "https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&mine=true&maxResults=50";
+            using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            var response = await _httpClient.SendAsync(request, ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync(ct);
+                NotifyError($"[YouTube] API Ошибка: {error}");
+                return [];
+            }
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var result = new List<Playlist>();
+            using var doc = JsonDocument.Parse(json);
+
+            if (!doc.RootElement.TryGetProperty("items", out var items)) return [];
+
+            foreach (var item in items.EnumerateArray())
+            {
+                var snippet = item.GetProperty("snippet");
+                string? thumbUrl = null;
+                if (snippet.TryGetProperty("thumbnails", out var thumbs) && thumbs.TryGetProperty("default", out var defThumb))
+                {
+                    thumbUrl = defThumb.GetProperty("url").GetString();
+                }
+
+                var newPlaylist = new Playlist
+                {
+                    Id = $"yt_{item.GetProperty("id").GetString()}",
+                    YoutubePlaylistId = item.GetProperty("id").GetString(),
+                    Name = snippet.GetProperty("title").GetString()!,
+                    Author = snippet.GetProperty("channelTitle").GetString(),
+                    ThumbnailUrl = thumbUrl,
+                    IsLocal = false,
+                    IsFromAccount = true,
+                };
+                result.Add(newPlaylist);
+            }
+            NotifyStatus($"[YouTube] Загружено {result.Count} плейлистов с аккаунта.");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            NotifyError($"[YouTube] Исключение при получении плейлистов: {ex.Message}");
+            return [];
         }
     }
 

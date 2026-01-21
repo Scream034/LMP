@@ -68,6 +68,8 @@ class Program
         services.AddTransient<LibraryViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<PlaylistViewModel>();
+        services.AddTransient<MergeConflictViewModel>();
+        services.AddTransient<SyncSelectionViewModel>();
 
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<PlayerBarViewModel>();

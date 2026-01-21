@@ -16,6 +16,19 @@ internal partial class PlayerResponse(JsonElement content)
 
     public string? PlayabilityError => Playability?.GetPropertyOrNull("reason")?.GetStringOrNull();
 
+    public string? Category =>
+        content
+            .GetPropertyOrNull("microformat")
+            ?.GetPropertyOrNull("playerMicroformatRenderer")
+            ?.GetPropertyOrNull("category")
+            ?.GetStringOrNull();
+
+    // YouTube Music обычно помечает видео категорией "Music".
+    // Также можно проверять musicVideoType, но Category — самый надежный способ.
+    public bool IsMusic =>
+        string.Equals(Category, "Music", StringComparison.OrdinalIgnoreCase) ||
+        content.GetPropertyOrNull("videoDetails")?.GetPropertyOrNull("musicVideoType") != null;
+
     public bool IsAvailable =>
         !string.Equals(PlayabilityStatus, "error", StringComparison.OrdinalIgnoreCase)
         && Details is not null;

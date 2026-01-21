@@ -23,7 +23,7 @@
                 <DockPanel>
                     <!-- Logo -->
                     <StackPanel DockPanel.Dock="Top" Margin="16,16,16,24">
-                        <TextBlock Text="♪ Lite Player"
+                        <TextBlock Text="{Binding L[Common_AppName]}"
                             FontSize="24"
                             FontWeight="Bold"
                             Foreground="{StaticResource TextPrimaryBrush}" />
@@ -75,31 +75,41 @@
                                     BorderBrush="{StaticResource BgHighlightBrush}"
                                     BorderThickness="1">
                                     <Panel>
-                                        <!-- Fallback Icon -->
+                                        <!-- Fallback Icon (Показываем, если URL пуст) -->
                                         <mi:MaterialIcon Kind="Account"
                                             Width="24" Height="24"
                                             Foreground="{StaticResource TextSecondaryBrush}"
                                             IsVisible="{Binding UserAvatarUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
 
-                                        <!-- Real Avatar -->
+                                        <!-- Real Avatar (Показываем, если URL есть) -->
+                                        <!-- ИСПРАВЛЕНО: Убрана привязка к IsAuthenticated -->
                                         <Image
                                             asyncImage:ImageLoader.Source="{Binding UserAvatarUrl}"
                                             Stretch="UniformToFill"
-                                            IsVisible="{Binding IsAuthenticated}" />
+                                            IsVisible="{Binding UserAvatarUrl, Converter={StaticResource NullToVisible}}" />
                                     </Panel>
                                 </Border>
 
                                 <!-- Text & Settings Icon -->
                                 <Grid Grid.Column="1" Margin="12,0,0,0" RowDefinitions="*,*">
-                                    <TextBlock Grid.Row="0"
-                                        Text="{Binding UserName, FallbackValue='Guest'}"
-                                        FontWeight="SemiBold"
-                                        Foreground="{StaticResource TextPrimaryBrush}"
-                                        VerticalAlignment="Bottom"
-                                        TextTrimming="CharacterEllipsis" />
+                                    <StackPanel Grid.Row="0" VerticalAlignment="Bottom">
+                                        <TextBlock Text="{Binding UserName}"
+                                            FontWeight="SemiBold"
+                                            Foreground="{StaticResource TextPrimaryBrush}"
+                                            TextTrimming="CharacterEllipsis" />
+
+                                        <!-- Метка для Fake Account -->
+                                        <Border Background="{StaticResource BgHighlightBrush}"
+                                            CornerRadius="4" Padding="4,1" Margin="0,2,0,0"
+                                            HorizontalAlignment="Left"
+                                            IsVisible="{Binding IsRestrictedAccess}">
+                                            <TextBlock Text="{Binding L[Sidebar_RestrictedAccess]}" FontSize="9"
+                                                Foreground="{StaticResource SystemWarnOrangeBrush}" />
+                                        </Border>
+                                    </StackPanel>
 
                                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4"
-                                        VerticalAlignment="Top">
+                                        VerticalAlignment="Top" Margin="0,2,0,0">
                                         <mi:MaterialIcon Kind="Cog" Width="12" Height="12"
                                             Foreground="{StaticResource TextMutedBrush}"
                                             VerticalAlignment="Center" />

@@ -48,6 +48,10 @@ public class PlaylistVideo(
     public Author Author { get; } = author;
 
     /// <inheritdoc />
+    // В списках плейлиста категория видео недоступна.
+    public bool IsMusic => false;
+
+    /// <inheritdoc />
     public TimeSpan? Duration { get; } = duration;
 
     /// <inheritdoc />

@@ -8,6 +8,7 @@ public class TrackInfo
     public string Title { get; set; } = string.Empty;
     public string Author { get; set; } = string.Empty;
     public bool IsOfficialArtist { get; set; } = false;
+    public bool IsMusic { get; set; } = false;
     public string Url { get; set; } = string.Empty;
     public string StreamUrl { get; set; } = string.Empty;
     public TimeSpan Duration { get; set; }
@@ -24,7 +25,7 @@ public class TrackInfo
             // Fallback: генерируем URL превью YouTube по ID
             if (Id.StartsWith("yt_") && Id.Length > 3)
             {
-                var videoId = Id.Substring(3);
+                var videoId = Id[3..];
                 // YouTube thumbnail URLs
                 return $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
             }

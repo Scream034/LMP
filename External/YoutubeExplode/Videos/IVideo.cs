@@ -39,4 +39,6 @@ public interface IVideo
     /// Video thumbnails.
     /// </summary>
     IReadOnlyList<Thumbnail> Thumbnails { get; }
+
+    bool IsMusic { get; }
 }

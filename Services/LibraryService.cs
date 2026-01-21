@@ -11,10 +11,7 @@ public class LibraryService
 
     public LibraryData Data { get; private set; } = new();
 
-    // Оповещение об изменении всей библиотеки (для рефреша списков)
     public event Action? OnDataChanged;
-
-    // НОВОЕ: Оповещение об изменении конкретного трека (для синхронизации лайков)
     public event Action<TrackInfo>? OnTrackUpdated;
 
     public LibraryService()
@@ -23,7 +20,6 @@ public class LibraryService
         _appFolder = Path.Combine(appData, "LiteMusicPlayer");
         Directory.CreateDirectory(_appFolder);
         _libraryPath = Path.Combine(_appFolder, LibraryFileName);
-
         Load();
     }
 
@@ -41,6 +37,8 @@ public class LibraryService
         }
     }
 
+    public bool HasFakeAccount => !string.IsNullOrEmpty(Data.FakeAccountChannelUrl);
+
     public void Load()
     {
         try
@@ -55,7 +53,6 @@ public class LibraryService
         {
             Data = new LibraryData();
         }
-
         EnsureLikedPlaylist();
         Directory.CreateDirectory(DownloadPath);
     }
@@ -102,7 +99,6 @@ public class LibraryService
 
         if (Data.Tracks.TryGetValue(track.Id, out var existing))
         {
-            // Сохраняем важные пользовательские флаги
             track.IsLiked = existing.IsLiked;
             track.IsDisliked = existing.IsDisliked;
             track.IsDownloaded = existing.IsDownloaded || track.IsDownloaded;
@@ -111,29 +107,83 @@ public class LibraryService
         }
 
         Data.Tracks[track.Id] = track;
-
         Save();
-        // ВАЖНО: Не вызываем OnTrackUpdated здесь для всех подряд обновлений, 
-        // только специфические методы (ToggleLike) будут это делать,
-        // либо можно раскомментировать, если нужно реагировать на всё.
         OnDataChanged?.Invoke();
     }
 
-    public TrackInfo? GetTrack(string id) =>
-        Data.Tracks.TryGetValue(id, out var track) ? track : null;
+    /// <summary>
+    /// Добавляет или обновляет плейлист в библиотеке.
+    /// </summary>
+    public void AddOrUpdatePlaylist(Playlist playlist)
+    {
+        if (Data.Playlists.TryGetValue(playlist.Id, out var existing))
+        {
+            // Обновляем существующий, чтобы сохранить свежесть данных
+            existing.Name = playlist.Name;
+            existing.ThumbnailUrl = playlist.ThumbnailUrl;
+            existing.TrackIds = playlist.TrackIds; // Полностью заменяем список треков
+            existing.UpdatedAt = DateTime.Now;
+        }
+        else
+        {
+            Data.Playlists[playlist.Id] = playlist;
+        }
+        Save();
+        OnDataChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Объединяет треки из одного плейлиста в другой.
+    /// </summary>
+    public bool MergePlaylists(string sourceId, string targetId)
+    {
+        if (!Data.Playlists.TryGetValue(sourceId, out var sourcePlaylist) ||
+            !Data.Playlists.TryGetValue(targetId, out var targetPlaylist))
+        {
+            return false;
+        }
+
+        // Объединять можно только в локальные плейлисты
+        if (!targetPlaylist.IsLocal) return false;
+
+        var targetTrackIds = new HashSet<string>(targetPlaylist.TrackIds);
+        int newTracksCount = 0;
+
+        foreach (var trackId in sourcePlaylist.TrackIds)
+        {
+            if (targetTrackIds.Add(trackId))
+            {
+                newTracksCount++;
+                // Обновляем метаданные трека
+                if (Data.Tracks.TryGetValue(trackId, out var track))
+                {
+                    track.InPlaylists.Add(targetId);
+                }
+            }
+        }
+
+        if (newTracksCount > 0)
+        {
+            targetPlaylist.TrackIds = [.. targetTrackIds];
+            targetPlaylist.UpdatedAt = DateTime.Now;
+            Save();
+            OnDataChanged?.Invoke();
+        }
+
+        return true;
+    }
+
+    public TrackInfo? GetTrack(string id) => Data.Tracks.TryGetValue(id, out var track) ? track : null;
 
     public bool HasTrack(string id) => Data.Tracks.ContainsKey(id);
 
     public void AddToRecentlyPlayed(TrackInfo track)
     {
         AddOrUpdateTrack(track);
-
         Data.RecentlyPlayedIds.Remove(track.Id);
         Data.RecentlyPlayedIds.Insert(0, track.Id);
-
         if (Data.RecentlyPlayedIds.Count > 100)
             Data.RecentlyPlayedIds.RemoveRange(100, Data.RecentlyPlayedIds.Count - 100);
-
         Save();
     }
 
@@ -156,13 +206,9 @@ public class LibraryService
 
     public void ToggleLike(TrackInfo track)
     {
-        // Сначала убеждаемся, что трек есть в базе, чтобы не потерять состояние
         AddOrUpdateTrack(track);
-
-        // Инвертируем
         track.IsLiked = !track.IsLiked;
         track.IsDisliked = false;
-
         var likedPlaylist = Data.Playlists["liked"];
 
         if (track.IsLiked)
@@ -183,31 +229,24 @@ public class LibraryService
 
         Data.Tracks[track.Id] = track;
         Save();
-
         OnDataChanged?.Invoke();
-
-        // НОВОЕ: Уведомляем конкретно об изменении этого трека
         OnTrackUpdated?.Invoke(track);
     }
 
     public void ToggleDislike(TrackInfo track)
     {
         AddOrUpdateTrack(track);
-
         track.IsDisliked = !track.IsDisliked;
-
         if (track.IsDisliked)
         {
             track.IsLiked = false;
             Data.Playlists["liked"].TrackIds.Remove(track.Id);
             track.InPlaylists.Remove("liked");
         }
-
         Data.Tracks[track.Id] = track;
         Save();
-
         OnDataChanged?.Invoke();
-        OnTrackUpdated?.Invoke(track); // Уведомляем
+        OnTrackUpdated?.Invoke(track);
     }
 
     public Playlist CreatePlaylist(string name)
@@ -282,6 +321,7 @@ public class LibraryService
     }
 
     public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
+
     public Playlist? GetPlaylist(string playlistId) => Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
 
     public void MergeAccountPlaylists(IEnumerable<Playlist> accountPlaylists)
@@ -298,13 +338,33 @@ public class LibraryService
         {
             try
             {
-                var uri = new Uri(track.Url);
-                var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-                var videoId = query["v"];
-                if (!string.IsNullOrEmpty(videoId)) return $"yt_{videoId}";
+                var videoId = YoutubeExplode.Videos.VideoId.TryParse(track.Url);
+                if (videoId.HasValue)
+                {
+                    return $"yt_{videoId.Value.Value}";
+                }
             }
             catch { }
         }
         return $"local_{Guid.NewGuid():N}";
+    }
+
+    public void SetFakeAccount(string url, string name, string avatarUrl)
+    {
+        Data.FakeAccountChannelUrl = url;
+        Data.FakeAccountName = name;
+        Data.FakeAccountAvatarUrl = avatarUrl;
+        Save();
+        // Вызываем событие, чтобы UI обновился
+        OnDataChanged?.Invoke();
+    }
+
+    public void ClearFakeAccount()
+    {
+        Data.FakeAccountChannelUrl = null;
+        Data.FakeAccountName = null;
+        Data.FakeAccountAvatarUrl = null;
+        Save();
+        OnDataChanged?.Invoke();
     }
 }

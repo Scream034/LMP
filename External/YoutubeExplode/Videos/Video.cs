@@ -12,7 +12,8 @@ public class Video(
     TimeSpan? duration,
     IReadOnlyList<Thumbnail> thumbnails,
     long viewCount,
-    long likeCount
+    long likeCount,
+    bool isMusic
 ) : IVideo
 {
     public VideoId Id { get; } = id;
@@ -24,6 +25,7 @@ public class Video(
 
     public long ViewCount { get; } = viewCount;
     public long LikeCount { get; } = likeCount;
+    public bool IsMusic { get; } = isMusic;
 
-    public override string ToString() => $"Video ({Title})";
+    public override string ToString() => $"Video ({Title}, {Id}, {IsMusic})";
 }

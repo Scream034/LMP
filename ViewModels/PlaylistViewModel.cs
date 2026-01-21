@@ -11,6 +11,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     private readonly LibraryService _library;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
+    private readonly IDialogService _dialog;
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
@@ -21,18 +22,23 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
     public ReactiveCommand<Unit, Unit> ShufflePlayCommand { get; }
     public ReactiveCommand<Unit, Unit> DownloadAllCommand { get; }
+    public ReactiveCommand<Unit, Unit> MergePlaylistCommand { get; }
 
     public string FormattedTrackCount =>
         LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
+    private string _playlistId = ""; // Храним ID текущего плейлиста
+
     public PlaylistViewModel(
         LibraryService library,
         AudioEngine audio,
-        DownloadService downloads)
+        DownloadService downloads,
+        IDialogService dialog)
     {
         _library = library;
         _audio = audio;
         _downloads = downloads;
+        _dialog = dialog;
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
 
@@ -61,6 +67,8 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
                 _downloads.StartDownload(track);
             }
         }, hasTracks);
+
+        MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
 
         // Обновление локализации
         this.WhenAnyValue(x => x.TrackCount)
@@ -104,5 +112,33 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         }
 
         _library.AddToRecentlyPlayed(track);
+    }
+
+    private async Task MergePlaylistAsync()
+    {
+        var otherPlaylists = _library.GetAllPlaylists().Where(p => p.Id != _playlistId && p.IsLocal).ToList();
+        if (otherPlaylists.Count == 0)
+        {
+            await _dialog.ShowInfoAsync("Некуда объединять", "Нет других локальных плейлистов для объединения.");
+            return;
+        }
+
+        // Здесь должен быть вызов диалога для выбора целевого плейлиста
+        // var targetId = await _dialog.ShowSelectTargetPlaylistDialog(otherPlaylists);
+
+        // Для примера, объединим с первым попавшимся
+        var targetId = otherPlaylists.First().Id;
+
+        if (!string.IsNullOrEmpty(targetId))
+        {
+            if (_library.MergePlaylists(_playlistId, targetId))
+            {
+                await _dialog.ShowInfoAsync("Успешно", "Плейлист был успешно объединен.");
+            }
+            else
+            {
+                await _dialog.ShowInfoAsync("Ошибка", "Не удалось объединить плейлисты.");
+            }
+        }
     }
 }

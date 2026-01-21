@@ -1,5 +1,4 @@
-﻿<!-- Views/SettingsView.axaml -->
-<UserControl xmlns="https://github.com/avaloniaui"
+﻿<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     x:Class="MyLiteMusicPlayer.Views.SettingsView"
@@ -40,11 +39,7 @@
 
                 <Grid ColumnDefinitions="*, Auto" VerticalAlignment="Center">
                     <StackPanel>
-                        <!-- Отображение Email или заглушки -->
-                        <TextBlock Text="{Binding DisplayEmail}"
-                            FontWeight="SemiBold" />
-
-                        <!-- Отображение статуса (Авторизован/Гость) -->
+                        <TextBlock Text="{Binding DisplayEmail}" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding AuthStatusText}"
                             Foreground="{StaticResource TextSecondaryBrush}"
                             FontSize="13" />
@@ -66,6 +61,27 @@
                         SelectedItem="{Binding SelectedLanguage}"
                         DisplayMemberBinding="{Binding Name}"
                         MinWidth="140" />
+                </Grid>
+            </StackPanel>
+
+            <!-- СЕКЦИЯ: FAKE ACCOUNT -->
+            <StackPanel Spacing="16" Margin="0,24,0,0">
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_PublicSync]}" />
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <StackPanel Margin="0,0,16,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Settings_ChannelUrl]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_ChannelUrlDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <TextBox Width="250" Text="{Binding FakeChannelInput}"
+                            Watermark="{Binding L[Settings_ChannelPlaceholder]}" />
+                        <Button Content="{Binding L[Common_Set]}"
+                            Command="{Binding SetFakeAccountCommand}" />
+                        <Button Content="{Binding L[Common_Clear]}"
+                            Command="{Binding ClearFakeAccountCommand}" />
+                    </StackPanel>
                 </Grid>
             </StackPanel>
 
@@ -106,7 +122,6 @@
                             Text="{Binding L[Settings_AudioQualityDesc]}" />
                     </StackPanel>
 
-                    <!-- Конвертер для Enum в локализованную строку -->
                     <ComboBox Grid.Column="1"
                         ItemsSource="{Binding QualityOptions}"
                         SelectedItem="{Binding QualityPreference}"

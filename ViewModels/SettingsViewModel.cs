@@ -120,6 +120,8 @@ public class SettingsViewModel : ViewModelBase
     /// <summary>Имя пользователя</summary>
     [Reactive] public string? UserName { get; private set; }
 
+    [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
+
     /// <summary>Отображаемый email или заглушка</summary>
     public string DisplayEmail => string.IsNullOrWhiteSpace(UserEmail)
         ? L["Auth_NotSignedIn"]
@@ -147,6 +149,9 @@ public class SettingsViewModel : ViewModelBase
     /// <summary>Выйти из аккаунта</summary>
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
 
+    public ReactiveCommand<Unit, Unit> SetFakeAccountCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearFakeAccountCommand { get; }
+
     // КОНСТРУКТОР
 
     /// <summary>
@@ -166,6 +171,8 @@ public class SettingsViewModel : ViewModelBase
         _youtube = youtube;
 
         QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
+
+        FakeChannelInput = _library.Data.FakeAccountChannelUrl ?? "";
 
         LoadSettings();
         UpdateAuthState();
@@ -259,6 +266,36 @@ public class SettingsViewModel : ViewModelBase
 
         // КОМАНДЫ
 
+        SetFakeAccountCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            if (string.IsNullOrWhiteSpace(FakeChannelInput)) return;
+
+            try
+            {
+                var info = await _youtube.GetChannelInfoAsync(FakeChannelInput);
+                if (info != null)
+                {
+                    _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
+                    // await _dialog.ShowInfoAsync(L["Dialog_Title_Success"], $"Linked to public channel: {info.Value.Name}");
+                    await _dialog.ShowInfoAsync(L["Dialog_Title_Success"], string.Format(L["Dialog_Merge_Success"], info.Value.Name));
+                }
+                else
+                {
+                    // await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], "Could not find channel.");
+                    await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], L["Dialog_Merge_Error"]);
+                }
+            }
+            catch (Exception ex)
+            {
+                await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], ex.Message);
+            }
+        });
+
+        ClearFakeAccountCommand = ReactiveCommand.Create(() =>
+        {
+            _library.ClearFakeAccount();
+            FakeChannelInput = "";
+        });
 
         // Выбор папки загрузки
         BrowseDownloadPathCommand = ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync);

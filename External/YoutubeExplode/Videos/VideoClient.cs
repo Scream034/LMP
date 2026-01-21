@@ -80,6 +80,9 @@ public class VideoClient(HttpClient http)
         // Пока возьмем из watchPage (если мы восстановим парсинг там) или поставим 0.
         long likeCount = watchPage.LikeCount ?? 0;
 
+        // Достаем признак музыки
+        bool isMusic = playerResponse.IsMusic;
+
         return new Video(
             videoId,
             title,
@@ -87,7 +90,8 @@ public class VideoClient(HttpClient http)
             playerResponse.Duration,
             thumbnails,
             viewCount,
-            likeCount
+            likeCount,
+            isMusic
         );
     }
 }

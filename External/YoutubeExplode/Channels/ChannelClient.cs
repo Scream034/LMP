@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using YoutubeExplode.Bridge;
 using YoutubeExplode.Common;
@@ -109,6 +110,72 @@ public partial class ChannelClient(HttpClient http)
         // Replace 'UC' in the channel ID with 'UU'
         var playlistId = "UU" + channelId.Value[2..];
         return new PlaylistClient(http).GetVideosAsync(playlistId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Enumerates playlists found on the channel's "Playlists" tab.
+    /// </summary>
+    public IAsyncEnumerable<Playlist> GetPlaylistsAsync(
+        ChannelId channelId,
+        CancellationToken cancellationToken = default
+    ) => GetPlaylistBatchesAsync(channelId, cancellationToken).FlattenAsync();
+
+    /// <summary>
+    /// Enumerates batches of playlists found on the channel's "Playlists" tab.
+    /// </summary>
+    public async IAsyncEnumerable<Batch<Playlist>> GetPlaylistBatchesAsync(
+        ChannelId channelId,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
+    )
+    {
+        // Получаем информацию о канале один раз, чтобы заполнить поле Author у плейлистов
+        // (так как в списке плейлистов часто нет инфы об авторе, т.к. мы и так на его странице)
+        var channelPage = await _controller.GetChannelPageAsync(channelId, cancellationToken);
+        // Небольшой хак: вытаскиваем имя канала из страницы
+        var channelTitle = channelPage.Title ?? "Unknown Channel";
+        var author = new Author(channelId, channelTitle);
+
+        var encounteredIds = new HashSet<string>(StringComparer.Ordinal);
+        var continuationToken = default(string?);
+
+        do
+        {
+            var response = await _controller.GetChannelPlaylistsPageAsync(
+                channelId,
+                continuationToken,
+                cancellationToken
+            );
+
+            var batch = new List<Playlist>();
+
+            foreach (var item in response.Playlists)
+            {
+                if (!encounteredIds.Add(item.Id.Value))
+                    continue;
+
+                // Создаем новый объект Playlist, обогащенный правильным Автором
+                var enrichedPlaylist = new Playlist(
+                    item.Id,
+                    item.Title,
+                    author, // Вставляем автора явно
+                    item.Description,
+                    item.Count,
+                    item.Thumbnails
+                );
+
+                batch.Add(enrichedPlaylist);
+            }
+
+            // Если ничего не нашли в первом запросе, но токена нет - выходим
+            if (batch.Count == 0 && continuationToken == null && response.ContinuationToken == null)
+                yield break;
+
+            if (batch.Count > 0)
+                yield return Batch.Create(batch);
+
+            continuationToken = response.ContinuationToken;
+
+        } while (!string.IsNullOrWhiteSpace(continuationToken));
     }
 
     [GeneratedRegex(@"\bs(\d+)\b")]

@@ -31,6 +31,11 @@ public class VideoSearchResult(
     public bool IsOfficialArtist { get; } = isOfficialArtist;
 
     /// <inheritdoc />
+    // В результатах поиска категория видео обычно недоступна, 
+    // поэтому по умолчанию false. Если нужен точный статус, нужно загружать полное Video.
+    public bool IsMusic => false; 
+
+    /// <inheritdoc />
     public TimeSpan? Duration { get; } = duration;
 
     /// <inheritdoc />

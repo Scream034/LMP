@@ -1,27 +1,71 @@
 ﻿<UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+             xmlns:mi="using:Material.Icons.Avalonia"
              x:Class="MyLiteMusicPlayer.Views.LibraryView"
              x:DataType="vm:LibraryViewModel">
 
     <DockPanel>
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="16" Margin="0,0,0,24">
-            <TextBlock Text="{Binding L[Library_Title]}" FontSize="32" FontWeight="Bold"/>
-            
-            <Button Command="{Binding CreatePlaylistCommand}" 
-                    Content="{Binding L[Library_NewPlaylist]}"
-                    VerticalAlignment="Center"/>
-                    
-            <Button Command="{Binding SyncAccountPlaylistsCommand}" 
-                    Content="{Binding L[Library_SyncYoutube]}"
-                    VerticalAlignment="Center"/>
+        <!-- Верхняя панель -->
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,24">
+            <StackPanel Orientation="Horizontal" Spacing="16">
+                <TextBlock Text="{Binding L[Library_Title]}" FontSize="32" FontWeight="Bold"/>
+                
+                <!-- Кнопка "Создать" (просто включает режим) -->
+                <Button Command="{Binding OpenCreateCommand}" 
+                        Content="{Binding L[Library_NewPlaylist]}"
+                        Classes="accent"
+                        IsVisible="{Binding !IsCreatingPlaylist}"
+                        VerticalAlignment="Center"/>
+                        
+                <!-- Кнопка "Синхронизировать" -->
+                <Button Command="{Binding SyncAccountPlaylistsCommand}" 
+                        Content="{Binding L[Library_SyncYoutube]}"
+                        IsEnabled="{Binding !IsLoading}"
+                        VerticalAlignment="Center"/>
+                
+                <!-- Индикатор загрузки -->
+                <mi:MaterialIcon Kind="Loading" Classes="spinning" 
+                                 IsVisible="{Binding IsLoading}"
+                                 Width="24" Height="24" 
+                                 Foreground="{StaticResource AccentBrush}"/>
+            </StackPanel>
         </StackPanel>
 
-        <!-- Создание плейлиста -->
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" 
-                    IsVisible="{Binding NewPlaylistName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <TextBox Text="{Binding NewPlaylistName}" Watermark="{Binding L[Library_PlaylistNamePlaceholder]}" Width="200"/>
-        </StackPanel>
+        <!-- Панель создания плейлиста (Видна только когда IsCreatingPlaylist = true) -->
+        <Border DockPanel.Dock="Top" 
+                IsVisible="{Binding IsCreatingPlaylist}"
+                Background="{StaticResource BgElevatedBrush}"
+                CornerRadius="8" Padding="16" Margin="0,0,0,24">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <mi:MaterialIcon Kind="PlaylistPlus" Width="24" Height="24" VerticalAlignment="Center"/>
+                
+                <!-- Поле ввода с привязкой Enter -> Save -->
+                <TextBox Text="{Binding NewPlaylistName}" 
+                         Watermark="{Binding L[Library_PlaylistNamePlaceholder]}" 
+                         Width="300"
+                         VerticalAlignment="Center">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding SavePlaylistCommand}"/>
+                        <KeyBinding Gesture="Escape" Command="{Binding CancelCreateCommand}"/>
+                    </TextBox.KeyBindings>
+                </TextBox>
+                
+                <!-- Кнопка Сохранить -->
+                <Button Command="{Binding SavePlaylistCommand}" 
+                        Classes="icon-btn" 
+                        ToolTip.Tip="Save">
+                    <mi:MaterialIcon Kind="Check" Foreground="{StaticResource AccentBrush}"/>
+                </Button>
+                
+                <!-- Кнопка Отмена -->
+                <Button Command="{Binding CancelCreateCommand}" 
+                        Classes="icon-btn"
+                        ToolTip.Tip="Cancel">
+                    <mi:MaterialIcon Kind="Close" Foreground="{StaticResource SystemErrorBrush}"/>
+                </Button>
+            </StackPanel>
+        </Border>
 
         <!-- Сетка плейлистов -->
         <ScrollViewer>
