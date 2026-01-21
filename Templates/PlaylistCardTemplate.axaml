@@ -19,12 +19,12 @@
                             <Border Width="136" Height="136"
                                 CornerRadius="4"
                                 ClipToBounds="True"
-                                BoxShadow="0 4 8 0 #40000000"
+                                BoxShadow="{StaticResource CardShadow}"
                                 Margin="0,0,0,12">
-                                <Panel Background="#333">
+                                <Panel Background="{StaticResource BgElevatedBrush}">
                                     <mi:MaterialIcon Kind="MusicNote"
                                         Width="64" Height="64"
-                                        Foreground="#555"
+                                        Foreground="{StaticResource TextMutedBrush}"
                                         IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
                                     <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
                                         Stretch="UniformToFill"

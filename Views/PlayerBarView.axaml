@@ -27,10 +27,22 @@
             </Style.Animations>
         </Style>
 
+        <!-- Стиль для полосок громкости (убираем дублирование) -->
+        <Style Selector="Border.volume-bar">
+            <Setter Property="Width" Value="4" />
+            <Setter Property="CornerRadius" Value="1" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                    <BrushTransition Property="Background" Duration="0:0:0.2" />
+                </Transitions>
+            </Setter>
+        </Style>
+
         <!-- Кастомный Слайдер (Spotify Style) -->
         <Style Selector="Slider.spotify-slider">
             <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-            <Setter Property="Background" Value="#404040" />
+            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
             <Setter Property="CornerRadius" Value="2" />
         </Style>
         <Style Selector="Slider.spotify-slider /template/ Track">
@@ -72,7 +84,7 @@
                         ClipToBounds="True">
                         <Panel>
                             <mi:MaterialIcon Kind="MusicNote" Width="24" Height="24"
-                                Foreground="#555"
+                                Foreground="{StaticResource TextMutedBrush}"
                                 IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
                             <Image asyncImage:ImageLoader.Source="{Binding SafeThumbnail}"
                                 Stretch="UniformToFill"
@@ -90,12 +102,12 @@
                         <Button Classes="icon-btn" Command="{Binding ToggleLikeCommand}">
                             <mi:MaterialIcon
                                 Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
-                                Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}"
+                                Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}"
                                 Width="18" Height="18" />
                         </Button>
                         <Button Classes="icon-btn" Command="{Binding CopyLinkCommand}">
                             <mi:MaterialIcon Kind="ContentCopy" Width="16" Height="16"
-                                Foreground="#B3B3B3" />
+                                Foreground="{StaticResource TextSecondaryBrush}" />
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -105,17 +117,19 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
                         <Button Classes="icon-btn" Command="{Binding ToggleShuffleCommand}">
                             <mi:MaterialIcon Kind="Shuffle"
-                                Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}" />
+                                Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                         </Button>
                         <Button Classes="icon-btn" Command="{Binding PreviousCommand}">
                             <mi:MaterialIcon Kind="SkipPrevious" />
                         </Button>
                         <Button Classes="play-circle" Command="{Binding PlayPauseCommand}"
-                            Width="32" Height="32" Background="White">
+                            Width="32" Height="32" Background="{StaticResource TextPrimaryBrush}">
                             <Panel>
-                                <mi:MaterialIcon Kind="Pause" Foreground="Black" Width="20"
+                                <mi:MaterialIcon Kind="Pause"
+                                    Foreground="{StaticResource TextDarkBrush}" Width="20"
                                     Height="20" IsVisible="{Binding IsPlaying}" />
-                                <mi:MaterialIcon Kind="Play" Foreground="Black" Width="20"
+                                <mi:MaterialIcon Kind="Play"
+                                    Foreground="{StaticResource TextDarkBrush}" Width="20"
                                     Height="20" IsVisible="{Binding IsPaused}" />
                             </Panel>
                         </Button>
@@ -138,13 +152,16 @@
                         <Grid Grid.Column="1" Height="24" VerticalAlignment="Center">
                             <!-- Busy Indicator -->
                             <Border CornerRadius="6" Margin="-6,-4" IsVisible="{Binding IsSeekBusy}"
-                                Classes="seek-busy-indicator" BorderBrush="#1DB954" />
+                                Classes="seek-busy-indicator"
+                                BorderBrush="{StaticResource AccentBrush}" />
                             <Panel VerticalAlignment="Center">
-                                <Border Height="4" CornerRadius="2" Background="#333"
+                                <Border Height="4" CornerRadius="2"
+                                    Background="{StaticResource BgElevatedBrush}"
                                     VerticalAlignment="Center" />
                                 <ProgressBar Minimum="0" Maximum="{Binding DurationSeconds}"
                                     Value="{Binding BufferedSeconds}" Height="4"
-                                    Background="Transparent" Foreground="#5E5E5E"
+                                    Background="Transparent"
+                                    Foreground="{StaticResource BgHoverBrush}"
                                     VerticalAlignment="Center" CornerRadius="2" />
                                 <Slider Minimum="0" Maximum="{Binding DurationSeconds}"
                                     Value="{Binding PositionSeconds}" Classes="spotify-slider"
@@ -166,7 +183,9 @@
                                 </Border.Styles>
                             </Border>
                             <!-- Tooltip -->
-                            <Border Name="HoverTooltip" Background="#282828" BorderBrush="#333"
+                            <Border Name="HoverTooltip"
+                                Background="{StaticResource BgSkeletonBrush}"
+                                BorderBrush="{StaticResource BgElevatedBrush}"
                                 BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False"
                                 HorizontalAlignment="Left" VerticalAlignment="Top"
                                 Margin="0,-30,0,0">
@@ -174,7 +193,7 @@
                                     <TranslateTransform />
                                 </Border.RenderTransform>
                                 <TextBlock Name="HoverTimeText" Text="0:00" FontSize="11"
-                                    FontWeight="Bold" Foreground="White" />
+                                    FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
                             </Border>
                         </Grid>
                         <TextBlock Grid.Column="2"
@@ -209,7 +228,8 @@
                                                         <TextBlock Text="{Binding DisplayName}" />
                                                         <TextBlock Grid.Column="1"
                                                             Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}"
-                                                            Foreground="#888" FontSize="11"
+                                                            Foreground="{StaticResource TextMutedBrush}"
+                                                            FontSize="11"
                                                             VerticalAlignment="Center"
                                                             Margin="8,0,0,0" />
                                                     </Grid>
@@ -223,18 +243,20 @@
 
                         <!-- Содержимое кнопки (Текущая инфа) -->
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock Text="{Binding StreamInfo}" FontSize="10" Foreground="#888"
+                            <TextBlock Text="{Binding StreamInfo}" FontSize="10"
+                                Foreground="{StaticResource TextMutedBrush}"
                                 VerticalAlignment="Center" />
 
                             <!-- Значок стрелочки, намекающий на меню -->
                             <mi:MaterialIcon Kind="ChevronUp" Width="12" Height="12"
-                                Foreground="#555" />
+                                Foreground="{StaticResource TextMutedBrush}" />
 
-                            <TextBlock Text="•" FontSize="9" Foreground="#444"
+                            <TextBlock Text="•" FontSize="9"
+                                Foreground="{StaticResource BgHighlightBrush}"
                                 IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
                                 VerticalAlignment="Center" />
                             <TextBlock Text="{Binding DownloadSpeedText}" FontSize="9"
-                                Foreground="#1DB954"
+                                Foreground="{StaticResource AccentBrush}"
                                 IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
                                 VerticalAlignment="Center" />
                         </StackPanel>
@@ -251,53 +273,23 @@
                         Width="40">
                         <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
                             HorizontalAlignment="Center">
-                            <!-- Бар 1 -->
-                            <Border Width="4" Height="6" CornerRadius="1"
-                                Background="{Binding VolumeBarBrush}"
-                                Opacity="{Binding Bar1Opacity}">
-                                <Border.Transitions>
-                                    <Transitions>
-                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
-                                    </Transitions>
-                                </Border.Transitions>
-                            </Border>
-                            <!-- Бар 2 -->
-                            <Border Width="4" Height="9" CornerRadius="1"
-                                Background="{Binding VolumeBarBrush}"
-                                Opacity="{Binding Bar2Opacity}">
-                                <Border.Transitions>
-                                    <Transitions>
-                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
-                                    </Transitions>
-                                </Border.Transitions>
-                            </Border>
-                            <!-- Бар 3 -->
-                            <Border Width="4" Height="12" CornerRadius="1"
-                                Background="{Binding VolumeBarBrush}"
-                                Opacity="{Binding Bar3Opacity}">
-                                <Border.Transitions>
-                                    <Transitions>
-                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
-                                    </Transitions>
-                                </Border.Transitions>
-                            </Border>
-                            <!-- Бар 4 -->
-                            <Border Width="4" Height="15" CornerRadius="1"
-                                Background="{Binding VolumeBarBrush}"
-                                Opacity="{Binding Bar4Opacity}">
-                                <Border.Transitions>
-                                    <Transitions>
-                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                                        <BrushTransition Property="Background" Duration="0:0:0.2" />
-                                    </Transitions>
-                                </Border.Transitions>
-                            </Border>
+                            <!-- Пример для одной полоски, применить ко всем пяти -->
+                            <Border Classes="volume-bar" Height="6"
+                                Background="{DynamicResource {Binding VolumeBarBrushKey}}"
+                                Opacity="{Binding Bar1Opacity}" />
+                            <Border Classes="volume-bar" Height="9"
+                                Background="{DynamicResource {Binding VolumeBarBrushKey}}"
+                                Opacity="{Binding Bar2Opacity}" />
+                            <Border Classes="volume-bar" Height="12"
+                                Background="{DynamicResource {Binding VolumeBarBrushKey}}"
+                                Opacity="{Binding Bar3Opacity}" />
+                            <Border Classes="volume-bar" Height="15"
+                                Background="{DynamicResource {Binding VolumeBarBrushKey}}"
+                                Opacity="{Binding Bar4Opacity}" />
                             <!-- Бар 5 (Толстеющий) -->
-                            <Border Width="{Binding Bar5Thickness}" Height="18" CornerRadius="1"
-                                Background="{Binding VolumeBarBrush}"
+                            <Border Classes="volume-bar" Height="18"
+                                Width="{Binding Bar5Thickness}"
+                                Background="{DynamicResource {Binding VolumeBarBrushKey}}"
                                 Opacity="{Binding Bar5Opacity}">
                                 <Border.Transitions>
                                     <Transitions>
@@ -328,14 +320,15 @@
                             PointerPressed="OnVolumeAreaPressed" PointerMoved="OnVolumeAreaMoved"
                             PointerReleased="OnVolumeAreaReleased"
                             PointerExited="OnVolumeAreaExited" />
-                        <Border Name="VolumeTooltip" Background="#282828" BorderBrush="#333"
+                        <Border Name="VolumeTooltip" Background="{StaticResource BgSkeletonBrush}"
+                            BorderBrush="{StaticResource BgElevatedBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="6,2" IsVisible="False"
                             HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,-30,0,0">
                             <Border.RenderTransform>
                                 <TranslateTransform />
                             </Border.RenderTransform>
                             <TextBlock Name="VolumeTooltipText" Text="50%" FontSize="11"
-                                FontWeight="Bold" Foreground="White" />
+                                FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
                         </Border>
                     </Grid>
                 </StackPanel>

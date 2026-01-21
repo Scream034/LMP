@@ -173,7 +173,7 @@
                         BorderThickness="1" />
                     <Button Content="{Binding L[Storage_ResetApp]}"
                         Command="{Binding ResetLibraryCommand}"
-                        Foreground="#FF6B6B"
+                        Foreground="{StaticResource SystemErrorBrush}"
                         Background="Transparent" />
                 </StackPanel>
             </StackPanel>

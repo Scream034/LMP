@@ -6,33 +6,62 @@
     <Style>
         <Style.Resources>
             <!-- Background Colors -->
-            <!-- Немного высветлил базовые цвета для лучшего контраста -->
             <Color x:Key="BgPrimary">#121212</Color>
             <Color x:Key="BgSecondary">#1E1E1E</Color>
             <Color x:Key="BgElevated">#2A2A2A</Color>
             <Color x:Key="BgHighlight">#404040</Color>
             <Color x:Key="BgHover">#505050</Color>
 
-            <!-- Brand Colors -->
-            <Color x:Key="AccentGreen">#1DB954</Color>
-            <Color x:Key="AccentGreenHover">#1ED760</Color>
+            <!-- Skeleton / Loading Colors -->
+            <Color x:Key="BgSkeleton">#282828</Color>
+            <Color x:Key="BgSkeletonDeep">#1a1a1a</Color>
+            <Color x:Key="BgOverlay">#CC121212</Color>
+
+            <!-- Brand Colors (Mapped to System) -->
+            <!-- Используем DynamicResource для подхвата цвета Windows -->
+            <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource SystemAccentColor}" />
+            <SolidColorBrush x:Key="AccentHoverBrush"
+                Color="{DynamicResource SystemAccentColorLight1}" />
+
+            <!-- Semantic Colors -->
+            <Color x:Key="SystemError">#FF6B6B</Color>
+            <Color x:Key="SystemErrorBg">#331A1A</Color>
+            <Color x:Key="SystemInfoBlue">#00BFFF</Color>
+            <Color x:Key="SystemWarnOrange">#FFA500</Color>
 
             <!-- Text Colors -->
             <Color x:Key="TextPrimary">#FFFFFF</Color>
             <Color x:Key="TextSecondary">#B3B3B3</Color>
             <Color x:Key="TextMuted">#888888</Color>
+            <Color x:Key="TextDark">#000000</Color>
 
-            <!-- Brushes -->
+            <!-- Brushes: Backgrounds -->
             <SolidColorBrush x:Key="BgPrimaryBrush" Color="{StaticResource BgPrimary}" />
             <SolidColorBrush x:Key="BgSecondaryBrush" Color="{StaticResource BgSecondary}" />
             <SolidColorBrush x:Key="BgElevatedBrush" Color="{StaticResource BgElevated}" />
             <SolidColorBrush x:Key="BgHighlightBrush" Color="{StaticResource BgHighlight}" />
             <SolidColorBrush x:Key="BgHoverBrush" Color="{StaticResource BgHover}" />
-            <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentGreen}" />
-            <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentGreenHover}" />
+
+            <!-- Brushes: Skeletons & Overlays -->
+            <SolidColorBrush x:Key="BgSkeletonBrush" Color="{StaticResource BgSkeleton}" />
+            <SolidColorBrush x:Key="BgSkeletonDeepBrush" Color="{StaticResource BgSkeletonDeep}" />
+            <SolidColorBrush x:Key="BgOverlayBrush" Color="{StaticResource BgOverlay}" />
+
+            <!-- Brushes: Semantic -->
+            <SolidColorBrush x:Key="SystemErrorBrush" Color="{StaticResource SystemError}" />
+            <SolidColorBrush x:Key="SystemErrorBgBrush" Color="{StaticResource SystemErrorBg}" />
+            <SolidColorBrush x:Key="SystemInfoBlueBrush" Color="{StaticResource SystemInfoBlue}" />
+            <SolidColorBrush x:Key="SystemWarnOrangeBrush" Color="{StaticResource SystemWarnOrange}" />
+
+            <!-- Brushes: Text -->
             <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource TextPrimary}" />
             <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondary}" />
             <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMuted}" />
+            <SolidColorBrush x:Key="TextDarkBrush" Color="{StaticResource TextDark}" />
+
+            <!-- Shadows -->
+            <BoxShadows x:Key="CardShadow">0 4 8 0 #40000000</BoxShadows>
+            <BoxShadows x:Key="SmallShadow">0 2 4 0 #40000000</BoxShadows>
         </Style.Resources>
     </Style>
 
@@ -93,7 +122,7 @@
     <!-- Primary Button (Play) -->
     <Style Selector="Button.primary-btn">
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-        <Setter Property="Foreground" Value="#000000" />
+        <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}" />
         <Setter Property="Padding" Value="24,12" />
         <Setter Property="CornerRadius" Value="20" />
         <Setter Property="FontWeight" Value="Bold" />
@@ -113,7 +142,7 @@
     <!-- Play Button (Large Circle) -->
     <Style Selector="Button.play-circle">
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-        <Setter Property="Foreground" Value="#000000" />
+        <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}" />
         <Setter Property="Width" Value="56" />
         <Setter Property="Height" Value="56" />
         <Setter Property="CornerRadius" Value="28" />
@@ -134,7 +163,7 @@
     <!-- Slider (Seek/Volume) -->
     <Style Selector="Slider.spotify-slider">
         <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-        <Setter Property="Background" Value="#404040" />
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
         <Setter Property="CornerRadius" Value="2" />
     </Style>
 
@@ -142,7 +171,6 @@
         <Setter Property="Minimum" Value="{TemplateBinding Minimum}" />
         <Setter Property="Maximum" Value="{TemplateBinding Maximum}" />
         <Setter Property="Value" Value="{TemplateBinding Value}" />
-        <!-- Высота трека чуть больше -->
         <Setter Property="Height" Value="4" />
     </Style>
 
@@ -183,26 +211,6 @@
     </Style>
     <Style Selector="TextBox.search-box:pointerover">
         <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
-    </Style>
-
-    <!-- ScrollViewer -->
-    <Style Selector="ScrollViewer">
-        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
-    </Style>
-
-    <!-- ListBox -->
-    <Style Selector="ListBox">
-        <Setter Property="Background" Value="Transparent" />
-    </Style>
-    <Style Selector="ListBoxItem">
-        <Setter Property="Padding" Value="0" />
-        <Setter Property="Background" Value="Transparent" />
-    </Style>
-    <Style Selector="ListBoxItem:selected">
-        <Setter Property="Background" Value="Transparent" />
-    </Style>
-    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-        <Setter Property="Background" Value="Transparent" />
     </Style>
 
 </Styles>

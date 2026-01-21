@@ -21,12 +21,12 @@
                             <Border Width="144" Height="144" 
                                     CornerRadius="6" 
                                     ClipToBounds="True"
-                                    BoxShadow="0 4 8 0 #40000000"
+                                    BoxShadow="{StaticResource CardShadow}"
                                     Margin="0,0,0,12">
-                                <Panel Background="#282828">
+                                <Panel Background="{StaticResource BgSkeletonBrush}">
                                     <mi:MaterialIcon Kind="MusicNote" 
                                                      Width="48" Height="48" 
-                                                     Foreground="#555"
+                                                     Foreground="{StaticResource TextMutedBrush}"
                                                      IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"/>
                                     <!-- Оптимизация: Mode=OneTime для URL, так как он редко меняется -->
                                     <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
@@ -34,8 +34,8 @@
                                            IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}}"/>
                                     
                                     <!-- Overlay Play Button (Hover effect handled in styles) -->
-                                    <Panel Classes="hover-overlay" Background="#66000000" IsVisible="{Binding IsHovered}">
-                                         <mi:MaterialIcon Kind="PlayCircle" Width="48" Height="48" Foreground="White"/>
+                                    <Panel Classes="hover-overlay" Background="{StaticResource BgOverlayBrush}" IsVisible="{Binding IsHovered}">
+                                         <mi:MaterialIcon Kind="PlayCircle" Width="48" Height="48" Foreground="{StaticResource TextPrimaryBrush}"/>
                                     </Panel>
                                 </Panel>
                             </Border>

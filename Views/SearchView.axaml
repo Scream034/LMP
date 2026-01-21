@@ -37,10 +37,13 @@
         <!-- Ошибка -->
         <Border DockPanel.Dock="Top"
             IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-            Background="#331a1a" CornerRadius="8" Padding="16" Margin="0,0,0,16">
+            Background="{StaticResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
+            Margin="0,0,0,16">
             <StackPanel Orientation="Horizontal" Spacing="12">
-                <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20" Foreground="#ff6b6b" />
-                <TextBlock Text="{Binding ErrorMessage}" Foreground="#ff6b6b" />
+                <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20"
+                    Foreground="{StaticResource SystemErrorBrush}" />
+                <TextBlock Text="{Binding ErrorMessage}"
+                    Foreground="{StaticResource SystemErrorBrush}" />
             </StackPanel>
         </Border>
 

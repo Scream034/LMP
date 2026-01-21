@@ -26,9 +26,9 @@ public sealed class MemoryFirstCachingStream : Stream
     private const int ReadWaitTimeoutMs = 8000;                  // 8 сек макс ожидание в Read
     private const int MinPreBufferBlocks = 1;                       // 64KB для больших файлов (было 2)
     private const int PreBufferTimeoutMs = 3000;                    // 3 сек (было 5)
-    private const int LargeFileThreshold = 20 * 1024 * 1024;        // 20MB (было 15MB)
-    private const int ChunkSize = 10 * 1024 * 1024;                 // 10MB chunks (было 5MB)
-    private const int ParallelChunks = 4;                           // Параллельные потоки для chunked
+    private const int LargeFileThreshold = 15 * 1024 * 1024;        // 20MB (было 15MB)
+    private const int ChunkSize = 5 * 1024 * 1024;                 // 10MB chunks (было 5MB)
+    private const int ParallelChunks = 2;                           // Параллельные потоки для chunked
 
     #endregion
 

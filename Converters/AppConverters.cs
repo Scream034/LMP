@@ -5,6 +5,8 @@ using System.Globalization;
 using Material.Icons;
 using Avalonia.Input;
 using MyLiteMusicPlayer.Services; // Убедитесь, что этот using есть
+using static System.Net.Mime.MediaTypeNames;
+using Avalonia.Controls; // Убедитесь, что этот using есть
 
 namespace MyLiteMusicPlayer.Converters;
 
@@ -95,15 +97,31 @@ public class BoolToSelectorConverter : IValueConverter
                 }
 
                 // Если просят цвет (IBrush)
-                if (targetType == typeof(IBrush))
+                if (typeof(IBrush).IsAssignableFrom(targetType))
                 {
-                    try { return SolidColorBrush.Parse(resultString); } catch { }
+                    // 1. Пытаемся найти в ресурсах приложения (для AccentBrush, TextPrimaryBrush и т.д.)
+                    if (Avalonia.Application.Current != null && Avalonia.Application.Current.TryFindResource(resultString, out var res))
+                    {
+                        if (res is IBrush brush) return brush;
+                        if (res is Color color) return new SolidColorBrush(color);
+                    }
+
+                    // 2. Если не ресурс, пытаемся распарсить как HEX или именованный цвет (Red, Blue...)
+                    try
+                    {
+                        return SolidColorBrush.Parse(resultString);
+                    }
+                    catch
+                    {
+                        // Если это не HEX, возможно это системный ключ напрямую
+                        return Brushes.Transparent;
+                    }
                 }
 
                 return resultString;
             }
         }
-        return null; // или значение по умолчанию
+        return null;
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();

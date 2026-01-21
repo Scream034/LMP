@@ -23,7 +23,7 @@
                     Command="{Binding ToggleDebugCommand}"
                     Background="Transparent" Padding="8">
                     <mi:MaterialIcon Kind="Bug" Width="20" Height="20"
-                        Foreground="{Binding ShowDebugInfo, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#666'}" />
+                        Foreground="{Binding ShowDebugInfo, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextMutedBrush'}" />
                 </Button>
             </Grid>
 
@@ -56,31 +56,32 @@
 
             <!-- 2. Debug Panel -->
             <Border IsVisible="{Binding ShowDebugInfo}"
-                Background="#1A1A1A" CornerRadius="8" Padding="16,12" Margin="0,0,0,16">
+                Background="{StaticResource BgSecondaryBrush}" CornerRadius="8" Padding="16,12"
+                Margin="0,0,0,16">
                 <Grid ColumnDefinitions="*, *, *, *">
                     <StackPanel Grid.Column="0">
                         <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10"
-                            Foreground="#666" />
+                            Foreground="{StaticResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="#1DB954" />
+                            FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1">
                         <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10"
-                            Foreground="#666" />
+                            Foreground="{StaticResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="White" />
+                            FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
                         <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10"
-                            Foreground="#666" />
+                            Foreground="{StaticResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="#FFA500" />
+                            FontWeight="Bold" Foreground="{StaticResource SystemWarnOrangeBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3">
                         <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10"
-                            Foreground="#666" />
+                            Foreground="{StaticResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14"
-                            FontWeight="Bold" Foreground="#00BFFF" />
+                            FontWeight="Bold" Foreground="{StaticResource SystemInfoBlueBrush}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -112,8 +113,10 @@
             <Border IsVisible="{Binding ReachedEnd}" Margin="0,24,0,80"
                 HorizontalAlignment="Center">
                 <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.5">
-                    <mi:MaterialIcon Kind="CheckCircle" Width="20" Height="20" Foreground="#666" />
-                    <TextBlock Text="{Binding L[Home_EndOfList]}" Foreground="#666" FontSize="14" />
+                    <mi:MaterialIcon Kind="CheckCircle" Width="20" Height="20"
+                        Foreground="{StaticResource TextMutedBrush}" />
+                    <TextBlock Text="{Binding L[Home_EndOfList]}"
+                        Foreground="{StaticResource TextMutedBrush}" FontSize="14" />
                 </StackPanel>
             </Border>
         </StackPanel>

@@ -135,7 +135,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public double Bar4Opacity { get; set; } = 0.3;
     [Reactive] public double Bar5Opacity { get; set; } = 0.3;
     [Reactive] public double Bar5Thickness { get; set; } = 4;
-    [Reactive] public string VolumeBarBrush { get; set; } = "#B3B3B3";
+    [Reactive] public string VolumeBarBrushKey { get; set; } = "TextSecondaryBrush";
 
     // ИНФОРМАЦИЯ О ПОТОКЕ
 
@@ -459,12 +459,14 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             double boost = (vol - 100) / 100.0;
             Bar5Thickness = 4 + (boost * 6);
             if (Bar5Thickness > 12) Bar5Thickness = 12;
-            VolumeBarBrush = "#1DB954"; // Зеленый для boost
+
+            // Используем акцентный цвет системы для буста
+            VolumeBarBrushKey = "AccentBrush";
         }
         else
         {
             Bar5Thickness = 4;
-            VolumeBarBrush = "#B3B3B3"; // Серый для нормальной громкости
+            VolumeBarBrushKey = "TextSecondaryBrush";
         }
     }
 

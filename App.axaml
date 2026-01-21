@@ -30,7 +30,7 @@
                 <!-- 2. Инфо -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="{Binding Title}"
-                        Foreground="{Binding IsCurrentTrack, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#FFFFFF'}"
+                        Foreground="{Binding IsCurrentTrack, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextPrimaryBrush'}"
                         FontWeight="Medium"
                         TextTrimming="CharacterEllipsis" />
                     <TextBlock Text="{Binding Author}" FontSize="12"
@@ -54,7 +54,7 @@
                     <mi:MaterialIcon
                         Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
                         Width="18" Height="18"
-                        Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='#1DB954|#B3B3B3'}" />
+                        Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                 </Button>
 
                 <!-- 5. Длительность -->
