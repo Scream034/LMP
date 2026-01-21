@@ -1,5 +1,4 @@
-﻿<!-- Views/MainWindow.axaml -->
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     xmlns:views="using:MyLiteMusicPlayer.Views"
@@ -39,7 +38,6 @@
                                     VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
-
                         <Button Classes="sidebar-btn" Command="{Binding NavigateSearchCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
@@ -47,7 +45,6 @@
                                     VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
-
                         <Button Classes="sidebar-btn" Command="{Binding NavigateLibraryCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24" />
@@ -63,36 +60,55 @@
                         Background="{StaticResource BgHighlightBrush}"
                         Margin="16,16" />
 
-                    <!-- User Section at Bottom -->
-                    <Border DockPanel.Dock="Bottom" Padding="8">
-                        <Button Classes="sidebar-btn" Command="{Binding NavigateSettingsCommand}">
-                            <Grid ColumnDefinitions="Auto, *, Auto">
-                                <!-- Avatar or Icon -->
+                    <!-- User Section (REDESIGNED) -->
+                    <Border DockPanel.Dock="Bottom" Padding="4">
+                        <Button Classes="sidebar-btn" Command="{Binding NavigateSettingsCommand}"
+                            Padding="8,12">
+                            <Grid ColumnDefinitions="Auto, *">
+
+                                <!-- Avatar Circle -->
                                 <Border Grid.Column="0"
-                                    Width="32" Height="32"
-                                    CornerRadius="16"
+                                    Width="40" Height="40"
+                                    CornerRadius="20"
                                     ClipToBounds="True"
-                                    Background="{StaticResource BgElevatedBrush}">
+                                    Background="{StaticResource BgElevatedBrush}"
+                                    BorderBrush="{StaticResource BgHighlightBrush}"
+                                    BorderThickness="1">
                                     <Panel>
+                                        <!-- Fallback Icon -->
                                         <mi:MaterialIcon Kind="Account"
-                                            Width="20" Height="20"
+                                            Width="24" Height="24"
+                                            Foreground="{StaticResource TextSecondaryBrush}"
                                             IsVisible="{Binding UserAvatarUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
+
+                                        <!-- Real Avatar -->
                                         <Image
                                             asyncImage:ImageLoader.Source="{Binding UserAvatarUrl}"
+                                            Stretch="UniformToFill"
                                             IsVisible="{Binding IsAuthenticated}" />
                                     </Panel>
                                 </Border>
 
-                                <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding UserName, FallbackValue='Guest'}"
+                                <!-- Text & Settings Icon -->
+                                <Grid Grid.Column="1" Margin="12,0,0,0" RowDefinitions="*,*">
+                                    <TextBlock Grid.Row="0"
+                                        Text="{Binding UserName, FallbackValue='Guest'}"
                                         FontWeight="SemiBold"
-                                        Foreground="{StaticResource TextPrimaryBrush}" />
-                                    <TextBlock Text="{Binding L[Sidebar_Settings]}"
-                                        FontSize="12"
-                                        Foreground="{StaticResource TextMutedBrush}" />
-                                </StackPanel>
+                                        Foreground="{StaticResource TextPrimaryBrush}"
+                                        VerticalAlignment="Bottom"
+                                        TextTrimming="CharacterEllipsis" />
 
-                                <mi:MaterialIcon Grid.Column="2" Kind="Cog" Width="20" Height="20" />
+                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4"
+                                        VerticalAlignment="Top">
+                                        <mi:MaterialIcon Kind="Cog" Width="12" Height="12"
+                                            Foreground="{StaticResource TextMutedBrush}"
+                                            VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding L[Sidebar_Settings]}"
+                                            FontSize="11"
+                                            Foreground="{StaticResource TextMutedBrush}"
+                                            VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Grid>
                             </Grid>
                         </Button>
                     </Border>
@@ -128,7 +144,7 @@
             </Border>
         </Grid>
 
-        <!-- Player Bar (Hidden if no track) -->
+        <!-- Player Bar -->
         <views:PlayerBarView Grid.Row="1"
             DataContext="{Binding PlayerBar}"
             IsVisible="{Binding HasTrack}" />
