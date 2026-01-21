@@ -22,7 +22,7 @@ namespace MyLiteMusicPlayer.Services;
 public class AudioEngine : ViewModelBase, IDisposable
 {
     // ЗАВИСИМОСТИ И СЕРВИСЫ
-    
+
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;
     private readonly StreamCacheManager _cacheManager;
@@ -39,10 +39,10 @@ public class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>Блокировка загрузки трека (предотвращает параллельную загрузку)</summary>
     private readonly SemaphoreSlim _loadLock = new(1, 1);
-    
+
     /// <summary>Блокировка команд управления (Play/Pause/Seek)</summary>
     private readonly SemaphoreSlim _commandLock = new(1, 1);
-    
+
     /// <summary>Блокировка API запросов (throttling)</summary>
     private readonly SemaphoreSlim _apiLock = new(1, 1);
 
@@ -212,7 +212,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         int percent = (int)Math.Round(value);
         _volumePercent = Math.Clamp(percent, 0, 500);
         Task.Run(ApplyVolumeImmediate);
-        
+
         // Отмечаем необходимость сохранения
         _library.Data.Volume = _volumePercent;
         _lastVolumeChange = DateTime.UtcNow;
@@ -330,17 +330,13 @@ public class AudioEngine : ViewModelBase, IDisposable
         if (track == null || _isDisposed) return;
         Log.Info($"[AudioEngine] PlayTrackAsync requested: {track.Title} ({track.Id})");
 
-        // === СИНХРОНИЗАЦИЯ НАСТРОЕК ===
-        // Если трек пришел из поиска (новый объект), он не знает о сохраненных предпочтениях.
-        // Проверяем библиотеку и подтягиваем настройки, если они есть.
+        // === СИНХРОНИЗАЦИЯ НАСТРОЕК (Быстрая операция в памяти) ===
         if (_library.Data.Tracks.TryGetValue(track.Id, out var savedTrack))
         {
-            // Если у текущего объекта не установлены предпочтения, берем из сохраненного
             if (string.IsNullOrEmpty(track.PreferredContainer) && !string.IsNullOrEmpty(savedTrack.PreferredContainer))
             {
                 track.PreferredContainer = savedTrack.PreferredContainer;
                 track.PreferredBitrate = savedTrack.PreferredBitrate;
-                Log.Info($"[AudioEngine] Restored preference from library: {track.PreferredContainer}/{track.PreferredBitrate}kbps");
             }
         }
 
@@ -349,6 +345,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         var session = Interlocked.Increment(ref _session);
         try { oldCts?.Cancel(); } catch { /* ignore */ }
 
+        // === ОБНОВЛЕНИЕ UI (Должно быть в UI потоке) ===
         ResetStreamInfo();
         IsLoading = true;
         CurrentTrack = track;
@@ -357,19 +354,30 @@ public class AudioEngine : ViewModelBase, IDisposable
 
         SafeInvoke(() => OnTrackChanged?.Invoke(track));
 
-        Log.Debug("[AudioEngine] Waiting for _loadLock...");
-        bool lockAcquired = await _loadLock.WaitAsync(500);
-        Log.Debug($"[AudioEngine] _loadLock acquired: {lockAcquired}");
+        // Выносим всю тяжелую работу в фоновый поток ★★★
+        // Это гарантирует, что UI освобождается мгновенно после установки флага IsLoading.
+        // VLC Stop() и сетевые запросы будут выполняться в ThreadPool.
+        _ = Task.Run(async () =>
+        {
+            Log.Debug("[AudioEngine] Waiting for _loadLock...");
+            bool lockAcquired = await _loadLock.WaitAsync(500);
+            Log.Debug($"[AudioEngine] _loadLock acquired: {lockAcquired}");
 
-        try
-        {
-            await PlayTrackInternalAsync(track, session, _cts.Token);
-        }
-        finally
-        {
-            if (lockAcquired) _loadLock.Release();
-        }
+            try
+            {
+                if (lockAcquired)
+                {
+                    // Внутри этого метода происходит StopPlaybackAsync (Stop VLC) и сетевые запросы
+                    await PlayTrackInternalAsync(track, session, _cts.Token);
+                }
+            }
+            finally
+            {
+                if (lockAcquired) _loadLock.Release();
+            }
+        });
     }
+
 
     /// <summary>
     /// Внутренняя логика загрузки и запуска потока.
@@ -377,7 +385,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private async Task PlayTrackInternalAsync(TrackInfo track, int session, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        
+
         // ★ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ:
         // Асинхронно останавливаем предыдущее воспроизведение и ЖДЕМ освобождения файла.
         // Это предотвращает ошибку "File being used by another process".
@@ -423,8 +431,8 @@ public class AudioEngine : ViewModelBase, IDisposable
             SetStreamInfo(streamDetails.Codec, streamDetails.Bitrate, streamDetails.Container);
 
             string url = streamDetails.Url;
-            long size = streamDetails.Size > 0 
-                ? streamDetails.Size 
+            long size = streamDetails.Size > 0
+                ? streamDetails.Size
                 : await TryGetContentLengthAsync(url, ct);
 
             // Если размер неизвестен, играем напрямую (без кэширования)
@@ -479,7 +487,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     private void StartPlayback(Media media, MemoryFirstCachingStream? stream, TrackInfo track, int session)
     {
         Log.Info("[AudioEngine] StartPlayback called. Swapping media...");
-        
+
         // Очищаем предыдущие ресурсы (хотя StopPlaybackAsync уже должен был это сделать,
         // но для надежности при прямом воспроизведении оставим)
         var oldMedia = _currentMedia;
@@ -524,7 +532,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         // 2. Забираем ссылки и обнуляем поля класса
         var oldStream = _currentStream;
         var oldMedia = _currentMedia;
-        
+
         _currentStream = null;
         _currentMedia = null;
         _isPlayerReady = false;
@@ -614,11 +622,11 @@ public class AudioEngine : ViewModelBase, IDisposable
         Log.Info("[AudioEngine] Stop requested.");
         Interlocked.Increment(ref _session);
         _cts?.Cancel();
-        
+
         // Запускаем остановку. Здесь не ждем (fire-and-forget), т.к. Stop() обычно вызывается UI синхронно,
         // и нам важнее быстрее освободить UI. Гонки не будет, т.к. _session инкрементирован.
         _ = StopPlaybackAsync();
-        
+
         ResetStreamInfo();
         CurrentTrack = null;
         IsLoading = false;
@@ -653,13 +661,13 @@ public class AudioEngine : ViewModelBase, IDisposable
     }
 
     private void OnVlcPaused(object? sender, EventArgs e) { NotifyPlaybackStateChanged(); }
-    
-    private void OnVlcStopped(object? sender, EventArgs e) 
-    { 
-        _isPlayerReady = false; 
-        NotifyPlaybackStateChanged(); 
+
+    private void OnVlcStopped(object? sender, EventArgs e)
+    {
+        _isPlayerReady = false;
+        NotifyPlaybackStateChanged();
     }
-    
+
     private void OnVlcEndReached(object? sender, EventArgs e)
     {
         Log.Info("[AudioEngine] VLC Event: EndReached");
@@ -679,9 +687,9 @@ public class AudioEngine : ViewModelBase, IDisposable
         IsLoading = false;
         NotifyPlaybackStateChanged();
     }
-    
+
     private void OnVlcBuffering(object? sender, MediaPlayerBufferingEventArgs e) { }
-    
+
     private void OnVlcTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
     {
         if (_isDisposed || !_isPlayerReady) return;
@@ -729,7 +737,7 @@ public class AudioEngine : ViewModelBase, IDisposable
         }
         return (_activeCodec, _activeBitrate, _streamInfoReady);
     }
-    
+
     public long GetDownloadedBytes() => _currentStream != null
         ? (long)(_currentStream.DownloadProgress / 100.0 * _currentStream.Length)
         : 0;
@@ -745,12 +753,12 @@ public class AudioEngine : ViewModelBase, IDisposable
             }
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(8));
-            
+
             // Здесь YoutubeProvider автоматически выберет формат на основе 
             // TransientContainer или PreferredContainer, которые мы установили
             var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
             _lastApiCall = DateTime.UtcNow;
-            
+
             if (!result.HasValue) return null;
             return new StreamDetails
             {
@@ -855,7 +863,7 @@ public class AudioEngine : ViewModelBase, IDisposable
     }
 
     private static void SafeInvoke(Action action) { try { action(); } catch { } }
-    
+
     #endregion
 
     // ОСВОБОЖДЕНИЕ РЕСУРСОВ
