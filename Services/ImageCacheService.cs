@@ -264,8 +264,7 @@ public class ImageCacheService : IDisposable
 
     private static string GetCacheKey(string url)
     {
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(url));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(url));
         return Convert.ToHexString(bytes)[..32];
     }
 

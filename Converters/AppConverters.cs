@@ -3,7 +3,8 @@ using Avalonia.Media;
 using MyLiteMusicPlayer.Models;
 using System.Globalization;
 using Material.Icons;
-using Avalonia.Input; // Убедитесь, что этот using есть
+using Avalonia.Input;
+using MyLiteMusicPlayer.Services; // Убедитесь, что этот using есть
 
 namespace MyLiteMusicPlayer.Converters;
 
@@ -146,6 +147,32 @@ public sealed class ToUpperConverter : IValueConverter
             return str.ToUpper(culture);
         }
         return value;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
+    }
+}
+
+/// <summary>
+/// Конвертирует AudioQualityPreference в локализованную строку
+/// </summary>
+public sealed class AudioQualityToStringConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is AudioQualityPreference preference)
+        {
+            var loc = LocalizationService.Instance;
+            return preference switch
+            {
+                AudioQualityPreference.BestAvailable => loc["Quality_BestAvailable"],
+                AudioQualityPreference.Standard => loc["Quality_Standard"],
+                _ => preference.ToString()
+            };
+        }
+        return value?.ToString();
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

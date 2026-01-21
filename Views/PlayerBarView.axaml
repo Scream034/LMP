@@ -183,19 +183,63 @@
                             Width="40" TextAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
 
-                    <!-- Stream Info -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="6"
-                        Margin="0,2,0,0" IsVisible="{Binding ShowStreamInfo}">
-                        <TextBlock Text="{Binding StreamInfo}" FontSize="9" Foreground="#555"
-                            VerticalAlignment="Center" />
-                        <TextBlock Text="•" FontSize="9" Foreground="#444"
-                            IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
-                            VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding DownloadSpeedText}" FontSize="9"
-                            Foreground="#1DB95488"
-                            IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
-                            VerticalAlignment="Center" />
-                    </StackPanel>
+                    <!-- Stream Info Section -->
+                    <Button Classes="sidebar-btn"
+                        Padding="4,2"
+                        Margin="0,2,0,0"
+                        HorizontalAlignment="Center"
+                        Command="{Binding LoadFormatsCommand}"
+                        IsVisible="{Binding ShowStreamInfo}">
+
+                        <Button.Flyout>
+                            <Flyout Placement="Top">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{Binding L[Stream_SelectQuality]}"
+                                        FontWeight="Bold" Margin="4" />
+                                    <ListBox ItemsSource="{Binding AvailableFormats}"
+                                        Background="Transparent">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Left"
+                                                    Background="Transparent"
+                                                    Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
+                                                    CommandParameter="{Binding}">
+                                                    <Grid ColumnDefinitions="*, Auto" Width="180">
+                                                        <TextBlock Text="{Binding DisplayName}" />
+                                                        <TextBlock Grid.Column="1"
+                                                            Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}"
+                                                            Foreground="#888" FontSize="11"
+                                                            VerticalAlignment="Center"
+                                                            Margin="8,0,0,0" />
+                                                    </Grid>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+
+                        <!-- Содержимое кнопки (Текущая инфа) -->
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding StreamInfo}" FontSize="10" Foreground="#888"
+                                VerticalAlignment="Center" />
+
+                            <!-- Значок стрелочки, намекающий на меню -->
+                            <mi:MaterialIcon Kind="ChevronUp" Width="12" Height="12"
+                                Foreground="#555" />
+
+                            <TextBlock Text="•" FontSize="9" Foreground="#444"
+                                IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
+                                VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding DownloadSpeedText}" FontSize="9"
+                                Foreground="#1DB954"
+                                IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
+                                VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
                 </StackPanel>
 
                 <!-- ПРАВО: Громкость (Кастомная) -->

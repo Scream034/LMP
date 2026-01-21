@@ -1,6 +1,6 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:conv="using:MyLiteMusicPlayer.Converters">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:conv="using:MyLiteMusicPlayer.Converters">
 
     <conv:TimeSpanToStringConverter x:Key="TimeSpanConverter" />
     <conv:BoolToOpacityConverter x:Key="BoolToOpacity" />
@@ -8,8 +8,9 @@
     <conv:InverseBoolConverter x:Key="InverseBool" />
     <conv:RepeatModeToIconConverter x:Key="RepeatModeIcon" />
     <conv:VolumeToIconConverter x:Key="VolumeIcon" />
-    
-    <!-- Важно: регистрируем новый конвертер -->
     <conv:BoolToSelectorConverter x:Key="BoolToSelector" />
+    <conv:BoolToCursorConverter x:Key="BoolToCursor" />
+    <conv:ToUpperConverter x:Key="ToUpper" />
+    <conv:AudioQualityToStringConverter x:Key="AudioQualityToString" />
 
 </ResourceDictionary>

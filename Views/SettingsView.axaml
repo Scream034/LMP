@@ -97,6 +97,34 @@
                         <Slider Minimum="-12" Maximum="12" Value="{Binding TargetGainDb}" />
                     </StackPanel>
                 </Grid>
+
+                <!-- Quality Selector -->
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Settings_AudioQuality]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_AudioQualityDesc]}" />
+                    </StackPanel>
+
+                    <!-- Конвертер для Enum в локализованную строку -->
+                    <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding QualityOptions}"
+                        SelectedItem="{Binding QualityPreference}"
+                        HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock
+                                    Text="{Binding Converter={StaticResource AudioQualityToString}}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L[Settings_RememberFormat]}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding RememberTrackFormat}"
+                        OnContent="" OffContent="" />
+                </Grid>
             </StackPanel>
 
             <!-- СЕКЦИЯ: ОБЩЕЕ -->

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MyLiteMusicPlayer.Models;
 
 public class TrackInfo
@@ -32,20 +34,48 @@ public class TrackInfo
         set => _thumbnailUrl = value;
     }
 
-    // Для проверки - есть ли реальный thumbnail
+    /// <summary>
+    /// Для проверки - есть ли реальный thumbnail
+    /// </summary>
     public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl);
 
-    // Состояние в библиотеке
+    /// Состояние в библиотеке
     public bool IsLiked { get; set; }
     public bool IsDisliked { get; set; }
     public bool IsDownloaded { get; set; }
     public string? LocalPath { get; set; }
 
-    // В каких плейлистах находится
+    /// <summary>
+    /// В каких плейлистах находится
+    /// </summary>
     public HashSet<string> InPlaylists { get; set; } = [];
 
-    // Метаданные для радио
+    /// <summary>
+    /// Метаданные для радио
+    /// </summary>
     public string? RadioSeedId { get; set; }
+
+    /// <summary>
+    /// Сохраняем предпочтительный кодек для этого трека (например: "webm" или "mp4")
+    /// </summary>
+    public string? PreferredContainer { get; set; }
+
+    /// <summary>
+    /// Предпочтительный битрейт (для точного выбора формата)
+    /// </summary>
+    public int PreferredBitrate { get; set; }
+
+    /// <summary>Закэшированный кодек (Opus/AAC/etc)</summary>
+    [JsonIgnore]
+    public string CachedCodec { get; set; } = "";
+
+    /// <summary>Закэшированный битрейт</summary>
+    [JsonIgnore]
+    public int CachedBitrate { get; set; }
+
+    /// <summary>Закэшированный контейнер</summary>
+    [JsonIgnore]
+    public string CachedContainer { get; set; } = "";
 
     public TrackInfo Clone() => new()
     {

@@ -75,5 +75,13 @@
   "Home_EndOfList": "Вы долистали до конца",
   "Search_Searching": "Ищем треки...",
   "Search_FetchingMore": "Загружаем ещё результаты...",
-  "Search_EndOfResults": "Больше результатов нет"
+  "Search_EndOfResults": "Больше результатов нет",
+  "Settings_AudioQuality": "Качество аудио",
+  "Settings_AudioQualityDesc": "Предпочитать Opus (Высокое) или AAC (Стандарт)",
+  "Settings_RememberFormat": "Запоминать формат для треков",
+  "Quality_BestAvailable": "Высокое (Opus)",
+  "Quality_Standard": "Стандартное (AAC/MP4)",
+  "Stream_SelectQuality": "Выберите качество",
+  "Stream_LocalFile": "Локальный файл",
+  "Stream_Loading": "Загрузка..."
 }

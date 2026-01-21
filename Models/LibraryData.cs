@@ -31,6 +31,9 @@ public class LibraryData
 
     public int LoadBatchSize { get; set; } = 20;
     public bool EnableSmoothLoading { get; set; } = true;
+
+    public AudioQualityPreference QualityPreference { get; set; } = AudioQualityPreference.BestAvailable;
+    public bool RememberTrackFormat { get; set; } = true; // Запоминать ли выбор формата для треков
 }
 
 public enum RepeatMode
@@ -38,4 +41,10 @@ public enum RepeatMode
     None,      // Исправлено: Было Off в коде, но None в модели
     RepeatOne,
     RepeatAll
+}
+
+public enum AudioQualityPreference
+{
+    BestAvailable, // Преимущественно Opus (WebM)
+    Standard       // Преимущественно AAC (MP4), совместимость
 }
