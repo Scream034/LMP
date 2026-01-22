@@ -5,7 +5,9 @@ namespace MyLiteMusicPlayer.Services;
 
 public class LibraryService
 {
+    public const string LikedPlaylistId = "liked";
     private const string LibraryFileName = "library.json";
+
     private readonly string _libraryPath;
     private readonly string _appFolder;
 
@@ -20,6 +22,9 @@ public class LibraryService
         _appFolder = Path.Combine(appData, "LiteMusicPlayer");
         Directory.CreateDirectory(_appFolder);
         _libraryPath = Path.Combine(_appFolder, LibraryFileName);
+
+        // Подписываемся на смену языка
+        LocalizationService.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
         Load();
     }
 
@@ -79,24 +84,46 @@ public class LibraryService
         OnDataChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Обработчик смены языка - обновляет имя плейлиста "Любимое"
+    /// </summary>
+    private void OnLanguageChanged()
+    {
+        // Просто уведомляем UI что данные "изменились" 
+        // Имя Liked пересчитается автоматически через геттер
+        OnDataChanged?.Invoke();
+    }
+
     private void EnsureLikedPlaylist()
     {
-        if (!Data.Playlists.ContainsKey("liked"))
+        if (!Data.Playlists.TryGetValue(LikedPlaylistId, out Playlist? value))
         {
-            Data.Playlists["liked"] = new Playlist
+            Data.Playlists[LikedPlaylistId] = new Playlist
             {
-                Id = "liked",
-                Name = "Любимое",
-                SyncMode = PlaylistSyncMode.LocalOnly, // Изначально локальный, менеджер может изменить на Sync
-                ThumbnailUrl = "avares://MyLiteMusicPlayer/Assets/liked-cover.png" // Можно заглушку поставить
+                Id = LikedPlaylistId,
+                Name = LocalizationService.Instance["Playlist_Liked"], // Локализованное имя
+                SyncMode = PlaylistSyncMode.LocalOnly,
+                ThumbnailUrl = null // Будет отображаться иконка сердца
             };
+        }
+        else
+        {
+            value.Name = LocalizationService.Instance["Playlist_Liked"];
         }
     }
 
     public Playlist GetLikedPlaylist()
     {
         EnsureLikedPlaylist();
-        return Data.Playlists["liked"];
+        return Data.Playlists[LikedPlaylistId];
+    }
+
+    /// <summary>
+    /// Проверяет, является ли плейлист системным (Любимое)
+    /// </summary>
+    public static bool IsSystemPlaylist(string playlistId)
+    {
+        return playlistId == LikedPlaylistId;
     }
 
     public void AddOrUpdateTrack(TrackInfo track)
@@ -115,22 +142,32 @@ public class LibraryService
 
         Data.Tracks[track.Id] = track;
         Save();
-        // Уведомление вызываем снаружи или точечно, чтобы не спамить при массовом апдейте
     }
 
-    /// <summary>
-    /// Добавляет или обновляет плейлист в библиотеке.
-    /// </summary>
     public void AddOrUpdatePlaylist(Playlist playlist)
     {
-        if (Data.Playlists.TryGetValue(playlist.Id, out var existing))
+        // Защита от изменения ID системного плейлиста
+        if (playlist.Id == LikedPlaylistId)
         {
-            existing.Name = playlist.Name;
-            existing.ThumbnailUrl = playlist.ThumbnailUrl;
-            existing.TrackIds = playlist.TrackIds;
-            existing.YoutubeId = playlist.YoutubeId;
-            existing.SyncMode = playlist.SyncMode;
-            existing.UpdatedAt = DateTime.Now;
+            // Для liked обновляем только треки, не имя
+            if (Data.Playlists.TryGetValue(LikedPlaylistId, out var existing))
+            {
+                existing.TrackIds = playlist.TrackIds;
+                existing.UpdatedAt = DateTime.Now;
+            }
+            Save();
+            OnDataChanged?.Invoke();
+            return;
+        }
+
+        if (Data.Playlists.TryGetValue(playlist.Id, out var existingPlaylist))
+        {
+            existingPlaylist.Name = playlist.Name;
+            existingPlaylist.ThumbnailUrl = playlist.ThumbnailUrl;
+            existingPlaylist.TrackIds = playlist.TrackIds;
+            existingPlaylist.YoutubeId = playlist.YoutubeId;
+            existingPlaylist.SyncMode = playlist.SyncMode;
+            existingPlaylist.UpdatedAt = DateTime.Now;
         }
         else
         {
@@ -212,7 +249,7 @@ public class LibraryService
         AddOrUpdateTrack(track);
         track.IsLiked = !track.IsLiked;
         track.IsDisliked = false;
-        var likedPlaylist = Data.Playlists["liked"];
+        var likedPlaylist = Data.Playlists[LikedPlaylistId];
 
         if (track.IsLiked)
         {
@@ -221,13 +258,13 @@ public class LibraryService
                 likedPlaylist.TrackIds.Insert(0, track.Id);
                 likedPlaylist.UpdatedAt = DateTime.Now;
             }
-            track.InPlaylists.Add("liked");
+            track.InPlaylists.Add(LikedPlaylistId);
         }
         else
         {
             likedPlaylist.TrackIds.Remove(track.Id);
             likedPlaylist.UpdatedAt = DateTime.Now;
-            track.InPlaylists.Remove("liked");
+            track.InPlaylists.Remove(LikedPlaylistId);
         }
 
         Data.Tracks[track.Id] = track;
@@ -243,8 +280,8 @@ public class LibraryService
         if (track.IsDisliked)
         {
             track.IsLiked = false;
-            Data.Playlists["liked"].TrackIds.Remove(track.Id);
-            track.InPlaylists.Remove("liked");
+            Data.Playlists[LikedPlaylistId].TrackIds.Remove(track.Id);
+            track.InPlaylists.Remove(LikedPlaylistId);
         }
         Data.Tracks[track.Id] = track;
         Save();
@@ -263,6 +300,9 @@ public class LibraryService
 
     public void RemovePlaylist(string playlistId)
     {
+        // Нельзя удалить системный плейлист
+        if (IsSystemPlaylist(playlistId)) return;
+
         if (Data.Playlists.Remove(playlistId))
         {
             Save();
@@ -272,7 +312,9 @@ public class LibraryService
 
     public void RenamePlaylist(string playlistId, string newName)
     {
-        if (playlistId == "liked") return;
+        // Нельзя переименовать системный плейлист
+        if (IsSystemPlaylist(playlistId)) return;
+
         if (Data.Playlists.TryGetValue(playlistId, out var playlist))
         {
             playlist.Name = newName;
@@ -284,7 +326,9 @@ public class LibraryService
 
     public void DeletePlaylist(string playlistId)
     {
-        if (playlistId == "liked") return;
+        // Нельзя удалить системный плейлист
+        if (IsSystemPlaylist(playlistId)) return;
+
         if (Data.Playlists.Remove(playlistId))
         {
             foreach (var track in Data.Tracks.Values)

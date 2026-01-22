@@ -15,5 +15,6 @@
     <conv:BitmapAssetValueConverter x:Key="BitmapAssetConverter" />
     <conv:StringStartsWithConverter x:Key="StringStartsWithConverter" />
     <conv:WebUrlConverter x:Key="WebUrlConverter" />
+    <conv:ProgressToWidthConverter x:Key="ProgressToWidthConverter" />
 
 </ResourceDictionary>

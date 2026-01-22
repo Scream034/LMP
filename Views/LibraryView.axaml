@@ -1,93 +1,191 @@
 ﻿<UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             x:Class="MyLiteMusicPlayer.Views.LibraryView"
-             x:DataType="vm:LibraryViewModel">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    xmlns:local="using:MyLiteMusicPlayer.Converters"
+    x:Class="MyLiteMusicPlayer.Views.LibraryView"
+    x:DataType="vm:LibraryViewModel">
 
-    <DockPanel>
-        <!-- Верхняя панель (Header) -->
-        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,24">
-            <StackPanel Orientation="Horizontal" Spacing="16">
-                <TextBlock Text="{Binding L[Library_Title]}" FontSize="32" FontWeight="Bold"/>
-                
-                <Button Command="{Binding OpenCreateCommand}" 
-                        Content="{Binding L[Library_NewPlaylist]}"
-                        Classes="accent"
-                        IsVisible="{Binding !IsCreatingPlaylist}"
-                        VerticalAlignment="Center"/>
-                        
-                <Button Command="{Binding SyncAccountPlaylistsCommand}" 
-                        Content="{Binding L[Library_SyncYoutube]}"
-                        IsEnabled="{Binding !IsLoading}"
-                        VerticalAlignment="Center"/>
-                
-                <mi:MaterialIcon Kind="Loading" Classes="spinning" 
-                                 IsVisible="{Binding IsLoading}"
-                                 Width="24" Height="24" 
-                                 Foreground="{StaticResource AccentBrush}"/>
+    <Grid RowDefinitions="Auto, Auto, *">
+
+        <!-- Заголовок -->
+        <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,24,24,8">
+            <StackPanel>
+                <TextBlock Text="{Binding L[Library_Title]}"
+                    FontSize="28" FontWeight="Bold"
+                    Foreground="{StaticResource TextPrimaryBrush}" />
+                <!-- Статус синхронизации -->
+                <TextBlock Text="{Binding SyncStatus}"
+                    FontSize="12"
+                    Foreground="{StaticResource TextMutedBrush}"
+                    IsVisible="{Binding IsSyncing}"
+                    Margin="0,4,0,0" />
             </StackPanel>
-        </StackPanel>
 
-        <!-- Панель создания плейлиста -->
-        <Border DockPanel.Dock="Top" 
-                IsVisible="{Binding IsCreatingPlaylist}"
-                Background="{StaticResource BgElevatedBrush}"
-                CornerRadius="8" Padding="16" Margin="0,0,0,24">
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <mi:MaterialIcon Kind="PlaylistPlus" Width="24" Height="24" VerticalAlignment="Center"/>
-                <TextBox Text="{Binding NewPlaylistName}" 
-                         Watermark="{Binding L[Library_PlaylistNamePlaceholder]}" 
-                         Width="300" VerticalAlignment="Center">
-                    <TextBox.KeyBindings>
-                        <KeyBinding Gesture="Enter" Command="{Binding SavePlaylistCommand}"/>
-                        <KeyBinding Gesture="Escape" Command="{Binding CancelCreateCommand}"/>
-                    </TextBox.KeyBindings>
-                </TextBox>
-                <Button Command="{Binding SavePlaylistCommand}" Classes="icon-btn">
-                    <mi:MaterialIcon Kind="Check" Foreground="{StaticResource AccentBrush}"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <!-- Кнопка отмены синхронизации -->
+                <!-- <Button Command="{Binding CancelSyncCommand}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Common_Cancel]}"
+                    IsVisible="{Binding IsSyncing}">
+                    <mi:MaterialIcon Kind="Close" Width="18" Height="18"
+                        Foreground="{StaticResource SystemErrorBrush}" />
+                </Button> -->
+
+                <!-- Кнопка синхронизации -->
+                <Button Command="{Binding SyncAccountPlaylistsCommand}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Library_SyncYoutube]}"
+                    Width="36" Height="36">
+                    <Panel Width="22" Height="22">
+                        <!-- Обычное состояние -->
+                        <mi:MaterialIcon Kind="CloudSync" Width="22" Height="22"
+                            IsVisible="{Binding !IsSyncing}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+
+                        <!-- Анимация синхронизации (22x22) -->
+                        <Panel IsVisible="{Binding IsSyncing}">
+                            <!-- Акцентный фон -->
+                            <Border Classes="cloud-bg-accent-small"
+                                CornerRadius="11"
+                                Width="22" Height="22" />
+
+                            <!-- Облако -->
+                            <Panel HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                                <mi:MaterialIcon Kind="Cloud"
+                                    Width="14" Height="14"
+                                    Classes="cloud-dark" />
+                                <mi:MaterialIcon Kind="Cloud"
+                                    Width="14" Height="14"
+                                    Classes="cloud-bright-small" />
+                            </Panel>
+                        </Panel>
+                    </Panel>
                 </Button>
-                <Button Command="{Binding CancelCreateCommand}" Classes="icon-btn">
-                    <mi:MaterialIcon Kind="Close" Foreground="{StaticResource SystemErrorBrush}"/>
+
+                <!-- Кнопка создания плейлиста -->
+                <Button Command="{Binding OpenCreateCommand}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Library_CreatePlaylist]}"
+                    IsEnabled="{Binding !IsSyncing}">
+                    <mi:MaterialIcon Kind="Plus" Width="20" Height="20" />
                 </Button>
             </StackPanel>
-        </Border>
+        </Grid>
 
-        <!-- Сетка плейлистов (ИСПРАВЛЕНО: ListBox + WrapPanel) -->
-        <ScrollViewer>
-            <ListBox ItemsSource="{Binding Playlists}" 
-                     Background="Transparent" 
-                     Padding="0">
-                
-                <!-- Задаем панель элементов как WrapPanel для сетки -->
-                <ListBox.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ListBox.ItemsPanel>
+        <!-- Прогресс-бар синхронизации (тонкая линия под заголовком) -->
+        <Grid Grid.Row="1" Height="3" Margin="24,0" IsVisible="{Binding IsSyncing}">
+            <!-- Фон -->
+            <Border Background="{StaticResource BgHighlightBrush}" CornerRadius="1.5" />
+            <!-- Заполненная часть -->
+            <Border Background="{StaticResource AccentBrush}"
+                CornerRadius="1.5"
+                HorizontalAlignment="Left">
+                <Border.Width>
+                    <MultiBinding>
+                        <MultiBinding.Converter>
+                            <local:ProgressToWidthConverter />
+                        </MultiBinding.Converter>
+                        <Binding Path="SyncProgress" />
+                        <Binding Path="$parent[Grid].Bounds.Width" />
+                    </MultiBinding>
+                </Border.Width>
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                    </Transitions>
+                </Border.Transitions>
+            </Border>
+        </Grid>
 
-                <!-- Стиль для элемента списка (убираем подсветку выделения) -->
-                <ListBox.Styles>
-                    <Style Selector="ListBoxItem">
-                        <Setter Property="Padding" Value="0"/>
-                        <Setter Property="Margin" Value="0"/>
-                        <Setter Property="Background" Value="Transparent"/>
-                    </Style>
-                    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                        <Setter Property="Background" Value="Transparent"/>
-                    </Style>
-                    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                        <Setter Property="Background" Value="Transparent"/>
-                    </Style>
-                </ListBox.Styles>
+        <!-- Контент -->
+        <Panel Grid.Row="2" Margin="0,8,0,0">
 
-                <!-- Шаблон элемента -->
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <ContentControl Content="{Binding}" Classes="playlist-card"/>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
-        </ScrollViewer>
-    </DockPanel>
+            <!-- Скелетон загрузки при синхронизации -->
+            <ScrollViewer IsVisible="{Binding IsSyncing}">
+                <StackPanel Margin="24,16,24,100">
+                    <WrapPanel Orientation="Horizontal">
+                        <!-- Скелетоны карточек с нарастающим блюром -->
+                        <Border Width="160" Height="220" Margin="0,0,16,16"
+                            Background="{StaticResource BgElevatedBrush}"
+                            CornerRadius="8" Classes="skeleton" Opacity="0.7" />
+                        <Border Width="160" Height="220" Margin="0,0,16,16"
+                            Background="{StaticResource BgElevatedBrush}"
+                            CornerRadius="8" Classes="skeleton" Opacity="0.5">
+                            <Border.Effect>
+                                <BlurEffect Radius="2" />
+                            </Border.Effect>
+                        </Border>
+                        <Border Width="160" Height="220" Margin="0,0,16,16"
+                            Background="{StaticResource BgElevatedBrush}"
+                            CornerRadius="8" Classes="skeleton" Opacity="0.3">
+                            <Border.Effect>
+                                <BlurEffect Radius="4" />
+                            </Border.Effect>
+                        </Border>
+                        <Border Width="160" Height="220" Margin="0,0,16,16"
+                            Background="{StaticResource BgElevatedBrush}"
+                            CornerRadius="8" Classes="skeleton" Opacity="0.2">
+                            <Border.Effect>
+                                <BlurEffect Radius="8" />
+                            </Border.Effect>
+                        </Border>
+                    </WrapPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Основной контент -->
+            <ScrollViewer IsVisible="{Binding !IsSyncing}">
+                <StackPanel Margin="24,0,24,100">
+
+                    <!-- Форма создания плейлиста -->
+                    <Border IsVisible="{Binding IsCreatingPlaylist}"
+                        Background="{StaticResource BgElevatedBrush}"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,16">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="{Binding L[Library_NewPlaylistName]}"
+                                FontWeight="Medium" />
+                            <TextBox Text="{Binding NewPlaylistName}"
+                                Watermark="{Binding L[Library_PlaylistNameHint]}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8"
+                                HorizontalAlignment="Right">
+                                <Button Content="{Binding L[Button_Cancel]}"
+                                    Command="{Binding CancelCreateCommand}" />
+                                <Button Content="{Binding L[Button_Create]}"
+                                    Command="{Binding SavePlaylistCommand}"
+                                    Classes="accent" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Сетка плейлистов -->
+                    <ItemsControl ItemsSource="{Binding Playlists}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+
+                    <!-- Пустое состояние -->
+                    <StackPanel IsVisible="{Binding !Playlists.Count}"
+                        HorizontalAlignment="Center"
+                        Margin="0,60">
+                        <mi:MaterialIcon Kind="PlaylistMusic" Width="64" Height="64"
+                            Foreground="{StaticResource TextMutedBrush}"
+                            HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding L[Library_Empty]}"
+                            FontSize="16"
+                            Foreground="{StaticResource TextSecondaryBrush}"
+                            HorizontalAlignment="Center"
+                            Margin="0,16,0,0" />
+                    </StackPanel>
+
+                </StackPanel>
+            </ScrollViewer>
+
+        </Panel>
+    </Grid>
 </UserControl>

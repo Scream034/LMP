@@ -6,6 +6,9 @@ namespace MyLiteMusicPlayer.Views;
 
 public partial class SyncSelectionDialog : Window
 {
+    private IDisposable? _syncSub;
+    private IDisposable? _cancelSub;
+
     public SyncSelectionDialog()
     {
         InitializeComponent();
@@ -20,11 +23,27 @@ public partial class SyncSelectionDialog : Window
     {
         base.OnDataContextChanged(e);
         
+        // Отписываемся от старых подписок
+        _syncSub?.Dispose();
+        _cancelSub?.Dispose();
+        
         if (DataContext is SyncSelectionViewModel vm)
         {
-            // Закрываем окно и возвращаем список (или пустой список при отмене)
-            vm.SyncCommand.Subscribe(result => Close(result));
-            vm.CancelCommand.Subscribe(result => Close(result));
+            _syncSub = vm.SyncCommand.Subscribe(result => 
+            {
+                if (IsLoaded) Close(result);
+            });
+            _cancelSub = vm.CancelCommand.Subscribe(result => 
+            {
+                if (IsLoaded) Close(result);
+            });
         }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _syncSub?.Dispose();
+        _cancelSub?.Dispose();
+        base.OnClosed(e);
     }
 }

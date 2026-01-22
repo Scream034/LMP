@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.ViewModels;
 using MyLiteMusicPlayer.Views;
 using MyLiteMusicPlayer.Views.Dialogs;
@@ -15,10 +16,9 @@ public interface IDialogService
     Task<bool> ConfirmAsync(string title, string message, string confirmText = "OK", string cancelText = "Cancel");
     Task<string?> SelectFolderAsync(string? startPath = null);
     Task ShowInfoAsync(string title, string message, string buttonText = "OK");
-
     Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items);
-
     Task<List<MergeDecision>> ShowMergeConflictResolutionDialogAsync(List<string> playlistNames);
+    Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated);
 }
 
 public class DialogService : IDialogService
@@ -27,10 +27,33 @@ public class DialogService : IDialogService
     {
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // ПРОВЕРКА: Возвращаем окно только если оно существует и загружено
-            return desktop.MainWindow?.IsLoaded == true ? desktop.MainWindow : null;
+            var window = desktop.MainWindow;
+            // Проверяем что окно существует, загружено и видимо
+            if (window is { IsLoaded: true, IsVisible: true })
+            {
+                return window;
+            }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Безопасно показывает диалог с ожиданием готовности окна
+    /// </summary>
+    private static async Task<T?> ShowDialogSafeAsync<T>(Window dialog, Window owner)
+    {
+        try
+        {
+            // Ждём один кадр UI чтобы окно точно было готово
+            await Task.Yield();
+
+            return await dialog.ShowDialog<T?>(owner);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Dialog] Error showing dialog: {ex.Message}");
+            return default;
+        }
     }
 
     public async Task<bool> ConfirmAsync(string title, string message, string confirmText = "OK", string cancelText = "Cancel")
@@ -47,7 +70,8 @@ public class DialogService : IDialogService
                 ConfirmText = confirmText,
                 CancelText = cancelText
             };
-            var result = await dialog.ShowDialog<bool?>(window);
+
+            var result = await ShowDialogSafeAsync<bool?>(dialog, window);
             return result == true;
         });
     }
@@ -91,7 +115,8 @@ public class DialogService : IDialogService
                 Message = message,
                 ButtonText = buttonText
             };
-            await dialog.ShowDialog(window);
+
+            await ShowDialogSafeAsync<object>(dialog, window);
         });
     }
 
@@ -104,7 +129,8 @@ public class DialogService : IDialogService
 
             var vm = new SyncSelectionViewModel(items);
             var dialog = new SyncSelectionDialog { DataContext = vm };
-            var result = await dialog.ShowDialog<List<PlaylistSearchResult>>(window);
+
+            var result = await ShowDialogSafeAsync<List<PlaylistSearchResult>>(dialog, window);
             return result ?? [];
         });
     }
@@ -122,8 +148,22 @@ public class DialogService : IDialogService
             var vm = new MergeConflictResolutionViewModel(playlistNames);
             var dialog = new MergeConflictResolutionDialog { DataContext = vm };
 
-            var result = await dialog.ShowDialog<List<MergeDecision>>(window);
+            var result = await ShowDialogSafeAsync<List<MergeDecision>>(dialog, window);
             return result ?? playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
+        });
+    }
+
+    public async Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated)
+    {
+        return await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var window = GetMainWindow();
+            if (window == null) return null;
+
+            var vm = new DeletePlaylistDialogViewModel(playlist, isAuthenticated);
+            var dialog = new DeletePlaylistDialog { DataContext = vm };
+
+            return await ShowDialogSafeAsync<DeletePlaylistResult?>(dialog, window);
         });
     }
 }

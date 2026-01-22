@@ -1,4 +1,3 @@
-// Views/Dialogs/InfoDialog.axaml.cs
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
@@ -9,6 +8,8 @@ namespace MyLiteMusicPlayer.Views.Dialogs;
 
 public partial class InfoDialog : Window
 {
+    private readonly IDisposable? _closeSub;
+
     public static readonly StyledProperty<string> DialogTitleProperty =
         AvaloniaProperty.Register<InfoDialog, string>(nameof(DialogTitle), "Info");
 
@@ -41,12 +42,24 @@ public partial class InfoDialog : Window
     public InfoDialog()
     {
         InitializeComponent();
-        CloseCommand = ReactiveCommand.Create(Close);
+        
+        CloseCommand = ReactiveCommand.Create(() => { });
+        _closeSub = CloseCommand.Subscribe(_ =>
+        {
+            if (IsLoaded) Close();
+        });
+        
         DataContext = this;
     }
 
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _closeSub?.Dispose();
+        base.OnClosed(e);
     }
 }

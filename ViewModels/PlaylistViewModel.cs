@@ -3,7 +3,7 @@ using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
-using System.Reactive.Linq; // Важно
+using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
@@ -63,7 +63,10 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
         DeletePlaylistCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            if (await _dialog.ConfirmAsync(L["Confirm_Delete"], L["Delete_Playlist_Msg"]))
+            var confirmTitle = L["Dialog_Confirm_Title"];
+            var confirmMsg = string.Format(L["Playlist_DeleteConfirm"], PlaylistName);
+
+            if (await _dialog.ConfirmAsync(confirmTitle, confirmMsg))
             {
                 await _manager.DeletePlaylistAsync(_currentPlaylistId);
             }
@@ -87,12 +90,11 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         DownloadAllCommand = ReactiveCommand.Create(DownloadAll, hasTracks);
         MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
 
-        // Подписываемся на изменения в библиотеке, чтобы автообновлять UI
-        // (Например, когда SyncLikedTracksAsync добавит треки в фоне)
+        // Подписываемся на изменения в библиотеке
         _librarySubscription = Observable.FromEvent(
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
-            .Throttle(TimeSpan.FromMilliseconds(500)) // Не обновлять слишком часто
+            .Throttle(TimeSpan.FromMilliseconds(500))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
@@ -148,12 +150,10 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
         var tracks = _library.GetPlaylistTracks(playlistId);
         TrackCount = tracks.Count;
-        this.RaisePropertyChanged(nameof(FormattedTrackCount)); // Обновить текст кол-ва треков
+        this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
         CalculateTotalDuration(tracks);
 
-        // Используем canFetchMore=false, так как это локальный плейлист (или полностью загруженный yt)
-        // Для плейлистов пагинация обычно не нужна, если треки уже в памяти
         await InitializeItemsAsync(tracks, canFetchMore: false);
     }
 
@@ -188,19 +188,25 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
     private async Task MergePlaylistAsync()
     {
-        var otherPlaylists = _library.GetAllPlaylists().Where(p => p.Id != _currentPlaylistId && p.IsLocal).ToList();
+        var otherPlaylists = _library.GetAllPlaylists()
+            .Where(p => p.Id != _currentPlaylistId && p.IsLocal)
+            .ToList();
+
         if (otherPlaylists.Count == 0)
         {
-            await _dialog.ShowInfoAsync("Некуда объединять", "Нет других локальных плейлистов для объединения.");
+            await _dialog.ShowInfoAsync(
+                L["Merge_NoTargets_Title"],
+                L["Merge_NoTargets_Msg"]);
             return;
         }
+
         var targetId = otherPlaylists.First().Id;
         if (!string.IsNullOrEmpty(targetId))
         {
             if (_library.MergePlaylists(_currentPlaylistId, targetId))
-                await _dialog.ShowInfoAsync("Успешно", "Плейлист был успешно объединен.");
+                await _dialog.ShowInfoAsync(L["Dialog_Title_Success"], L["Merge_Success_Msg"]);
             else
-                await _dialog.ShowInfoAsync("Ошибка", "Не удалось объединить плейлисты.");
+                await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], L["Merge_Error_Msg"]);
         }
     }
 

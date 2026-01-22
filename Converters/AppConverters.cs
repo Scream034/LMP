@@ -204,7 +204,7 @@ public sealed class AudioQualityToStringConverter : IValueConverter
 
 /// <summary>
 /// Конвертирует строку avares://... в Bitmap.
-/// Возвращает null, если это HTTP ссылка (чтобы её обработал AsyncImageLoader).
+/// Возвращает null, если это HTTP ссылка или ресурс не найден.
 /// </summary>
 public class BitmapAssetValueConverter : IValueConverter
 {
@@ -214,7 +214,7 @@ public class BitmapAssetValueConverter : IValueConverter
     {
         if (value is string uriStr && !string.IsNullOrEmpty(uriStr))
         {
-            // Если это веб-ссылка, возвращаем null (пусть другой Image контрол с AsyncLoader'ом её подхватит)
+            // Если это веб-ссылка, возвращаем null
             if (uriStr.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 return null;
 
@@ -223,11 +223,21 @@ public class BitmapAssetValueConverter : IValueConverter
             {
                 try
                 {
-                    return new Bitmap(AssetLoader.Open(new Uri(uriStr)));
+                    var uri = new Uri(uriStr);
+
+                    // Проверяем существование ресурса ПЕРЕД загрузкой
+                    if (!AssetLoader.Exists(uri))
+                    {
+                        // Ресурс не найден - возвращаем null без исключения
+                        return null;
+                    }
+
+                    using var stream = AssetLoader.Open(uri);
+                    return new Bitmap(stream);
                 }
                 catch (Exception)
                 {
-                    // Логируем или возвращаем null при ошибке
+                    // На случай других ошибок (повреждённый файл и т.д.)
                     return null;
                 }
             }
@@ -280,5 +290,22 @@ public class WebUrlConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         throw new NotImplementedException();
+    }
+}
+
+/// <summary>
+/// Конвертирует прогресс (0-1) и ширину контейнера в ширину прогресс-бара
+/// </summary>
+public class ProgressToWidthConverter : IMultiValueConverter
+{
+    public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (values.Count >= 2 && 
+            values[0] is double progress && 
+            values[1] is double containerWidth)
+        {
+            return Math.Max(0, containerWidth * progress);
+        }
+        return 0.0;
     }
 }

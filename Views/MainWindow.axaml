@@ -3,160 +3,228 @@
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
     xmlns:views="using:MyLiteMusicPlayer.Views"
     xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:asyncImage="using:AsyncImageLoader"
     x:Class="MyLiteMusicPlayer.Views.MainWindow"
     x:DataType="vm:MainWindowViewModel"
     Title="Lite Music Player"
-    Width="1280" Height="800"
-    MinWidth="1024" MinHeight="600"
-    WindowStartupLocation="CenterScreen"
-    Background="{StaticResource BgPrimaryBrush}">
+    Width="1200" Height="800"
+    MinWidth="900" MinHeight="600"
+    Background="{StaticResource BgPrimaryBrush}"
+    WindowStartupLocation="CenterScreen">
 
     <Grid RowDefinitions="*, Auto">
-        <!-- Main Content Area -->
+
+        <!-- Основной контент -->
         <Grid Grid.Row="0" ColumnDefinitions="240, *">
 
-            <!-- Sidebar -->
+
+            <!-- САЙДБАР -->
+
             <Border Grid.Column="0"
                 Background="{StaticResource BgSecondaryBrush}"
-                Padding="8">
-                <DockPanel>
-                    <!-- Logo -->
-                    <StackPanel DockPanel.Dock="Top" Margin="16,16,16,24">
-                        <TextBlock Text="{Binding L[Common_AppName]}"
-                            FontSize="24"
-                            FontWeight="Bold"
-                            Foreground="{StaticResource TextPrimaryBrush}" />
-                    </StackPanel>
+                Padding="16,16,16,16">
 
-                    <!-- Navigation -->
-                    <StackPanel DockPanel.Dock="Top" Spacing="4">
-                        <Button Classes="sidebar-btn" Command="{Binding NavigateHomeCommand}">
+                <Panel>
+                    <!-- Основное содержимое сайдбара -->
+                    <Grid RowDefinitions="Auto, Auto, *, Auto">
+
+                        <!-- Логотип -->
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12"
+                            Margin="4,4,4,28">
+                            <mi:MaterialIcon Kind="Music" Width="36" Height="36"
+                                Foreground="{StaticResource AccentBrush}" />
+                            <TextBlock Text="LitePlayer"
+                                FontSize="22" FontWeight="Bold"
+                                VerticalAlignment="Center"
+                                Foreground="{StaticResource TextPrimaryBrush}" />
+                        </StackPanel>
+
+                        <!-- Навигация -->
+                        <StackPanel Grid.Row="1" Spacing="6">
+                            <!-- Home -->
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Home'}"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Home"
+                                IsEnabled="{Binding !IsNavigationLocked}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <mi:MaterialIcon Kind="Home" Width="24" Height="24" />
+                                    <TextBlock Text="{Binding L[Nav_Home]}"
+                                        VerticalAlignment="Center"
+                                        FontSize="15" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Search -->
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Search'}"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Search"
+                                IsEnabled="{Binding !IsNavigationLocked}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
+                                    <TextBlock Text="{Binding L[Nav_Search]}"
+                                        VerticalAlignment="Center"
+                                        FontSize="15" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Library -->
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Library'}"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Library"
+                                IsEnabled="{Binding !IsNavigationLocked}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24" />
+                                    <TextBlock Text="{Binding L[Nav_Library]}"
+                                        VerticalAlignment="Center"
+                                        FontSize="15" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Playlist (виден только если на странице плейлиста) -->
+                            <Button Classes="sidebar-btn active"
+                                IsVisible="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Playlist'}"
+                                IsEnabled="False"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <mi:MaterialIcon Kind="PlaylistMusic" Width="24" Height="24" />
+                                    <TextBlock Text="{Binding L[Nav_Playlist]}"
+                                        VerticalAlignment="Center"
+                                        FontSize="15" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Пустое пространство -->
+                        <Panel Grid.Row="2" />
+
+                        <!-- Настройки внизу -->
+                        <Button Grid.Row="3"
+                            Classes="sidebar-btn"
+                            Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Settings'}"
+                            Command="{Binding NavigateCommand}"
+                            CommandParameter="Settings"
+                            IsEnabled="{Binding !IsNavigationLocked}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,8">
                             <StackPanel Orientation="Horizontal" Spacing="16">
-                                <mi:MaterialIcon Kind="Home" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Sidebar_Home]}"
-                                    VerticalAlignment="Center" />
+                                <mi:MaterialIcon Kind="Cog" Width="24" Height="24" />
+                                <TextBlock Text="{Binding L[Nav_Settings]}"
+                                    VerticalAlignment="Center"
+                                    FontSize="15" />
                             </StackPanel>
                         </Button>
-                        <Button Classes="sidebar-btn" Command="{Binding NavigateSearchCommand}">
-                            <StackPanel Orientation="Horizontal" Spacing="16">
-                                <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Sidebar_Search]}"
-                                    VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
-                        <Button Classes="sidebar-btn" Command="{Binding NavigateLibraryCommand}">
-                            <StackPanel Orientation="Horizontal" Spacing="16">
-                                <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Sidebar_Library]}"
-                                    VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
+                    </Grid>
 
-                    <!-- Divider -->
-                    <Border DockPanel.Dock="Top"
-                        Height="1"
-                        Background="{StaticResource BgHighlightBrush}"
-                        Margin="16,16" />
 
-                    <!-- User Section (REDESIGNED) -->
-                    <Border DockPanel.Dock="Bottom" Padding="4">
-                        <Button Classes="sidebar-btn" Command="{Binding NavigateSettingsCommand}"
-                            Padding="8,12">
-                            <Grid ColumnDefinitions="Auto, *">
+                    <!-- ОВЕРЛЕЙ БЛОКИРОВКИ НАВИГАЦИИ -->
+                    <Border IsVisible="{Binding IsNavigationLocked}"
+                        Background="#E8121212"
+                        CornerRadius="8"
+                        Margin="-16">
+                        <Grid RowDefinitions="*, Auto, *">
+                            <StackPanel Grid.Row="1"
+                                HorizontalAlignment="Center"
+                                Spacing="20">
 
-                                <!-- Avatar Circle -->
-                                <Border Grid.Column="0"
-                                    Width="40" Height="40"
-                                    CornerRadius="20"
-                                    ClipToBounds="True"
-                                    Background="{StaticResource BgElevatedBrush}"
-                                    BorderBrush="{StaticResource BgHighlightBrush}"
-                                    BorderThickness="1">
-                                    <Panel>
-                                        <!-- Fallback Icon (Показываем, если URL пуст) -->
-                                        <mi:MaterialIcon Kind="Account"
-                                            Width="24" Height="24"
-                                            Foreground="{StaticResource TextSecondaryBrush}"
-                                            IsVisible="{Binding UserAvatarUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
+                                <!-- Анимированная иконка облака (64x64) -->
+                                <Panel Width="64" Height="64" HorizontalAlignment="Center">
+                                    <!-- Акцентный фон (пульсирует в противофазе с облаком) -->
+                                    <Border Classes="cloud-bg-accent-large"
+                                        CornerRadius="32"
+                                        Width="64" Height="64" />
 
-                                        <!-- Real Avatar (Показываем, если URL есть) -->
-                                        <!-- ИСПРАВЛЕНО: Убрана привязка к IsAuthenticated -->
-                                        <Image
-                                            asyncImage:ImageLoader.Source="{Binding UserAvatarUrl}"
-                                            Stretch="UniformToFill"
-                                            IsVisible="{Binding UserAvatarUrl, Converter={StaticResource NullToVisible}}" />
+                                    <!-- Облако -->
+                                    <Panel HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                        <!-- Тёмный базовый слой -->
+                                        <mi:MaterialIcon Kind="Cloud"
+                                            Width="32" Height="32"
+                                            Classes="cloud-dark" />
+                                        <!-- Яркий пульсирующий слой -->
+                                        <mi:MaterialIcon Kind="Cloud"
+                                            Width="32" Height="32"
+                                            Classes="cloud-bright-large" />
                                     </Panel>
-                                </Border>
+                                </Panel>
 
-                                <!-- Text & Settings Icon -->
-                                <Grid Grid.Column="1" Margin="12,0,0,0" RowDefinitions="*,*">
-                                    <StackPanel Grid.Row="0" VerticalAlignment="Bottom">
-                                        <TextBlock Text="{Binding UserName}"
-                                            FontWeight="SemiBold"
-                                            Foreground="{StaticResource TextPrimaryBrush}"
-                                            TextTrimming="CharacterEllipsis" />
+                                <!-- Текст причины блокировки -->
+                                <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding NavigationLockReason}"
+                                        FontSize="14"
+                                        FontWeight="Medium"
+                                        Foreground="{StaticResource TextPrimaryBrush}"
+                                        TextAlignment="Center"
+                                        TextWrapping="Wrap"
+                                        MaxWidth="180"
+                                        HorizontalAlignment="Center" />
 
-                                        <!-- Метка для Fake Account -->
-                                        <Border Background="{StaticResource BgHighlightBrush}"
-                                            CornerRadius="4" Padding="4,1" Margin="0,2,0,0"
-                                            HorizontalAlignment="Left"
-                                            IsVisible="{Binding IsRestrictedAccess}">
-                                            <TextBlock Text="{Binding L[Sidebar_RestrictedAccess]}" FontSize="9"
-                                                Foreground="{StaticResource SystemWarnOrangeBrush}" />
-                                        </Border>
-                                    </StackPanel>
-
-                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4"
-                                        VerticalAlignment="Top" Margin="0,2,0,0">
-                                        <mi:MaterialIcon Kind="Cog" Width="12" Height="12"
-                                            Foreground="{StaticResource TextMutedBrush}"
-                                            VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding L[Sidebar_Settings]}"
-                                            FontSize="11"
-                                            Foreground="{StaticResource TextMutedBrush}"
-                                            VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Grid>
-                            </Grid>
-                        </Button>
+                                    <TextBlock Text="{Binding L[Nav_PleaseWait]}"
+                                        FontSize="12"
+                                        Foreground="{StaticResource TextMutedBrush}"
+                                        TextAlignment="Center"
+                                        HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
                     </Border>
-
-                    <!-- Spacer -->
-                    <Border />
-                </DockPanel>
+                </Panel>
             </Border>
 
-            <!-- Content Area -->
+            <!-- ОСНОВНОЙ КОНТЕНТ -->
+
             <Border Grid.Column="1"
                 Background="{StaticResource BgPrimaryBrush}"
-                Padding="24">
-                <ContentControl Content="{Binding CurrentPage}">
-                    <ContentControl.DataTemplates>
-                        <DataTemplate DataType="vm:HomeViewModel">
-                            <views:HomeView />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:SearchViewModel">
-                            <views:SearchView />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:LibraryViewModel">
-                            <views:LibraryView />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:PlaylistViewModel">
-                            <views:PlaylistView />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:SettingsViewModel">
-                            <views:SettingsView />
-                        </DataTemplate>
-                    </ContentControl.DataTemplates>
-                </ContentControl>
+                ClipToBounds="True">
+                <Panel>
+                    <!-- Контент страницы -->
+                    <ContentControl Content="{Binding CurrentPage}">
+                        <ContentControl.ContentTemplate>
+                            <DataTemplate>
+                                <ContentControl Content="{Binding}">
+                                    <ContentControl.DataTemplates>
+                                        <DataTemplate DataType="{x:Type vm:HomeViewModel}">
+                                            <views:HomeView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:SearchViewModel}">
+                                            <views:SearchView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:LibraryViewModel}">
+                                            <views:LibraryView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                                            <views:SettingsView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:PlaylistViewModel}">
+                                            <views:PlaylistView />
+                                        </DataTemplate>
+                                    </ContentControl.DataTemplates>
+                                </ContentControl>
+                            </DataTemplate>
+                        </ContentControl.ContentTemplate>
+                    </ContentControl>
+
+                    <!-- Затемнение контента при блокировке -->
+                    <Border IsVisible="{Binding IsNavigationLocked}"
+                        Background="#60000000"
+                        IsHitTestVisible="True" />
+                </Panel>
             </Border>
         </Grid>
 
-        <!-- Player Bar -->
+        <!-- ПЛЕЕР-БАР (скрыт если нет трека) -->
         <views:PlayerBarView Grid.Row="1"
             DataContext="{Binding PlayerBar}"
             IsVisible="{Binding HasTrack}" />
+
     </Grid>
 </Window>

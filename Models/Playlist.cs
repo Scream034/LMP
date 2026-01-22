@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MyLiteMusicPlayer.Services;
 
 namespace MyLiteMusicPlayer.Models;
 
@@ -12,7 +13,27 @@ public enum PlaylistSyncMode
 public class Playlist
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string Name { get; set; } = string.Empty;
+
+    // Внутреннее имя (сохраняется в JSON)
+    [JsonPropertyName("name")]
+    public string StoredName { get; set; } = "New Playlist";
+
+    // Отображаемое имя (вычисляется динамически для системных плейлистов)
+    [JsonIgnore]
+    public string Name
+    {
+        get
+        {
+            // Для плейлиста "Любимое" всегда возвращаем локализованное имя
+            if (Id == LibraryService.LikedPlaylistId)
+            {
+                return LocalizationService.Instance["Playlist_Liked"];
+            }
+            return StoredName;
+        }
+        set => StoredName = value;
+    }
+
     public string? ThumbnailUrl { get; set; }
     public string? Author { get; set; }
 

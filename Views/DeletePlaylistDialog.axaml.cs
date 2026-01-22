@@ -4,15 +4,16 @@ using MyLiteMusicPlayer.ViewModels;
 
 namespace MyLiteMusicPlayer.Views;
 
-public partial class MergeConflictResolutionDialog : Window
+public partial class DeletePlaylistDialog : Window
 {
     private IDisposable? _confirmSub;
+    private IDisposable? _cancelSub;
 
-    public MergeConflictResolutionDialog()
+    public DeletePlaylistDialog()
     {
         InitializeComponent();
     }
-    
+
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
@@ -21,13 +22,19 @@ public partial class MergeConflictResolutionDialog : Window
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
-        _confirmSub?.Dispose();
         
-        if (DataContext is MergeConflictResolutionViewModel vm)
+        _confirmSub?.Dispose();
+        _cancelSub?.Dispose();
+
+        if (DataContext is DeletePlaylistDialogViewModel vm)
         {
             _confirmSub = vm.ConfirmCommand.Subscribe(result =>
             {
                 if (IsLoaded) Close(result);
+            });
+            _cancelSub = vm.CancelCommand.Subscribe(_ =>
+            {
+                if (IsLoaded) Close(null);
             });
         }
     }
@@ -35,6 +42,7 @@ public partial class MergeConflictResolutionDialog : Window
     protected override void OnClosed(EventArgs e)
     {
         _confirmSub?.Dispose();
+        _cancelSub?.Dispose();
         base.OnClosed(e);
     }
 }

@@ -1,4 +1,3 @@
-// Views/Dialogs/ConfirmDialog.axaml.cs
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
@@ -9,6 +8,9 @@ namespace MyLiteMusicPlayer.Views.Dialogs;
 
 public partial class ConfirmDialog : Window
 {
+    private readonly IDisposable? _confirmSub;
+    private readonly IDisposable? _cancelSub;
+
     public static readonly StyledProperty<string> DialogTitleProperty =
         AvaloniaProperty.Register<ConfirmDialog, string>(nameof(DialogTitle), "Confirm");
 
@@ -52,15 +54,30 @@ public partial class ConfirmDialog : Window
     {
         InitializeComponent();
 
-        ConfirmCommand = ReactiveCommand.Create(() => Close(true));
-        CancelCommand = ReactiveCommand.Create(() => Close(false));
+        ConfirmCommand = ReactiveCommand.Create(() => { });
+        CancelCommand = ReactiveCommand.Create(() => { });
+        
+        _confirmSub = ConfirmCommand.Subscribe(_ =>
+        {
+            if (IsLoaded) Close(true);
+        });
+        _cancelSub = CancelCommand.Subscribe(_ =>
+        {
+            if (IsLoaded) Close(false);
+        });
 
-        // Устанавливаем DataContext на себя для биндингов
         DataContext = this;
     }
 
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _confirmSub?.Dispose();
+        _cancelSub?.Dispose();
+        base.OnClosed(e);
     }
 }

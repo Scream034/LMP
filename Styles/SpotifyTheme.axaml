@@ -72,6 +72,60 @@
         <Setter Property="FontFamily" Value="Inter, Segoe UI, sans-serif" />
     </Style>
 
+    <!-- Accent Button (Primary action) -->
+    <Style Selector="Button.accent">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}" />
+        <Setter Property="Padding" Value="16,8" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.accent:pointerover">
+        <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.accent:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- Sidebar Button - Disabled State -->
+    <Style Selector="Button.sidebar-btn:disabled">
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+
+    <!-- Sidebar Button - Disabled но активная страница -->
+    <Style Selector="Button.sidebar-btn.active:disabled">
+        <Setter Property="Opacity" Value="0.6" />
+        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+    </Style>
+
+    <!-- Delete Button (показывается при hover) -->
+    <Style Selector="Button.delete-btn">
+        <Setter Property="Background" Value="#80000000" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- Показываем кнопку при hover на родительский Border -->
+    <Style Selector="Border:pointerover Button.delete-btn">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <Style Selector="Button.delete-btn:pointerover">
+        <Setter Property="Background" Value="{StaticResource SystemErrorBrush}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
     <!-- Sidebar Button -->
     <Style Selector="Button.sidebar-btn">
         <Setter Property="Background" Value="Transparent" />

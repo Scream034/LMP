@@ -1,37 +1,46 @@
 <!-- Views/Dialogs/InfoDialog.axaml -->
 <Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:dialogs="using:MyLiteMusicPlayer.Views.Dialogs"
-        x:Class="MyLiteMusicPlayer.Views.Dialogs.InfoDialog"
-        x:DataType="dialogs:InfoDialog"
-        Title="Info"
-        Width="380" Height="160"
-        WindowStartupLocation="CenterOwner"
-        CanResize="False"
-        ShowInTaskbar="False"
-        SystemDecorations="BorderOnly"
-        Background="{StaticResource BgBaseBrush}">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dialogs="using:MyLiteMusicPlayer.Views.Dialogs"
+    x:Class="MyLiteMusicPlayer.Views.Dialogs.InfoDialog"
+    x:DataType="dialogs:InfoDialog"
+    Title="Info"
+    Width="400"
+    MinHeight="160"
+    SizeToContent="Height"
+    MaxHeight="400"
+    WindowStartupLocation="CenterOwner"
+    CanResize="False"
+    ShowInTaskbar="False"
+    SystemDecorations="BorderOnly"
+    Background="{StaticResource BgPrimaryBrush}">
 
-    <Border BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8" Padding="24">
-        <Grid RowDefinitions="Auto, *, Auto">
-            <TextBlock Grid.Row="0" 
-                       Text="{Binding DialogTitle}"
-                       FontSize="18" FontWeight="Bold" 
-                       Foreground="{StaticResource TextPrimaryBrush}"
-                       Margin="0,0,0,16"/>
-            
-            <TextBlock Grid.Row="1" 
-                       Text="{Binding Message}"
-                       TextWrapping="Wrap"
-                       Foreground="{StaticResource TextSecondaryBrush}"/>
-            
-            <Button Grid.Row="2" 
-                    Content="{Binding ButtonText}" 
-                    Command="{Binding CloseCommand}"
-                    HorizontalAlignment="Right"
-                    MinWidth="80"
-                    Classes="accent"
-                    Margin="0,24,0,0"/>
-        </Grid>
+    <Border BorderBrush="{StaticResource BgHighlightBrush}"
+        BorderThickness="1"
+        CornerRadius="8"
+        Padding="24">
+        <StackPanel Spacing="16">
+            <!-- Заголовок -->
+            <TextBlock Text="{Binding DialogTitle}"
+                FontSize="18"
+                FontWeight="Bold"
+                Foreground="{StaticResource TextPrimaryBrush}" />
+
+            <!-- Сообщение с автоматической высотой -->
+            <ScrollViewer MaxHeight="200"
+                HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+                <TextBlock Text="{Binding Message}"
+                    TextWrapping="Wrap"
+                    Foreground="{StaticResource TextSecondaryBrush}" />
+            </ScrollViewer>
+
+            <!-- Кнопка -->
+            <Button Content="{Binding ButtonText}"
+                Command="{Binding CloseCommand}"
+                HorizontalAlignment="Right"
+                MinWidth="80"
+                Classes="accent" />
+        </StackPanel>
     </Border>
 </Window>

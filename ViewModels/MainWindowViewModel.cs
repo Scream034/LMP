@@ -1,140 +1,150 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Diagnostics;
-using System.Reactive;
-using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
-/// <summary>
-/// Главная ViewModel управления состоянием всего приложения и навигацией.
-/// </summary>
 public class MainWindowViewModel : ViewModelBase
 {
-    private readonly AudioEngine _audio;
+    private readonly IServiceProvider _services;
     private readonly LibraryService _library;
-    private readonly GoogleAuthService _auth;
 
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
-    [Reactive] public string? CurrentPageName { get; private set; }
+    [Reactive] public string CurrentPageName { get; private set; } = "Home";
+    
+    // Блокировка навигации
+    [Reactive] public bool IsNavigationLocked { get; private set; }
+    [Reactive] public string NavigationLockReason { get; private set; } = "";
 
-    // Auth / User State
-    [Reactive] public bool IsAuthenticated { get; private set; } // Real Auth
-    [Reactive] public bool IsRestrictedAccess { get; private set; } // Fake Account
-    [Reactive] public string? UserName { get; private set; }
-    [Reactive] public string? UserAvatarUrl { get; private set; }
-
-    // Commands
-    public ReactiveCommand<Unit, Unit> NavigateHomeCommand { get; }
-    public ReactiveCommand<Unit, Unit> NavigateSearchCommand { get; }
-    public ReactiveCommand<Unit, Unit> NavigateLibraryCommand { get; }
-    public ReactiveCommand<Unit, Unit> NavigateSettingsCommand { get; }
-    public ReactiveCommand<string, Unit> NavigatePlaylistCommand { get; }
+    // Команды навигации
+    public ReactiveCommand<string, Unit> NavigateCommand { get; }
 
     public MainWindowViewModel(
-        AudioEngine audio,
-        LibraryService library,
-        GoogleAuthService auth,
-        PlayerBarViewModel playerBar)
+        IServiceProvider services,
+        PlayerBarViewModel playerBar,
+        LibraryService library)
     {
-        _audio = audio;
-        _library = library;
-        _auth = auth;
-        PlayerBar = playerBar;
-
         Log.Info("MainWindowViewModel constructor started.");
 
-        // Подписка на обновление состояния авторизации
-        UpdateAuthState();
-        // Подписка на AuthState
-        Observable.FromEvent(h => _auth.OnAuthStateChanged += h, h => _auth.OnAuthStateChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdateAuthState());
+        _services = services;
+        _library = library;
+        PlayerBar = playerBar;
 
-        // Подписка на изменения в Library (для Fake Account)
-        Observable.FromEvent(h => _library.OnDataChanged += h, h => _library.OnDataChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdateAuthState());
-
-        // Определение команд навигации с логированием
-        NavigateHomeCommand = ReactiveCommand.Create(() => SwitchPage<HomeViewModel>("Home"));
-        NavigateSearchCommand = ReactiveCommand.Create(() => SwitchPage<SearchViewModel>("Search"));
-        NavigateLibraryCommand = ReactiveCommand.Create(() => SwitchPage<LibraryViewModel>("Library"));
-        NavigateSettingsCommand = ReactiveCommand.Create(() => SwitchPage<SettingsViewModel>("Settings"));
-
-        NavigatePlaylistCommand = ReactiveCommand.Create<string>(id =>
+        // Навигация возможна только если не заблокирована
+        var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
+        
+        NavigateCommand = ReactiveCommand.Create<string>(pageName =>
         {
-            Log.Info($"Navigating to Playlist: {id}");
-            try
+            if (!IsNavigationLocked)
             {
-                var vm = Program.Services.GetRequiredService<PlaylistViewModel>();
-                vm.LoadPlaylist(id);
-                CurrentPage = vm;
-                CurrentPageName = "Playlist";
+                Navigate(pageName);
             }
-            catch (Exception ex)
-            {
-                Log.Info($"Playlist navigation failed: {ex.Message}\n{ex.StackTrace}");
-            }
-        });
+        }, canNavigate);
 
-        // Стартовая страница
-        NavigateHomeCommand.Execute().Subscribe();
+        Navigate("Home");
+
         Log.Info("MainWindowViewModel initialized.");
     }
 
     /// <summary>
-    /// Обобщенный метод смены страниц с отладкой
+    /// Блокирует навигацию на время выполнения операции
     /// </summary>
-    private void SwitchPage<T>(string name) where T : ViewModelBase
+    public void LockNavigation(string reason)
     {
-        Log.Info($"Switching to page: {name} (Type: {typeof(T).Name})");
+        IsNavigationLocked = true;
+        NavigationLockReason = reason;
+        Log.Info($"[Navigation] Locked: {reason}");
+    }
+
+    /// <summary>
+    /// Разблокирует навигацию
+    /// </summary>
+    public void UnlockNavigation()
+    {
+        IsNavigationLocked = false;
+        NavigationLockReason = "";
+        Log.Info("[Navigation] Unlocked");
+    }
+
+    /// <summary>
+    /// Выполняет операцию с блокировкой навигации
+    /// </summary>
+    public async Task WithNavigationLockAsync(string reason, Func<Task> operation)
+    {
+        LockNavigation(reason);
         try
         {
-            var stopWatch = Stopwatch.StartNew();
-            var page = Program.Services.GetRequiredService<T>();
-            CurrentPage = page;
-            CurrentPageName = name;
-            stopWatch.Stop();
-            Log.Info($"Successfully switched to {name} in {stopWatch.ElapsedMilliseconds}ms");
+            await operation();
         }
-        catch (Exception ex)
+        finally
         {
-            Log.Info($"Navigation to {name} failed: {ex.Message}\n{ex.StackTrace}");
+            UnlockNavigation();
         }
     }
 
-    private void UpdateAuthState()
+    /// <summary>
+    /// Выполняет операцию с блокировкой навигации и возвратом результата
+    /// </summary>
+    public async Task<T> WithNavigationLockAsync<T>(string reason, Func<Task<T>> operation)
     {
-        // 1. Приоритет: Настоящий вход
-        if (_auth.IsAuthenticated)
+        LockNavigation(reason);
+        try
         {
-            IsAuthenticated = true;
-            IsRestrictedAccess = false;
-            UserName = _auth.State.UserName;
-            UserAvatarUrl = _auth.State.UserAvatarUrl;
+            return await operation();
         }
-        // 2. Фейковый аккаунт (синхронизация по ссылке)
-        else if (_library.HasFakeAccount)
+        finally
         {
-            IsAuthenticated = false; // Технически не залогинен
-            IsRestrictedAccess = true; // Показываем метку
-            UserName = _library.Data.FakeAccountName;
-            UserAvatarUrl = _library.Data.FakeAccountAvatarUrl;
+            UnlockNavigation();
         }
-        // 3. Гость
-        else
+    }
+
+    private void Navigate(string pageName)
+    {
+        if (IsNavigationLocked) return;
+        
+        var sw = Stopwatch.StartNew();
+        Log.Info($"Switching to page: {pageName} (Type: {pageName}ViewModel)");
+
+        // Диспозим текущую страницу если она IDisposable
+        if (CurrentPage is IDisposable disposable)
         {
-            IsAuthenticated = false;
-            IsRestrictedAccess = false;
-            UserName = "Guest";
-            UserAvatarUrl = null;
+            disposable.Dispose();
         }
+
+        CurrentPage = pageName switch
+        {
+            "Home" => _services.GetRequiredService<HomeViewModel>(),
+            "Search" => _services.GetRequiredService<SearchViewModel>(),
+            "Library" => _services.GetRequiredService<LibraryViewModel>(),
+            "Settings" => _services.GetRequiredService<SettingsViewModel>(),
+            _ => CurrentPage
+        };
+
+        CurrentPageName = pageName;
+        sw.Stop();
+        Log.Info($"Successfully switched to {pageName} in {sw.ElapsedMilliseconds}ms");
     }
 
     public void NavigateToPlaylist(string playlistId)
-        => NavigatePlaylistCommand.Execute(playlistId).Subscribe();
+    {
+        if (IsNavigationLocked) return;
+        
+        Log.Info($"Navigating to Playlist: {playlistId}");
+        
+        // Диспозим текущую страницу
+        if (CurrentPage is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+
+        var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
+        playlistVM.LoadPlaylist(playlistId);
+        CurrentPage = playlistVM;
+        CurrentPageName = "Playlist";
+    }
 }
