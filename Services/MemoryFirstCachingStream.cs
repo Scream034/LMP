@@ -20,6 +20,8 @@ public sealed class MemoryFirstCachingStream : Stream
     private const int MaxRamChunks = 128;              // ~16MB
     private const int ChunkDownloadTimeoutMs = 20000;
     private const int ProgressLogIntervalBytes = 6 * 1024 * 1024;
+    private const int MaxFileOpenRetries = 10;
+    private const int FileOpenRetryDelayMs = 100;
 
     private readonly string _trackId;
     private readonly string _url;
@@ -30,22 +32,19 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly RangeMap _diskRanges;
     private readonly int _totalChunks;
 
-    // Оптимизация: Храним арендованные буферы.
-    // Важно: Value в словаре - это массив из пула, который может быть больше ChunkSize.
     private readonly ConcurrentDictionary<int, byte[]> _chunks = new();
-    
+
     private readonly ConcurrentDictionary<int, Task> _pendingDownloads = new();
     private readonly SemaphoreSlim _downloadSemaphore;
     private readonly PriorityQueue<int, int> _downloadQueue = new();
-    private readonly HashSet<int> _queuedChunks = new();
-    private readonly object _queueLock = new();
+    private readonly HashSet<int> _queuedChunks = [];
+    private readonly Lock _queueLock = new();
 
     private readonly ReaderWriterLockSlim _fileLock = new(LockRecursionPolicy.NoRecursion);
-    // Channel передает (Position, ArrayFromPool, Length)
     private readonly Channel<(long Pos, byte[] Data, int Len)> _diskChannel;
     private readonly ManualResetEventSlim _dataAvailable = new(false);
     private readonly CancellationTokenSource _disposeCts = new();
-    private CancellationTokenSource _cts;
+    private readonly CancellationTokenSource _downloadCts;
 
     private readonly Task _diskWriterTask;
     private Task? _downloadLoop;
@@ -83,17 +82,17 @@ public sealed class MemoryFirstCachingStream : Stream
         _http = http;
         _cacheManager = cacheManager;
         _cachePath = cacheManager.GetCachePath(trackId);
-        _cts = new CancellationTokenSource();
+        _downloadCts = new CancellationTokenSource();
         _downloadSemaphore = new SemaphoreSlim(MaxConcurrentDownloads);
         _totalChunks = (int)((_contentLength + ChunkSize - 1) / ChunkSize);
 
         var meta = cacheManager.LoadOrCreateMetadata(trackId, url, contentLength);
         _diskRanges = RangeMap.Deserialize(meta.RangesJson);
 
-        _cacheFile = new FileStream(_cachePath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
-            FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        // Открываем файл с повторными попытками
+        _cacheFile = OpenCacheFileWithRetry(_cachePath);
 
-        if (_cacheFile.Length < _contentLength)
+        if (_cacheFile != null && _cacheFile.Length < _contentLength)
             _cacheFile.SetLength(_contentLength);
 
         _diskChannel = Channel.CreateBounded<(long, byte[], int)>(
@@ -105,37 +104,82 @@ public sealed class MemoryFirstCachingStream : Stream
         Log.Info($"Opened {trackId}: {contentLength / 1024 / 1024}MB, cached: {_diskRanges.DownloadedBytes / 1024}KB");
     }
 
-    public async Task<bool> PreBufferAsync(CancellationToken ct)
+    private static FileStream? OpenCacheFileWithRetry(string path)
     {
-        if (_disposed) return false;
+        Exception? lastException = null;
 
-        _downloadLoop ??= Task.Run(() => DownloadLoopAsync(_cts.Token), _cts.Token);
-
-        if (HasChunk(0)) return true;
-
-        var sw = Stopwatch.StartNew();
-        EnqueueUrgent(0);
-
-        while (!HasChunk(0))
+        for (int attempt = 1; attempt <= MaxFileOpenRetries; attempt++)
         {
-            if (!_dataAvailable.Wait(1000, ct))
+            try
             {
-                if (sw.ElapsedMilliseconds > ChunkDownloadTimeoutMs)
-                {
-                    Log.Error($"PreBuffer timeout after {sw.ElapsedMilliseconds}ms");
-                    return false;
-                }
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+                    FileShare.ReadWrite, // Разрешаем совместный доступ
+                    65536, FileOptions.Asynchronous | FileOptions.RandomAccess);
             }
-            _dataAvailable.Reset();
+            catch (IOException ex) when (attempt < MaxFileOpenRetries)
+            {
+                lastException = ex;
+                Log.Warn($"Cache file busy, retry {attempt}/{MaxFileOpenRetries}...");
+                Thread.Sleep(FileOpenRetryDelayMs * attempt);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to open cache file: {ex.Message}");
+                return null;
+            }
         }
 
-        Log.Info($"PreBuffer OK in {sw.ElapsedMilliseconds}ms");
-        return true;
+        Log.Error($"Failed to open cache file after {MaxFileOpenRetries} retries: {lastException?.Message}");
+        return null; // Работаем без файлового кэша
+    }
+
+    public async Task<bool> PreBufferAsync(CancellationToken ct)
+    {
+        if (_disposed || _disposing) return false;
+
+        try
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadCts.Token, _disposeCts.Token);
+
+            _downloadLoop ??= Task.Run(() => DownloadLoopAsync(linkedCts.Token), linkedCts.Token);
+
+            if (HasChunk(0)) return true;
+
+            var sw = Stopwatch.StartNew();
+            EnqueueUrgent(0);
+
+            while (!HasChunk(0))
+            {
+                if (_disposed || _disposing) return false;
+
+                if (!_dataAvailable.Wait(500, linkedCts.Token))
+                {
+                    if (sw.ElapsedMilliseconds > ChunkDownloadTimeoutMs)
+                    {
+                        Log.Error($"PreBuffer timeout after {sw.ElapsedMilliseconds}ms");
+                        return false;
+                    }
+                }
+                _dataAvailable.Reset();
+            }
+
+            Log.Info($"PreBuffer OK in {sw.ElapsedMilliseconds}ms");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Нормальная отмена - не логируем как ошибку
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
     }
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        if (_disposed) return 0;
+        if (_disposed || _disposing) return 0;
 
         long pos = Volatile.Read(ref _position);
         if (pos >= _contentLength) return 0;
@@ -151,15 +195,26 @@ public sealed class MemoryFirstCachingStream : Stream
 
         while (!HasChunk(chunkIndex))
         {
+            if (_disposed || _disposing) return 0;
+
             EnqueueUrgent(chunkIndex);
-            if (!_dataAvailable.Wait(1000, _disposeCts.Token))
+
+            try
             {
-                if (sw.ElapsedMilliseconds > ReadTimeoutMs)
+                if (!_dataAvailable.Wait(1000, _disposeCts.Token))
                 {
-                    Log.Error($"Read timeout for chunk {chunkIndex}");
-                    return 0;
+                    if (sw.ElapsedMilliseconds > ReadTimeoutMs)
+                    {
+                        Log.Error($"Read timeout for chunk {chunkIndex}");
+                        return 0;
+                    }
                 }
             }
+            catch (OperationCanceledException)
+            {
+                return 0;
+            }
+
             _dataAvailable.Reset();
         }
 
@@ -197,12 +252,10 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         if (_chunks.TryGetValue(idx, out var chunk))
         {
-            // Оптимизация: chunk - это массив из пула, он может быть больше ChunkSize.
-            // Но логика разбиения на чанки гарантирует, что полезных данных там ровно ChunkSize (или остаток для последнего).
-            int usefulDataLength = (idx == _totalChunks - 1) 
-                ? (int)(_contentLength - ((long)idx * ChunkSize)) 
+            int usefulDataLength = (idx == _totalChunks - 1)
+                ? (int)(_contentLength - ((long)idx * ChunkSize))
                 : ChunkSize;
-                
+
             int available = Math.Min(count, usefulDataLength - off);
             if (available > 0)
             {
@@ -223,7 +276,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
         try
         {
-            _fileLock.EnterReadLock();
+            if (!_fileLock.TryEnterReadLock(100)) return 0;
             try
             {
                 if (_cacheFile == null) return 0;
@@ -300,7 +353,12 @@ public sealed class MemoryFirstCachingStream : Stream
                 continue;
             }
 
-            await _downloadSemaphore.WaitAsync(ct);
+            try
+            {
+                await _downloadSemaphore.WaitAsync(ct);
+            }
+            catch (OperationCanceledException) { break; }
+
             _ = DownloadChunkSafeAsync(chunk, ct);
 
             long bytes = Volatile.Read(ref _bytesDownloaded);
@@ -323,7 +381,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
     private async Task DownloadChunkAsync(int idx, CancellationToken ct)
     {
-        if (HasChunk(idx)) return;
+        if (HasChunk(idx) || _disposing) return;
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pendingDownloads.TryAdd(idx, tcs.Task))
@@ -333,7 +391,6 @@ public sealed class MemoryFirstCachingStream : Stream
             return;
         }
 
-        // Оптимизация: Арендуем массив из пула
         byte[]? buffer = null;
 
         try
@@ -344,70 +401,52 @@ public sealed class MemoryFirstCachingStream : Stream
             using var req = new HttpRequestMessage(HttpMethod.Get, _url);
             req.Headers.Range = new RangeHeaderValue(start, end);
 
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadCts.Token);
             cts.CancelAfter(ChunkDownloadTimeoutMs);
 
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             resp.EnsureSuccessStatusCode();
 
-            // Берем массив. Он может быть больше ChunkSize.
             buffer = ArrayPool<byte>.Shared.Rent(ChunkSize);
-            
-            // Читаем в буфер. stream.ReadAsync заполнит столько, сколько скачано.
+
             using var netStream = await resp.Content.ReadAsStreamAsync(cts.Token);
-            
+
             int totalRead = 0;
             int bytesRead;
-            // Нужно прочитать весь чанк в буфер
             while ((bytesRead = await netStream.ReadAsync(buffer, totalRead, ChunkSize - totalRead, cts.Token)) > 0)
             {
                 totalRead += bytesRead;
             }
 
-            if (!_chunks.ContainsKey(idx))
+            if (!_chunks.ContainsKey(idx) && !_disposing)
             {
-                // Сохраняем арендованный буфер в словарь
                 _chunks[idx] = buffer;
-                
+
                 Interlocked.Add(ref _bytesDownloaded, totalRead);
                 _dataAvailable.Set();
 
-                // Для записи на диск нам нужно скопировать или передать владение. 
-                // Чтобы не усложнять возврат из DiskWriter, здесь сделаем копию для диска? 
-                // Нет, DiskWriter просто пишет. Но буфер "принадлежит" _chunks.
-                // Передадим в канал копию? Это аллокация, но временная (Gen0). 
-                // Иначе придется делать RefCount для буфера из пула.
-                // Компромисс: сделаем копию только для записи на диск, чтобы _chunks владел основным буфером до Trim/Dispose.
-                
-                // Асинхронно пишем в канал
-                if (!_disposing)
+                // Копия для записи на диск
+                if (!_disposing && _cacheFile != null)
                 {
                     byte[] diskBuffer = ArrayPool<byte>.Shared.Rent(totalRead);
                     Buffer.BlockCopy(buffer, 0, diskBuffer, 0, totalRead);
                     _diskChannel.Writer.TryWrite((start, diskBuffer, totalRead));
                 }
-                
-                // buffer теперь "живет" в _chunks. Сбрасываем ссылку локальную, чтобы finally не вернул его.
-                buffer = null; 
+
+                buffer = null; // Передали владение в _chunks
 
                 if (_chunks.Count > MaxRamChunks) TrimRamCache();
-            }
-            else
-            {
-                // Чанк уже есть (гонка), возвращаем текущий
-                // finally блок сделает Return, т.к. buffer != null
             }
 
             tcs.SetResult();
         }
         catch (OperationCanceledException) { tcs.TrySetCanceled(); }
         catch (Exception ex) { tcs.TrySetException(ex); }
-        finally 
-        { 
+        finally
+        {
             _pendingDownloads.TryRemove(idx, out _);
             if (buffer != null)
             {
-                // Если buffer не null, значит мы его не положили в _chunks, возвращаем в пул
                 ArrayPool<byte>.Shared.Return(buffer);
             }
         }
@@ -431,10 +470,9 @@ public sealed class MemoryFirstCachingStream : Stream
 
         foreach (var i in toRemove)
         {
-            if (_chunks.TryRemove(i, out var buffer))
+            if (_chunks.TryRemove(i, out var buf))
             {
-                // Оптимизация: Возвращаем массив в пул при очистке RAM
-                ArrayPool<byte>.Shared.Return(buffer);
+                ArrayPool<byte>.Shared.Return(buf);
             }
         }
     }
@@ -454,28 +492,30 @@ public sealed class MemoryFirstCachingStream : Stream
             {
                 if (_disposing || _cacheFile == null)
                 {
-                    // Если стрим закрылся, возвращаем буферы (которые копии для диска)
                     ArrayPool<byte>.Shared.Return(data);
                     continue;
                 }
 
                 try
                 {
-                    _fileLock.EnterWriteLock();
-                    try
+                    if (_fileLock.TryEnterWriteLock(500))
                     {
-                        if (_cacheFile == null) continue;
-                        _cacheFile.Seek(pos, SeekOrigin.Begin);
-                        _cacheFile.Write(data, 0, len);
-                    }
-                    finally { _fileLock.ExitWriteLock(); }
+                        try
+                        {
+                            if (_cacheFile != null)
+                            {
+                                _cacheFile.Seek(pos, SeekOrigin.Begin);
+                                _cacheFile.Write(data, 0, len);
+                            }
+                        }
+                        finally { _fileLock.ExitWriteLock(); }
 
-                    _diskRanges.MarkComplete(pos, pos + len);
+                        _diskRanges.MarkComplete(pos, pos + len);
+                    }
                 }
                 catch { }
                 finally
                 {
-                    // Оптимизация: Возвращаем буфер записи в пул
                     ArrayPool<byte>.Shared.Return(data);
                 }
             }
@@ -485,7 +525,14 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (_disposing) return;
 
-        Try(() => { _fileLock.EnterWriteLock(); try { _cacheFile?.Flush(); } finally { _fileLock.ExitWriteLock(); } });
+        Try(() =>
+        {
+            if (_fileLock.TryEnterWriteLock(1000))
+            {
+                try { _cacheFile?.Flush(); }
+                finally { _fileLock.ExitWriteLock(); }
+            }
+        });
         Try(() => _cacheManager.UpdateRanges(_trackId, _diskRanges));
     }
 
@@ -502,35 +549,53 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (disposing)
         {
+            // 1. Отменяем все операции
+            Try(_downloadCts.Cancel);
             Try(_disposeCts.Cancel);
-            Try(_cts.Cancel);
             Try(_dataAvailable.Set);
             Try(() => _diskChannel.Writer.TryComplete());
-            Try(() => _diskWriterTask.Wait(1000));
-            Try(() => _downloadLoop?.Wait(500));
+
+            // 2. Ждём завершения задач
+            Try(() => _diskWriterTask.Wait(2000));
+            Try(() => _downloadLoop?.Wait(1000));
+
+            // 3. Сохраняем метаданные
             Try(() => _cacheManager.UpdateRanges(_trackId, _diskRanges));
 
-            _fileLock.EnterWriteLock();
-            try
+            // 4. Закрываем файл
+            if (_fileLock.TryEnterWriteLock(2000))
             {
-                Try(() => _cacheFile?.Flush());
+                try
+                {
+                    Try(() => _cacheFile?.Flush());
+                    Try(() => _cacheFile?.Dispose());
+                    _cacheFile = null;
+                }
+                finally
+                {
+                    _fileLock.ExitWriteLock();
+                }
+            }
+            else
+            {
+                // Принудительно закрываем
                 Try(() => _cacheFile?.Dispose());
                 _cacheFile = null;
             }
-            finally { _fileLock.ExitWriteLock(); }
 
-            // Оптимизация: Возвращаем ВСЕ буферы из словаря в пул
+            // 5. Возвращаем буферы в пул
             foreach (var buffer in _chunks.Values)
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                Try(() => ArrayPool<byte>.Shared.Return(buffer));
             }
             _chunks.Clear();
             _pendingDownloads.Clear();
 
+            // 6. Освобождаем ресурсы
             Try(_dataAvailable.Dispose);
             Try(_fileLock.Dispose);
+            Try(_downloadCts.Dispose);
             Try(_disposeCts.Dispose);
-            Try(_cts.Dispose);
             Try(_downloadSemaphore.Dispose);
         }
 

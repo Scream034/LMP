@@ -23,9 +23,9 @@ public partial class MergeConflictDialog : Window
         if (DataContext is MergeConflictViewModel vm)
         {
             // Подписываемся на команды ViewModel, чтобы закрыть окно и вернуть результат
-            vm.MergeCommand.Subscribe(result => Close(result));
-            vm.DuplicateCommand.Subscribe(result => Close(result));
-            vm.SkipCommand.Subscribe(result => Close(result));
+            vm.MergeCommand.Subscribe(Close);
+            vm.DuplicateCommand.Subscribe(Close);
+            vm.SkipCommand.Subscribe(Close);
         }
     }
 }

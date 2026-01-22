@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Avalonia.Threading;
 using DynamicData.Binding;
 using MyLiteMusicPlayer.Models;
@@ -21,6 +22,12 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
     private IDisposable? _librarySub;
+    
+    // Debounce для навигации
+    private readonly Subject<Unit> _nextSubject = new();
+    private readonly Subject<Unit> _prevSubject = new();
+    private readonly IDisposable _nextSub;
+    private readonly IDisposable _prevSub;
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
@@ -29,6 +36,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     private long _lastDownloadedBytes;
     private DateTime _lastSpeedCheck = DateTime.MinValue;
     private const int SeekCooldownMs = 250;
+    private const int NavigationDebounceMs = 300;
 
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
     [Reactive] public bool IsLoading { get; private set; }
@@ -36,6 +44,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public bool IsPaused { get; private set; }
     [Reactive] public bool HasTrack { get; private set; }
     [Reactive] public bool IsLiked { get; private set; }
+    [Reactive] public bool IsNavigating { get; private set; }
 
     public string SafeTitle => CurrentTrack?.Title ?? "Not Playing";
     public string SafeAuthor => CurrentTrack?.Author ?? "";
@@ -53,8 +62,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public int Volume { get; set; }
     [Reactive] public int MaxVolume { get; private set; } = 100;
     [Reactive] public bool IsMuted { get; private set; }
-    
-    // Убрано сохранение в библиотеку, это просто визуальное состояние
+
     [Reactive] public bool ShuffleEnabled { get; private set; }
     [Reactive] public RepeatMode RepeatMode { get; set; }
 
@@ -71,14 +79,13 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public string StreamInfo { get; private set; } = "";
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
-    
-    // Показывает, есть ли треки в очереди для перемешивания
+
     [Reactive] public bool HasQueueToShuffle { get; private set; }
 
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
-    public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; } 
+    public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleRepeatCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleMuteCommand { get; }
@@ -115,7 +122,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnPlaybackStateChanged += (isPlaying, isPaused) =>
             Dispatcher.UIThread.Post(() => SyncPlaybackState(isPlaying, isPaused));
 
-        // Подписка на изменения очереди
         _audio.OnQueueChanged += () =>
             Dispatcher.UIThread.Post(UpdateQueueState);
 
@@ -168,7 +174,12 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             UpdateVolumeBars();
         });
 
-        _audio.OnTrackChanged += t => Dispatcher.UIThread.Post(() => HandleTrackChanged(t));
+        _audio.OnTrackChanged += t => Dispatcher.UIThread.Post(() =>
+        {
+            HandleTrackChanged(t);
+            // Сбрасываем флаг навигации когда трек реально сменился
+            IsNavigating = false;
+        });
 
         _audio.WhenValueChanged(x => x.IsLoading)
             .Subscribe(l =>
@@ -201,7 +212,43 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
                 }
             });
 
+        // === DEBOUNCE для навигации ===
+        
+        // Next: берём только последний клик за 300ms
+        _nextSub = _nextSubject
+            .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(async _ =>
+            {
+                try
+                {
+                    await _audio.PlayNextAsync();
+                }
+                finally
+                {
+                    IsNavigating = false;
+                }
+            });
+
+        // Previous: аналогично
+        _prevSub = _prevSubject
+            .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(async _ =>
+            {
+                try
+                {
+                    await _audio.PlayPreviousAsync();
+                }
+                finally
+                {
+                    IsNavigating = false;
+                }
+            });
+
         var canExecute = this.WhenAnyValue(x => x.HasTrack);
+        var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating,
+            (hasTrack, isNav) => hasTrack && !isNav);
 
         PlayPauseCommand = ReactiveCommand.CreateFromTask(async () =>
         {
@@ -209,21 +256,29 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             await _audio.SetPlaybackStateAsync(wantsToPlay);
         }, canExecute);
 
-        NextCommand = ReactiveCommand.CreateFromTask(() => _audio.PlayNextAsync(), canExecute);
-        PreviousCommand = ReactiveCommand.CreateFromTask(() => _audio.PlayPreviousAsync(), canExecute);
+        // Команды теперь просто пушат в Subject, debounce делает своё дело
+        NextCommand = ReactiveCommand.Create(() =>
+        {
+            IsNavigating = true;
+            _nextSubject.OnNext(Unit.Default);
+        }, canNavigate);
 
-        // Теперь перемешивает реальную очередь
+        PreviousCommand = ReactiveCommand.Create(() =>
+        {
+            IsNavigating = true;
+            _prevSubject.OnNext(Unit.Default);
+        }, canNavigate);
+
         var canShuffle = this.WhenAnyValue(x => x.HasQueueToShuffle);
         ShuffleQueueCommand = ReactiveCommand.Create(() =>
         {
             _audio.ShuffleQueue();
-            
-            // Визуальная обратная связь - мигаем иконкой
+
             ShuffleEnabled = true;
             Observable.Timer(TimeSpan.FromMilliseconds(500))
                 .ObserveOn(RxApp.MainThreadScheduler)
                 .Subscribe(_ => ShuffleEnabled = false);
-                
+
         }, canShuffle);
 
         ToggleRepeatCommand = ReactiveCommand.Create(() =>
@@ -277,11 +332,10 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         });
     }
 
-    // ✅ НОВЫЙ МЕТОД: Обновляет состояние очереди
     private void UpdateQueueState()
     {
         var queue = _audio.Queue;
-        HasQueueToShuffle = queue.Count > 1; // Можно перемешать только если > 1 трека
+        HasQueueToShuffle = queue.Count > 1;
     }
 
     private void SyncPlaybackState(bool isPlaying, bool isPaused)
@@ -329,10 +383,10 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         {
             Duration = track.Duration;
             DurationSeconds = Duration.TotalSeconds > 0 ? Duration.TotalSeconds : 1;
-            
+
             var storedTrack = _library.GetTrack(track.Id);
             IsLiked = storedTrack?.IsLiked ?? track.IsLiked;
-            
+
             Position = TimeSpan.Zero;
             PositionSeconds = 0;
             BufferedSeconds = track.IsDownloaded ? DurationSeconds : 0;
@@ -348,7 +402,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             StreamInfo = "";
             IsLiked = false;
         }
-        
+
         UpdateQueueState();
     }
 
@@ -467,6 +521,10 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         _librarySub?.Dispose();
+        _nextSub.Dispose();
+        _prevSub.Dispose();
+        _nextSubject.Dispose();
+        _prevSubject.Dispose();
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
         _audio.SaveVolumeNow();
