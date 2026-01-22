@@ -72,6 +72,7 @@ class Program
         services.AddTransient<PlaylistViewModel>();
         services.AddTransient<MergeConflictViewModel>();
         services.AddTransient<SyncSelectionViewModel>();
+        services.AddSingleton<TrackViewModelFactory>();
 
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<PlayerBarViewModel>();

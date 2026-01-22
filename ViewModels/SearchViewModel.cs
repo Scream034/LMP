@@ -2,7 +2,6 @@ using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using System.Collections.ObjectModel;
 using System.Reactive;
 
 namespace MyLiteMusicPlayer.ViewModels;
@@ -14,8 +13,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
-    private readonly DownloadService _downloads;
-    private readonly MusicLibraryManager _manager; // <--- Добавлено
+    private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
 
@@ -26,7 +24,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     [Reactive] public string? ErrorMessage { get; private set; }
 
     public ReactiveCommand<Unit, Unit> SearchCommand { get; }
-    public ObservableCollection<TrackItemViewModel> Results => Items;
+    public Avalonia.Collections.AvaloniaList<TrackItemViewModel> Results => Items;
 
     public SearchViewModel(
         YoutubeProvider youtube,
@@ -34,16 +32,14 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         ImageCacheService imageCache,
         AudioEngine audio,
         LibraryService library,
-        DownloadService downloads,
-        MusicLibraryManager manager) // <--- Инъекция
+        TrackViewModelFactory vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
         _library = library;
-        _downloads = downloads;
-        _manager = manager; // <--- Сохранение
+        _vmFactory = vmFactory;
 
         var canSearch = this.WhenAnyValue(x => x.SearchQuery, q => !string.IsNullOrWhiteSpace(q));
         SearchCommand = ReactiveCommand.CreateFromTask(ExecuteSearchAsync, canSearch);
@@ -61,8 +57,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
             }
         }
 
-        // <--- Передаем _manager
-        return new TrackItemViewModel(track, _audio, _library, _downloads, _manager, PlayTrackWithContext);
+        return _vmFactory.GetOrCreate(track, PlayTrackWithContext);
     }
 
     protected override string GetItemId(TrackInfo item) => item.Id;
@@ -146,16 +141,13 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     {
         _audio.ClearQueue();
         _ = _audio.PlayTrackAsync(track);
-        bool found = false;
-        foreach (var item in Items)
-        {
-            if (found) _audio.Enqueue(item.Track);
-            if (item.Track.Id == track.Id) found = true;
-        }
+        var tracks = Items.Select(x => x.Track).ToList();
+        _audio.EnqueueRange(tracks);
     }
 
     public void Dispose()
     {
         CancelLoading();
+        GC.SuppressFinalize(this);
     }
 }

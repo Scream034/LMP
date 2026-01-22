@@ -111,7 +111,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         SyncProgress = 0;
         SyncStatus = L["Sync_FetchingPlaylists"];
         
-        // Блокируем навигацию
         _mainWindow.LockNavigation(L["Sync_InProgress"]);
         
         try
@@ -124,7 +123,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 {
                     var ytPlaylists = await _youtube.GetUserPlaylistsByAuthAsync();
                     ct.ThrowIfCancellationRequested();
-                    
                     SyncProgress = 0.1;
 
                     playlistsToImport = ytPlaylists.Select(p =>
@@ -152,7 +150,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 var result = await _youtube.GetChannelPlaylistsForSyncAsync(_library.Data.FakeAccountChannelUrl, ct);
                 ct.ThrowIfCancellationRequested();
-                
                 SyncProgress = 0.1;
                 if (result != null) playlistsToImport = result.Value.Playlists;
             }
@@ -180,12 +177,13 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
 
-            var existingLocalNames = _library.GetAllPlaylists()
+            // OPTIMIZATION: Create lookups to avoid N+1 scans in the loop
+            var existingLocalPlaylists = _library.GetAllPlaylists()
                 .Where(p => p.IsLocal)
-                .Select(p => p.Name)
-                .ToHashSet();
+                .ToDictionary(p => p.Name, p => p);
+            
             var conflicts = selected
-                .Where(p => existingLocalNames.Contains(p.Title))
+                .Where(p => existingLocalPlaylists.ContainsKey(p.Title))
                 .Select(p => p.Title)
                 .ToList();
 
@@ -196,6 +194,9 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 decisions = await _dialog.ShowMergeConflictResolutionDialogAsync(conflicts);
                 if (_isDisposed) return;
             }
+            
+            // Fast lookup for decisions
+            var decisionLookup = decisions.ToDictionary(d => d.PlaylistName, d => d.Action);
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.25;
@@ -211,8 +212,16 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 ct.ThrowIfCancellationRequested();
                 if (_isDisposed) return;
                 
-                var decision = decisions.FirstOrDefault(d => d.PlaylistName == candidate.Title)?.Action ?? MergeAction.Duplicate;
-                if (!conflicts.Contains(candidate.Title)) decision = MergeAction.Duplicate;
+                var decision = MergeAction.Duplicate;
+                if (decisionLookup.TryGetValue(candidate.Title, out var action))
+                {
+                    decision = action;
+                }
+                else if (!existingLocalPlaylists.ContainsKey(candidate.Title))
+                {
+                    decision = MergeAction.Duplicate;
+                }
+
                 if (decision == MergeAction.Skip)
                 {
                     processed++;
@@ -228,7 +237,8 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     continue;
                 }
 
-                var existing = _library.GetAllPlaylists().FirstOrDefault(p => p.Name == candidate.Title && p.IsLocal);
+                // O(1) lookup
+                existingLocalPlaylists.TryGetValue(candidate.Title, out var existing);
 
                 if (decision == MergeAction.Merge && existing != null)
                 {
@@ -284,8 +294,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         finally
         {
             await Task.Delay(300);
-            
-            // Разблокируем навигацию
             _mainWindow.UnlockNavigation();
             
             if (!_isDisposed)
@@ -321,7 +329,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         var playlist = _library.GetPlaylist(playlistId);
         if (playlist == null) return;
         
-        // Нельзя удалить "Любимое"
         if (playlistId == "liked")
         {
             await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Playlist_CannotDeleteLiked"]);
@@ -336,7 +343,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         
         if (!confirmed) return;
         
-        // Блокируем навигацию на время удаления
         _mainWindow.LockNavigation(L["Playlist_Deleting"]);
         
         try
@@ -359,5 +365,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         _syncCts?.Cancel();
         _syncCts?.Dispose();
         _librarySubscription?.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

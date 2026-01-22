@@ -17,8 +17,7 @@
     </Application.Resources>
 
     <Application.DataTemplates>
-
-        <!-- === ШАБЛОН ТРЕКА === -->
+        <!-- === TRACK TEMPLATE === -->
         <DataTemplate DataType="{x:Type vm:TrackItemViewModel}">
             <Panel Classes="track-row"
                 Classes.is-active="{Binding IsActive}"
@@ -26,13 +25,13 @@
                 Background="Transparent"
                 Margin="0,2">
 
-                <!-- 1. ФОНОВАЯ ПОДЛОЖКА -->
+                <!-- 1. BACKGROUND -->
                 <Border Classes="track-bg" CornerRadius="6" />
 
-                <!-- 2. КОНТЕНТ -->
+                <!-- 2. CONTENT -->
                 <Grid ColumnDefinitions="48, *, Auto, Auto, Auto" Margin="4">
 
-                    <!-- КАРТИНКА + УПРАВЛЕНИЕ -->
+                    <!-- IMAGE + CONTROLS -->
                     <Panel Grid.Column="0" Width="48" Height="48" HorizontalAlignment="Left">
                         <Border CornerRadius="4" ClipToBounds="True">
                             <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
@@ -52,7 +51,7 @@
                             Cursor="Hand" />
                     </Panel>
 
-                    <!-- ИНФО -->
+                    <!-- INFO -->
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4" Margin="12,0">
                         <TextBlock Text="{Binding Title}"
                             Classes="track-title"
@@ -64,7 +63,7 @@
                             TextTrimming="CharacterEllipsis" MaxLines="1" />
                     </StackPanel>
 
-                    <!-- СТАТУС (Скачано) -->
+                    <!-- STATUS (Downloaded) -->
                     <Panel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0" Width="20">
                         <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
                             Foreground="{StaticResource AccentBrush}"
@@ -75,7 +74,7 @@
                             Foreground="{StaticResource AccentBrush}" />
                     </Panel>
 
-                    <!-- ЛАЙК -->
+                    <!-- LIKE -->
                     <Button Grid.Column="3" Classes="icon-btn like-btn"
                         Command="{Binding ToggleLikeCommand}"
                         VerticalAlignment="Center" Margin="0,0,8,0">
@@ -85,7 +84,7 @@
                             Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                     </Button>
 
-                    <!-- ДЛИТЕЛЬНОСТЬ -->
+                    <!-- DURATION -->
                     <TextBlock Grid.Column="4"
                         Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
                         VerticalAlignment="Center"
@@ -97,7 +96,7 @@
                         TextAlignment="Right" />
                 </Grid>
 
-                <!-- 3. ОБВОДКА АКТИВНОГО ТРЕКА -->
+                <!-- 3. OUTLINE -->
                 <Rectangle Classes="track-outline"
                     RadiusX="6" RadiusY="6"
                     Fill="Transparent"
@@ -105,90 +104,8 @@
                     IsHitTestVisible="False" />
             </Panel>
         </DataTemplate>
-
-        <!-- Шаблон карточки плейлиста -->
-        <DataTemplate DataType="{x:Type vm:PlaylistCardViewModel}">
-            <Border Background="{StaticResource BgElevatedBrush}"
-                CornerRadius="8"
-                Width="160" Height="220"
-                Margin="0,0,16,16"
-                ClipToBounds="True">
-
-                <!-- Используем Panel для наложения кнопки удаления -->
-                <Panel>
-                    <!-- Основной контент (кликабельный) -->
-                    <Button Command="{Binding OpenCommand}"
-                        Background="Transparent"
-                        Padding="12"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch"
-                        HorizontalContentAlignment="Stretch"
-                        VerticalContentAlignment="Stretch">
-                        <StackPanel>
-                            <Border Width="136" Height="136" CornerRadius="4" ClipToBounds="True"
-                                Margin="0,0,0,12">
-                                <Panel Background="{StaticResource BgElevatedBrush}">
-                                    <!-- Иконка сердца для Liked -->
-                                    <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
-                                        Foreground="{StaticResource AccentBrush}"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center"
-                                        IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
-
-                                    <!-- Стандартная иконка для плейлистов без обложки -->
-                                    <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
-                                        Foreground="{StaticResource TextMutedBrush}"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center">
-                                        <mi:MaterialIcon.IsVisible>
-                                            <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                                <Binding Path="ThumbnailUrl"
-                                                    Converter="{StaticResource NullToVisible}"
-                                                    ConverterParameter="invert" />
-                                                <Binding Path="Id"
-                                                    Converter="{StaticResource StringStartsWithConverter}"
-                                                    ConverterParameter="yt_" />
-                                            </MultiBinding>
-                                        </mi:MaterialIcon.IsVisible>
-                                    </mi:MaterialIcon>
-
-                                    <!-- Веб-изображение -->
-                                    <Image
-                                        asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
-                                        Stretch="UniformToFill"
-                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
-
-                                    <!-- Локальный ресурс -->
-                                    <Image
-                                        Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
-                                        Stretch="UniformToFill"
-                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
-                                </Panel>
-                            </Border>
-
-                            <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="14"
-                                TextTrimming="CharacterEllipsis" MaxLines="1"
-                                Foreground="{StaticResource TextPrimaryBrush}" />
-                            <TextBlock Text="{Binding FormattedTrackCount}" FontSize="12"
-                                Margin="0,4,0,0"
-                                Foreground="{StaticResource TextSecondaryBrush}" />
-                        </StackPanel>
-                    </Button>
-
-                    <!-- Кнопка удаления (в правом верхнем углу) -->
-                    <Button Command="{Binding DeleteCommand}"
-                        Classes="icon-btn delete-btn"
-                        IsVisible="{Binding CanDelete}"
-                        Width="28" Height="28"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Top"
-                        Margin="0,8,8,0"
-                        ToolTip.Tip="{Binding L[Button_Delete]}">
-                        <mi:MaterialIcon Kind="Delete" Width="14" Height="14" />
-                    </Button>
-                </Panel>
-            </Border>
-        </DataTemplate>
+        
+        <!-- PlaylistCardTemplate is now handled via Styles in Templates/PlaylistCardTemplate.axaml -->
     </Application.DataTemplates>
 
     <Application.Styles>
@@ -197,10 +114,11 @@
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
         <StyleInclude Source="/Styles/SpotifyTheme.axaml" />
         <StyleInclude Source="avares://MyLiteMusicPlayer/Templates/LoadingSkeletons.axaml" />
+        <StyleInclude Source="avares://MyLiteMusicPlayer/Templates/PlaylistCardTemplate.axaml" />
 
-        <!--                   ЛОГИКА CSS СТИЛЕЙ                       -->
+        <!--                   CSS LOGIC                       -->
 
-        <!-- 1. БАЗОВЫЕ НАСТРОЙКИ -->
+        <!-- 1. BASE SETTINGS -->
         <Style Selector="Panel.track-row Border.track-bg">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Transitions">
@@ -248,7 +166,7 @@
             <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
         </Style>
 
-        <!-- 2. HOVER (Навели мышку) -->
+        <!-- 2. HOVER -->
         <Style Selector="Panel.track-row:pointerover Border.track-bg">
             <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
         </Style>
@@ -257,12 +175,11 @@
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- При hover показываем Play, если НЕ играет -->
         <Style Selector="Panel.track-row:pointerover:not(.is-playing) mi|MaterialIcon.icon-play">
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- 3. АКТИВНЫЙ ТРЕК (Загружен в плеер) -->
+        <!-- 3. ACTIVE TRACK -->
         <Style Selector="Panel.track-row.is-active Border.track-bg">
             <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
         </Style>
@@ -275,17 +192,15 @@
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- Активный но на паузе - показываем Play -->
         <Style Selector="Panel.track-row.is-active:not(.is-playing) mi|MaterialIcon.icon-play">
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- 4. ИГРАЮЩИЙ ТРЕК (Перебивает всё) -->
+        <!-- 4. PLAYING TRACK -->
         <Style Selector="Panel.track-row.is-playing mi|MaterialIcon.icon-pause">
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- Скрываем Play когда играет -->
         <Style Selector="Panel.track-row.is-playing mi|MaterialIcon.icon-play">
             <Setter Property="Opacity" Value="0" />
         </Style>

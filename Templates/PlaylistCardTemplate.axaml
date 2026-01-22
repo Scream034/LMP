@@ -8,55 +8,87 @@
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                    <Button Command="{Binding OpenCommand}"
-                        Background="{StaticResource BgElevatedBrush}"
+                    <Border Background="{StaticResource BgElevatedBrush}"
                         CornerRadius="8"
-                        Padding="12"
                         Width="160" Height="220"
-                        Margin="0,0,16,16">
-                        <StackPanel>
-                            <!-- Cover Image -->
-                            <Border Width="136" Height="136"
-                                CornerRadius="4"
-                                ClipToBounds="True"
-                                BoxShadow="{StaticResource CardShadow}"
-                                Margin="0,0,0,12">
-                                <Panel Background="{StaticResource BgElevatedBrush}">
-                                    <mi:MaterialIcon Kind="MusicNote"
-                                        Width="64" Height="64"
-                                        Foreground="{StaticResource TextMutedBrush}"
-                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
+                        Margin="0,0,16,16"
+                        ClipToBounds="True">
 
-                                    <!-- ИСПРАВЛЕНИЕ: Используем WebUrlConverter -->
-                                    <Image
-                                        asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
-                                        Stretch="UniformToFill"
-                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
+                        <Panel>
+                            <!-- Clickable Area -->
+                            <Button Command="{Binding OpenCommand}"
+                                Background="Transparent"
+                                Padding="12"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch">
+                                <StackPanel>
+                                    <Border Width="136" Height="136" CornerRadius="4"
+                                        ClipToBounds="True"
+                                        Margin="0,0,0,12">
+                                        <Panel Background="{StaticResource BgElevatedBrush}">
+                                            <!-- Heart Icon -->
+                                            <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
+                                                Foreground="{StaticResource AccentBrush}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
 
-                                    <!-- ИСПРАВЛЕНИЕ: Поддержка локальных картинок -->
-                                    <Image
-                                        Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
-                                        Stretch="UniformToFill"
-                                        IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
-                                </Panel>
-                            </Border>
+                                            <!-- Note Icon -->
+                                            <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
+                                                Foreground="{StaticResource TextMutedBrush}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center">
+                                                <mi:MaterialIcon.IsVisible>
+                                                    <MultiBinding
+                                                        Converter="{x:Static BoolConverters.And}">
+                                                        <Binding Path="ThumbnailUrl"
+                                                            Converter="{StaticResource NullToVisible}"
+                                                            ConverterParameter="invert" />
+                                                        <Binding Path="Id"
+                                                            Converter="{StaticResource StringStartsWithConverter}"
+                                                            ConverterParameter="yt_" />
+                                                    </MultiBinding>
+                                                </mi:MaterialIcon.IsVisible>
+                                            </mi:MaterialIcon>
 
-                            <!-- Title -->
-                            <TextBlock Text="{Binding Name}"
-                                FontWeight="Bold"
-                                FontSize="14"
-                                TextTrimming="CharacterEllipsis"
-                                MaxLines="1"
-                                ToolTip.Tip="{Binding Name}"
-                                Foreground="{StaticResource TextPrimaryBrush}" />
+                                            <!-- Web Image -->
+                                            <Image
+                                                asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
+                                                Stretch="UniformToFill"
+                                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
 
-                            <!-- Subtitle -->
-                            <TextBlock Text="{Binding FormattedTrackCount}"
-                                FontSize="12"
-                                Margin="0,4,0,0"
-                                Foreground="{StaticResource TextSecondaryBrush}" />
-                        </StackPanel>
-                    </Button>
+                                            <!-- Local Image -->
+                                            <Image
+                                                Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
+                                                Stretch="UniformToFill"
+                                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
+                                        </Panel>
+                                    </Border>
+
+                                    <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="14"
+                                        TextTrimming="CharacterEllipsis" MaxLines="1"
+                                        Foreground="{StaticResource TextPrimaryBrush}" />
+                                    <TextBlock Text="{Binding FormattedTrackCount}" FontSize="12"
+                                        Margin="0,4,0,0"
+                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Delete Button -->
+                            <Button Command="{Binding DeleteCommand}"
+                                Classes="icon-btn delete-btn"
+                                IsVisible="{Binding CanDelete}"
+                                Width="28" Height="28"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Top"
+                                Margin="0,8,8,0"
+                                ToolTip.Tip="{Binding L[Button_Delete]}">
+                                <mi:MaterialIcon Kind="Delete" Width="14" Height="14" />
+                            </Button>
+                        </Panel>
+                    </Border>
                 </DataTemplate>
             </Setter.Value>
         </Setter>

@@ -14,6 +14,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
     private readonly IDialogService _dialog;
+    private readonly TrackViewModelFactory _vmFactory;
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
@@ -45,15 +46,16 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
       AudioEngine audio,
       DownloadService downloads,
       MusicLibraryManager manager,
-      IDialogService dialog)
+      IDialogService dialog,
+      TrackViewModelFactory vmFactory)
     {
         _library = library;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
         _dialog = dialog;
+        _vmFactory = vmFactory;
 
-        // Подписываемся на обновление языка для перерисовки "X треков"
         LocalizationService.Instance.LanguageChanged += (_, _) =>
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
@@ -90,7 +92,6 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         DownloadAllCommand = ReactiveCommand.Create(DownloadAll, hasTracks);
         MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
 
-        // Подписываемся на изменения в библиотеке
         _librarySubscription = Observable.FromEvent(
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
@@ -133,7 +134,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        return new TrackItemViewModel(track, _audio, _library, _downloads, _manager, PlayFromPlaylist);
+        return _vmFactory.GetOrCreate(track, PlayFromPlaylist);
     }
 
     public async void LoadPlaylist(string playlistId)
@@ -175,14 +176,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     {
         _audio.ClearQueue();
         _ = _audio.PlayTrackAsync(track);
-
-        bool found = false;
-        foreach (var item in AllItems)
-        {
-            if (found) _audio.Enqueue(item);
-            if (item.Id == track.Id) found = true;
-        }
-
+        _audio.EnqueueRange(AllItems);
         _library.AddToRecentlyPlayed(track);
     }
 
@@ -214,5 +208,6 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     {
         _librarySubscription?.Dispose();
         CancelLoading();
+        GC.SuppressFinalize(this);
     }
 }

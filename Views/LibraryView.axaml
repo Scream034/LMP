@@ -8,13 +8,12 @@
 
     <Grid RowDefinitions="Auto, Auto, *">
 
-        <!-- Заголовок -->
+        <!-- Header -->
         <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,24,24,8">
             <StackPanel>
                 <TextBlock Text="{Binding L[Library_Title]}"
                     FontSize="28" FontWeight="Bold"
                     Foreground="{StaticResource TextPrimaryBrush}" />
-                <!-- Статус синхронизации -->
                 <TextBlock Text="{Binding SyncStatus}"
                     FontSize="12"
                     Foreground="{StaticResource TextMutedBrush}"
@@ -23,35 +22,21 @@
             </StackPanel>
 
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                <!-- Кнопка отмены синхронизации -->
-                <!-- <Button Command="{Binding CancelSyncCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Common_Cancel]}"
-                    IsVisible="{Binding IsSyncing}">
-                    <mi:MaterialIcon Kind="Close" Width="18" Height="18"
-                        Foreground="{StaticResource SystemErrorBrush}" />
-                </Button> -->
-
-                <!-- Кнопка синхронизации -->
+                <!-- Sync Button -->
                 <Button Command="{Binding SyncAccountPlaylistsCommand}"
                     Classes="icon-btn"
                     ToolTip.Tip="{Binding L[Library_SyncYoutube]}"
                     Width="36" Height="36">
                     <Panel Width="22" Height="22">
-                        <!-- Обычное состояние -->
                         <mi:MaterialIcon Kind="CloudSync" Width="22" Height="22"
                             IsVisible="{Binding !IsSyncing}"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center" />
 
-                        <!-- Анимация синхронизации (22x22) -->
                         <Panel IsVisible="{Binding IsSyncing}">
-                            <!-- Акцентный фон -->
                             <Border Classes="cloud-bg-accent-small"
                                 CornerRadius="11"
                                 Width="22" Height="22" />
-
-                            <!-- Облако -->
                             <Panel HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
                                 <mi:MaterialIcon Kind="Cloud"
@@ -65,7 +50,7 @@
                     </Panel>
                 </Button>
 
-                <!-- Кнопка создания плейлиста -->
+                <!-- Create Button -->
                 <Button Command="{Binding OpenCreateCommand}"
                     Classes="icon-btn"
                     ToolTip.Tip="{Binding L[Library_CreatePlaylist]}"
@@ -75,11 +60,9 @@
             </StackPanel>
         </Grid>
 
-        <!-- Прогресс-бар синхронизации (тонкая линия под заголовком) -->
+        <!-- Sync Progress Bar -->
         <Grid Grid.Row="1" Height="3" Margin="24,0" IsVisible="{Binding IsSyncing}">
-            <!-- Фон -->
             <Border Background="{StaticResource BgHighlightBrush}" CornerRadius="1.5" />
-            <!-- Заполненная часть -->
             <Border Background="{StaticResource AccentBrush}"
                 CornerRadius="1.5"
                 HorizontalAlignment="Left">
@@ -100,14 +83,13 @@
             </Border>
         </Grid>
 
-        <!-- Контент -->
+        <!-- Content -->
         <Panel Grid.Row="2" Margin="0,8,0,0">
 
-            <!-- Скелетон загрузки при синхронизации -->
+            <!-- Skeleton -->
             <ScrollViewer IsVisible="{Binding IsSyncing}">
                 <StackPanel Margin="24,16,24,100">
                     <WrapPanel Orientation="Horizontal">
-                        <!-- Скелетоны карточек с нарастающим блюром -->
                         <Border Width="160" Height="220" Margin="0,0,16,16"
                             Background="{StaticResource BgElevatedBrush}"
                             CornerRadius="8" Classes="skeleton" Opacity="0.7" />
@@ -136,11 +118,11 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- Основной контент -->
+            <!-- Main Content -->
             <ScrollViewer IsVisible="{Binding !IsSyncing}">
                 <StackPanel Margin="24,0,24,100">
 
-                    <!-- Форма создания плейлиста -->
+                    <!-- Create Form -->
                     <Border IsVisible="{Binding IsCreatingPlaylist}"
                         Background="{StaticResource BgElevatedBrush}"
                         CornerRadius="8" Padding="16" Margin="0,0,0,16">
@@ -160,16 +142,22 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Сетка плейлистов -->
+                    <!-- Playlist Grid -->
                     <ItemsControl ItemsSource="{Binding Playlists}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <WrapPanel Orientation="Horizontal" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <!-- Using style class explicitly -->
+                                <ContentControl Content="{Binding}" Classes="playlist-card" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- Пустое состояние -->
+                    <!-- Empty State -->
                     <StackPanel IsVisible="{Binding !Playlists.Count}"
                         HorizontalAlignment="Center"
                         Margin="0,60">

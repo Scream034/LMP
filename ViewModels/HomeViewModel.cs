@@ -15,8 +15,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
-    private readonly DownloadService _downloads;
-    private readonly MusicLibraryManager _manager; // <--- Добавлено
+    private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
     private int _fetchOffset = 0;
@@ -31,7 +30,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
     public ObservableCollection<CategoryItem> Categories { get; } = [];
     public DebugStats Stats { get; } = new();
-    public ObservableCollection<TrackItemViewModel> ActiveTracks => Items;
+    public Avalonia.Collections.AvaloniaList<TrackItemViewModel> ActiveTracks => Items;
 
     public ReactiveCommand<Unit, bool> ToggleDebugCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
@@ -42,16 +41,14 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         ImageCacheService imageCache,
         AudioEngine audio,
         LibraryService library,
-        DownloadService downloads,
-        MusicLibraryManager manager) // <--- Инъекция
+        TrackViewModelFactory vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
         _library = library;
-        _downloads = downloads;
-        _manager = manager; // <--- Сохранение
+        _vmFactory = vmFactory;
 
         UpdateGreeting();
         InitializeCategories();
@@ -82,7 +79,8 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
             }
         }
 
-        return new TrackItemViewModel(track, _audio, _library, _downloads, _manager, PlayWithContext);
+        // Use Factory
+        return _vmFactory.GetOrCreate(track, PlayWithContext);
     }
     
     protected override string GetItemId(TrackInfo item) => item.Id;
@@ -176,12 +174,11 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
     {
         _audio.ClearQueue();
         _ = _audio.PlayTrackAsync(track);
-        bool found = false;
-        foreach (var item in Items)
-        {
-            if (found) _audio.Enqueue(item.Track);
-            if (item.Track.Id == track.Id) found = true;
-        }
+        
+        // Add all current items to queue, but efficiently
+        var tracks = Items.Select(x => x.Track).ToList();
+        _audio.EnqueueRange(tracks);
+        
         _library.AddToRecentlyPlayed(track);
     }
 
@@ -221,6 +218,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
     public void Dispose()
     {
         CancelLoading();
+        GC.SuppressFinalize(this);
     }
 }
 
