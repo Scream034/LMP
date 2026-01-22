@@ -68,6 +68,7 @@ class Program
         services.AddTransient<HomeViewModel>();
         services.AddTransient<SearchViewModel>();
         services.AddTransient<LibraryViewModel>();
+        services.AddTransient<QueueViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<PlaylistViewModel>();
         services.AddTransient<MergeConflictViewModel>();

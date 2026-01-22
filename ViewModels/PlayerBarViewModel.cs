@@ -19,8 +19,8 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly YoutubeProvider _youtube;
 
     private readonly DispatcherTimer _speedUpdateTimer;
-    // Timer для fallback позиции тоже можно оставить, он редкий (500мс)
     private readonly DispatcherTimer _fallbackPositionTimer;
+    private IDisposable? _librarySub;
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
@@ -54,12 +54,13 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public int Volume { get; set; }
     [Reactive] public int MaxVolume { get; private set; } = 100;
     [Reactive] public bool IsMuted { get; private set; }
-    [Reactive] public bool ShuffleEnabled { get; set; }
+    
+    // Убрано сохранение в библиотеку, это просто визуальное состояние
+    [Reactive] public bool ShuffleEnabled { get; private set; }
     [Reactive] public RepeatMode RepeatMode { get; set; }
 
     public double VolumeSliderWidth => 100 + ((MaxVolume - 100) * 0.5);
 
-    // Свойства для визуализации громкости (оставил как есть, но оптимизация в AudioEngine handle)
     [Reactive] public double Bar1Opacity { get; set; } = 0.3;
     [Reactive] public double Bar2Opacity { get; set; } = 0.3;
     [Reactive] public double Bar3Opacity { get; set; } = 0.3;
@@ -71,11 +72,14 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public string StreamInfo { get; private set; } = "";
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
+    
+    // Показывает, есть ли треки в очереди для перемешивания
+    [Reactive] public bool HasQueueToShuffle { get; private set; }
 
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
-    public ReactiveCommand<Unit, Unit> ToggleShuffleCommand { get; }
+    public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; } 
     public ReactiveCommand<Unit, Unit> ToggleRepeatCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleMuteCommand { get; }
@@ -106,14 +110,28 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         RepeatMode = _audio.RepeatMode;
 
         UpdateVolumeBars();
+        UpdateQueueState();
 
         Log.Info($"[PlayerBar] Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
         _audio.OnPlaybackStateChanged += (isPlaying, isPaused) =>
             Dispatcher.UIThread.Post(() => SyncPlaybackState(isPlaying, isPaused));
 
-        // Оптимизация: Throttle/Sample для обновлений позиции.
-        // VLC шлет события очень часто (каждые ~10мс). Мы ограничиваем обновление UI до 5 раз в секунду.
+        // Подписка на изменения очереди
+        _audio.OnQueueChanged += () =>
+            Dispatcher.UIThread.Post(UpdateQueueState);
+
+        _librarySub = Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
+            h => _library.OnTrackUpdated += h,
+            h => _library.OnTrackUpdated -= h)
+            .Where(t => CurrentTrack != null && t.Id == CurrentTrack.Id)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(t =>
+            {
+                IsLiked = t.IsLiked;
+                if (CurrentTrack != null) CurrentTrack.IsLiked = t.IsLiked;
+            });
+
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnPositionChanged += h,
                 h => _audio.OnPositionChanged -= h)
@@ -171,12 +189,11 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _speedUpdateTimer.Tick += (_, _) => UpdateDownloadSpeed();
         _speedUpdateTimer.Start();
 
-        // Оптимизация: Throttle для обновлений прогресса загрузки
         Observable.FromEvent<Action<string, float>, (string, float)>(
                 h => (id, p) => h((id, p)),
                 h => _downloads.OnProgress += h,
                 h => _downloads.OnProgress -= h)
-            .Sample(TimeSpan.FromMilliseconds(200)) // Не обновлять прогресс-бар чаще 5 раз/сек
+            .Sample(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(x =>
             {
@@ -197,13 +214,19 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         NextCommand = ReactiveCommand.CreateFromTask(() => _audio.PlayNextAsync(), canExecute);
         PreviousCommand = ReactiveCommand.CreateFromTask(() => _audio.PlayPreviousAsync(), canExecute);
 
-        ToggleShuffleCommand = ReactiveCommand.Create(() =>
+        // Теперь перемешивает реальную очередь
+        var canShuffle = this.WhenAnyValue(x => x.HasQueueToShuffle);
+        ShuffleQueueCommand = ReactiveCommand.Create(() =>
         {
-            ShuffleEnabled = !ShuffleEnabled;
-            _audio.ShuffleEnabled = ShuffleEnabled;
-            _library.Data.ShuffleEnabled = ShuffleEnabled;
-            _library.Save();
-        });
+            _audio.ShuffleQueue();
+            
+            // Визуальная обратная связь - мигаем иконкой
+            ShuffleEnabled = true;
+            Observable.Timer(TimeSpan.FromMilliseconds(500))
+                .ObserveOn(RxApp.MainThreadScheduler)
+                .Subscribe(_ => ShuffleEnabled = false);
+                
+        }, canShuffle);
 
         ToggleRepeatCommand = ReactiveCommand.Create(() =>
         {
@@ -233,11 +256,9 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>
         {
-            Log.Info($"[PlayerBar] ToggleLikeCommand: {CurrentTrack?.Id}");
             if (CurrentTrack != null)
             {
                 _library.ToggleLike(CurrentTrack);
-                IsLiked = CurrentTrack.IsLiked;
             }
         }, canExecute);
 
@@ -267,6 +288,13 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             if (option == null) return;
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
         });
+    }
+
+    // ✅ НОВЫЙ МЕТОД: Обновляет состояние очереди
+    private void UpdateQueueState()
+    {
+        var queue = _audio.Queue;
+        HasQueueToShuffle = queue.Count > 1; // Можно перемешать только если > 1 трека
     }
 
     private void SyncPlaybackState(bool isPlaying, bool isPaused)
@@ -300,15 +328,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private void HandleTrackChanged(TrackInfo? track)
     {
-        if (track != null)
-        {
-            Log.Info($"[PlayerBar] Track changed to: {track.Title} (ID: {track.Id}, URL: {track.Url})");
-        }
-        else
-        {
-            Log.Info("[PlayerBar] Track cleared");
-        }
-
         CurrentTrack = track;
         HasTrack = track != null;
 
@@ -323,7 +342,10 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         {
             Duration = track.Duration;
             DurationSeconds = Duration.TotalSeconds > 0 ? Duration.TotalSeconds : 1;
-            IsLiked = track.IsLiked;
+            
+            var storedTrack = _library.GetTrack(track.Id);
+            IsLiked = storedTrack?.IsLiked ?? track.IsLiked;
+            
             Position = TimeSpan.Zero;
             PositionSeconds = 0;
             BufferedSeconds = track.IsDownloaded ? DurationSeconds : 0;
@@ -337,7 +359,10 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             BufferedSeconds = 0;
             ShowStreamInfo = false;
             StreamInfo = "";
+            IsLiked = false;
         }
+        
+        UpdateQueueState();
     }
 
     private void UpdateStreamInfo()
@@ -454,6 +479,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        _librarySub?.Dispose();
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
         _audio.SaveVolumeNow();

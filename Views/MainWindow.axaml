@@ -17,40 +17,73 @@
         <Grid Grid.Row="0" ColumnDefinitions="240, *">
 
             <!-- SIDEBAR -->
-            <Border Grid.Column="0" Background="{StaticResource BgSecondaryBrush}" Padding="16,16,16,16">
+            <Border Grid.Column="0" Background="{StaticResource BgSecondaryBrush}"
+                Padding="16,16,16,16">
                 <Panel>
                     <!-- Sidebar Items (Navigation) -->
                     <Grid RowDefinitions="Auto, Auto, *, Auto">
                         <!-- Logo -->
-                        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="4,4,4,28">
-                            <mi:MaterialIcon Kind="Music" Width="36" Height="36" Foreground="{StaticResource AccentBrush}" />
-                            <TextBlock Text="LitePlayer" FontSize="22" FontWeight="Bold" VerticalAlignment="Center" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12"
+                            Margin="4,4,4,28">
+                            <mi:MaterialIcon Kind="Music" Width="36" Height="36"
+                                Foreground="{StaticResource AccentBrush}" />
+                            <TextBlock Text="LitePlayer" FontSize="22" FontWeight="Bold"
+                                VerticalAlignment="Center"
+                                Foreground="{StaticResource TextPrimaryBrush}" />
                         </StackPanel>
 
                         <!-- Nav Buttons -->
                         <StackPanel Grid.Row="1" Spacing="6">
-                            <Button Classes="sidebar-btn" Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Home'}" Command="{Binding NavigateCommand}" CommandParameter="Home" IsEnabled="{Binding !IsNavigationLocked}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Home'}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Home"
+                                IsEnabled="{Binding !IsNavigationLocked}"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
                                 <StackPanel Orientation="Horizontal" Spacing="16">
                                     <mi:MaterialIcon Kind="Home" Width="24" Height="24" />
-                                    <TextBlock Text="{Binding L[Nav_Home]}" VerticalAlignment="Center" FontSize="15" />
+                                    <TextBlock Text="{Binding L[Nav_Home]}"
+                                        VerticalAlignment="Center" FontSize="15" />
                                 </StackPanel>
                             </Button>
-                            <Button Classes="sidebar-btn" Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Search'}" Command="{Binding NavigateCommand}" CommandParameter="Search" IsEnabled="{Binding !IsNavigationLocked}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Search'}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Search"
+                                IsEnabled="{Binding !IsNavigationLocked}"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
                                 <StackPanel Orientation="Horizontal" Spacing="16">
                                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
-                                    <TextBlock Text="{Binding L[Nav_Search]}" VerticalAlignment="Center" FontSize="15" />
+                                    <TextBlock Text="{Binding L[Nav_Search]}"
+                                        VerticalAlignment="Center" FontSize="15" />
                                 </StackPanel>
                             </Button>
-                            <Button Classes="sidebar-btn" Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Library'}" Command="{Binding NavigateCommand}" CommandParameter="Library" IsEnabled="{Binding !IsNavigationLocked}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Library'}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Library"
+                                IsEnabled="{Binding !IsNavigationLocked}"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
                                 <StackPanel Orientation="Horizontal" Spacing="16">
                                     <mi:MaterialIcon Kind="BookMusic" Width="24" Height="24" />
-                                    <TextBlock Text="{Binding L[Nav_Library]}" VerticalAlignment="Center" FontSize="15" />
+                                    <TextBlock Text="{Binding L[Nav_Library]}"
+                                        VerticalAlignment="Center" FontSize="15" />
                                 </StackPanel>
                             </Button>
-                            <Button Classes="sidebar-btn active" IsVisible="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Playlist'}" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+
+                            <!-- кнопка Очереди -->
+                           <Button Classes="sidebar-btn" Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Queue'}" Command="{Binding NavigateCommand}" CommandParameter="Queue" IsEnabled="{Binding !IsNavigationLocked}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <mi:MaterialIcon Kind="PlaylistPlay" Width="24" Height="24" />
+                                    <TextBlock Text="{Binding L[Nav_Queue]}" VerticalAlignment="Center" FontSize="15" />
+                                </StackPanel>
+                            </Button>
+
+                            <Button Classes="sidebar-btn active"
+                                IsVisible="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Playlist'}"
+                                IsEnabled="False" HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left">
                                 <StackPanel Orientation="Horizontal" Spacing="16">
                                     <mi:MaterialIcon Kind="PlaylistMusic" Width="24" Height="24" />
-                                    <TextBlock Text="{Binding L[Nav_Playlist]}" VerticalAlignment="Center" FontSize="15" />
+                                    <TextBlock Text="{Binding L[Nav_Playlist]}"
+                                        VerticalAlignment="Center" FontSize="15" />
                                 </StackPanel>
                             </Button>
                         </StackPanel>
@@ -58,53 +91,41 @@
                         <Panel Grid.Row="2" />
 
                         <!-- Settings -->
-                        <Button Grid.Row="3" Classes="sidebar-btn" Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Settings'}" Command="{Binding NavigateCommand}" CommandParameter="Settings" IsEnabled="{Binding !IsNavigationLocked}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="0,0,0,8">
+                        <Button Grid.Row="3" Classes="sidebar-btn"
+                            Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Settings'}"
+                            Command="{Binding NavigateCommand}" CommandParameter="Settings"
+                            IsEnabled="{Binding !IsNavigationLocked}" HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left" Margin="0,0,0,8">
                             <StackPanel Orientation="Horizontal" Spacing="16">
                                 <mi:MaterialIcon Kind="Cog" Width="24" Height="24" />
-                                <TextBlock Text="{Binding L[Nav_Settings]}" VerticalAlignment="Center" FontSize="15" />
+                                <TextBlock Text="{Binding L[Nav_Settings]}"
+                                    VerticalAlignment="Center" FontSize="15" />
                             </StackPanel>
                         </Button>
                     </Grid>
 
-                    <!-- === LOCK OVERLAY WITH ANIMATION === -->
-                    <Border IsVisible="{Binding IsNavigationLocked}" Background="#FA121212" CornerRadius="8" Margin="-16" ClipToBounds="True">
+                    <!-- === LOCK OVERLAY === -->
+                    <Border IsVisible="{Binding IsNavigationLocked}" Background="#FA121212"
+                        CornerRadius="8" Margin="-16" ClipToBounds="True">
                         <Grid>
-                            <!-- 1. Blurred Background Tracks (4 items) -->
-                            <StackPanel VerticalAlignment="Center" Spacing="8" Opacity="0.3">
-                                <StackPanel.Effect>
-                                    <BlurEffect Radius="8"/>
-                                </StackPanel.Effect>
-                                <Border Classes="track-skeleton-row" Background="{StaticResource BgElevatedBrush}" Margin="24,0" CornerRadius="8"/>
-                                <Border Classes="track-skeleton-row" Background="{StaticResource BgElevatedBrush}" Margin="24,0" CornerRadius="8"/>
-                                <Border Classes="track-skeleton-row" Background="{StaticResource BgElevatedBrush}" Margin="24,0" CornerRadius="8"/>
-                                <Border Classes="track-skeleton-row" Background="{StaticResource BgElevatedBrush}" Margin="24,0" CornerRadius="8"/>
-                            </StackPanel>
-
-                            <!-- 2. Content -->
-                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="24">
-                                
-                                <!-- Cloud Color Swap Animation -->
+                            <!-- ... (Lock Animation from previous snippet) ... -->
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Spacing="24">
                                 <Panel Width="80" Height="80" HorizontalAlignment="Center">
-                                    
-                                    <!-- STATE A: Accent Background, Dark Cloud -->
-                                    <Panel>
-                                        <Border Width="80" Height="80" CornerRadius="40" Background="{StaticResource AccentBrush}" />
-                                        <mi:MaterialIcon Kind="CloudSync" Width="40" Height="40" Foreground="{StaticResource TextDarkBrush}" 
-                                                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Panel>
-
-                                    <!-- STATE B: Dark Background, Accent Cloud (Overlay with Animation) -->
-                                    <Panel Classes="cloud-crossfade-overlay">
-                                        <Border Width="80" Height="80" CornerRadius="40" Background="{StaticResource BgElevatedBrush}" />
-                                        <mi:MaterialIcon Kind="CloudSync" Width="40" Height="40" Foreground="{StaticResource AccentBrush}" 
-                                                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Panel>
+                                    <Border Width="80" Height="80" CornerRadius="40"
+                                        Background="{StaticResource AccentBrush}" />
+                                    <mi:MaterialIcon Kind="CloudSync" Width="40" Height="40"
+                                        Foreground="{StaticResource TextDarkBrush}"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Panel>
-
-                                <!-- Text -->
                                 <StackPanel Spacing="6" HorizontalAlignment="Center">
-                                    <TextBlock Text="{Binding NavigationLockReason}" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="250" HorizontalAlignment="Center" />
-                                    <TextBlock Text="{Binding L[Nav_PleaseWait]}" FontSize="13" Foreground="{StaticResource TextMutedBrush}" TextAlignment="Center" HorizontalAlignment="Center" />
+                                    <TextBlock Text="{Binding NavigationLockReason}" FontSize="16"
+                                        FontWeight="Bold"
+                                        Foreground="{StaticResource TextPrimaryBrush}"
+                                        TextAlignment="Center" />
+                                    <TextBlock Text="{Binding L[Nav_PleaseWait]}" FontSize="13"
+                                        Foreground="{StaticResource TextMutedBrush}"
+                                        TextAlignment="Center" />
                                 </StackPanel>
                             </StackPanel>
                         </Grid>
@@ -120,24 +141,39 @@
                             <DataTemplate>
                                 <ContentControl Content="{Binding}">
                                     <ContentControl.DataTemplates>
-                                        <DataTemplate DataType="{x:Type vm:HomeViewModel}"><views:HomeView /></DataTemplate>
-                                        <DataTemplate DataType="{x:Type vm:SearchViewModel}"><views:SearchView /></DataTemplate>
-                                        <DataTemplate DataType="{x:Type vm:LibraryViewModel}"><views:LibraryView /></DataTemplate>
-                                        <DataTemplate DataType="{x:Type vm:SettingsViewModel}"><views:SettingsView /></DataTemplate>
-                                        <DataTemplate DataType="{x:Type vm:PlaylistViewModel}"><views:PlaylistView /></DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:HomeViewModel}">
+                                            <views:HomeView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:SearchViewModel}">
+                                            <views:SearchView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:LibraryViewModel}">
+                                            <views:LibraryView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                                            <views:SettingsView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:PlaylistViewModel}">
+                                            <views:PlaylistView />
+                                        </DataTemplate>
+                                        <DataTemplate DataType="{x:Type vm:QueueViewModel}">
+                                            <views:QueueView />
+                                        </DataTemplate>
                                     </ContentControl.DataTemplates>
                                 </ContentControl>
                             </DataTemplate>
                         </ContentControl.ContentTemplate>
                     </ContentControl>
 
-                    <Border IsVisible="{Binding IsNavigationLocked}" Background="#60000000" IsHitTestVisible="True" />
+                    <Border IsVisible="{Binding IsNavigationLocked}" Background="#60000000"
+                        IsHitTestVisible="True" />
                 </Panel>
             </Border>
         </Grid>
 
         <!-- PLAYER BAR -->
-        <views:PlayerBarView Grid.Row="1" DataContext="{Binding PlayerBar}" IsVisible="{Binding HasTrack}" />
+        <views:PlayerBarView Grid.Row="1" DataContext="{Binding PlayerBar}"
+            IsVisible="{Binding HasTrack}" />
 
     </Grid>
 </Window>

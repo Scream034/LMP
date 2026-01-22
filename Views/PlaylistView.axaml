@@ -78,9 +78,11 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- Actions -->
+                    <!-- В блоке Actions -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="24"
                         VerticalAlignment="Center">
+
+                        <!-- Play All -->
                         <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="56"
                             Height="56">
                             <Panel>
@@ -92,16 +94,34 @@
                                     IsVisible="{Binding IsPlayingThisPlaylist}" />
                             </Panel>
                         </Button>
+
+                        <!-- Shuffle -->
                         <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}"
-                            ToolTip.Tip="Shuffle">
-                            <mi:MaterialIcon Kind="Shuffle" Width="24" Height="24"
-                                Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                            ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
+                            <mi:MaterialIcon Kind="ShuffleVariant" Width="24" Height="24"
+                                Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}">
+                                <mi:MaterialIcon.Transitions>
+                                    <Transitions>
+                                        <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </mi:MaterialIcon.Transitions>
+                            </mi:MaterialIcon>
                         </Button>
+
+                        <!-- НОВАЯ КНОПКА: Add to Queue -->
+                        <Button Classes="icon-btn" Command="{Binding AddToQueueCommand}"
+                            ToolTip.Tip="{Binding L[Queue_Add]}">
+                            <mi:MaterialIcon Kind="PlaylistPlus" Width="24" Height="24" />
+                        </Button>
+
+                        <!-- Download -->
                         <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}"
                             ToolTip.Tip="Download All">
                             <mi:MaterialIcon Kind="Download" Width="24" Height="24"
                                 Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                         </Button>
+
+                        <!-- Sync -->
                         <Button Classes="icon-btn" Command="{Binding RefreshPlaylistCommand}"
                             IsVisible="{Binding IsCloud}" ToolTip.Tip="Sync with YouTube">
                             <mi:MaterialIcon Kind="Sync" Width="24" Height="24" />

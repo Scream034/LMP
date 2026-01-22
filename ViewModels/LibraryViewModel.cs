@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -11,13 +12,14 @@ namespace MyLiteMusicPlayer.ViewModels;
 
 public class LibraryViewModel : ViewModelBase, IDisposable
 {
+    private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly YoutubeProvider _youtube;
     private readonly GoogleAuthService _auth;
     private readonly IDialogService _dialog;
     private readonly MainWindowViewModel _mainWindow;
     private readonly MusicLibraryManager _manager;
-    
+
     private CancellationTokenSource? _syncCts;
     private IDisposable? _librarySubscription;
     private bool _isDisposed;
@@ -45,8 +47,10 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         GoogleAuthService auth,
         MainWindowViewModel mainWindow,
         IDialogService dialog,
-        MusicLibraryManager manager)
+        MusicLibraryManager manager,
+        AudioEngine audio)
     {
+        _audio = audio;
         _library = library;
         _youtube = youtube;
         _auth = auth;
@@ -73,7 +77,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
         var canSync = this.WhenAnyValue(x => x.IsSyncing, syncing => !syncing);
         SyncAccountPlaylistsCommand = ReactiveCommand.CreateFromTask(SyncAccountPlaylistsAsync, canSync);
-        
+
         CancelSyncCommand = ReactiveCommand.Create(() =>
         {
             _syncCts?.Cancel();
@@ -81,15 +85,15 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         });
 
         RefreshCommand = ReactiveCommand.Create(LoadPlaylists);
-        
+
         _librarySubscription = Observable.FromEvent(
-                h => _library.OnDataChanged += h, 
+                h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
             .Subscribe(_ => LoadPlaylists());
-        
+
         LoadPlaylists();
     }
 
@@ -102,17 +106,17 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private async Task SyncAccountPlaylistsAsync()
     {
         if (_isDisposed) return;
-        
+
         _syncCts?.Cancel();
         _syncCts = new CancellationTokenSource();
         var ct = _syncCts.Token;
-        
+
         IsSyncing = true;
         SyncProgress = 0;
         SyncStatus = L["Sync_FetchingPlaylists"];
-        
+
         _mainWindow.LockNavigation(L["Sync_InProgress"]);
-        
+
         try
         {
             List<PlaylistSearchResult> playlistsToImport = [];
@@ -180,7 +184,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             var existingLocalPlaylists = _library.GetAllPlaylists()
                 .Where(p => p.IsLocal)
                 .ToDictionary(p => p.Name, p => p);
-            
+
             var conflicts = selected
                 .Where(p => existingLocalPlaylists.ContainsKey(p.Title))
                 .Select(p => p.Title)
@@ -193,7 +197,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 decisions = await _dialog.ShowMergeConflictResolutionDialogAsync(conflicts);
                 if (_isDisposed) return;
             }
-            
+
             var decisionLookup = decisions.ToDictionary(d => d.PlaylistName, d => d.Action);
 
             ct.ThrowIfCancellationRequested();
@@ -209,7 +213,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 ct.ThrowIfCancellationRequested();
                 if (_isDisposed) return;
-                
+
                 var decision = MergeAction.Duplicate;
                 if (decisionLookup.TryGetValue(candidate.Title, out var action))
                 {
@@ -308,7 +312,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         {
             await Task.Delay(300);
             _mainWindow.UnlockNavigation();
-            
+
             if (!_isDisposed)
             {
                 IsSyncing = false;
@@ -322,15 +326,22 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private void LoadPlaylists()
     {
         if (_isDisposed) return;
-        
+
         Playlists.Clear();
         var allPlaylists = _library.GetAllPlaylists();
         var sorted = allPlaylists.OrderByDescending(p => p.IsLocal).ThenBy(p => p.Name);
+
         foreach (var playlist in sorted)
         {
             Playlists.Add(new PlaylistCardViewModel(
-                playlist, 
+                playlist,
                 _mainWindow.NavigateToPlaylist,
+                (p) => // Action AddToQueue
+                {
+                    // Получаем треки плейлиста
+                    var tracks = _library.GetPlaylistTracks(p.Id);
+                    _audio.EnqueueRange(tracks);
+                },
                 DeletePlaylistAsync));
         }
     }
@@ -338,26 +349,26 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private async Task DeletePlaylistAsync(string playlistId)
     {
         if (_isDisposed) return;
-        
+
         var playlist = _library.GetPlaylist(playlistId);
         if (playlist == null) return;
-        
+
         if (playlistId == "liked")
         {
             await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Playlist_CannotDeleteLiked"]);
             return;
         }
-        
+
         var confirmed = await _dialog.ConfirmAsync(
             L["Dialog_Confirm_Title"],
             string.Format(L["Playlist_DeleteConfirm"], playlist.Name),
             L["Button_Delete"],
             L["Button_Cancel"]);
-        
+
         if (!confirmed) return;
-        
+
         _mainWindow.LockNavigation(L["Playlist_Deleting"]);
-        
+
         try
         {
             await _manager.DeletePlaylistAsync(playlistId);
@@ -368,12 +379,12 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             _mainWindow.UnlockNavigation();
         }
     }
-    
+
     public void Dispose()
     {
         if (_isDisposed) return;
         _isDisposed = true;
-        
+
         _auth.OnAuthStateChanged -= OnAuthChanged;
         _syncCts?.Cancel();
         _syncCts?.Dispose();

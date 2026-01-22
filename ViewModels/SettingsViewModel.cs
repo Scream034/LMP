@@ -276,12 +276,10 @@ public class SettingsViewModel : ViewModelBase
                 if (info != null)
                 {
                     _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
-                    // await _dialog.ShowInfoAsync(L["Dialog_Success"], $"Linked to public channel: {info.Value.Name}");
                     await _dialog.ShowInfoAsync(L["Dialog_Success"], string.Format(L["Dialog_Merge_Success"], info.Value.Name));
                 }
                 else
                 {
-                    // await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], "Could not find channel.");
                     await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Dialog_Merge_Error"]);
                 }
             }

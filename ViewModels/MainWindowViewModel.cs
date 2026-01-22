@@ -16,7 +16,7 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
     [Reactive] public string CurrentPageName { get; private set; } = "Home";
-    
+
     // Блокировка навигации
     [Reactive] public bool IsNavigationLocked { get; private set; }
     [Reactive] public string NavigationLockReason { get; private set; } = "";
@@ -37,7 +37,7 @@ public class MainWindowViewModel : ViewModelBase
 
         // Навигация возможна только если не заблокирована
         var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
-        
+
         NavigateCommand = ReactiveCommand.Create<string>(pageName =>
         {
             if (!IsNavigationLocked)
@@ -106,7 +106,7 @@ public class MainWindowViewModel : ViewModelBase
     private void Navigate(string pageName)
     {
         if (IsNavigationLocked) return;
-        
+
         var sw = Stopwatch.StartNew();
         Log.Info($"Switching to page: {pageName} (Type: {pageName}ViewModel)");
 
@@ -122,6 +122,7 @@ public class MainWindowViewModel : ViewModelBase
             "Search" => _services.GetRequiredService<SearchViewModel>(),
             "Library" => _services.GetRequiredService<LibraryViewModel>(),
             "Settings" => _services.GetRequiredService<SettingsViewModel>(),
+            "Queue" => _services.GetRequiredService<QueueViewModel>(),
             _ => CurrentPage
         };
 
@@ -133,9 +134,9 @@ public class MainWindowViewModel : ViewModelBase
     public void NavigateToPlaylist(string playlistId)
     {
         if (IsNavigationLocked) return;
-        
+
         Log.Info($"Navigating to Playlist: {playlistId}");
-        
+
         // Диспозим текущую страницу
         if (CurrentPage is IDisposable disposable)
         {

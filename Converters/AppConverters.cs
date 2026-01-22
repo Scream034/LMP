@@ -4,11 +4,10 @@ using MyLiteMusicPlayer.Models;
 using System.Globalization;
 using Material.Icons;
 using Avalonia.Input;
-using MyLiteMusicPlayer.Services; // Убедитесь, что этот using есть
-using static System.Net.Mime.MediaTypeNames;
-using Avalonia.Controls;
+using MyLiteMusicPlayer.Services;
 using Avalonia.Platform;
-using Avalonia.Media.Imaging; // Убедитесь, что этот using есть
+using Avalonia.Media.Imaging;
+using Avalonia.Controls;
 
 namespace MyLiteMusicPlayer.Converters;
 
@@ -101,21 +100,20 @@ public class BoolToSelectorConverter : IValueConverter
                 // Если просят цвет (IBrush)
                 if (typeof(IBrush).IsAssignableFrom(targetType))
                 {
-                    // 1. Пытаемся найти в ресурсах приложения (для AccentBrush, TextPrimaryBrush и т.д.)
+                    // 1. Пытаемся найти в ресурсах приложения
                     if (Avalonia.Application.Current != null && Avalonia.Application.Current.TryFindResource(resultString, out var res))
                     {
                         if (res is IBrush brush) return brush;
                         if (res is Color color) return new SolidColorBrush(color);
                     }
 
-                    // 2. Если не ресурс, пытаемся распарсить как HEX или именованный цвет (Red, Blue...)
+                    // 2. Если не ресурс, пытаемся распарсить как HEX
                     try
                     {
                         return SolidColorBrush.Parse(resultString);
                     }
                     catch
                     {
-                        // Если это не HEX, возможно это системный ключ напрямую
                         return Brushes.Transparent;
                     }
                 }
@@ -155,9 +153,6 @@ public class BoolToCursorConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
-/// <summary>
-/// Конвертирует строку в верхний регистр.
-/// </summary>
 public sealed class ToUpperConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -175,9 +170,6 @@ public sealed class ToUpperConverter : IValueConverter
     }
 }
 
-/// <summary>
-/// Конвертирует AudioQualityPreference в локализованную строку
-/// </summary>
 public sealed class AudioQualityToStringConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -201,11 +193,6 @@ public sealed class AudioQualityToStringConverter : IValueConverter
     }
 }
 
-
-/// <summary>
-/// Конвертирует строку avares://... в Bitmap.
-/// Возвращает null, если это HTTP ссылка или ресурс не найден.
-/// </summary>
 public class BitmapAssetValueConverter : IValueConverter
 {
     public static readonly BitmapAssetValueConverter Instance = new();
@@ -214,30 +201,21 @@ public class BitmapAssetValueConverter : IValueConverter
     {
         if (value is string uriStr && !string.IsNullOrEmpty(uriStr))
         {
-            // Если это веб-ссылка, возвращаем null
             if (uriStr.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 return null;
 
-            // Если это ресурс avalonia
             if (uriStr.StartsWith("avares://"))
             {
                 try
                 {
                     var uri = new Uri(uriStr);
-
-                    // Проверяем существование ресурса ПЕРЕД загрузкой
-                    if (!AssetLoader.Exists(uri))
-                    {
-                        // Ресурс не найден - возвращаем null без исключения
-                        return null;
-                    }
+                    if (!AssetLoader.Exists(uri)) return null;
 
                     using var stream = AssetLoader.Open(uri);
                     return new Bitmap(stream);
                 }
                 catch (Exception)
                 {
-                    // На случай других ошибок (повреждённый файл и т.д.)
                     return null;
                 }
             }
@@ -270,10 +248,6 @@ public class StringStartsWithConverter : IValueConverter
     }
 }
 
-/// <summary>
-/// Возвращает строку, только если она начинается с http/https.
-/// Иначе возвращает null. Спасает AsyncImageLoader от краша на avares:// ссылках.
-/// </summary>
 public class WebUrlConverter : IValueConverter
 {
     public static readonly WebUrlConverter Instance = new();
@@ -293,9 +267,6 @@ public class WebUrlConverter : IValueConverter
     }
 }
 
-/// <summary>
-/// Конвертирует прогресс (0-1) и ширину контейнера в ширину прогресс-бара
-/// </summary>
 public class ProgressToWidthConverter : IMultiValueConverter
 {
     public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
@@ -307,5 +278,28 @@ public class ProgressToWidthConverter : IMultiValueConverter
             return Math.Max(0, containerWidth * progress);
         }
         return 0.0;
+    }
+}
+
+// === НОВЫЙ КОНВЕРТЕР ===
+public class GreaterThanConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        // Проверяет, больше ли значение (value) чем параметр (parameter)
+        if (value is double d && double.TryParse(parameter?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out double threshold))
+        {
+            return d > threshold;
+        }
+        if (value is int i && int.TryParse(parameter?.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out int iThreshold))
+        {
+            return i > iThreshold;
+        }
+        return false;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotImplementedException();
     }
 }

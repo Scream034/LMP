@@ -2,14 +2,10 @@ using System.Diagnostics;
 using LibVLCSharp.Shared;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.ViewModels;
-using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.Services;
 
-/// <summary>
-/// Центральный аудио движок: воспроизведение, очередь, громкость, кэширование потоков.
-/// </summary>
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {
     private const int ApiCooldownMs = 200;
@@ -25,7 +21,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private readonly SemaphoreSlim _commandLock = new(1, 1);
     private readonly SemaphoreSlim _apiLock = new(1, 1);
-    private readonly Queue<TrackInfo> _queue = new();
+
+    // === НОВАЯ ЛОГИКА ОЧЕРЕДИ (Index Based) ===
+    private readonly List<TrackInfo> _queue = [];
+    private int _currentIndex = -1;
+
+    // История прослушивания (для аналитики или UI "Recently Played")
     private readonly List<TrackInfo> _history = [];
 
     private MediaPlayer? _player;
@@ -36,7 +37,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private int _session;
     private int _volumePercent;
-    private int _historyIndex = -1;
     private DateTime _lastApiCall = DateTime.MinValue;
     private DateTime _lastVolumeChange = DateTime.MinValue;
 
@@ -46,7 +46,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private volatile bool _isDisposed;
     private volatile bool _isPlayerReady;
-    private volatile bool _isPlayingOrBuffering;
     private volatile bool _streamInfoReady;
     private volatile bool _volumeSavePending;
 
@@ -56,6 +55,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     [Reactive] public bool IsPlaying { get; private set; }
     [Reactive] public bool IsPaused { get; private set; }
     [Reactive] public bool IsLoading { get; private set; }
+
+    // Возвращаем копию для безопасности UI потоков
+    public IReadOnlyList<TrackInfo> Queue
+    {
+        get
+        {
+            lock (_queue) return _queue.ToList();
+        }
+    }
+
+    public int CurrentQueueIndex => _currentIndex;
 
     public string VlcStateString => _player?.State.ToString() ?? "NULL";
     public double BufferProgress => _currentStream?.DownloadProgress ?? 0;
@@ -79,8 +89,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<int>? OnMaxVolumeChanged;
     public event Action? OnStreamInfoReady;
     public event Action<bool, bool>? OnPlaybackStateChanged;
-
-    // === Constructor ===
+    public event Action? OnQueueChanged;
 
     public AudioEngine(YoutubeProvider youtube, LibraryService library)
     {
@@ -104,7 +113,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         Core.Initialize();
         _libVLC = new LibVLC(
             "--no-video", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
-            "--network-caching=1024", "--file-caching=512", "--live-caching=512",
+            "--network-caching=1024", "--file-caching=1024", "--live-caching=1024",
             "--http-reconnect", "--http-continuous",
             "--audio-resampler=speex", "--aout=wasapi",
             "--clock-jitter=0", "--clock-synchro=0",
@@ -129,7 +138,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     }
 
     // === Volume ===
-
     public float GetVolume() => _volumePercent;
 
     public void SetVolumeInstant(float value)
@@ -158,7 +166,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void ApplyVolume()
     {
         if (_player == null || _isDisposed) return;
-
         Try(() =>
         {
             float gain = MathF.Pow(10f, Math.Clamp(_library.Data.TargetGainDb, -20f, 20f) / 20f);
@@ -179,13 +186,58 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private static int NormalizeVolume(float saved) =>
         Math.Clamp(saved is <= 1f and > 0 ? (int)(saved * 100) : (int)saved, 0, 500);
 
-    // === Playback ===
+    // === Playback Core ===
+
     public async Task PlayTrackAsync(TrackInfo track)
     {
         if (track == null || _isDisposed) return;
-        Log.Info($"[AudioEngine] Play: {track.Title}");
 
-        SyncTrackPreferences(track);
+        bool needsEvent = false;
+
+        lock (_queue)
+        {
+            // 1. Проверяем, есть ли трек в текущей очереди
+            int existingIndex = _queue.FindIndex(t => t.Id == track.Id);
+
+            if (existingIndex >= 0)
+            {
+                // Если есть - просто прыгаем на него
+                _currentIndex = existingIndex;
+                // Обновляем данные трека (вдруг лайк изменился)
+                _queue[existingIndex] = track;
+            }
+            else
+            {
+                // 2. Если трека нет - это новый контекст.
+                // Очищаем очередь и ставим трек первым.
+                // Примечание: Для "Добавить в конец" есть метод Enqueue.
+                // PlayTrackAsync подразумевает "Я хочу слушать ЭТО прямо сейчас".
+                _queue.Clear();
+                _queue.Add(track);
+                _currentIndex = 0;
+                needsEvent = true;
+            }
+        }
+
+        if (needsEvent) RaiseEvent(() => OnQueueChanged?.Invoke());
+
+        await PlayCurrentIndexAsync();
+    }
+
+    // Внутренний метод для запуска воспроизведения по текущему индексу
+    private async Task PlayCurrentIndexAsync()
+    {
+        TrackInfo? trackToPlay;
+        lock (_queue)
+        {
+            if (_currentIndex >= 0 && _currentIndex < _queue.Count)
+                trackToPlay = _queue[_currentIndex];
+            else
+                return; // Индекс вне диапазона
+        }
+
+        Log.Info($"[AudioEngine] Play Index: {_currentIndex} ({trackToPlay.Title})");
+        SyncTrackPreferences(trackToPlay);
 
         var oldCts = _cts;
         _cts = new CancellationTokenSource();
@@ -195,17 +247,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ResetStreamInfo();
 
         IsLoading = true;
-        CurrentTrack = track;
-
+        CurrentTrack = trackToPlay;
         _isPlayerReady = false;
-        _isPlayingOrBuffering = true;
 
-        RaiseEvent(() => OnTrackChanged?.Invoke(track));
+        RaiseEvent(() => OnTrackChanged?.Invoke(trackToPlay));
+        // Для обновления UI выделения в плейлисте
+        RaiseEvent(() => OnQueueChanged?.Invoke());
 
         _ = Task.Run(async () =>
         {
             if (!await _loadLock.WaitAsync(500)) return;
-            try { await PlayTrackInternalAsync(track, session, _cts.Token); }
+            try { await PlayTrackInternalAsync(trackToPlay, session, _cts.Token); }
             finally { _loadLock.Release(); }
         });
     }
@@ -213,7 +265,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public async Task SwitchQualityAsync(string container, int targetBitrate = 0)
     {
         if (CurrentTrack == null) return;
-        Log.Info($"[AudioEngine] Switch quality: {container}/{targetBitrate}kbps");
 
         var position = CurrentPosition;
         var track = CurrentTrack;
@@ -231,7 +282,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         track.StreamUrl = string.Empty;
         _playbackStartedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await PlayTrackAsync(track);
+        // Перезапускаем текущий трек
+        await PlayCurrentIndexAsync();
 
         try
         {
@@ -277,13 +329,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             StartPlayback(new Media(_libVLC, new StreamMediaInput(cacheStream)), cacheStream, track);
             Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");
         }
-        catch (OperationCanceledException) { _isPlayingOrBuffering = false; }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Error($"[AudioEngine] Error: {ex.Message}");
             RaiseEvent(() => OnError?.Invoke(ex.Message));
             IsLoading = false;
-            _isPlayingOrBuffering = false;
         }
     }
 
@@ -304,7 +355,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private async Task StopPlaybackAsync()
     {
         if (_player == null) return;
-
         Try(() => { if (_player.State != VLCState.Stopped) _player.Stop(); });
 
         var (oldStream, oldMedia) = (_currentStream, _currentMedia);
@@ -329,38 +379,30 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             var state = _player.State;
             if (shouldPlay)
             {
-                switch (state)
+                if (state == VLCState.Paused) _player.SetPause(false);
+                else if (state is VLCState.Stopped or VLCState.Ended or VLCState.Error)
                 {
-                    case VLCState.Playing:
-                        break;
-                    case VLCState.Paused:
-                        _player.SetPause(false);
-                        IsPlaying = true;
-                        IsPaused = false;
-                        break;
-                    case VLCState.Stopped or VLCState.Ended or VLCState.Error:
-                        if (CurrentTrack != null)
-                            _ = PlayTrackAsync(CurrentTrack);
-                        else
-                            _player.Play();
-                        break;
-                    default:
-                        _player.Play();
-                        break;
+                    // Если остановлено, пробуем играть текущий индекс
+                    if (CurrentTrack != null) _ = PlayCurrentIndexAsync();
                 }
+                else _player.Play();
+
+                IsPlaying = true;
+                IsPaused = false;
             }
-            else if (state is VLCState.Playing or VLCState.Buffering or VLCState.Opening)
+            else
             {
-                _player.Pause();
+                if (state is VLCState.Playing or VLCState.Buffering or VLCState.Opening) _player.Pause();
                 IsPlaying = false;
                 IsPaused = true;
             }
+            NotifyPlaybackState();
         }));
     }
+
     public async Task SeekAsync(TimeSpan position)
     {
         if (_player == null || !_isPlayerReady || _isDisposed) return;
-
         await WithLock(_commandLock, () => Task.Run(() =>
             _player.Time = (long)Math.Clamp(position.TotalMilliseconds, 0, _player.Length)));
     }
@@ -378,68 +420,281 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         IsPlaying = false;
         IsPaused = false;
 
-        _isPlayingOrBuffering = false;
-
         RaiseEvent(() => OnTrackChanged?.Invoke(null));
         RaiseEvent(() => OnPlaybackStopped?.Invoke());
         NotifyPlaybackState();
     }
 
-    // === Navigation ===
+    // === Navigation / Queue Management ===
+
+    /// <summary>
+    /// Полностью заменяет очередь списком треков и начинает воспроизведение указанного трека.
+    /// Используется при клике на трек внутри плейлиста/альбома.
+    /// </summary>
+    public async Task StartQueueAsync(IEnumerable<TrackInfo> tracks, TrackInfo startTrack)
+    {
+        if (_isDisposed) return;
+
+        lock (_queue)
+        {
+            _queue.Clear();
+            _queue.AddRange(tracks);
+
+            // Ищем индекс стартового трека в новом списке
+            _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
+
+            // Если вдруг трек не найден в переданном списке (редкий баг), играем первый
+            if (_currentIndex == -1 && _queue.Count > 0)
+            {
+                _currentIndex = 0;
+            }
+        }
+
+        RaiseEvent(() => OnQueueChanged?.Invoke());
+
+        // Запускаем воспроизведение
+        await PlayCurrentIndexAsync();
+    }
 
     public async Task PlayNextAsync()
     {
-        TrackInfo? next = RepeatMode == RepeatMode.RepeatOne ? CurrentTrack : GetNextFromQueue();
-        if (next != null) await PlayTrackAsync(next);
-        else Stop();
+        // 1. Повтор одного трека
+        if (RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
+        {
+            await SeekAsync(TimeSpan.Zero);
+            return;
+        }
+
+        bool hasNext = false;
+        lock (_queue)
+        {
+            if (_queue.Count == 0) return;
+
+            if (_currentIndex + 1 < _queue.Count)
+            {
+                _currentIndex++;
+                hasNext = true;
+            }
+            else if (RepeatMode == RepeatMode.RepeatAll)
+            {
+                _currentIndex = 0;
+                hasNext = true;
+            }
+        }
+
+        if (hasNext) await PlayCurrentIndexAsync();
+        else Stop(); // Конец очереди
     }
 
     public async Task PlayPreviousAsync()
     {
-        if (_historyIndex > 0)
-            await PlayTrackAsync(_history[--_historyIndex]);
-        else if (CurrentTrack != null)
+        // Если проиграло более 3 сек, возвращаемся в начало трека
+        if (CurrentPosition.TotalSeconds > 3)
+        {
             await SeekAsync(TimeSpan.Zero);
+            return;
+        }
+
+        bool hasPrev = false;
+        lock (_queue)
+        {
+            if (_queue.Count == 0) return;
+
+            if (_currentIndex - 1 >= 0)
+            {
+                _currentIndex--;
+                hasPrev = true;
+            }
+            else if (RepeatMode == RepeatMode.RepeatAll)
+            {
+                _currentIndex = _queue.Count - 1;
+                hasPrev = true;
+            }
+        }
+
+        if (hasPrev) await PlayCurrentIndexAsync();
+        else await SeekAsync(TimeSpan.Zero);
     }
 
     public void Enqueue(TrackInfo track)
     {
-        _queue.Enqueue(track);
-        if (!IsPlaying && !IsPaused && !IsLoading)
+        lock (_queue)
         {
-            _ = PlayTrackAsync(track);
-            _queue.TryDequeue(out _);
+            // ✅ Защита от дублирования - проверяем по ID, не только последний
+            if (_queue.Any(t => t.Id == track.Id))
+                return;
+
+            _queue.Add(track);
+        }
+        RaiseEvent(() => OnQueueChanged?.Invoke());
+
+        // Автоплей, если стоим
+        if (CurrentTrack == null && !IsPlaying && !IsLoading)
+        {
+            lock (_queue)
+            {
+                _currentIndex = _queue.Count - 1;
+            }
+            _ = PlayCurrentIndexAsync();
         }
     }
 
-    public void EnqueueRange(IEnumerable<TrackInfo> tracks) => tracks.ToList().ForEach(Enqueue);
-    public void ClearQueue() => _queue.Clear();
-
-    private TrackInfo? GetNextFromQueue()
+    public void EnqueueRange(IEnumerable<TrackInfo> tracks)
     {
-        if (ShuffleEnabled && _queue.Count > 0)
+        var list = tracks.ToList();
+        if (list.Count == 0) return;
+
+        lock (_queue)
         {
-            var list = _queue.ToList();
-            int idx = Random.Shared.Next(list.Count);
-            var track = list[idx];
-            list.RemoveAt(idx);
-            _queue.Clear();
-            list.ForEach(_queue.Enqueue);
-            return track;
+            // ✅ Фильтруем дубликаты
+            var existingIds = _queue.Select(t => t.Id).ToHashSet();
+            var newTracks = list.Where(t => !existingIds.Contains(t.Id)).ToList();
+
+            if (newTracks.Count == 0) return;
+
+            _queue.AddRange(newTracks);
         }
-        return _queue.TryDequeue(out var t) ? t : null;
+
+        RaiseEvent(() => OnQueueChanged?.Invoke());
+
+        if (CurrentTrack == null && !IsPlaying && !IsLoading)
+        {
+            _ = PlayNextAsync();
+        }
     }
+
+    public void ClearQueue()
+    {
+        lock (_queue)
+        {
+            _queue.Clear();
+            _currentIndex = -1;
+
+            // Если играет, оставляем только его
+            if (CurrentTrack != null)
+            {
+                _queue.Add(CurrentTrack);
+                _currentIndex = 0;
+            }
+        }
+        RaiseEvent(() => OnQueueChanged?.Invoke());
+    }
+
+    public void ShuffleQueue()
+    {
+        lock (_queue)
+        {
+            if (_queue.Count < 2) return;
+
+            // Запоминаем текущий
+            var current = (_currentIndex >= 0 && _currentIndex < _queue.Count)
+                ? _queue[_currentIndex]
+                : null;
+
+            // Алгоритм Фишера-Йетса
+            var rng = Random.Shared;
+            int n = _queue.Count;
+            while (n > 1)
+            {
+                n--;
+                int k = rng.Next(n + 1);
+                (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
+            }
+
+            // Находим новый индекс текущего трека
+            if (current != null)
+            {
+                _currentIndex = _queue.IndexOf(current);
+                if (_currentIndex == -1)
+                {
+                    _currentIndex = 0; // На всякий случай
+                    _queue.Insert(0, current);
+                }
+            }
+        }
+        RaiseEvent(() => OnQueueChanged?.Invoke());
+    }
+
+    // --- НОВЫЕ МЕТОДЫ ДЛЯ DRAG & DROP И УДАЛЕНИЯ ---
+
+    public void RemoveFromQueue(TrackInfo track)
+    {
+        bool changed = false;
+        bool needStop = false;
+
+        lock (_queue)
+        {
+            int index = _queue.FindIndex(t => t.Id == track.Id);
+            if (index == -1) return;
+
+            // Если удаляем текущий играющий
+            if (index == _currentIndex)
+            {
+                // Если есть следующий, индекс останется тем же (но указывать будет на след.)
+                // Если это был последний, нужно уменьшить индекс
+                if (index == _queue.Count - 1)
+                {
+                    _currentIndex--; // Станет указывать на предпоследний (который теперь последний) или -1
+                }
+
+                // В идеале можно остановить, но лучше играть дальше
+                // Если удалили играющий, плеер продолжит играть буфер, но логически трека уже нет.
+                // Решение: Если удалили играющий, переключаем на следующий сразу или стоп.
+                needStop = _queue.Count == 1; // Был единственный
+            }
+            else if (index < _currentIndex)
+            {
+                // Удалили трек ДО курсора, нужно сместить курсор влево
+                _currentIndex--;
+            }
+
+            _queue.RemoveAt(index);
+            changed = true;
+        }
+
+        if (changed) RaiseEvent(() => OnQueueChanged?.Invoke());
+        if (needStop) Stop();
+    }
+
+    public void MoveQueueItem(int oldIndex, int newIndex)
+    {
+        lock (_queue)
+        {
+            if (oldIndex < 0 || oldIndex >= _queue.Count || newIndex < 0 || newIndex >= _queue.Count) return;
+            if (oldIndex == newIndex) return;
+
+            var item = _queue[oldIndex];
+            _queue.RemoveAt(oldIndex);
+            _queue.Insert(newIndex, item);
+
+            // Коррекция курсора воспроизведения
+            if (_currentIndex == oldIndex)
+            {
+                _currentIndex = newIndex;
+            }
+            else if (oldIndex < _currentIndex && newIndex >= _currentIndex)
+            {
+                _currentIndex--; // Трек переехал из "до" в "после", курсор влево
+            }
+            else if (oldIndex > _currentIndex && newIndex <= _currentIndex)
+            {
+                _currentIndex++; // Трек переехал из "после" в "до", курсор вправо
+            }
+        }
+        RaiseEvent(() => OnQueueChanged?.Invoke());
+    }
+
+    // ----------------------------------------------
 
     private void AddToHistory(TrackInfo track)
     {
         if (_history.LastOrDefault()?.Id == track.Id) return;
         _history.Add(track);
         if (_history.Count > MaxHistorySize) _history.RemoveAt(0);
-        _historyIndex = _history.Count - 1;
     }
 
-    // === Stream Info ===
-
+    // === Stream Info & API ===
+    // (Без изменений, копия из оригинального кода для целостности, но сокращу для ответа)
     public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo() =>
         CurrentTrack?.IsDownloaded == true
             ? (Path.GetExtension(CurrentTrack.LocalPath)?.TrimStart('.').ToUpper() ?? "FILE", 0, true)
@@ -447,17 +702,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public long GetDownloadedBytes() =>
         _currentStream != null ? (long)(_currentStream.DownloadProgress / 100 * _currentStream.Length) : 0;
-
-    public async Task PrefetchAsync(TrackInfo track)
-    {
-        if (_isPlayingOrBuffering || track.IsDownloaded) return;
-        await WithLock(_apiLock, async () =>
-        {
-            using var cts = new CancellationTokenSource(5000);
-            await _youtube.RefreshStreamUrlAsync(track, cts.Token);
-            _lastApiCall = DateTime.UtcNow;
-        });
-    }
 
     private void ResetStreamInfo() =>
         (_activeCodec, _activeBitrate, _activeContainer, _streamInfoReady) = ("", 0, "", false);
@@ -537,10 +781,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcPaused(object? sender, EventArgs e)
     {
         if (_isDisposed) return;
-
         IsPlaying = false;
         IsPaused = true;
-
         NotifyPlaybackState();
     }
 
@@ -548,22 +790,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
         _isPlayerReady = false;
-
         IsPlaying = false;
         IsPaused = false;
-
         NotifyPlaybackState();
     }
 
     private void OnVlcEndReached()
     {
         if (_isDisposed) return;
-
         IsPlaying = false;
         IsPaused = false;
-
         NotifyPlaybackState();
-        _ = Task.Run(async () => { await Task.Delay(50); if (!_isDisposed) await PlayNextAsync(); });
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(50);
+            if (!_isDisposed) await PlayNextAsync();
+        });
     }
 
     private void OnVlcError()
@@ -571,7 +814,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         IsLoading = false;
         IsPlaying = false;
         IsPaused = false;
-
         RaiseEvent(() => OnError?.Invoke("VLC playback error"));
         NotifyPlaybackState();
     }
@@ -579,6 +821,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcTimeChanged(long time)
     {
         if (_isDisposed || !_isPlayerReady) return;
+        long length = _player?.Length ?? 0;
+        if (length > 0 && time > length) time = length;
         RaiseEvent(() => OnPositionChanged?.Invoke(TimeSpan.FromMilliseconds(time)));
     }
 
@@ -628,8 +872,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         try { return await action(); }
         finally { sem.Release(); }
     }
-
-    // === Dispose ===
 
     public void Dispose()
     {

@@ -19,6 +19,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
     private string _currentQuery = "";
     private int _fetchOffset = 0;
+    private CancellationTokenSource? _categoryCts;
 
     protected override int BatchSize => 30;
     protected override int LoadDelayMs => 150;
@@ -51,15 +52,16 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         _vmFactory = vmFactory;
 
         UpdateGreeting();
+
+        LocalizationService.Instance.LanguageChanged += (_, _) => InitializeCategories();
         InitializeCategories();
 
         ToggleDebugCommand = ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo);
-        RefreshCommand = ReactiveCommand.CreateFromTask(LoadTracksAsync);
+        RefreshCommand = ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true));
 
         this.WhenAnyValue(x => x.SelectedCategory)
             .WhereNotNull()
             .Skip(1)
-            .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ => await LoadTracksAsync());
 
@@ -78,20 +80,22 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
                 track.IsLiked = existing.IsLiked;
             }
         }
-
-        // Use Factory
         return _vmFactory.GetOrCreate(track, PlayWithContext);
     }
-    
+
     protected override string GetItemId(TrackInfo item) => item.Id;
 
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
         if (SelectedCategory?.IsSpecial == true) return [];
+
         _fetchOffset += 50;
         var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
+
+        if (ct.IsCancellationRequested) return [];
+
         var result = newTracks.Skip(TotalCount).ToList();
-        
+
         if (result.Count > 0)
         {
             var allTracks = AllItems.Concat(result).ToList();
@@ -103,10 +107,15 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         return result;
     }
 
-    private async Task LoadTracksAsync()
+    private async Task LoadTracksAsync(bool force = false)
     {
         var category = SelectedCategory;
         if (category == null) return;
+
+        // Отмена предыдущей загрузки
+        _categoryCts?.Cancel();
+        _categoryCts = new CancellationTokenSource();
+        var ct = _categoryCts.Token;
 
         IsLoading = true;
         ClearItems();
@@ -114,10 +123,13 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
         try
         {
+            await Task.Delay(50, ct); // Небольшой дебаунс для быстрых кликов
+
             List<TrackInfo> tracks;
-            if (category.IsSpecial && category.Name == "Recently Played")
+            if (category.IsSpecial)
             {
                 tracks = _library.GetRecentlyPlayed(100);
+                if (ct.IsCancellationRequested) return;
                 await InitializeItemsAsync(tracks, canFetchMore: false);
             }
             else
@@ -125,60 +137,64 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
                 _currentQuery = category.Query;
                 var cached = await _searchCache.GetAsync(_currentQuery, 30);
 
-                if (cached != null && cached.Count > 0)
+                if (cached != null && cached.Count > 0 && !force)
                 {
                     tracks = cached;
-                    _ = RefreshCacheInBackgroundAsync();
+                    if (ct.IsCancellationRequested) return;
+                    _ = RefreshCacheInBackgroundAsync(ct);
                 }
                 else
                 {
                     IsFetchingFromNetwork = true;
                     tracks = await _youtube.SearchAsync(_currentQuery, 100);
                     IsFetchingFromNetwork = false;
+
+                    if (ct.IsCancellationRequested) return;
+
                     if (tracks.Count > 0) _ = _searchCache.SetAsync(_currentQuery, tracks);
                 }
 
                 var imageUrls = tracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
-                _ = _imageCache.PrefetchAsync(imageUrls!);
+                _ = _imageCache.PrefetchAsync(imageUrls!, ct);
+
+                if (ct.IsCancellationRequested) return;
+
                 await InitializeItemsAsync(tracks, canFetchMore: true);
             }
             UpdateStats();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Info($"Load error: {ex.Message}");
         }
         finally
         {
-            IsLoading = false;
-            IsFetchingFromNetwork = false;
+            if (!ct.IsCancellationRequested)
+            {
+                IsLoading = false;
+                IsFetchingFromNetwork = false;
+            }
         }
     }
 
-    private async Task RefreshCacheInBackgroundAsync()
+    private async Task RefreshCacheInBackgroundAsync(CancellationToken ct)
     {
         try
         {
-            await Task.Delay(3000, LoadCancellationToken);
+            await Task.Delay(3000, ct);
             var fresh = await _youtube.SearchAsync(_currentQuery, 100);
-            if (fresh.Count > 0)
-            {
-                AppendItems(fresh);
-                await _searchCache.SetAsync(_currentQuery, AllItems.ToList());
-            }
+            if (ct.IsCancellationRequested) return;
+            if (fresh.Count > 0) await _searchCache.SetAsync(_currentQuery, fresh);
         }
         catch { }
     }
 
     private void PlayWithContext(TrackInfo track)
     {
-        _audio.ClearQueue();
-        _ = _audio.PlayTrackAsync(track);
-        
-        // Add all current items to queue, but efficiently
+        // Атомарно устанавливаем очередь и начинаем воспроизведение
         var tracks = Items.Select(x => x.Track).ToList();
-        _audio.EnqueueRange(tracks);
-        
+        _ = _audio.StartQueueAsync(tracks, track);
         _library.AddToRecentlyPlayed(track);
     }
 
@@ -196,14 +212,37 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
     private void InitializeCategories()
     {
-        Categories.Add(new CategoryItem { Name = "Recently Played", IsSpecial = true });
-        Categories.Add(new CategoryItem { Name = "Trending", Query = "trending music 2024" });
-        Categories.Add(new CategoryItem { Name = "Pop", Query = "pop hits 2024" });
-        Categories.Add(new CategoryItem { Name = "Hip-Hop", Query = "hip hop 2024" });
-        Categories.Add(new CategoryItem { Name = "Electronic", Query = "electronic music" });
-        Categories.Add(new CategoryItem { Name = "Lo-Fi", Query = "lofi hip hop chill beats" });
-        Categories.Add(new CategoryItem { Name = "Rock", Query = "rock music" });
-        SelectedCategory = Categories.FirstOrDefault();
+        var currentQuery = SelectedCategory?.Query;
+        var wasSpecial = SelectedCategory?.IsSpecial == true;
+
+        Categories.Clear();
+
+        AddCat("Category_RecentlyPlayed", "Recently Played", special: true);
+        AddCat("Category_Trending", "Trending", "trending music 2024");
+        AddCat("Category_Pop", "Pop", "pop hits 2024");
+        AddCat("Category_HipHop", "Hip-Hop", "hip hop 2024");
+        AddCat("Category_Electronic", "Electronic", "electronic music");
+        AddCat("Category_LoFi", "Lo-Fi", "lofi hip hop chill beats");
+        AddCat("Category_Rock", "Rock", "rock music");
+
+        if (wasSpecial) SelectedCategory = Categories.FirstOrDefault(c => c.IsSpecial);
+        else if (!string.IsNullOrEmpty(currentQuery)) SelectedCategory = Categories.FirstOrDefault(c => c.Query == currentQuery);
+
+        if (SelectedCategory == null) SelectedCategory = Categories.FirstOrDefault();
+    }
+
+    private void AddCat(string key, string fallback, string query = "", bool special = false)
+    {
+        var name = L[key];
+        if (string.IsNullOrEmpty(name) || name == key) name = fallback;
+
+        Categories.Add(new CategoryItem
+        {
+            Name = name,
+            Query = query,
+            IsSpecial = special,
+            LocKey = key
+        });
     }
 
     private void UpdateStats()
@@ -217,6 +256,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
     public void Dispose()
     {
+        _categoryCts?.Cancel();
         CancelLoading();
         GC.SuppressFinalize(this);
     }
@@ -227,6 +267,7 @@ public class CategoryItem
     public string Name { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public bool IsSpecial { get; set; }
+    public string LocKey { get; set; } = "";
 }
 
 public class DebugStats : ReactiveObject

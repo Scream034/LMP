@@ -24,13 +24,10 @@
                 Background="Transparent"
                 Margin="0,2">
 
-                <!-- BACKGROUND -->
                 <Border Classes="track-bg" CornerRadius="6" />
 
-                <!-- CONTENT GRID -->
-                <!-- 0:Img(48) | 1:Text(*) | 2:Status(Auto) | 3:Like(40) | 4:Time(60) -->
-                <!-- Статус (Col 2) теперь Auto, чтобы вместить широкий бар -->
-                <Grid ColumnDefinitions="48, *, Auto, 40, 60" Margin="4">
+                <!-- Grid columns: Img, Text, Status, Like, QueueBtn, Time -->
+                <Grid ColumnDefinitions="48, *, Auto, 40, 30, 60" Margin="4">
 
                     <!-- 0. IMAGE + PLAY BTN -->
                     <Panel Grid.Column="0" Width="48" Height="48" HorizontalAlignment="Left">
@@ -57,16 +54,14 @@
                     </StackPanel>
 
                     <!-- 2. STATUS -->
-                    <!-- Margin="8,0" отодвигает бар от текста слева и от лайка справа -->
                     <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
-                        <!-- Галочка -->
+                        <!-- ZIndex повышен, цвет AccentBrush -->
                         <mi:MaterialIcon Kind="CheckCircle" Width="18" Height="18"
                             Foreground="{StaticResource AccentBrush}"
                             IsVisible="{Binding IsDownloaded}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            ZIndex="5" />
 
-                        <!-- Прогресс бар -->
-                        <!-- Сделан шире (36), чтобы было видно прогресс -->
                         <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
                             Width="36" Height="4"
                             IsVisible="{Binding IsDownloading}"
@@ -85,8 +80,19 @@
                             Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                     </Button>
 
-                    <!-- 4. DURATION -->
-                    <TextBlock Grid.Column="4"
+                    <!-- 4. QUEUE ADD BTN - скрыта в контексте очереди -->
+                    <Button Grid.Column="4" Classes="icon-btn queue-btn"
+                        Command="{Binding AddToQueueCommand}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        ToolTip.Tip="{Binding L[Queue_Add]}"
+                        IsVisible="{Binding ShowAddToQueue}">
+                        <mi:MaterialIcon Kind="PlaylistPlus" Width="18" Height="18"
+                            Foreground="{StaticResource TextSecondaryBrush}" />
+                    </Button>
+
+                    <!-- 5. DURATION -->
+                    <TextBlock Grid.Column="5"
                         Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
                         VerticalAlignment="Center"
                         Foreground="{StaticResource TextSecondaryBrush}"
@@ -96,14 +102,12 @@
                         TextAlignment="Right" />
                 </Grid>
 
-                <!-- OUTLINE -->
                 <Rectangle Classes="track-outline" RadiusX="6" RadiusY="6" Fill="Transparent"
                     StrokeThickness="1" IsHitTestVisible="False" />
             </Panel>
         </DataTemplate>
     </Application.DataTemplates>
 
-    <!-- (Styles остаются без изменений, они скрыты для краткости) -->
     <Application.Styles>
         <FluentTheme />
         <materialIcons:MaterialIconStyles />
@@ -129,6 +133,19 @@
                     <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
                 </Transitions>
             </Setter>
+        </Style>
+
+        <!-- Queue Button Hover Logic -->
+        <Style Selector="Button.queue-btn">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Panel.track-row:pointerover Button.queue-btn">
+            <Setter Property="Opacity" Value="1" />
         </Style>
 
         <Style Selector="Panel.track-row mi|MaterialIcon.icon-play">

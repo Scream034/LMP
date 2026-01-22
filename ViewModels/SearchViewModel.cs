@@ -2,7 +2,9 @@ using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using System.Collections.ObjectModel;
 using System.Reactive;
+using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
@@ -23,8 +25,11 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     [Reactive] public bool HasResults { get; private set; }
     [Reactive] public string? ErrorMessage { get; private set; }
 
+    public ObservableCollection<string> RecentSearches { get; } = [];
+
     public ReactiveCommand<Unit, Unit> SearchCommand { get; }
-    public Avalonia.Collections.AvaloniaList<TrackItemViewModel> Results => Items;
+    public ReactiveCommand<string, Unit> HistoryClickCommand { get; }
+    public ReactiveCommand<string, Unit> RemoveHistoryCommand { get; }
 
     public SearchViewModel(
         YoutubeProvider youtube,
@@ -41,8 +46,34 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         _library = library;
         _vmFactory = vmFactory;
 
+        // Восстановление истории
+        if (_library.Data.SearchHistory != null)
+        {
+            foreach (var item in _library.Data.SearchHistory)
+                RecentSearches.Add(item);
+        }
+
+        // Восстановление последнего запроса
+        if (!string.IsNullOrEmpty(_library.Data.LastSearchQuery))
+        {
+            SearchQuery = _library.Data.LastSearchQuery;
+            _ = ExecuteSearchAsync();
+        }
+
         var canSearch = this.WhenAnyValue(x => x.SearchQuery, q => !string.IsNullOrWhiteSpace(q));
         SearchCommand = ReactiveCommand.CreateFromTask(ExecuteSearchAsync, canSearch);
+
+        HistoryClickCommand = ReactiveCommand.Create<string>(query =>
+        {
+            SearchQuery = query;
+            _ = ExecuteSearchAsync();
+        });
+
+        RemoveHistoryCommand = ReactiveCommand.Create<string>(query =>
+        {
+            RecentSearches.Remove(query);
+            UpdateHistoryStorage();
+        });
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -56,7 +87,6 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
                 track.IsDownloaded = existing.IsDownloaded;
             }
         }
-
         return _vmFactory.GetOrCreate(track, PlayTrackWithContext);
     }
 
@@ -83,6 +113,11 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         ClearItems();
 
         _currentQuery = SearchQuery.Trim();
+
+        // Сохраняем запрос и историю
+        _library.Data.LastSearchQuery = _currentQuery;
+        AddToHistory(_currentQuery);
+        _library.Save();
 
         try
         {
@@ -137,12 +172,31 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         }
     }
 
+    private void AddToHistory(string query)
+    {
+        if (RecentSearches.Contains(query))
+            RecentSearches.Remove(query);
+
+        RecentSearches.Insert(0, query);
+
+        while (RecentSearches.Count > 10)
+            RecentSearches.RemoveAt(RecentSearches.Count - 1);
+
+        UpdateHistoryStorage();
+    }
+
+    private void UpdateHistoryStorage()
+    {
+        _library.Data.SearchHistory = RecentSearches.ToList();
+        _library.Save();
+    }
+
     private void PlayTrackWithContext(TrackInfo track)
     {
-        _audio.ClearQueue();
-        _ = _audio.PlayTrackAsync(track);
+        // Атомарно устанавливаем очередь и начинаем воспроизведение
         var tracks = Items.Select(x => x.Track).ToList();
-        _audio.EnqueueRange(tracks);
+        _ = _audio.StartQueueAsync(tracks, track);
+        _library.AddToRecentlyPlayed(track);
     }
 
     public void Dispose()

@@ -16,5 +16,6 @@
     <conv:StringStartsWithConverter x:Key="StringStartsWithConverter" />
     <conv:WebUrlConverter x:Key="WebUrlConverter" />
     <conv:ProgressToWidthConverter x:Key="ProgressToWidthConverter" />
+    <conv:GreaterThanConverter x:Key="GreaterThanConverter" />
 
 </ResourceDictionary>

@@ -27,7 +27,7 @@
                 </Animation>
             </Style.Animations>
         </Style>
-        
+
         <Style Selector="Border.seek-gradient-runner">
             <Style.Animations>
                 <Animation Duration="0:0:1.5" IterationCount="Infinite">
@@ -61,36 +61,44 @@
                 </Transitions>
             </Setter>
         </Style>
-        
+
         <Style Selector="Border.volume-bar.boosted">
             <Setter Property="Background" Value="{StaticResource AccentBrush}" />
         </Style>
 
         <Style Selector="StackPanel.stream-info">
-             <Setter Property="Opacity" Value="0.7" />
-             <Style.Animations>
-                 <Animation Duration="0:0:0.3">
-                     <KeyFrame Cue="0%">
-                         <Setter Property="Opacity" Value="0" />
-                     </KeyFrame>
-                     <KeyFrame Cue="100%">
-                         <Setter Property="Opacity" Value="0.7" />
-                     </KeyFrame>
-                 </Animation>
-             </Style.Animations>
-         </Style>
+            <Setter Property="Opacity" Value="0.7" />
+            <Style.Animations>
+                <Animation Duration="0:0:0.3">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.7" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
 
-         <Style Selector="Ellipse.loading-dot">
-             <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
-             <Style.Animations>
-                 <Animation Duration="0:0:0.8" IterationCount="Infinite">
-                     <KeyFrame Cue="0%"> <Setter Property="Opacity" Value="0.2" /> </KeyFrame>
-                     <KeyFrame Cue="33%"> <Setter Property="Opacity" Value="1" /> </KeyFrame>
-                     <KeyFrame Cue="66%"> <Setter Property="Opacity" Value="0.2" /> </KeyFrame>
-                     <KeyFrame Cue="100%"> <Setter Property="Opacity" Value="0.2" /> </KeyFrame>
-                 </Animation>
-             </Style.Animations>
-         </Style>
+        <Style Selector="Ellipse.loading-dot">
+            <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+            <Style.Animations>
+                <Animation Duration="0:0:0.8" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                    <KeyFrame Cue="33%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="66%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
 
         <Style Selector="Slider.spotify-slider">
             <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
@@ -131,7 +139,7 @@
                 IsVisible="{Binding IsLoading}" />
 
             <Grid ColumnDefinitions="3*, 4*, 3*" Margin="16,0">
-                
+
                 <!-- LEVO -->
                 <Grid Grid.Column="0" ColumnDefinitions="Auto, *, Auto">
                     <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4"
@@ -171,9 +179,17 @@
                 <!-- CENTER -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
-                        <Button Classes="icon-btn" Command="{Binding ToggleShuffleCommand}">
+                        <Button Classes="icon-btn"
+                            Command="{Binding ShuffleQueueCommand}"
+                            ToolTip.Tip="{Binding L[Queue_Shuffle]}">
                             <mi:MaterialIcon Kind="Shuffle"
-                                Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                                Foreground="{Binding ShuffleEnabled, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}">
+                                <mi:MaterialIcon.Transitions>
+                                    <Transitions>
+                                        <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+                                    </Transitions>
+                                </mi:MaterialIcon.Transitions>
+                            </mi:MaterialIcon>
                         </Button>
                         <Button Classes="icon-btn" Command="{Binding PreviousCommand}">
                             <mi:MaterialIcon Kind="SkipPrevious" />
@@ -209,12 +225,14 @@
                             <Border CornerRadius="6" Margin="-6,-4" IsVisible="{Binding IsSeekBusy}"
                                 Classes="seek-busy-indicator"
                                 BorderBrush="{StaticResource AccentBrush}" />
-                            
-                            <Canvas IsVisible="{Binding IsSeekBusy}" ClipToBounds="False" Margin="-2,0">
+
+                            <Canvas IsVisible="{Binding IsSeekBusy}" ClipToBounds="False"
+                                Margin="-2,0">
                                 <Border Canvas.Top="-2" Width="40" Height="2" CornerRadius="1"
                                     Background="{StaticResource AccentBrush}"
                                     Classes="seek-gradient-runner" />
-                                <Border Canvas.Bottom="-2" Canvas.Right="0" Width="40" Height="2" CornerRadius="1"
+                                <Border Canvas.Bottom="-2" Canvas.Right="0" Width="40" Height="2"
+                                    CornerRadius="1"
                                     Background="{StaticResource AccentBrush}"
                                     Classes="seek-gradient-runner" />
                             </Canvas>
@@ -268,8 +286,8 @@
                             Width="40" TextAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
 
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" 
-                                Classes="stream-info" IsVisible="{Binding ShowStreamInfo}">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                        Classes="stream-info" IsVisible="{Binding ShowStreamInfo}">
                         <Button Classes="sidebar-btn" Padding="4,2" Margin="0,2,0,0"
                             Command="{Binding LoadFormatsCommand}">
                             <Button.Flyout>
@@ -286,7 +304,8 @@
                                                         Background="Transparent"
                                                         Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
                                                         CommandParameter="{Binding}">
-                                                        <Grid ColumnDefinitions="*, Auto" Width="180">
+                                                        <Grid ColumnDefinitions="*, Auto"
+                                                            Width="180">
                                                             <TextBlock Text="{Binding DisplayName}" />
                                                             <TextBlock Grid.Column="1"
                                                                 Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}"
@@ -309,7 +328,7 @@
                                     VerticalAlignment="Center" />
                                 <mi:MaterialIcon Kind="ChevronUp" Width="12" Height="12"
                                     Foreground="{StaticResource TextMutedBrush}" />
-                                
+
                                 <TextBlock Text="•" FontSize="9"
                                     Foreground="{StaticResource BgHighlightBrush}"
                                     IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
@@ -320,16 +339,28 @@
                                     VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
-                        
+
                         <StackPanel Orientation="Horizontal" Spacing="3"
-                                    IsVisible="{Binding IsSeekBusy}"
-                                    VerticalAlignment="Center" Margin="4,0,0,0">
+                            IsVisible="{Binding IsSeekBusy}"
+                            VerticalAlignment="Center" Margin="4,0,0,0">
                             <Ellipse Classes="loading-dot" Width="4" Height="4" />
                             <Ellipse Classes="loading-dot" Width="4" Height="4">
-                                <Ellipse.Styles><Style Selector="Ellipse"><Style.Animations><Animation Delay="0:0:0.15" /></Style.Animations></Style></Ellipse.Styles>
+                                <Ellipse.Styles>
+                                    <Style Selector="Ellipse">
+                                        <Style.Animations>
+                                            <Animation Delay="0:0:0.15" />
+                                        </Style.Animations>
+                                    </Style>
+                                </Ellipse.Styles>
                             </Ellipse>
                             <Ellipse Classes="loading-dot" Width="4" Height="4">
-                                <Ellipse.Styles><Style Selector="Ellipse"><Style.Animations><Animation Delay="0:0:0.3" /></Style.Animations></Style></Ellipse.Styles>
+                                <Ellipse.Styles>
+                                    <Style Selector="Ellipse">
+                                        <Style.Animations>
+                                            <Animation Delay="0:0:0.3" />
+                                        </Style.Animations>
+                                    </Style>
+                                </Ellipse.Styles>
                             </Ellipse>
                         </StackPanel>
                     </StackPanel>
@@ -338,7 +369,7 @@
                 <!-- PRAVO: Volume -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
                     VerticalAlignment="Center" Spacing="12">
-                    
+
                     <Button Classes="icon-btn" Command="{Binding ToggleMuteCommand}" Padding="0"
                         Width="40">
                         <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
@@ -352,12 +383,13 @@
                             <Border Classes="volume-bar" Classes.boosted="{Binding IsVolumeBoosted}"
                                 Height="15" Opacity="{Binding Bar4Opacity}" />
                             <Border Classes="volume-bar" Classes.boosted="{Binding IsVolumeBoosted}"
-                                Height="18" Opacity="{Binding Bar5Opacity}" 
+                                Height="18" Opacity="{Binding Bar5Opacity}"
                                 Width="{Binding Bar5Thickness}">
                                 <Border.Transitions>
                                     <Transitions>
                                         <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="BackEaseOut" />
+                                        <DoubleTransition Property="Width" Duration="0:0:0.2"
+                                            Easing="BackEaseOut" />
                                         <BrushTransition Property="Background" Duration="0:0:0.2" />
                                     </Transitions>
                                 </Border.Transitions>

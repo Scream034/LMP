@@ -65,6 +65,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     public ReactiveCommand<Unit, Unit> DownloadAllCommand { get; }
     public ReactiveCommand<Unit, Unit> MergePlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshPlaylistCommand { get; }
+    public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
 
     public string FormattedTrackCount =>
         LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
@@ -125,6 +126,11 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         ShufflePlayCommand = ReactiveCommand.Create(ToggleShuffle, hasTracks);
         DownloadAllCommand = ReactiveCommand.Create(DownloadAll, hasTracks);
         MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
+
+        AddToQueueCommand = ReactiveCommand.Create(() =>
+        {
+            _audio.EnqueueRange(AllItems);
+        }, hasTracks);
 
         // ПОДПИСКИ НА ОБНОВЛЕНИЯ БИБЛИОТЕКИ
         _librarySubscription = Observable.FromEvent(
@@ -202,30 +208,27 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     {
         if (AllItems.Count == 0) return;
 
-        if (IsPlayingThisPlaylist && IsShuffleActive)
-        {
-            // Если уже играет и шаффл включен - выключаем его
-            _audio.ShuffleEnabled = false;
-            IsShuffleActive = false;
-        }
-        else
-        {
-            // Включаем шаффл и играем
-            _audio.ClearQueue();
-            _audio.ShuffleEnabled = true;
-            IsShuffleActive = true;
+        // 1. Очищаем очередь и добавляем все треки плейлиста
+        _audio.ClearQueue();
+        _audio.EnqueueRange(AllItems);
 
-            _audio.EnqueueRange(AllItems);
-            // При шаффле берем первый трек рандомно (в движке логика PlayNext учтет шаффл)
-            // Но чтобы начать сразу, выберем случайный из списка здесь
-            var randomTrack = AllItems[Random.Shared.Next(AllItems.Count)];
-            _ = _audio.PlayTrackAsync(randomTrack);
+        // 2. Перемешиваем очередь
+        _audio.ShuffleQueue();
+
+        // 3. Запускаем воспроизведение (первый трек после перемешивания)
+        var queue = _audio.Queue;
+        if (queue.Count > 0)
+        {
+            _ = _audio.PlayTrackAsync(queue[0]);
         }
 
-        // Обновляем настройку в библиотеке
-        _library.Data.ShuffleEnabled = IsShuffleActive;
-        _library.Save();
+        // 4. Визуальная обратная связь
+        IsShuffleActive = true;
+        Observable.Timer(TimeSpan.FromMilliseconds(800))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => IsShuffleActive = false);
     }
+
 
     private void DownloadAll()
     {
@@ -285,15 +288,21 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
     private void PlayFromPlaylist(TrackInfo track)
     {
-        // При клике на конкретный трек
-        _audio.ClearQueue();
+        // Вместо Clear -> Play -> EnqueueRange (что создавало дубль),
+        // используем атомарную установку очереди
+        _audio.ShuffleEnabled = false;
+        IsShuffleActive = false;
 
-        // Если шаффл был активен глобально, здесь мы его можем либо оставить, либо сбросить
-        // Обычно при клике на трек в списке ожидается линейное воспроизведение от этого трека
-        // Но оставим как настроено пользователем
+        // Передаем ВЕСЬ список (Items - это только загруженные, AllItems - все известные)
+        // Важно: PaginatedViewModel обычно держит загруженные в Items. 
+        // Если плейлист огромный, здесь может потребоваться логика подгрузки, 
+        // но для Lite версии берем Items или загружаем все.
 
-        _ = _audio.PlayTrackAsync(track);
-        _audio.EnqueueRange(AllItems);
+        // В текущей реализации Items - это ViewModel, нам нужны модели
+        var tracks = Items.Select(vm => vm.Track).ToList();
+
+        _ = _audio.StartQueueAsync(tracks, track);
+
         _library.AddToRecentlyPlayed(track);
     }
 

@@ -13,10 +13,16 @@ public class TrackItemViewModel : ViewModelBase
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
     private Action<TrackInfo>? _onPlay;
+    
+    // Список подписок для очистки
+    private readonly List<IDisposable> _subscriptions = [];
 
     public TrackInfo Track { get; }
     
-    // Removed Activator: We use constructor-based weak subscriptions now.
+    /// <summary>
+    /// Уникальный ID трека (для сравнения в очереди)
+    /// </summary>
+    public string Id => Track.Id;
 
     [Reactive] public bool IsActive { get; private set; }
     [Reactive] public bool IsPlaying { get; private set; }
@@ -24,6 +30,16 @@ public class TrackItemViewModel : ViewModelBase
     [Reactive] public bool IsDownloaded { get; set; }
     [Reactive] public bool IsDownloading { get; set; }
     [Reactive] public float DownloadProgress { get; set; }
+    
+    /// <summary>
+    /// Флаг: отображается в контексте очереди (скрывает кнопку добавления в очередь)
+    /// </summary>
+    [Reactive] public bool IsQueueContext { get; set; }
+    
+    /// <summary>
+    /// Показывать ли кнопку "Добавить в очередь"
+    /// </summary>
+    public bool ShowAddToQueue => !IsQueueContext;
 
     public string Title { get; }
     public string Author { get; }
@@ -32,6 +48,7 @@ public class TrackItemViewModel : ViewModelBase
 
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
+    public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
 
     public TrackItemViewModel(
         TrackInfo track,
@@ -52,54 +69,88 @@ public class TrackItemViewModel : ViewModelBase
         Author = track.Author;
         Duration = track.Duration;
         ThumbnailUrl = track.ThumbnailUrl;
+
+        // Initial state from Services
+        IsDownloading = _downloads.IsDownloading(track.Id);
+        if (IsDownloading) DownloadProgress = _downloads.GetProgress(track.Id);
+
         IsDownloaded = track.IsDownloaded;
         IsLiked = track.IsLiked;
 
-        // Initialize state immediately
         UpdateActiveState(_audio.CurrentTrack, _audio.IsPlaying);
 
-        // --- WEAK SUBSCRIPTIONS PATTERN ---
-        // Using WeakReference allows this ViewModel to be Garbage Collected
-        // even though it subscribes to Singleton services (AudioEngine, LibraryService).
+        // Подписки через WeakReference для избежания утечек памяти
+        SetupSubscriptions();
+
+        PlayCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            if (_audio.CurrentTrack?.Id == Track.Id)
+                await _audio.SetPlaybackStateAsync(!_audio.IsPlaying);
+            else
+            {
+                if (_onPlay != null) _onPlay(Track);
+                else await _audio.PlayTrackAsync(Track);
+            }
+        });
+
+        ToggleLikeCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            await _manager.ToggleLikeAsync(Track);
+        });
+
+        AddToQueueCommand = ReactiveCommand.Create(() =>
+        {
+            _audio.Enqueue(Track);
+        });
         
+        // Реактивное обновление ShowAddToQueue при изменении IsQueueContext
+        this.WhenAnyValue(x => x.IsQueueContext)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowAddToQueue)));
+    }
+
+    private void SetupSubscriptions()
+    {
         var weakSelf = new WeakReference<TrackItemViewModel>(this);
 
-        // 1. Audio Engine: Track Changed
+        // 1. Audio Engine Events
         Action<TrackInfo?> onTrackChanged = null!;
         onTrackChanged = t =>
         {
             if (weakSelf.TryGetTarget(out var vm)) 
                 vm.UpdateActiveState(t, vm._audio.IsPlaying);
             else 
-                audio.OnTrackChanged -= onTrackChanged; // Auto-unsubscribe if dead
+                _audio.OnTrackChanged -= onTrackChanged;
         };
         _audio.OnTrackChanged += onTrackChanged;
 
-        // 2. Audio Engine: Playback State
         Action<bool, bool> onPlaybackState = null!;
         onPlaybackState = (playing, paused) =>
         {
             if (weakSelf.TryGetTarget(out var vm)) 
                 vm.UpdateActiveState(vm._audio.CurrentTrack, playing);
             else 
-                audio.OnPlaybackStateChanged -= onPlaybackState;
+                _audio.OnPlaybackStateChanged -= onPlaybackState;
         };
         _audio.OnPlaybackStateChanged += onPlaybackState;
 
-        // 3. Library: Likes update
+        // 2. Library Updates
         Action<TrackInfo> onTrackUpdated = null!;
         onTrackUpdated = t =>
         {
             if (weakSelf.TryGetTarget(out var vm))
             {
-                if (t.Id == vm.Track.Id) vm.IsLiked = t.IsLiked;
+                if (t.Id == vm.Track.Id)
+                {
+                    vm.IsLiked = t.IsLiked;
+                    vm.IsDownloaded = t.IsDownloaded;
+                    vm.RaisePropertyChanged(nameof(IsDownloaded));
+                }
             }
-            else 
-                library.OnTrackUpdated -= onTrackUpdated;
+            else _library.OnTrackUpdated -= onTrackUpdated;
         };
         _library.OnTrackUpdated += onTrackUpdated;
 
-        // 4. Downloads: Progress
+        // 3. Download Progress
         Action<string, float> onProgress = null!;
         onProgress = (id, progress) =>
         {
@@ -107,42 +158,67 @@ public class TrackItemViewModel : ViewModelBase
             {
                 if (id == vm.Track.Id)
                 {
-                    vm.IsDownloading = progress < 1.0f;
+                    vm.IsDownloading = true;
                     vm.DownloadProgress = progress;
-                    if (progress >= 1.0f) vm.IsDownloaded = true;
                 }
             }
-            else 
-                downloads.OnProgress -= onProgress;
+            else _downloads.OnProgress -= onProgress;
         };
         _downloads.OnProgress += onProgress;
 
-        // Commands
-        PlayCommand = ReactiveCommand.CreateFromTask(async () =>
+        // 4. Download Completion
+        Action<string, bool, string?> onDownloadCompleted = null!;
+        onDownloadCompleted = (id, success, path) =>
         {
-            if (_onPlay != null)
-                _onPlay(Track);
-            else
-                await _audio.PlayTrackAsync(Track);
-        });
-
-        ToggleLikeCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            await _manager.ToggleLikeAsync(Track);
-            IsLiked = Track.IsLiked;
-        });
+            if (weakSelf.TryGetTarget(out var vm))
+            {
+                if (id == vm.Track.Id)
+                {
+                    vm.IsDownloading = false;
+                    vm.DownloadProgress = 0;
+                    if (success)
+                    {
+                        vm.IsDownloaded = true;
+                        vm.RaisePropertyChanged(nameof(IsDownloaded));
+                    }
+                }
+            }
+            else _downloads.OnCompleted -= onDownloadCompleted;
+        };
+        _downloads.OnCompleted += onDownloadCompleted;
     }
 
     private void UpdateActiveState(TrackInfo? currentTrack, bool isPlaying)
     {
         bool isMe = currentTrack?.Id == Track.Id;
-        // Direct property assignment triggers [Reactive] notification for the View
         IsActive = isMe;
         IsPlaying = isMe && isPlaying;
     }
 
+    /// <summary>
+    /// Обновляет действие воспроизведения (для переиспользования VM в разных контекстах)
+    /// </summary>
     public void UpdatePlayAction(Action<TrackInfo>? onPlay)
     {
         _onPlay = onPlay;
+    }
+    
+    /// <summary>
+    /// Устанавливает активное состояние (вызывается из QueueViewModel)
+    /// </summary>
+    public void SetActive(bool isActive)
+    {
+        IsActive = isActive;
+        IsPlaying = isActive && _audio.IsPlaying;
+    }
+    
+    /// <summary>
+    /// Очистка ресурсов (отписка от событий)
+    /// </summary>
+    public void Cleanup()
+    {
+        foreach (var sub in _subscriptions)
+            sub.Dispose();
+        _subscriptions.Clear();
     }
 }

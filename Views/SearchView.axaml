@@ -10,8 +10,7 @@
     x:CompileBindings="True">
 
     <Grid RowDefinitions="Auto, *">
-        <!-- Header (Fixed Top) -->
-        <StackPanel Grid.Row="0" Margin="24,24,24,20">
+        <StackPanel Grid.Row="0" Margin="24,24,24,10">
             <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
 
             <StackPanel Orientation="Horizontal" Spacing="12">
@@ -29,8 +28,40 @@
                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
                 </Button>
             </StackPanel>
+            
+            <!-- History Chips -->
+            <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                          Margin="0,12,0,0" IsVisible="{Binding RecentSearches.Count}">
+                <ItemsControl ItemsSource="{Binding RecentSearches}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="8" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="16" Padding="4,0,0,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Command="{Binding $parent[UserControl].DataContext.HistoryClickCommand}" 
+                                            CommandParameter="{Binding}"
+                                            Background="Transparent" BorderThickness="0"
+                                            Content="{Binding}" 
+                                            Padding="12,6"
+                                            Foreground="{StaticResource TextSecondaryBrush}"/>
+                                            
+                                    <Button Command="{Binding $parent[UserControl].DataContext.RemoveHistoryCommand}" 
+                                            CommandParameter="{Binding}"
+                                            Classes="icon-btn" Width="24" Height="24" 
+                                            Margin="0,0,4,0" Background="Transparent">
+                                         <mi:MaterialIcon Kind="Close" Width="14" Height="14" Foreground="{StaticResource TextMutedBrush}"/>
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
 
-            <!-- Error Message -->
             <Border IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                 Background="{StaticResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
                 Margin="0,16,0,0">
@@ -41,7 +72,6 @@
             </Border>
         </StackPanel>
 
-        <!-- Main Content Area (External Scroll) -->
         <ScrollViewer Grid.Row="1" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="150" />

@@ -1,8 +1,5 @@
 namespace MyLiteMusicPlayer.Models;
 
-/// <summary>
-/// Данные библиотеки и настройки пользователя, сохраняемые в JSON.
-/// </summary>
 public class LibraryData
 {
     public Dictionary<string, TrackInfo> Tracks { get; set; } = [];
@@ -10,45 +7,42 @@ public class LibraryData
     public List<string> LikedTrackIds { get; set; } = [];
     public List<string> RecentlyPlayedIds { get; set; } = [];
 
+    // --- Search History ---
+    public string LastSearchQuery { get; set; } = "";
+    public List<string> SearchHistory { get; set; } = [];
+
     // --- Fake Account / Public Sync ---
     public string? FakeAccountChannelUrl { get; set; }
     public string? FakeAccountName { get; set; }
     public string? FakeAccountAvatarUrl { get; set; }
 
-    // --- Настройки плеера ---
+    // --- Settings ---
     public float Volume { get; set; } = 0.5f;
     public int LastVolume { get; set; } = 50;
     public bool ShuffleEnabled { get; set; }
     public RepeatMode RepeatMode { get; set; } = RepeatMode.None;
-    // Сохранение высоты хедера плейлиста (по умолчанию 320)
     public double PlaylistHeaderHeight { get; set; } = 320;
-
-    // --- Настройки звука ---
     public int MaxVolumeLimit { get; set; } = 100;
     public float TargetGainDb { get; set; } = 0f;
-
-    // --- Настройки приложения ---
     public string LanguageCode { get; set; } = "en";
     public string DownloadPath { get; set; } = string.Empty;
     public bool DiscordRpcEnabled { get; set; } = true;
     public bool AutoPlayOnUrlPaste { get; set; } = true;
-
     public int LoadBatchSize { get; set; } = 20;
     public bool EnableSmoothLoading { get; set; } = true;
-
     public AudioQualityPreference QualityPreference { get; set; } = AudioQualityPreference.BestAvailable;
     public bool RememberTrackFormat { get; set; } = true;
 }
 
 public enum RepeatMode
 {
-    None,      // Исправлено: Было Off в коде, но None в модели
+    None,
     RepeatOne,
     RepeatAll
 }
 
 public enum AudioQualityPreference
 {
-    BestAvailable, // Преимущественно Opus (WebM)
-    Standard       // Преимущественно AAC (MP4), совместимость
+    BestAvailable,
+    Standard
 }
