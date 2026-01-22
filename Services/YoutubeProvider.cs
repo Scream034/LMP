@@ -15,6 +15,7 @@ using System.Text.RegularExpressions;
 using Playlist = MyLiteMusicPlayer.Models.Playlist;
 using YoutubeExplode.Channels;
 using Microsoft.Extensions.DependencyInjection;
+using System.Runtime.CompilerServices;
 
 namespace MyLiteMusicPlayer.Services;
 
@@ -83,9 +84,6 @@ public partial class YoutubeProvider
         NotifyStatus("[YouTube] Initialized");
         return Task.CompletedTask;
     }
-
-    // ... (Методы RefreshStreamUrlAsync, GetStreamOptionsAsync и т.д. остаются без изменений, для краткости скрыты, если нужно - скопирую полный файл) ...
-    // ВНИМАНИЕ: Я включаю полный файл, как запрошено, чтобы ничего не потерять.
 
     #region RefreshStreamUrlAsync
 
@@ -372,28 +370,287 @@ public partial class YoutubeProvider
         }
     }
 
-    public async Task<List<TrackInfo>> SearchAsync(string query, int maxResults = 20)
+    #region Search
+
+    /// <summary>
+    /// Потоковый поиск - возвращает результаты по мере их получения
+    /// </summary>
+    public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
+        string query,
+        int maxResults = 300,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (!IsReady || string.IsNullOrWhiteSpace(query)) yield break;
+
+        var sw = Stopwatch.StartNew();
+        int count = 0;
+
+        NotifyStatus($"[YouTube] Starting streaming search for '{query}'...");
+
+        await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, YoutubeExplode.Search.SearchFilter.Video, ct))
+        {
+            if (ct.IsCancellationRequested) yield break;
+
+            var tracks = new List<TrackInfo>();
+
+            foreach (var result in batch.Items)
+            {
+                if (count >= maxResults) break;
+
+                if (result is VideoSearchResult video)
+                {
+                    tracks.Add(ConvertSearchResultToTrackInfo(video));
+                    count++;
+                }
+            }
+
+            if (tracks.Count > 0)
+            {
+                NotifyStatus($"[YouTube] Got batch: +{tracks.Count} tracks (total: {count}) in {sw.ElapsedMilliseconds}ms");
+                yield return tracks;
+            }
+
+            if (count >= maxResults) break;
+        }
+
+        sw.Stop();
+        NotifyStatus($"[YouTube] Search complete: {count} results in {sw.ElapsedMilliseconds}ms");
+    }
+
+    /// <summary>
+    /// Быстрый поиск - возвращает первые результаты как можно быстрее
+    /// </summary>
+    public async Task<List<TrackInfo>> SearchFastAsync(string query, int maxResults = 100, CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query)) return [];
+
         var sw = Stopwatch.StartNew();
+        var results = new List<TrackInfo>(maxResults);
+
         try
         {
-            var results = new List<TrackInfo>();
-            await foreach (var video in _youtube.Search.GetVideosAsync(query))
+            await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, YoutubeExplode.Search.SearchFilter.Video, ct))
             {
+                foreach (var result in batch.Items)
+                {
+                    if (results.Count >= maxResults) break;
+
+                    if (result is VideoSearchResult video)
+                    {
+                        results.Add(ConvertSearchResultToTrackInfo(video));
+                    }
+                }
+
                 if (results.Count >= maxResults) break;
-                results.Add(ConvertSearchResultToTrackInfo(video));
             }
+
             sw.Stop();
-            NotifyStatus($"[YouTube] Search '{query}': {results.Count} results in {sw.ElapsedMilliseconds}ms");
-            return results;
+            NotifyStatus($"[YouTube] Fast search '{query}': {results.Count} results in {sw.ElapsedMilliseconds}ms");
+        }
+        catch (OperationCanceledException)
+        {
+            NotifyStatus($"[YouTube] Search cancelled after {results.Count} results");
         }
         catch (Exception ex)
         {
-            NotifyError($"[YouTube] SearchAsync error: {ex.Message}");
-            return [];
+            NotifyError($"[YouTube] SearchFastAsync error: {ex.Message}");
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Старый метод для совместимости - теперь использует быстрый поиск
+    /// </summary>
+    public async Task<List<TrackInfo>> SearchAsync(string query, int maxResults = 100)
+    {
+        return await SearchFastAsync(query, maxResults);
+    }
+
+    /// <summary>
+    /// Поиск с поддержкой продолжения (continuation) для ленивой загрузки
+    /// </summary>
+    public class SearchSession : IDisposable
+    {
+        private readonly YoutubeClient _youtube;
+        private readonly string _query;
+        private readonly int _maxResults;
+        private readonly HashSet<string> _seenIds = [];
+        private IAsyncEnumerator<Batch<ISearchResult>>? _enumerator;
+        private bool _hasMore = true;
+        private bool _disposed;
+        private readonly List<TrackInfo> _buffer = []; // Буфер для накопления результатов
+
+        public bool HasMore => (_hasMore || _buffer.Count > 0) && !_disposed && _seenIds.Count < _maxResults;
+        public int LoadedCount => _seenIds.Count;
+
+        internal SearchSession(YoutubeClient youtube, string query, int maxResults = 300, IEnumerable<string>? skipTrackIds = null)
+        {
+            _youtube = youtube;
+            _query = query;
+            _maxResults = maxResults;
+            _seenIds = [];
+
+            // Конвертируем TrackInfo.Id ("yt_xxx") в YouTube ID ("xxx")
+            if (skipTrackIds != null)
+            {
+                foreach (var id in skipTrackIds)
+                {
+                    var cleanId = id.StartsWith("yt_") ? id[3..] : id;
+                    _seenIds.Add(cleanId);
+                }
+                Log.Info($"[SearchSession] Initialized with {_seenIds.Count} pre-skipped IDs");
+            }
+        }
+
+        public async Task<List<TrackInfo>> FetchNextBatchAsync(int count = 50, CancellationToken ct = default)
+        {
+            if (_disposed || _seenIds.Count >= _maxResults) return [];
+
+            var results = new List<TrackInfo>();
+
+            // Сначала берем из буфера
+            while (results.Count < count && _buffer.Count > 0)
+            {
+                results.Add(_buffer[0]);
+                _buffer.RemoveAt(0);
+            }
+
+            // Если буфер пуст и нужно больше - грузим из сети
+            while (results.Count < count && _hasMore && _seenIds.Count < _maxResults)
+            {
+                try
+                {
+                    // Создаем енумератор при первом вызове
+                    _enumerator ??= _youtube.Search
+                        .GetResultBatchesAsync(_query, YoutubeExplode.Search.SearchFilter.Video, ct)
+                        .GetAsyncEnumerator(ct);
+
+                    if (!await _enumerator.MoveNextAsync())
+                    {
+                        _hasMore = false;
+                        Log.Info($"[SearchSession] No more batches from YouTube");
+                        break;
+                    }
+
+                    var batch = _enumerator.Current;
+                    Log.Info($"[SearchSession] Got batch with {batch.Items.Count} items");
+
+                    foreach (var item in batch.Items)
+                    {
+                        if (_seenIds.Count >= _maxResults) break;
+
+                        if (item is VideoSearchResult video && _seenIds.Add(video.Id))
+                        {
+                            var track = ConvertSearchResultToTrackInfo(video);
+
+                            if (results.Count < count)
+                            {
+                                results.Add(track);
+                            }
+                            else
+                            {
+                                // Остальное в буфер
+                                _buffer.Add(track);
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[SearchSession] Error: {ex.Message}");
+                    _hasMore = false;
+                    break;
+                }
+            }
+
+            Log.Info($"[SearchSession] Returning {results.Count} tracks, buffer: {_buffer.Count}, total seen: {_seenIds.Count}, hasMore: {HasMore}");
+            return results;
+        }
+
+        private static TrackInfo ConvertSearchResultToTrackInfo(VideoSearchResult video)
+        {
+            var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
+            return new TrackInfo
+            {
+                Id = $"yt_{video.Id.Value}",
+                Title = video.Title,
+                Author = video.Author.ChannelTitle,
+                Url = video.Url,
+                Duration = video.Duration ?? TimeSpan.Zero,
+                ThumbnailUrl = thumb?.Url ?? "",
+                IsOfficialArtist = video.IsOfficialArtist
+            };
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _hasMore = false;
+            _buffer.Clear();
+
+            if (_enumerator != null)
+            {
+                _ = _enumerator.DisposeAsync().AsTask();
+            }
         }
     }
+
+    private SearchSession? _currentSearchSession;
+
+    /// <summary>
+    /// Создает сессию поиска для ленивой загрузки
+    /// </summary>
+    public SearchSession CreateSearchSession(string query, int maxResults = 300)
+    {
+        _currentSearchSession?.Dispose();
+        _currentSearchSession = new SearchSession(_youtube, query, maxResults);
+        NotifyStatus($"[YouTube] Created search session for '{query}' (max: {maxResults})");
+        return _currentSearchSession;
+    }
+
+    /// <summary>
+    /// Создаёт сессию поиска для ленивой загрузки
+    /// </summary>
+    /// <param name="skipTrackIds">ID треков для пропуска (TrackInfo.Id с префиксом yt_)</param>
+    public SearchSession CreateSearchSession(string query, int maxResults = 300, IEnumerable<string>? skipTrackIds = null)
+    {
+        _currentSearchSession?.Dispose();
+        _currentSearchSession = new SearchSession(_youtube, query, maxResults, skipTrackIds);
+
+        var skipCount = skipTrackIds?.Count() ?? 0;
+        NotifyStatus($"[YouTube] Created search session for '{query}' (max: {maxResults}, skip: {skipCount})");
+
+        return _currentSearchSession;
+    }
+
+    /// <summary>
+    /// Быстрый первоначальный поиск с сессией
+    /// </summary>
+    public async Task<(List<TrackInfo> Tracks, SearchSession Session)> SearchWithSessionAsync(
+        string query,
+        int initialCount = 50,
+        int maxResults = 300,
+        CancellationToken ct = default)
+    {
+        if (!IsReady || string.IsNullOrWhiteSpace(query))
+            return ([], null!);
+
+        var sw = Stopwatch.StartNew();
+        var session = CreateSearchSession(query, maxResults);
+        var tracks = await session.FetchNextBatchAsync(initialCount, ct);
+
+        sw.Stop();
+        NotifyStatus($"[YouTube] Initial search '{query}': {tracks.Count} results in {sw.ElapsedMilliseconds}ms (session hasMore: {session.HasMore})");
+
+        return (tracks, session);
+    }
+    #endregion
 
     public async Task<(string Name, List<TrackInfo> Tracks)?> GetPlaylistAsync(string url)
     {

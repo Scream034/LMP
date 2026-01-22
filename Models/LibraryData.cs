@@ -27,6 +27,9 @@ public class LibraryData
     public bool DiscordRpcEnabled { get; set; } = true;
     public bool AutoPlayOnUrlPaste { get; set; } = true;
     public int LoadBatchSize { get; set; } = 20;
+    public int SearchBatchSize { get; set; } = 30;
+    public bool EnableSearchCache { get; set; } = true;
+    public int SearchCacheTtlMinutes { get; set; } = 120; // 2 часа по умолчанию
     public bool EnableSmoothLoading { get; set; } = true;
     public AudioQualityPreference QualityPreference { get; set; } = AudioQualityPreference.BestAvailable;
     public bool RememberTrackFormat { get; set; } = true;

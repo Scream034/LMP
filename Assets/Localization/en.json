@@ -7,6 +7,7 @@
   "Common_Clear": "Clear",
   "Common_Loading": "Loading...",
   "Common_Search": "Search",
+  "Common_Minutes": "min",
   
   "Nav_Home": "Home",
   "Nav_Search": "Search",
@@ -41,6 +42,18 @@
   "Search_Placeholder": "Songs, artists, or links...",
   "Search_History": "Recent Searches",
   "Search_NoResults": "Nothing found",
+  "Search_Searching": "Searching...",
+  "Search_LoadingMore": "Searching for more",
+  "Search_EndOfList": "End of list",
+  "Search_FromCache": "Results from cache",
+  "Search_ForceRefresh": "Refresh from network",
+  "Search_NetworkError": "Network error. Please try again.",
+  "Settings_SearchCache": "Cache search results",
+  "Settings_SearchCacheDesc": "Save search results for faster loading",
+  "Settings_SearchCacheTtl": "Search cache lifetime",
+  "Settings_SearchCacheTtlDesc": "How long to keep search results cached before refreshing",
+  "Settings_LoadBatchSize": "Items per page",
+  "Settings_LoadBatchSizeDesc": "Number of tracks loaded at once when scrolling lists",
 
   "Library_Title": "Library",
   "Library_NewPlaylist": "New Playlist",
@@ -88,6 +101,8 @@
   "Settings_AudioQuality": "Quality",
   "Settings_AudioQualityDesc": "Preferred audio format/bitrate.",
   "Settings_RememberFormat": "Remember format per track",
+  "Settings_SearchBatchSize": "Search batch size",
+  "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
   
   "Settings_Storage_Data": "Storage",
   "Settings_General": "General",
@@ -117,6 +132,7 @@
   "General_Discord": "Discord RPC",
   "General_AutoPaste": "Auto-play from Clipboard",
   "Perf_SmoothLoading": "Smooth Loading",
+  "Perf_SmoothLoadingDesc": "May improve performance",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",

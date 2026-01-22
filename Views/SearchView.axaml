@@ -12,8 +12,10 @@
 
     <Grid RowDefinitions="Auto, *">
         <StackPanel Grid.Row="0" Margin="24,24,24,10">
-            <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
+            <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold"
+                Margin="0,0,0,16" />
 
+            <!-- После TextBox поиска -->
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <TextBox Classes="search-box"
                     Watermark="{Binding L[Search_Placeholder]}"
@@ -25,14 +27,38 @@
                 </TextBox>
 
                 <Button Command="{Binding SearchCommand}" Classes="icon-btn"
-                    Width="44" Height="44" Background="{StaticResource BgElevatedBrush}">
+                    Width="44" Height="44" Background="{StaticResource BgElevatedBrush}"
+                    ToolTip.Tip="{Binding L[Search_Button]}">
                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
                 </Button>
+
+                <!-- Кнопка принудительного поиска (только если результаты из кэша) -->
+                <Button Command="{Binding ForceSearchCommand}"
+                    Classes="icon-btn"
+                    Width="44" Height="44"
+                    Background="{StaticResource BgElevatedBrush}"
+                    IsVisible="{Binding ShowForceSearchButton}"
+                    ToolTip.Tip="{Binding L[Search_ForceRefresh]}">
+                    <mi:MaterialIcon Kind="Refresh" Width="20" Height="20"
+                        Foreground="{StaticResource AccentBrush}" />
+                </Button>
             </StackPanel>
-            
+
+            <!-- Индикатор "Из кэша" -->
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0"
+                IsVisible="{Binding IsFromCache}"
+                Opacity="0.6">
+                <mi:MaterialIcon Kind="DatabaseOutline" Width="14" Height="14"
+                    Foreground="{StaticResource TextMutedBrush}" />
+                <TextBlock Text="{Binding L[Search_FromCache]}"
+                    FontSize="12"
+                    Foreground="{StaticResource TextMutedBrush}" />
+            </StackPanel>
+
             <!-- History Chips -->
-            <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
-                          Margin="0,12,0,0" IsVisible="{Binding RecentSearches.Count}">
+            <ScrollViewer HorizontalScrollBarVisibility="Hidden"
+                VerticalScrollBarVisibility="Disabled"
+                Margin="0,12,0,0" IsVisible="{Binding RecentSearches.Count}">
                 <ItemsControl ItemsSource="{Binding RecentSearches}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -41,20 +67,24 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="16" Padding="4,0,0,0">
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="16"
+                                Padding="4,0,0,0">
                                 <StackPanel Orientation="Horizontal">
-                                    <Button Command="{Binding #SearchRoot.DataContext.HistoryClickCommand}" 
-                                            CommandParameter="{Binding}"
-                                            Background="Transparent" BorderThickness="0"
-                                            Content="{Binding}" 
-                                            Padding="12,6"
-                                            Foreground="{StaticResource TextSecondaryBrush}"/>
-                                            
-                                    <Button Command="{Binding #SearchRoot.DataContext.RemoveHistoryCommand}" 
-                                            CommandParameter="{Binding}"
-                                            Classes="icon-btn" Width="24" Height="24" 
-                                            Margin="0,0,4,0" Background="Transparent">
-                                         <mi:MaterialIcon Kind="Close" Width="14" Height="14" Foreground="{StaticResource TextMutedBrush}"/>
+                                    <Button
+                                        Command="{Binding #SearchRoot.DataContext.HistoryClickCommand}"
+                                        CommandParameter="{Binding}"
+                                        Background="Transparent" BorderThickness="0"
+                                        Content="{Binding}"
+                                        Padding="12,6"
+                                        Foreground="{StaticResource TextSecondaryBrush}" />
+
+                                    <Button
+                                        Command="{Binding #SearchRoot.DataContext.RemoveHistoryCommand}"
+                                        CommandParameter="{Binding}"
+                                        Classes="icon-btn" Width="24" Height="24"
+                                        Margin="0,0,4,0" Background="Transparent">
+                                        <mi:MaterialIcon Kind="Close" Width="14" Height="14"
+                                            Foreground="{StaticResource TextMutedBrush}" />
                                     </Button>
                                 </StackPanel>
                             </Border>
@@ -63,23 +93,26 @@
                 </ItemsControl>
             </ScrollViewer>
 
-            <Border IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+            <Border
+                IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                 Background="{StaticResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
                 Margin="0,16,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="12">
-                    <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20" Foreground="{StaticResource SystemErrorBrush}" />
-                    <TextBlock Text="{Binding ErrorMessage}" Foreground="{StaticResource SystemErrorBrush}" VerticalAlignment="Center" />
+                    <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20"
+                        Foreground="{StaticResource SystemErrorBrush}" />
+                    <TextBlock Text="{Binding ErrorMessage}"
+                        Foreground="{StaticResource SystemErrorBrush}" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
         </StackPanel>
 
         <ScrollViewer Grid.Row="1" Margin="24,0">
             <i:Interaction.Behaviors>
-                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="150" />
+                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
 
             <!-- Не забываем пробрасывать EnableSmoothLoading, о котором говорили ранее -->
-            <controls:TrackListControl 
+            <controls:TrackListControl
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"
                 IsLoadingMore="{Binding IsLoadingMore}"

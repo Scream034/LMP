@@ -1,15 +1,87 @@
-using System;
 using System.Collections;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
+using MyLiteMusicPlayer.Services;
 
 namespace MyLiteMusicPlayer.Views.Controls;
 
 public partial class TrackListControl : UserControl
 {
+    public TrackListControl()
+    {
+        InitializeComponent();
+
+        // Подписка на смену языка
+        LocalizationService.Instance.LanguageChanged += (_, _) =>
+        {
+            // Проверяем, в UI-потоке ли мы
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                UpdateLocalizedTexts();
+            }
+            else
+            {
+                // Если нет - переключаемся в UI-поток
+                Dispatcher.UIThread.Post(UpdateLocalizedTexts);
+            }
+        };
+
+        UpdateLocalizedTexts();
+    }
+
+    private void InitializeComponent()
+    {
+        AvaloniaXamlLoader.Load(this);
+    }
+
+    private void UpdateLocalizedTexts()
+    {
+        SearchingText = LocalizationService.Instance["Search_Searching"] ?? "Searching...";
+        LoadingMoreText = LocalizationService.Instance["Search_LoadingMore"] ?? "Searching for more";
+        EndOfListText = LocalizationService.Instance["Search_EndOfList"] ?? "End of list";
+    }
+
+    // --- Localization Properties ---
+
+    private string _searchingText = "Searching...";
+    public static readonly DirectProperty<TrackListControl, string> SearchingTextProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
+            nameof(SearchingText), o => o.SearchingText, (o, v) => o.SearchingText = v);
+
+    public string SearchingText
+    {
+        get => _searchingText;
+        private set => SetAndRaise(SearchingTextProperty, ref _searchingText, value);
+    }
+
+    private string _loadingMoreText = "Searching for more";
+    public static readonly DirectProperty<TrackListControl, string> LoadingMoreTextProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
+            nameof(LoadingMoreText), o => o.LoadingMoreText, (o, v) => o.LoadingMoreText = v);
+
+    public string LoadingMoreText
+    {
+        get => _loadingMoreText;
+        private set => SetAndRaise(LoadingMoreTextProperty, ref _loadingMoreText, value);
+    }
+
+    private string _endOfListText = "End of list";
+    public static readonly DirectProperty<TrackListControl, string> EndOfListTextProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
+            nameof(EndOfListText), o => o.EndOfListText, (o, v) => o.EndOfListText = v);
+
+    public string EndOfListText
+    {
+        get => _endOfListText;
+        private set => SetAndRaise(EndOfListTextProperty, ref _endOfListText, value);
+    }
+
+    // --- Existing Properties ---
+
     public static readonly StyledProperty<bool> EnableSmoothLoadingProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableSmoothLoading), true);
 
@@ -18,18 +90,6 @@ public partial class TrackListControl : UserControl
         get => GetValue(EnableSmoothLoadingProperty);
         set => SetValue(EnableSmoothLoadingProperty, value);
     }
-
-    public TrackListControl()
-    {
-        InitializeComponent();
-    }
-
-    private void InitializeComponent()
-    {
-        AvaloniaXamlLoader.Load(this);
-    }
-
-    // --- Styled Properties ---
 
     public static readonly StyledProperty<IEnumerable?> ItemsProperty =
         AvaloniaProperty.Register<TrackListControl, IEnumerable?>(nameof(Items));
@@ -55,22 +115,16 @@ public partial class TrackListControl : UserControl
     public static readonly StyledProperty<bool> UseInternalScrollProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(UseInternalScroll), false);
 
-    // --- Direct Property (Исправляет ошибку CS7036) ---
-
     private ScrollBarVisibility _scrollVisibility = ScrollBarVisibility.Disabled;
-
     public static readonly DirectProperty<TrackListControl, ScrollBarVisibility> ScrollVisibilityProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, ScrollBarVisibility>(
-            nameof(ScrollVisibility),
-            o => o.ScrollVisibility);
+            nameof(ScrollVisibility), o => o.ScrollVisibility);
 
     public ScrollBarVisibility ScrollVisibility
     {
         get => _scrollVisibility;
         private set => SetAndRaise(ScrollVisibilityProperty, ref _scrollVisibility, value);
     }
-
-    // --- Accessors ---
 
     public IEnumerable? Items
     {
@@ -120,7 +174,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(UseInternalScrollProperty, value);
     }
 
-    // Перехватываем изменение UseInternalScroll и обновляем ScrollVisibility
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);

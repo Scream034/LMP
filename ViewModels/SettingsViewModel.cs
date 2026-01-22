@@ -13,6 +13,7 @@ namespace MyLiteMusicPlayer.ViewModels;
 public class SettingsViewModel : ViewModelBase
 {
     private readonly LibraryService _library;
+    private readonly SearchCacheService _searchCache;
     private readonly GoogleAuthService _auth;
     private readonly IDialogService _dialog;
     private readonly AudioEngine _audio;
@@ -21,6 +22,7 @@ public class SettingsViewModel : ViewModelBase
     // --- Настройки путей и загрузки ---
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
     [Reactive] public int LoadBatchSize { get; set; }
+    [Reactive] public int SearchBatchSize { get; set; }
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
     // --- Настройки звука ---
@@ -59,6 +61,7 @@ public class SettingsViewModel : ViewModelBase
     // --- Интеграции ---
     [Reactive] public bool DiscordRpcEnabled { get; set; }
     [Reactive] public bool AutoPlayOnPaste { get; set; }
+    [Reactive] public int SearchCacheTtlMinutes { get; set; }
 
     // --- Языки ---
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
@@ -91,8 +94,8 @@ public class SettingsViewModel : ViewModelBase
         get
         {
             if (IsAuthenticated)
-                return _auth.State.YouTubeChannelName 
-                    ?? _auth.State.UserName 
+                return _auth.State.YouTubeChannelName
+                    ?? _auth.State.UserName
                     ?? L["Auth_NotSignedIn"];
 
             if (_library.HasFakeAccount)
@@ -141,6 +144,18 @@ public class SettingsViewModel : ViewModelBase
     /// </summary>
     public bool ShowLimitedAccessWarning => IsFakeAccount;
 
+    public bool EnableSearchCache
+    {
+        get => _library.Data.EnableSearchCache;
+        set
+        {
+            if (_library.Data.EnableSearchCache == value) return;
+            _library.Data.EnableSearchCache = value;
+            _library.Save();
+            this.RaisePropertyChanged();
+        }
+    }
+
     // --- Команды ---
     public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearHistoryCommand { get; }
@@ -152,12 +167,14 @@ public class SettingsViewModel : ViewModelBase
 
     public SettingsViewModel(
         LibraryService library,
+        SearchCacheService searchCache,
         GoogleAuthService auth,
         IDialogService dialog,
         AudioEngine audio,
         YoutubeProvider youtube)
     {
         _library = library;
+        _searchCache = searchCache;
         _auth = auth;
         _dialog = dialog;
         _audio = audio;
@@ -166,6 +183,15 @@ public class SettingsViewModel : ViewModelBase
         QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
 
         FakeChannelInput = _library.FakeAccountUrl ?? "";
+
+        SearchCacheTtlMinutes = _library.Data.SearchCacheTtlMinutes > 0
+            ? _library.Data.SearchCacheTtlMinutes
+            : 60;
+
+        LoadBatchSize = _library.Data.LoadBatchSize > 0
+            ? _library.Data.LoadBatchSize
+            : 20;
+
 
         LoadSettings();
         UpdateAuthState();
@@ -196,6 +222,7 @@ public class SettingsViewModel : ViewModelBase
             .Throttle(TimeSpan.FromMilliseconds(100))
             .Subscribe(lang =>
             {
+                Log.Info($"New language: {lang.Name}");
                 LocalizationService.Instance.CurrentLanguage = lang.Code;
                 _library.Data.LanguageCode = lang.Code;
                 _library.Save();
@@ -206,6 +233,7 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
+                Log.Info($"New volume limit: {v}");
                 _library.Data.MaxVolumeLimit = v;
                 _library.Save();
                 _audio.UpdateAudioSettings();
@@ -217,6 +245,7 @@ public class SettingsViewModel : ViewModelBase
             .Throttle(TimeSpan.FromMilliseconds(300))
             .Subscribe(v =>
             {
+                Log.Info($"New target gain: {v}");
                 _library.Data.TargetGainDb = v;
                 _library.Save();
                 _audio.UpdateAudioSettings();
@@ -227,6 +256,7 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
+                Log.Info($"New smooth loading setting: {v}");
                 _library.Data.EnableSmoothLoading = v;
                 _library.Save();
             });
@@ -236,6 +266,7 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
+                Log.Info($"New Discord RPC setting: {v}");
                 _library.Data.DiscordRpcEnabled = v;
                 _library.Save();
             });
@@ -245,7 +276,41 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
+                Log.Info($"New autoplay setting: {v}");
                 _library.Data.AutoPlayOnUrlPaste = v;
+                _library.Save();
+            });
+
+        this.WhenAnyValue(x => x.SearchBatchSize)
+            .Skip(1)
+            .Where(v => v >= 10 && v <= 100)
+            .Subscribe(v =>
+            {
+                Log.Info($"New search batch size: {v}");
+                _library.Data.SearchBatchSize = v;
+                _library.Save();
+            });
+
+        this.WhenAnyValue(x => x.SearchCacheTtlMinutes)
+            .Skip(1)
+            .Throttle(TimeSpan.FromMilliseconds(500))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(val =>
+            {
+                _library.Data.SearchCacheTtlMinutes = val;
+                _library.Save();
+
+                // Очищаем просроченные записи при изменении TTL
+                _ = _searchCache.CleanupExpiredAsync();
+            });
+
+        this.WhenAnyValue(x => x.LoadBatchSize)
+            .Skip(1)
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(val =>
+            {
+                _library.Data.LoadBatchSize = val;
                 _library.Save();
             });
 
@@ -377,6 +442,7 @@ public class SettingsViewModel : ViewModelBase
         DiscordRpcEnabled = _library.Data.DiscordRpcEnabled;
         AutoPlayOnPaste = _library.Data.AutoPlayOnUrlPaste;
         LoadBatchSize = _library.Data.LoadBatchSize;
+        SearchBatchSize = _library.Data.SearchBatchSize > 0 ? _library.Data.SearchBatchSize : 30;
         EnableSmoothLoading = _library.Data.EnableSmoothLoading;
         MaxVolumeLimit = _library.Data.MaxVolumeLimit;
         TargetGainDb = _library.Data.TargetGainDb;
