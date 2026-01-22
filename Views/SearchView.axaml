@@ -4,28 +4,28 @@
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
     xmlns:b="using:MyLiteMusicPlayer.Behaviors"
+    xmlns:controls="using:MyLiteMusicPlayer.Views.Controls"
     x:Class="MyLiteMusicPlayer.Views.SearchView"
     x:DataType="vm:SearchViewModel"
     x:CompileBindings="True">
 
     <Grid RowDefinitions="Auto, *">
         <!-- Header (Fixed Top) -->
-        <StackPanel Grid.Row="0" Margin="0,0,0,20">
-            <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold"
-                Margin="0,0,0,16" />
+        <StackPanel Grid.Row="0" Margin="24,24,24,20">
+            <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold" Margin="0,0,0,16" />
 
-            <StackPanel Orientation="Horizontal" Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="12">
                 <TextBox Classes="search-box"
                     Watermark="{Binding L[Search_Placeholder]}"
                     Text="{Binding SearchQuery}"
-                    Width="360" CornerRadius="20" Padding="15,10">
+                    Width="400" CornerRadius="20" Padding="15,10">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
                     </TextBox.KeyBindings>
                 </TextBox>
 
                 <Button Command="{Binding SearchCommand}" Classes="icon-btn"
-                    Width="40" Height="40" Background="{StaticResource BgElevatedBrush}">
+                    Width="44" Height="44" Background="{StaticResource BgElevatedBrush}">
                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
                 </Button>
             </StackPanel>
@@ -35,57 +35,27 @@
                 Background="{StaticResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
                 Margin="0,16,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="12">
-                    <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20"
-                        Foreground="{StaticResource SystemErrorBrush}" />
-                    <TextBlock Text="{Binding ErrorMessage}"
-                        Foreground="{StaticResource SystemErrorBrush}" />
+                    <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20" Foreground="{StaticResource SystemErrorBrush}" />
+                    <TextBlock Text="{Binding ErrorMessage}" Foreground="{StaticResource SystemErrorBrush}" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
         </StackPanel>
 
-        <!-- Main Scroll Area -->
-        <ScrollViewer Grid.Row="1">
+        <!-- Main Content Area (External Scroll) -->
+        <ScrollViewer Grid.Row="1" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="150" />
             </i:Interaction.Behaviors>
 
-            <StackPanel>
-                <!-- 
-                   ANIMATED SEARCH LOADER 
-                   Shows blurred tracks + wandering magnifying glass 
-                -->
-                <ContentControl Classes="loading-search" IsVisible="{Binding IsLoading}" />
-
-                <!-- Results List -->
-                <ListBox ItemsSource="{Binding Items}" Background="Transparent"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListBox.Styles>
-                        <Style Selector="ListBoxItem">
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Margin" Value="0"/>
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                    </ListBox.Styles>
-
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <ContentControl Content="{Binding}" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-
-                <!-- Footer Loader -->
-                <ContentControl Classes="loading-skeletons" 
-                                IsVisible="{Binding IsLoadingMore}" 
-                                Margin="0,16"/>
-            </StackPanel>
+            <controls:TrackListControl 
+                Items="{Binding Items}"
+                IsLoading="{Binding IsLoading}"
+                IsLoadingMore="{Binding IsLoadingMore}"
+                IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
+                ReachedEnd="{Binding ReachedEnd}"
+                LoadMoreCommand="{Binding LoadMoreCommand}"
+                UseInternalScroll="False"
+                UseSearchLoader="True" />
         </ScrollViewer>
     </Grid>
 </UserControl>

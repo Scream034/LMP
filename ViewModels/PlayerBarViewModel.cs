@@ -20,7 +20,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private readonly DispatcherTimer _speedUpdateTimer;
     // Timer для fallback позиции тоже можно оставить, он редкий (500мс)
-    private readonly DispatcherTimer _fallbackPositionTimer; 
+    private readonly DispatcherTimer _fallbackPositionTimer;
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
@@ -117,7 +117,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnPositionChanged += h,
                 h => _audio.OnPositionChanged -= h)
-            .Sample(TimeSpan.FromMilliseconds(200)) 
+            .Sample(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(pos =>
             {
@@ -233,6 +233,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>
         {
+            Log.Info($"[PlayerBar] ToggleLikeCommand: {CurrentTrack?.Id}");
             if (CurrentTrack != null)
             {
                 _library.ToggleLike(CurrentTrack);
@@ -242,6 +243,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
         CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
         {
+            Log.Info($"[PlayerBar] Copying link to clipboard: {CurrentTrack?.Url} ({CurrentTrack?.Title})");
             if (CurrentTrack?.Url != null)
             {
                 await _clipboard.SetTextAsync(CurrentTrack.Url);
@@ -287,17 +289,26 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             double boost = (vol - 100) / 100.0;
             Bar5Thickness = 4 + (boost * 6);
             if (Bar5Thickness > 12) Bar5Thickness = 12;
-            IsVolumeBoosted = true; 
+            IsVolumeBoosted = true;
         }
         else
         {
             Bar5Thickness = 4;
-            IsVolumeBoosted = false; 
+            IsVolumeBoosted = false;
         }
     }
 
     private void HandleTrackChanged(TrackInfo? track)
     {
+        if (track != null)
+        {
+            Log.Info($"[PlayerBar] Track changed to: {track.Title} (ID: {track.Id}, URL: {track.Url})");
+        }
+        else
+        {
+            Log.Info("[PlayerBar] Track cleared");
+        }
+
         CurrentTrack = track;
         HasTrack = track != null;
 

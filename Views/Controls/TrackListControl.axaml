@@ -1,0 +1,129 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             xmlns:i="using:Avalonia.Xaml.Interactivity"
+             xmlns:b="using:MyLiteMusicPlayer.Behaviors"
+             xmlns:controls="using:MyLiteMusicPlayer.Views.Controls"
+             xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+             x:Class="MyLiteMusicPlayer.Views.Controls.TrackListControl"
+             x:Name="Root">
+
+    <UserControl.Styles>
+        <!-- Стили для строки трека внутри списка -->
+        <Style Selector="Border.track-row">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="4,2" />
+            <Setter Property="Margin" Value="0,1" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Ховер эффект (наводим мышь) -->
+        <Style Selector="Border.track-row:pointerover">
+            <Setter Property="Background" Value="#1AFFFFFF" />
+        </Style>
+
+        <!-- АКТИВНЫЙ ТРЕК (IsActive=True) -->
+        <!-- Меняем фон, чтобы выделить текущий играющий трек -->
+        <Style Selector="Border.track-row.isActive">
+            <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+        </Style>
+        
+        <!-- Дополнительно: Если активный трек под курсором, делаем чуть светлее -->
+        <Style Selector="Border.track-row.isActive:pointerover">
+            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+        </Style>
+    </UserControl.Styles>
+
+    <Grid>
+        <!-- 1. ЗАГРУЗКА (Initial Loader) -->
+        <Panel IsVisible="{Binding IsLoading, ElementName=Root}" ZIndex="10">
+            <ContentControl Classes="loading-initial" 
+                            IsVisible="{Binding !UseSearchLoader, ElementName=Root}" />
+            <ContentControl Classes="loading-search" 
+                            IsVisible="{Binding UseSearchLoader, ElementName=Root}" />
+        </Panel>
+
+        <!-- 2. КОНТЕНТ -->
+        <Grid RowDefinitions="*, Auto" IsVisible="{Binding !IsLoading, ElementName=Root}">
+            
+            <ListBox x:Name="MainListBox"
+                     Grid.Row="0"
+                     ItemsSource="{Binding Items, ElementName=Root}"
+                     Background="Transparent"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="{Binding ScrollVisibility, ElementName=Root}">
+                
+                <i:Interaction.Behaviors>
+                    <b:InfiniteScrollBehavior 
+                        Command="{Binding LoadMoreCommand, ElementName=Root}" 
+                        IsEnabled="{Binding UseInternalScroll, ElementName=Root}"
+                        Threshold="300" />
+                </i:Interaction.Behaviors>
+
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem">
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="Margin" Value="0,0,0,2"/>
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <!-- Отключаем стандартное синее/серое выделение ListBox -->
+                        <Setter Property="Template">
+                            <ControlTemplate>
+                                <ContentPresenter Name="PART_ContentPresenter"
+                                                  Background="Transparent"
+                                                  BorderBrush="Transparent"
+                                                  BorderThickness="0"
+                                                  CornerRadius="{TemplateBinding CornerRadius}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  Content="{TemplateBinding Content}"
+                                                  Padding="{TemplateBinding Padding}"
+                                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                            </ControlTemplate>
+                        </Setter>
+                    </Style>
+                </ListBox.Styles>
+
+                <ListBox.ItemTemplate>
+                    <!-- ЯВНО УКАЗЫВАЕМ DataType, ЧТОБЫ ИЗБЕЖАТЬ ОШИБКИ КОМПИЛЯЦИИ -->
+                    <DataTemplate x:DataType="vm:TrackItemViewModel">
+                        <!-- ОБЕРТКА ДЛЯ ПОДСВЕТКИ -->
+                        <Border Classes="track-row" 
+                                Classes.isActive="{Binding IsActive}">
+                            
+                            <!-- Само содержимое трека -->
+                            <ContentControl Content="{Binding}" />
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- 3. ФУТЕР (Pagination Loader) -->
+            <StackPanel Grid.Row="1" Margin="0,8,0,16">
+                <ContentControl Classes="loading-network" 
+                                IsVisible="{Binding IsFetchingFromNetwork, ElementName=Root}" />
+
+                <ContentControl Classes="loading-skeletons" 
+                                IsVisible="{Binding IsLoadingMore, ElementName=Root}" />
+
+                <Border IsVisible="{Binding ReachedEnd, ElementName=Root}" 
+                        Margin="0,16,0,32" 
+                        HorizontalAlignment="Center"
+                        Opacity="0.5">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
+                                         Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="End of list"
+                                   Foreground="{StaticResource TextMutedBrush}" 
+                                   FontSize="13" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

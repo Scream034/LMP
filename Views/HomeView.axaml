@@ -4,6 +4,7 @@
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
     xmlns:b="using:MyLiteMusicPlayer.Behaviors"
+    xmlns:controls="using:MyLiteMusicPlayer.Views.Controls"
     x:Class="MyLiteMusicPlayer.Views.HomeView"
     x:DataType="vm:HomeViewModel"
     x:CompileBindings="True">
@@ -16,8 +17,7 @@
             <Grid ColumnDefinitions="*, Auto" Margin="0,0,0,16">
                 <TextBlock Text="{Binding Greeting}"
                     FontSize="32" FontWeight="Bold"
-                    Foreground="{StaticResource TextPrimaryBrush}"
-                    RenderOptions.TextRenderingMode="Antialias" />
+                    Foreground="{StaticResource TextPrimaryBrush}" />
 
                 <Button Grid.Column="1"
                     Command="{Binding ToggleDebugCommand}"
@@ -34,28 +34,20 @@
                 Margin="0,0,0,16">
                 <Grid ColumnDefinitions="*, *, *, *">
                     <StackPanel Grid.Column="0">
-                        <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1">
-                        <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
-                        <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="{StaticResource SystemWarnOrangeBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource SystemWarnOrangeBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3">
-                        <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14"
-                            FontWeight="Bold" Foreground="{StaticResource SystemInfoBlueBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14" FontWeight="Bold" Foreground="{StaticResource SystemInfoBlueBrush}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -82,11 +74,6 @@
                         <Setter Property="Padding" Value="16,8" />
                         <Setter Property="CornerRadius" Value="20" />
                         <Setter Property="Cursor" Value="Hand" />
-                        <Setter Property="Transitions">
-                            <Transitions>
-                                <BrushTransition Property="Background" Duration="0:0:0.2"/>
-                            </Transitions>
-                        </Setter>
                     </Style>
                     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
                         <Setter Property="Background" Value="{StaticResource TextPrimaryBrush}" />
@@ -96,67 +83,21 @@
             </ListBox>
         </StackPanel>
 
-        <!-- 2. MAIN CONTENT WRAPPER -->
-        <!-- Using a ScrollViewer that wraps both ListBox and Loaders -->
+        <!-- 2. MAIN CONTENT AREA (External Scroll) -->
         <ScrollViewer Grid.Row="1" Margin="24,0,24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
 
-            <StackPanel>
-                <!-- Initial Loading Overlay -->
-                <ContentControl Classes="loading-initial" 
-                                IsVisible="{Binding IsLoading}" 
-                                ZIndex="10" />
-
-                <!-- The List of Tracks -->
-                <!-- Note: Internal scroll is disabled so it expands fully, allowing the page scroller to work -->
-                <ListBox ItemsSource="{Binding ActiveTracks}" 
-                         IsVisible="{Binding !IsLoading}"
-                         Background="Transparent"
-                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    
-                    <ListBox.Styles>
-                        <Style Selector="ListBoxItem">
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Margin" Value="0"/>
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                    </ListBox.Styles>
-                    
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <ContentControl Content="{Binding}" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-
-                <!-- BOTTOM LOADERS (Scrolls with content) -->
-                <StackPanel Margin="0,0,0,20">
-                    <!-- Network Loading Indicator -->
-                    <ContentControl Classes="loading-network" IsVisible="{Binding IsFetchingFromNetwork}" />
-                    
-                    <!-- Skeletons for pagination -->
-                    <ContentControl Classes="loading-skeletons" IsVisible="{Binding IsLoadingMore}" />
-
-                    <!-- End of List -->
-                    <Border IsVisible="{Binding ReachedEnd}" Margin="0,16,0,80" HorizontalAlignment="Center">
-                        <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.5">
-                            <mi:MaterialIcon Kind="CheckCircle" Width="20" Height="20"
-                                Foreground="{StaticResource TextMutedBrush}" />
-                            <TextBlock Text="{Binding L[Home_EndOfList]}"
-                                Foreground="{StaticResource TextMutedBrush}" FontSize="14" />
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-            </StackPanel>
+            <!-- Централизованный список треков -->
+            <controls:TrackListControl 
+                Items="{Binding ActiveTracks}"
+                IsLoading="{Binding IsLoading}"
+                IsLoadingMore="{Binding IsLoadingMore}"
+                IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
+                ReachedEnd="{Binding ReachedEnd}"
+                LoadMoreCommand="{Binding LoadMoreCommand}"
+                UseInternalScroll="False" />
         </ScrollViewer>
     </Grid>
 </UserControl>
