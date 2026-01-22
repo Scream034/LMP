@@ -17,6 +17,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
+    private CancellationTokenSource? _searchCts;
 
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
     [Reactive] public bool HasResults { get; private set; }
@@ -92,7 +93,10 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
         if (string.IsNullOrEmpty(_currentQuery)) return [];
-        var newTracks = await _youtube.SearchAsync(_currentQuery, TotalCount + 50);
+        var newTracks = await _youtube.SearchAsync(_currentQuery, TotalCount);
+        
+        if (ct.IsCancellationRequested) return [];
+        
         var result = newTracks.Skip(TotalCount).ToList();
         if (result.Count > 0)
         {
@@ -104,10 +108,16 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
     private async Task ExecuteSearchAsync()
     {
+        // Отмена предыдущего поиска
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var ct = _searchCts.Token;
+
         CancelLoading();
         IsLoading = true;
         ErrorMessage = null;
         ClearItems();
+        HasResults = false;
 
         _currentQuery = SearchQuery.Trim();
 
@@ -118,12 +128,18 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
         try
         {
+            // Небольшой дебаунс для быстрых кликов
+            await Task.Delay(50, ct);
+
             var queryType = YoutubeProvider.DetectQueryType(_currentQuery);
             List<TrackInfo> tracks;
 
             if (queryType == QueryType.DirectUrl)
             {
                 var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
+                
+                if (ct.IsCancellationRequested) return;
+                
                 tracks = track != null ? [track] : [];
                 await InitializeItemsAsync(tracks, canFetchMore: false);
 
@@ -136,6 +152,9 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
             {
                 IsFetchingFromNetwork = true;
                 var playlist = await _youtube.GetPlaylistAsync(_currentQuery);
+                
+                if (ct.IsCancellationRequested) return;
+                
                 tracks = playlist?.Tracks ?? [];
                 IsFetchingFromNetwork = false;
                 await InitializeItemsAsync(tracks, canFetchMore: false);
@@ -143,6 +162,9 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
             else
             {
                 var cached = await _searchCache.GetAsync(_currentQuery, 20);
+                
+                if (ct.IsCancellationRequested) return;
+                
                 if (cached != null && cached.Count > 0)
                 {
                     tracks = cached;
@@ -151,33 +173,50 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
                 {
                     IsFetchingFromNetwork = true;
                     tracks = await _youtube.SearchAsync(_currentQuery, 100);
+                    
+                    if (ct.IsCancellationRequested) return;
+                    
                     IsFetchingFromNetwork = false;
                     if (tracks.Count > 0) _ = _searchCache.SetAsync(_currentQuery, tracks);
                 }
 
                 var imageUrls = tracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
-                _ = _imageCache.PrefetchAsync(imageUrls!);
+                _ = _imageCache.PrefetchAsync(imageUrls!, ct);
+                
+                if (ct.IsCancellationRequested) return;
+                
                 await InitializeItemsAsync(tracks, canFetchMore: true);
             }
+
+            if (ct.IsCancellationRequested) return;
 
             HasResults = tracks.Count > 0;
             if (!HasResults) ErrorMessage = L["Search_NoResults"];
         }
+        catch (OperationCanceledException)
+        {
+            // Поиск был отменен - это нормально
+        }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
+            if (!ct.IsCancellationRequested)
+            {
+                ErrorMessage = ex.Message;
+            }
         }
         finally
         {
-            IsLoading = false;
-            IsFetchingFromNetwork = false;
+            if (!ct.IsCancellationRequested)
+            {
+                IsLoading = false;
+                IsFetchingFromNetwork = false;
+            }
         }
     }
 
     private void AddToHistory(string query)
     {
-        if (RecentSearches.Contains(query))
-            RecentSearches.Remove(query);
+        RecentSearches.Remove(query);
 
         RecentSearches.Insert(0, query);
 
@@ -189,7 +228,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
     private void UpdateHistoryStorage()
     {
-        LibService.Data.SearchHistory = RecentSearches.ToList();
+        LibService.Data.SearchHistory = [.. RecentSearches];
         LibService.Save();
     }
 
@@ -203,6 +242,8 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
     public void Dispose()
     {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
         CancelLoading();
         GC.SuppressFinalize(this);
     }

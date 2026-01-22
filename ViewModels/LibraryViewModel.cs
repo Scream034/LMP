@@ -129,7 +129,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     ct.ThrowIfCancellationRequested();
                     SyncProgress = 0.1;
 
-                    playlistsToImport = ytPlaylists.Select(p =>
+                    playlistsToImport = [.. ytPlaylists.Select(p =>
                     {
                         var pid = !string.IsNullOrEmpty(p.YoutubeId)
                             ? new YoutubeExplode.Playlists.PlaylistId(p.YoutubeId)
@@ -140,7 +140,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             p.Author ?? "Unknown");
 
                         return new PlaylistSearchResult(pid, p.Name, author, []);
-                    }).ToList();
+                    })];
                 }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex)

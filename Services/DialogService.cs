@@ -156,14 +156,14 @@ public class DialogService : IDialogService
             var window = GetMainWindow();
             if (window == null)
             {
-                return playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
+                return [.. playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip))];
             }
 
             var vm = new MergeConflictResolutionViewModel(playlistNames);
             var dialog = new MergeConflictResolutionDialog { DataContext = vm };
 
             var result = await ShowDialogSafeAsync<List<MergeDecision>>(dialog, window);
-            return result ?? playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
+            return result ?? [.. playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip))];
         });
     }
 

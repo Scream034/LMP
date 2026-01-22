@@ -347,7 +347,7 @@ public partial class YoutubeProvider
         if (cleanId.StartsWith("yt_"))
         {
             var rawId = cleanId[3..];
-            var safeId = new string(rawId.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-').ToArray());
+            var safeId = new string([.. rawId.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-')]);
             if (ValidYoutubeId.IsMatch(safeId)) return safeId;
         }
         if (!string.IsNullOrWhiteSpace(track.Url)) return ExtractVideoId(track.Url);
@@ -644,7 +644,7 @@ public partial class YoutubeProvider
     private static string SanitizeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = new string(name.Where(c => !invalid.Contains(c)).ToArray());
+        var sanitized = new string([.. name.Where(c => !invalid.Contains(c))]);
         return sanitized.Length > 200 ? sanitized[..200] : sanitized;
     }
 

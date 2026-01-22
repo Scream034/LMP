@@ -294,12 +294,11 @@ public class LibraryService : IDisposable
 
     public List<TrackInfo> GetRecentlyPlayed(int count = 20)
     {
-        return Data.RecentlyPlayedIds
+        return [.. Data.RecentlyPlayedIds
             .Take(count)
             .Select(GetTrack)
             .Where(t => t != null)
-            .Cast<TrackInfo>()
-            .ToList();
+            .Cast<TrackInfo>()];
     }
 
     public void ClearHistory()
@@ -435,7 +434,7 @@ public class LibraryService : IDisposable
     public List<TrackInfo> GetPlaylistTracks(string playlistId)
     {
         if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
-        return playlist.TrackIds.Select(GetTrack).Where(t => t != null).Cast<TrackInfo>().ToList();
+        return [.. playlist.TrackIds.Select(GetTrack).Where(t => t != null).Cast<TrackInfo>()];
     }
 
     public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
