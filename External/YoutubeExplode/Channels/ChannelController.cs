@@ -1,6 +1,7 @@
 ﻿using YoutubeExplode.Bridge;
 using YoutubeExplode.Exceptions;
 using YoutubeExplode.Utils;
+using System.Text;
 
 namespace YoutubeExplode.Channels;
 
@@ -54,62 +55,6 @@ internal class ChannelController(HttpClient http)
         CancellationToken cancellationToken = default
     ) => await GetChannelPageAsync("@" + channelHandle, cancellationToken);
 
-    public async ValueTask<ChannelPlaylistsResponse> GetChannelPlaylistsResponseAsync(
-      ChannelId channelId,
-      string? continuationToken,
-      CancellationToken cancellationToken = default
-  )
-    {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            "https://www.youtube.com/youtubei/v1/browse"
-        );
-
-        // "EglwbGF5bGlzdHM%3D" - это base64 от protobuf params для вкладки "Playlists"
-        // Если это первый запрос (нет токена), отправляем browseId канала и params.
-        // Если есть токен продолжения, отправляем только его.
-
-        var payload = continuationToken == null
-            ? $$"""
-            {
-              "browseId": {{Json.Serialize(channelId)}},
-              "params": "EglwbGF5bGlzdHM%3D", 
-              "context": {
-                "client": {
-                  "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
-                  "hl": "en",
-                  "gl": "US",
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """
-            : $$"""
-            {
-              "continuation": {{Json.Serialize(continuationToken)}},
-              "context": {
-                "client": {
-                  "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
-                  "hl": "en",
-                  "gl": "US",
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """;
-
-        request.Content = new StringContent(payload);
-
-        using var response = await http.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        return ChannelPlaylistsResponse.Parse(
-            await response.Content.ReadAsStringAsync(cancellationToken)
-        );
-    }
-
     public async ValueTask<ChannelPlaylistsResponse> GetChannelPlaylistsPageAsync(
     ChannelId channelId,
     string? continuationToken,
@@ -121,45 +66,52 @@ internal class ChannelController(HttpClient http)
             "https://www.youtube.com/youtubei/v1/browse"
         );
 
-        // Магия здесь: params "EglwbGF5bGlzdHM%3D" == Tab "Playlists"
-        var payload = continuationToken == null
-            ? $$"""
-            {
-              "browseId": {{Json.Serialize(channelId)}},
-              "params": "EglwbGF5bGlzdHM%3D",
-              "context": {
-                "client": {
-                  "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
-                  "hl": "en",
-                  "gl": "US",
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """
-            : $$"""
-            {
-              "continuation": {{Json.Serialize(continuationToken)}},
-              "context": {
-                "client": {
-                  "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
-                  "hl": "en",
-                  "gl": "US",
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """;
+        string payload;
 
-        request.Content = new StringContent(payload);
+        if (continuationToken == null)
+        {
+            // Первый запрос: запрашиваем страницу канала с открытой вкладкой Плейлисты
+            payload = $$"""
+        {
+            "browseId": "{{channelId.Value}}",
+            "params": "EglwbGF5bGlzdHPyBgQKAkIA", 
+            "context": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": "2.20240101.00.00",
+                    "hl": "en",
+                    "gl": "US"
+                }
+            }
+        }
+        """;
+        }
+        else
+        {
+            // Продолжение пагинации
+            payload = $$"""
+        {
+            "continuation": {{Json.Serialize(continuationToken)}},
+            "context": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": "2.20240101.00.00",
+                    "hl": "en",
+                    "gl": "US"
+                }
+            }
+        }
+        """;
+        }
+
+        request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
 
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        return ChannelPlaylistsResponse.Parse(
-            await response.Content.ReadAsStringAsync(cancellationToken)
-        );
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        // Здесь вызывается парсер, который нужно обновить (см. шаг 2)
+        return ChannelPlaylistsResponse.Parse(responseText);
     }
 }
