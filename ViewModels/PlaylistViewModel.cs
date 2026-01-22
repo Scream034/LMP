@@ -195,8 +195,8 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         if (otherPlaylists.Count == 0)
         {
             await _dialog.ShowInfoAsync(
-                L["Merge_NoTargets_Title"],
-                L["Merge_NoTargets_Msg"]);
+                L["Dialog_Merge_NoTarget_Title"],
+                L["Dialog_Merge_NoTarget_Msg"]);
             return;
         }
 
@@ -204,9 +204,9 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         if (!string.IsNullOrEmpty(targetId))
         {
             if (_library.MergePlaylists(_currentPlaylistId, targetId))
-                await _dialog.ShowInfoAsync(L["Dialog_Title_Success"], L["Merge_Success_Msg"]);
+                await _dialog.ShowInfoAsync(L["Dialog_Success"], L["Merge_Success_Msg"]);
             else
-                await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], L["Merge_Error_Msg"]);
+                await _dialog.ShowInfoAsync(L["Dialog_Error"], L["Merge_Error_Msg"]);
         }
     }
 

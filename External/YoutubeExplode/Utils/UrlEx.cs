@@ -1,4 +1,3 @@
-
 using System.Net;
 using System.Text;
 using YoutubeExplode.Utils.Extensions;
@@ -7,76 +6,101 @@ namespace YoutubeExplode.Utils;
 
 internal static class UrlEx
 {
+    // Оптимизировано: используем индексы вместо string.Split, чтобы избежать аллокации массива.
+    // Мы не используем Span здесь, так как yield return не позволяет хранить ref-структуры.
     private static IEnumerable<KeyValuePair<string, string>> EnumerateQueryParameters(string url)
     {
-        var query = url.Contains('?') ? url.SubstringAfter("?") : url;
+        if (string.IsNullOrWhiteSpace(url))
+            yield break;
 
-        foreach (var parameter in query.Split('&'))
+        var queryIndex = url.IndexOf('?');
+        var startIndex = queryIndex >= 0 ? queryIndex + 1 : 0;
+
+        if (queryIndex < 0 && url.Contains("http", StringComparison.OrdinalIgnoreCase))
         {
-            var key = WebUtility.UrlDecode(parameter.SubstringUntil("="));
-            var value = WebUtility.UrlDecode(parameter.SubstringAfter("="));
+            // Это полный URL без параметров запроса
+            yield break;
+        }
 
-            if (string.IsNullOrWhiteSpace(key))
-                continue;
+        var currentIndex = startIndex;
+        while (currentIndex < url.Length)
+        {
+            var ampIndex = url.IndexOf('&', currentIndex);
+            var segmentEnd = ampIndex < 0 ? url.Length : ampIndex;
+            var segmentLength = segmentEnd - currentIndex;
 
-            yield return new KeyValuePair<string, string>(key, value);
+            if (segmentLength > 0)
+            {
+                var eqIndex = url.IndexOf('=', currentIndex, segmentLength);
+                if (eqIndex >= 0)
+                {
+                    var key = WebUtility.UrlDecode(url.Substring(currentIndex, eqIndex - currentIndex));
+                    var value = WebUtility.UrlDecode(url.Substring(eqIndex + 1, segmentEnd - eqIndex - 1));
+
+                    if (!string.IsNullOrWhiteSpace(key))
+                        yield return new KeyValuePair<string, string>(key, value);
+                }
+                else
+                {
+                    var key = WebUtility.UrlDecode(url.Substring(currentIndex, segmentLength));
+                    if (!string.IsNullOrWhiteSpace(key))
+                        yield return new KeyValuePair<string, string>(key, "");
+                }
+            }
+
+            currentIndex = segmentEnd + 1;
         }
     }
 
-    public static IReadOnlyDictionary<string, string> GetQueryParameters(string url) =>
-        EnumerateQueryParameters(url).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+    public static IReadOnlyDictionary<string, string> GetQueryParameters(string url)
+    {
+        var dic = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kvp in EnumerateQueryParameters(url))
+        {
+            dic[kvp.Key] = kvp.Value;
+        }
+        return dic;
+    }
 
-    private static KeyValuePair<string, string>? TryGetQueryParameter(string url, string key)
+    public static string? TryGetQueryParameterValue(string url, string key)
     {
         foreach (var parameter in EnumerateQueryParameters(url))
         {
             if (string.Equals(parameter.Key, key, StringComparison.Ordinal))
-                return parameter;
+                return parameter.Value;
         }
-
         return null;
     }
-
-    public static string? TryGetQueryParameterValue(string url, string key) =>
-        TryGetQueryParameter(url, key)?.Value;
 
     public static bool ContainsQueryParameter(string url, string key) =>
         TryGetQueryParameterValue(url, key) is not null;
 
-    public static string RemoveQueryParameter(string url, string key)
-    {
-        if (!ContainsQueryParameter(url, key))
-            return url;
-
-        var urlBuilder = new UriBuilder(url);
-        var queryBuilder = new StringBuilder();
-
-        foreach (var parameter in EnumerateQueryParameters(url))
-        {
-            if (string.Equals(parameter.Key, key, StringComparison.Ordinal))
-                continue;
-
-            queryBuilder.Append(queryBuilder.Length > 0 ? '&' : '?');
-
-            queryBuilder.Append(Uri.EscapeDataString(parameter.Key));
-            queryBuilder.Append('=');
-            queryBuilder.Append(Uri.EscapeDataString(parameter.Value));
-        }
-
-        urlBuilder.Query = queryBuilder.ToString();
-
-        return urlBuilder.ToString();
-    }
-
     public static string SetQueryParameter(string url, string key, string value)
     {
-        var urlWithoutParameter = RemoveQueryParameter(url, key);
-        var hasOtherParameters = urlWithoutParameter.Contains('?');
+        var queryIndex = url.IndexOf('?');
+        var baseUrl = queryIndex < 0 ? url : url.Substring(0, queryIndex);
 
-        return urlWithoutParameter
-            + (hasOtherParameters ? '&' : '?')
-            + Uri.EscapeDataString(key)
-            + '='
-            + Uri.EscapeDataString(value);
+        var sb = new StringBuilder(baseUrl);
+        sb.Append('?');
+
+        var hasParams = false;
+        foreach (var p in EnumerateQueryParameters(url))
+        {
+            if (string.Equals(p.Key, key, StringComparison.Ordinal))
+                continue;
+
+            if (hasParams) sb.Append('&');
+            sb.Append(Uri.EscapeDataString(p.Key));
+            sb.Append('=');
+            sb.Append(Uri.EscapeDataString(p.Value));
+            hasParams = true;
+        }
+
+        if (hasParams) sb.Append('&');
+        sb.Append(Uri.EscapeDataString(key));
+        sb.Append('=');
+        sb.Append(Uri.EscapeDataString(value));
+
+        return sb.ToString();
     }
 }

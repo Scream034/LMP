@@ -329,7 +329,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         }
         
         var confirmed = await _dialog.ConfirmAsync(
-            L["Confirm_Delete"],
+            L["Dialog_Confirm_Title"],
             string.Format(L["Playlist_DeleteConfirm"], playlist.Name),
             L["Button_Delete"],
             L["Button_Cancel"]);

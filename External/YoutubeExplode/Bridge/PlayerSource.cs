@@ -36,6 +36,7 @@ internal partial class PlayerSource(string content)
                 return null;
 
             // Find the definition of the cipher functions
+            // Dynamic regex based on extracted container name - cannot use GeneratedRegex for the full pattern
             var cipherDefinition = Regex
                 .Match(
                     content,
@@ -56,30 +57,19 @@ internal partial class PlayerSource(string content)
                 .Value.NullIfWhiteSpace();
 
             // Identify the splice cipher function
-            var spliceFuncName = Regex
-                .Match(
-                    cipherDefinition,
-                    @"([$_\w]+):function\([$_\w]+,[$_\w]+\){+[^}]*?splice[^}]*?}",
-                    RegexOptions.Singleline
-                )
+            var spliceFuncName = SpliceFuncRegex().Match(cipherDefinition)
                 .Groups[1]
                 .Value.NullIfWhiteSpace();
 
             // Identify the reverse cipher function
-            var reverseFuncName = Regex
-                .Match(
-                    cipherDefinition,
-                    @"([$_\w]+):function\([$_\w]+\){+[^}]*?reverse[^}]*?}",
-                    RegexOptions.Singleline
-                )
+            var reverseFuncName = ReverseFuncRegex().Match(cipherDefinition)
                 .Groups[1]
                 .Value.NullIfWhiteSpace();
 
             var operations = new List<ICipherOperation>();
             foreach (var statement in cipherCallsite.Split(';'))
             {
-                var calledFuncName = Regex
-                    .Match(statement, @"[$_\w]+\.([$_\w]+)\([$_\w]+,\d+\)")
+                var calledFuncName = CalledFuncRegex().Match(statement)
                     .Groups[1]
                     .Value;
 
@@ -88,8 +78,7 @@ internal partial class PlayerSource(string content)
 
                 if (string.Equals(calledFuncName, swapFuncName, StringComparison.Ordinal))
                 {
-                    var index = Regex
-                        .Match(statement, @"\([$_\w]+,(\d+)\)")
+                    var index = IndexRegex().Match(statement)
                         .Groups[1]
                         .Value.Pipe(s => int.Parse(s, CultureInfo.InvariantCulture));
 
@@ -97,8 +86,7 @@ internal partial class PlayerSource(string content)
                 }
                 else if (string.Equals(calledFuncName, spliceFuncName, StringComparison.Ordinal))
                 {
-                    var index = Regex
-                        .Match(statement, @"\([$_\w]+,(\d+)\)")
+                    var index = IndexRegex().Match(statement)
                         .Groups[1]
                         .Value.Pipe(s => int.Parse(s, CultureInfo.InvariantCulture));
 
@@ -116,16 +104,33 @@ internal partial class PlayerSource(string content)
 
     [GeneratedRegex(@"(?:signatureTimestamp|sts):(\d{5})")]
     private static partial Regex MyRegex();
+
     [GeneratedRegex("""
                     [$_\w]+=function\([$_\w]+\){([$_\w]+)=\1\.split\(['"]{2}\);.*?return \1\.join\(['"]{2}\)}
                     """, RegexOptions.Singleline
     )]
     private static partial Regex MyRegex1();
+
     [GeneratedRegex(@"([$_\w]+)\.[$_\w]+\([$_\w]+,\d+\);")]
     private static partial Regex MyRegex2();
+
     [GeneratedRegex(@"([$_\w]+):function\([$_\w]+,[$_\w]+\){+[^}]*?%[^}]*?}", RegexOptions.Singleline
     )]
     private static partial Regex MyRegex3();
+
+    // New generated regexes replacing static Regex.Match
+
+    [GeneratedRegex(@"([$_\w]+):function\([$_\w]+,[$_\w]+\){+[^}]*?splice[^}]*?}", RegexOptions.Singleline)]
+    private static partial Regex SpliceFuncRegex();
+
+    [GeneratedRegex(@"([$_\w]+):function\([$_\w]+\){+[^}]*?reverse[^}]*?}", RegexOptions.Singleline)]
+    private static partial Regex ReverseFuncRegex();
+
+    [GeneratedRegex(@"[$_\w]+\.([$_\w]+)\([$_\w]+,\d+\)")]
+    private static partial Regex CalledFuncRegex();
+
+    [GeneratedRegex(@"\([$_\w]+,(\d+)\)")]
+    private static partial Regex IndexRegex();
 }
 
 internal partial class PlayerSource

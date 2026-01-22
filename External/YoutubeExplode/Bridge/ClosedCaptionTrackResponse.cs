@@ -6,8 +6,8 @@ namespace YoutubeExplode.Bridge;
 
 internal partial class ClosedCaptionTrackResponse(XElement content)
 {
-    public IReadOnlyList<CaptionData> Captions =>
-        content.Descendants("p").Select(x => new CaptionData(x)).ToArray();
+    public IEnumerable<CaptionData> Captions =>
+        content.Descendants("p").Select(x => new CaptionData(x));
 }
 
 internal partial class ClosedCaptionTrackResponse

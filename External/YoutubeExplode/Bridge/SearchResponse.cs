@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using YoutubeExplode.Utils;
 using YoutubeExplode.Utils.Extensions;
@@ -7,42 +8,101 @@ namespace YoutubeExplode.Bridge;
 
 internal partial class SearchResponse(JsonElement content)
 {
-    // Search response is incredibly inconsistent (with at least 5 variations),
-    // so we employ descendant searching, which is inefficient but resilient.
+    // Optimized traversal without EnumerateDescendantProperties
 
-    private JsonElement? ContentRoot =>
-        content.GetPropertyOrNull("contents")
-        ?? content.GetPropertyOrNull("onResponseReceivedCommands");
+    public IEnumerable<VideoData> Videos =>
+        EnumerateItems().Select(i => i.GetPropertyOrNull("videoRenderer")).WhereNotNull().Select(j => new VideoData(j));
 
-    public IReadOnlyList<VideoData> Videos =>
-        ContentRoot
-            ?.EnumerateDescendantProperties("videoRenderer")
-            .Select(j => new VideoData(j))
-            .ToArray() ?? [];
+    public IEnumerable<PlaylistData> Playlists =>
+        EnumerateItems()
+        .Select(i =>
+            i.GetPropertyOrNull("lockupViewModel") ??
+            i.GetPropertyOrNull("playlistRenderer"))
+        .WhereNotNull()
+        .Select(j => new PlaylistData(j));
 
-    public IReadOnlyList<PlaylistData> Playlists =>
-        ContentRoot
-            ?.EnumerateDescendantProperties("lockupViewModel")
-            .Select(j => new PlaylistData(j))
-            .ToArray()
-        ?? ContentRoot
-            ?.EnumerateDescendantProperties("playlistRenderer")
-            .Select(j => new PlaylistData(j))
-            .ToArray()
-        ?? [];
-
-    public IReadOnlyList<ChannelData> Channels =>
-        ContentRoot
-            ?.EnumerateDescendantProperties("channelRenderer")
-            .Select(j => new ChannelData(j))
-            .ToArray() ?? [];
+    public IEnumerable<ChannelData> Channels =>
+        EnumerateItems().Select(i => i.GetPropertyOrNull("channelRenderer")).WhereNotNull().Select(j => new ChannelData(j));
 
     public string? ContinuationToken =>
-        ContentRoot
-            ?.EnumerateDescendantProperties("continuationCommand")
-            .FirstOrNull()
+        // Try specific path first
+        content.GetPropertyOrNull("contents")
+            ?.GetPropertyOrNull("twoColumnSearchResultsRenderer")
+            ?.GetPropertyOrNull("primaryContents")
+            ?.GetPropertyOrNull("sectionListRenderer")
+            ?.GetPropertyOrNull("contents")?.EnumerateArrayOrNull()?.LastOrDefault()
+            .GetPropertyOrNull("continuationItemRenderer")
+            ?.GetPropertyOrNull("continuationEndpoint")
+            ?.GetPropertyOrNull("continuationCommand")
+            ?.GetPropertyOrNull("token")
+            ?.GetStringOrNull()
+        ??
+        // Try continuation path
+        content.GetPropertyOrNull("onResponseReceivedCommands")?.EnumerateArrayOrNull()?.FirstOrNull()
+            ?.GetPropertyOrNull("appendContinuationItemsAction")
+            ?.GetPropertyOrNull("continuationItems")?.EnumerateArrayOrNull()?.LastOrDefault()
+            .GetPropertyOrNull("continuationItemRenderer")
+            ?.GetPropertyOrNull("continuationEndpoint")
+            ?.GetPropertyOrNull("continuationCommand")
             ?.GetPropertyOrNull("token")
             ?.GetStringOrNull();
+
+    private IEnumerable<JsonElement> EnumerateItems()
+    {
+        // 1. Initial Search Response
+        var primaryContents = content.GetPropertyOrNull("contents")
+            ?.GetPropertyOrNull("twoColumnSearchResultsRenderer")
+            ?.GetPropertyOrNull("primaryContents");
+
+        if (primaryContents != null)
+        {
+            var sectionListContents = primaryContents.Value.GetPropertyOrNull("sectionListRenderer")
+                ?.GetPropertyOrNull("contents");
+
+            if (sectionListContents != null)
+            {
+                foreach (var section in sectionListContents.Value.EnumerateArrayOrEmpty())
+                {
+                    var items = section.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
+                    if (items != null)
+                    {
+                        foreach (var item in items.Value.EnumerateArrayOrEmpty())
+                        {
+                            yield return item;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Continuation Response
+        var commands = content.GetPropertyOrNull("onResponseReceivedCommands");
+        if (commands != null)
+        {
+            foreach (var cmd in commands.Value.EnumerateArrayOrEmpty())
+            {
+                var items = cmd.GetPropertyOrNull("appendContinuationItemsAction")
+                    ?.GetPropertyOrNull("continuationItems");
+
+                if (items != null)
+                {
+                    foreach (var item in items.Value.EnumerateArrayOrEmpty())
+                    {
+                        var itemSection = item.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
+                        if (itemSection != null)
+                        {
+                            foreach (var innerItem in itemSection.Value.EnumerateArrayOrEmpty())
+                                yield return innerItem;
+                        }
+                        else
+                        {
+                            yield return item;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 internal partial class SearchResponse
@@ -105,8 +165,7 @@ internal partial class SearchResponse
         public TimeSpan? Duration =>
             content
                 .GetPropertyOrNull("lengthText")
-                ?.GetPropertyOrNull("simpleText")
-                ?.GetStringOrNull()
+                ?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
                 ?.Pipe(s =>
                     TimeSpan.TryParseExact(
                         s,

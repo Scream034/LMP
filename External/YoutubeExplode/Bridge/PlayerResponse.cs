@@ -23,8 +23,6 @@ internal partial class PlayerResponse(JsonElement content)
             ?.GetPropertyOrNull("category")
             ?.GetStringOrNull();
 
-    // YouTube Music обычно помечает видео категорией "Music".
-    // Также можно проверять musicVideoType, но Category — самый надежный способ.
     public bool IsMusic =>
         string.Equals(Category, "Music", StringComparison.OrdinalIgnoreCase) ||
         content.GetPropertyOrNull("videoDetails")?.GetPropertyOrNull("musicVideoType") != null;
@@ -109,10 +107,7 @@ internal partial class PlayerResponse(JsonElement content)
             ?.GetPropertyOrNull("playerResponse")
             ?.GetStringOrNull()
             ?
-            // YouTube uses weird base64-like encoding here that I don't know how to deal with.
-            // It's supposed to have JSON inside, but if extracted as is, it contains garbage.
-            // Luckily, some of the text gets decoded correctly, which is enough for us to
-            // extract the preview video ID using regex.
+            // YouTube uses weird base64-like encoding here.
             .Replace('-', '+')
             .Replace('_', '/')
             .Pipe(Convert.FromBase64String)
@@ -128,40 +123,43 @@ internal partial class PlayerResponse(JsonElement content)
     public string? HlsManifestUrl =>
         StreamingData?.GetPropertyOrNull("hlsManifestUrl")?.GetStringOrNull();
 
-    public IReadOnlyList<IStreamData> Streams
+    // Lazy enumerable to save allocations
+    public IEnumerable<IStreamData> Streams
     {
         get
         {
-            var result = new List<IStreamData>();
+            var formats = StreamingData?.GetPropertyOrNull("formats");
+            if (formats != null)
+            {
+                foreach (var j in formats.Value.EnumerateArrayOrEmpty())
+                    yield return new StreamData(j);
+            }
 
-            var muxedStreams = StreamingData
-                ?.GetPropertyOrNull("formats")
-                ?.EnumerateArrayOrNull()
-                ?.Select(j => new StreamData(j));
-
-            if (muxedStreams is not null)
-                result.AddRange(muxedStreams);
-
-            var adaptiveStreams = StreamingData
-                ?.GetPropertyOrNull("adaptiveFormats")
-                ?.EnumerateArrayOrNull()
-                ?.Select(j => new StreamData(j));
-
-            if (adaptiveStreams is not null)
-                result.AddRange(adaptiveStreams);
-
-            return result;
+            var adaptiveFormats = StreamingData?.GetPropertyOrNull("adaptiveFormats");
+            if (adaptiveFormats != null)
+            {
+                foreach (var j in adaptiveFormats.Value.EnumerateArrayOrEmpty())
+                    yield return new StreamData(j);
+            }
         }
     }
 
-    public IReadOnlyList<ClosedCaptionTrackData> ClosedCaptionTracks =>
-        content
-            .GetPropertyOrNull("captions")
-            ?.GetPropertyOrNull("playerCaptionsTracklistRenderer")
-            ?.GetPropertyOrNull("captionTracks")
-            ?.EnumerateArrayOrNull()
-            ?.Select(j => new ClosedCaptionTrackData(j))
-            .ToArray() ?? [];
+    public IEnumerable<ClosedCaptionTrackData> ClosedCaptionTracks
+    {
+        get
+        {
+            var tracks = content
+                .GetPropertyOrNull("captions")
+                ?.GetPropertyOrNull("playerCaptionsTracklistRenderer")
+                ?.GetPropertyOrNull("captionTracks");
+
+            if (tracks != null)
+            {
+                foreach (var j in tracks.Value.EnumerateArrayOrEmpty())
+                    yield return new ClosedCaptionTrackData(j);
+            }
+        }
+    }
 
     [GeneratedRegex(@"video_id=(.{11})")]
     private static partial Regex MyRegex();
@@ -270,7 +268,6 @@ internal partial class PlayerResponse
             {
                 var codec = IsAudioOnly ? null : Codecs?.SubstringUntil(", ").NullIfWhiteSpace();
 
-                // "unknown" value indicates av01 codec
                 if (string.Equals(codec, "unknown", StringComparison.OrdinalIgnoreCase))
                     return "av01.0.05M.08";
 

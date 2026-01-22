@@ -276,18 +276,18 @@ public class SettingsViewModel : ViewModelBase
                 if (info != null)
                 {
                     _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
-                    // await _dialog.ShowInfoAsync(L["Dialog_Title_Success"], $"Linked to public channel: {info.Value.Name}");
-                    await _dialog.ShowInfoAsync(L["Dialog_Title_Success"], string.Format(L["Dialog_Merge_Success"], info.Value.Name));
+                    // await _dialog.ShowInfoAsync(L["Dialog_Success"], $"Linked to public channel: {info.Value.Name}");
+                    await _dialog.ShowInfoAsync(L["Dialog_Success"], string.Format(L["Dialog_Merge_Success"], info.Value.Name));
                 }
                 else
                 {
-                    // await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], "Could not find channel.");
-                    await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], L["Dialog_Merge_Error"]);
+                    // await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], "Could not find channel.");
+                    await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Dialog_Merge_Error"]);
                 }
             }
             catch (Exception ex)
             {
-                await _dialog.ShowInfoAsync(L["Dialog_Title_Error"], ex.Message);
+                await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], ex.Message);
             }
         });
 
@@ -306,13 +306,13 @@ public class SettingsViewModel : ViewModelBase
             var loc = LocalizationService.Instance;
 
             bool confirmed = await _dialog.ConfirmAsync(
-                loc["Dialog_Confirm"],
+                loc["Dialog_Confirm_Title"],
                 loc["Dialog_ClearHistoryMessage"]);
 
             if (confirmed)
             {
                 _library.ClearHistory();
-                await _dialog.ShowInfoAsync(loc["Dialog_Done"], loc["Dialog_HistoryCleared"]);
+                await _dialog.ShowInfoAsync(loc["Dialog_Done_Title"], loc["Dialog_HistoryCleared"]);
 
                 Log.Info("[Settings] History cleared");
             }
@@ -324,14 +324,14 @@ public class SettingsViewModel : ViewModelBase
             var loc = LocalizationService.Instance;
 
             bool confirmed = await _dialog.ConfirmAsync(
-                loc["Dialog_Warning"],
+                loc["Dialog_Warning_Title"],
                 loc["Dialog_ResetMessage"]);
 
             if (confirmed)
             {
                 _library.Reset();
                 LoadSettings();
-                await _dialog.ShowInfoAsync(loc["Dialog_Done"], loc["Dialog_ResetComplete"]);
+                await _dialog.ShowInfoAsync(loc["Dialog_Done_Title"], loc["Dialog_ResetComplete"]);
 
                 Log.Info("[Settings] Library reset");
             }

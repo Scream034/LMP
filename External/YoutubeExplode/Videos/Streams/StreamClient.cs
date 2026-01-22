@@ -103,7 +103,7 @@ public class StreamClient(HttpClient http)
             playerResponse = await _controller.GetPlayerResponseAsync(videoId, cipherManifest.SignatureTimestamp, cancellationToken);
         }
 
-        if (playerResponse.Streams.Count == 0)
+        if (playerResponse.Streams.Count() == 0)
             throw new VideoUnplayableException($"No streams for {videoId}");
 
         var streams = new List<IStreamInfo>();
