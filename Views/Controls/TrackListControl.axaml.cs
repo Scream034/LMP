@@ -10,6 +10,15 @@ namespace MyLiteMusicPlayer.Views.Controls;
 
 public partial class TrackListControl : UserControl
 {
+    public static readonly StyledProperty<bool> EnableSmoothLoadingProperty =
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableSmoothLoading), true);
+
+    public bool EnableSmoothLoading
+    {
+        get => GetValue(EnableSmoothLoadingProperty);
+        set => SetValue(EnableSmoothLoadingProperty, value);
+    }
+
     public TrackListControl()
     {
         InitializeComponent();
@@ -118,8 +127,8 @@ public partial class TrackListControl : UserControl
 
         if (change.Property == UseInternalScrollProperty)
         {
-            ScrollVisibility = UseInternalScroll 
-                ? ScrollBarVisibility.Auto 
+            ScrollVisibility = UseInternalScroll
+                ? ScrollBarVisibility.Auto
                 : ScrollBarVisibility.Disabled;
         }
     }

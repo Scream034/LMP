@@ -7,7 +7,8 @@
     xmlns:controls="using:MyLiteMusicPlayer.Views.Controls"
     x:Class="MyLiteMusicPlayer.Views.SearchView"
     x:DataType="vm:SearchViewModel"
-    x:CompileBindings="True">
+    x:CompileBindings="True"
+    x:Name="SearchRoot"> <!-- 1. Даем имя корневому контролу -->
 
     <Grid RowDefinitions="Auto, *">
         <StackPanel Grid.Row="0" Margin="24,24,24,10">
@@ -42,14 +43,14 @@
                         <DataTemplate>
                             <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="16" Padding="4,0,0,0">
                                 <StackPanel Orientation="Horizontal">
-                                    <Button Command="{Binding $parent[UserControl].DataContext.HistoryClickCommand}" 
+                                    <Button Command="{Binding #SearchRoot.DataContext.HistoryClickCommand}" 
                                             CommandParameter="{Binding}"
                                             Background="Transparent" BorderThickness="0"
                                             Content="{Binding}" 
                                             Padding="12,6"
                                             Foreground="{StaticResource TextSecondaryBrush}"/>
                                             
-                                    <Button Command="{Binding $parent[UserControl].DataContext.RemoveHistoryCommand}" 
+                                    <Button Command="{Binding #SearchRoot.DataContext.RemoveHistoryCommand}" 
                                             CommandParameter="{Binding}"
                                             Classes="icon-btn" Width="24" Height="24" 
                                             Margin="0,0,4,0" Background="Transparent">
@@ -77,6 +78,7 @@
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="150" />
             </i:Interaction.Behaviors>
 
+            <!-- Не забываем пробрасывать EnableSmoothLoading, о котором говорили ранее -->
             <controls:TrackListControl 
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"
@@ -85,7 +87,8 @@
                 ReachedEnd="{Binding ReachedEnd}"
                 LoadMoreCommand="{Binding LoadMoreCommand}"
                 UseInternalScroll="False"
-                UseSearchLoader="True" />
+                UseSearchLoader="True"
+                EnableSmoothLoading="{Binding EnableSmoothLoading}" />
         </ScrollViewer>
     </Grid>
 </UserControl>

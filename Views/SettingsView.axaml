@@ -1,6 +1,7 @@
 ﻿<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.ViewModels"
+    xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
     x:Class="MyLiteMusicPlayer.Views.SettingsView"
     x:DataType="vm:SettingsViewModel"
     x:CompileBindings="True">
@@ -34,41 +35,87 @@
             <!-- Заголовок -->
             <TextBlock Text="{Binding L[Settings_Title]}" FontSize="32" FontWeight="Bold" />
 
-            <!-- СЕКЦИЯ: АККАУНТ И ЯЗЫК -->
+            <!-- СЕКЦИЯ: АККАУНТ -->
             <StackPanel Spacing="16">
                 <TextBlock Classes="section-header" Text="{Binding L[Settings_Account_Language]}" />
 
-                <Grid ColumnDefinitions="*, Auto" VerticalAlignment="Center">
-                    <StackPanel>
-                        <TextBlock Text="{Binding DisplayEmail}" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding AuthStatusText}"
-                            Foreground="{StaticResource TextSecondaryBrush}"
-                            FontSize="13" />
+                <!-- Карточка аккаунта -->
+                <Border Background="{StaticResource BgSecondaryBrush}"
+                    Padding="16" CornerRadius="8">
+                    <StackPanel Spacing="12">
+                        <!-- Основная информация об аккаунте -->
+                        <Grid ColumnDefinitions="Auto, *, Auto">
+                            <!-- Аватар (для Fake Account) -->
+                            <Border Width="48" Height="48"
+                                CornerRadius="24"
+                                ClipToBounds="True"
+                                IsVisible="{Binding HasFakeAccount}"
+                                Margin="0,0,12,0">
+                                <Image asyncImageLoader:ImageLoader.Source="{Binding FakeAccountAvatar}"
+                                    Stretch="UniformToFill" />
+                            </Border>
+                            
+                            <!-- Иконка пользователя (для Google или Guest) -->
+                            <Border Width="48" Height="48"
+                                CornerRadius="24"
+                                Background="{StaticResource BgHighlightBrush}"
+                                IsVisible="{Binding !HasFakeAccount}"
+                                Margin="0,0,12,0">
+                                <TextBlock Text="👤" 
+                                    FontSize="24"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center" />
+                            </Border>
+
+                            <!-- Имя и статус -->
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding AccountDisplayName}" 
+                                    FontWeight="SemiBold" 
+                                    FontSize="15" />
+                                <TextBlock Text="{Binding AccountStatusText}"
+                                    Foreground="{StaticResource TextSecondaryBrush}"
+                                    FontSize="13" />
+                            </StackPanel>
+
+                            <!-- Кнопки -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Button Command="{Binding LoginCommand}"
+                                    Content="{Binding L[Auth_Login]}"
+                                    IsVisible="{Binding !IsAuthenticated}" 
+                                    Classes="accent" />
+                                <Button Command="{Binding LogoutCommand}"
+                                    Content="{Binding L[Auth_Logout]}"
+                                    IsVisible="{Binding IsAuthenticated}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Предупреждение об ограничениях (только для Fake Account) -->
+                        <Border IsVisible="{Binding ShowFakeAccountWarning}"
+                            Background="{StaticResource BgHighlightBrush}"
+                            Padding="12" 
+                            CornerRadius="6"
+                            Margin="0,4,0,0">
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="⚠️" FontSize="14" />
+                                    <TextBlock Text="{Binding L[Account_LimitedAccess]}" 
+                                        FontWeight="SemiBold"
+                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                                </StackPanel>
+                                <StackPanel Spacing="4" Margin="26,0,0,0">
+                                    <TextBlock Text="{Binding L[Account_LimitedAccess_Hint1]}"
+                                        FontSize="12"
+                                        Foreground="{StaticResource TextMutedBrush}" />
+                                    <TextBlock Text="{Binding L[Account_LimitedAccess_Hint2]}"
+                                        FontSize="12"
+                                        Foreground="{StaticResource TextMutedBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
-                        <Button Command="{Binding LoginCommand}"
-                            Content="{Binding L[Auth_Login]}"
-                            IsVisible="{Binding !IsAuthenticated}" Classes="accent" />
-                        <Button Command="{Binding LogoutCommand}"
-                            Content="{Binding L[Auth_Logout]}"
-                            IsVisible="{Binding IsAuthenticated}" />
-                    </StackPanel>
-                </Grid>
+                </Border>
 
-                <Grid ColumnDefinitions="*, Auto" Classes="setting-row">
-                    <TextBlock Classes="setting-title" Text="{Binding L[Language]}" />
-                    <ComboBox Grid.Column="1"
-                        ItemsSource="{Binding Languages}"
-                        SelectedItem="{Binding SelectedLanguage}"
-                        DisplayMemberBinding="{Binding Name}"
-                        MinWidth="140" />
-                </Grid>
-            </StackPanel>
-
-            <!-- СЕКЦИЯ: FAKE ACCOUNT -->
-            <StackPanel Spacing="16" Margin="0,24,0,0">
-                <TextBlock Classes="section-header" Text="{Binding L[Settings_PublicSync]}" />
-
+                <!-- Привязка публичного канала -->
                 <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
                     <StackPanel Margin="0,0,16,0">
                         <TextBlock Classes="setting-title" Text="{Binding L[Settings_ChannelUrl]}" />
@@ -81,8 +128,19 @@
                         <Button Content="{Binding L[Common_Set]}"
                             Command="{Binding SetFakeAccountCommand}" />
                         <Button Content="{Binding L[Common_Clear]}"
-                            Command="{Binding ClearFakeAccountCommand}" />
+                            Command="{Binding ClearFakeAccountCommand}"
+                            IsVisible="{Binding HasFakeAccount}" />
                     </StackPanel>
+                </Grid>
+
+                <!-- Язык -->
+                <Grid ColumnDefinitions="*, Auto" Classes="setting-row">
+                    <TextBlock Classes="setting-title" Text="{Binding L[Language]}" />
+                    <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding Languages}"
+                        SelectedItem="{Binding SelectedLanguage}"
+                        DisplayMemberBinding="{Binding Name}"
+                        MinWidth="140" />
                 </Grid>
             </StackPanel>
 

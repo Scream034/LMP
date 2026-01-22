@@ -1,4 +1,6 @@
 using Avalonia.Collections;
+using Microsoft.Extensions.DependencyInjection;
+using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
@@ -13,13 +15,15 @@ namespace MyLiteMusicPlayer.ViewModels;
 public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
     where TViewModel : class
 {
+    public readonly LibraryService LibService;
+
     private readonly List<TSource> _allItems = [];
     private readonly HashSet<string> _loadedIds = [];
     private int _displayedCount;
     private CancellationTokenSource? _loadCts;
 
     // ─── Configuration ───
-    protected virtual int BatchSize => 30;
+    protected virtual int BatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize : 20;
     protected virtual int LoadDelayMs => 200;
     protected virtual int PrefetchThreshold => 15;
 
@@ -29,6 +33,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
     [Reactive] public bool IsFetchingFromNetwork { get; protected set; }
     [Reactive] public bool HasMoreItems { get; protected set; }
     [Reactive] public bool ReachedEnd { get; protected set; }
+    [Reactive] public bool EnableSmoothLoading { get; set; }
 
     /// <summary>
     /// AvaloniaList optimized for UI notifications.
@@ -47,6 +52,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase
             (loading, hasMore, initial, fetching) => !loading && !initial && !fetching && hasMore);
 
         LoadMoreCommand = ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore);
+        LibService = Program.Services.GetRequiredService<LibraryService>();
+        EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
+        LibService.OnDataChanged += () => EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
     }
 
     // ─── Protected API ───

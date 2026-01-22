@@ -81,9 +81,8 @@
 
   "Settings_Title": "Настройки",
   "Settings_Account_Language": "Аккаунт и язык",
-  "Settings_PublicSync": "Публичный доступ",
-  "Settings_ChannelUrl": "Ссылка на канал",
-  "Settings_ChannelUrlDesc": "Синхронизация публичных плейлистов без входа.",
+  "Settings_ChannelUrl": "Публичный канал",
+  "Settings_ChannelUrlDesc": "Синхронизация публичных плейлистов без входа в Google.",
   "Settings_ChannelPlaceholder": "https://youtube.com/@channel",
   
   "Settings_Audio": "Аудио",
@@ -93,6 +92,10 @@
   
   "Settings_Storage_Data": "Данные",
   "Settings_General": "Общее",
+  
+  "Account_LimitedAccess": "Ограниченный доступ",
+  "Account_LimitedAccess_Hint1": "• Доступны только публичные плейлисты",
+  "Account_LimitedAccess_Hint2": "• Лайки и приватные данные требуют входа в Google",
   
   "Auth_NotSignedIn": "Вход не выполнен",
   "Auth_LoggedIn": "Вход выполнен",
@@ -112,9 +115,9 @@
   "Storage_ClearHistory": "Очистить историю",
   "Storage_ResetApp": "Сброс приложения",
   
-  "Perf_SmoothLoading": "Плавная загрузка",
   "General_Discord": "Discord RPC",
   "General_AutoPaste": "Играть при вставке ссылки",
+  "Perf_SmoothLoading": "Плавная загрузка",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",

@@ -14,12 +14,9 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
-    private readonly LibraryService _library;
     private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
-
-    protected override int BatchSize => 20;
 
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
     [Reactive] public bool HasResults { get; private set; }
@@ -36,27 +33,25 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         AudioEngine audio,
-        LibraryService library,
         TrackViewModelFactory vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
-        _library = library;
         _vmFactory = vmFactory;
 
         // Восстановление истории
-        if (_library.Data.SearchHistory != null)
+        if (LibService.Data.SearchHistory != null)
         {
-            foreach (var item in _library.Data.SearchHistory)
+            foreach (var item in LibService.Data.SearchHistory)
                 RecentSearches.Add(item);
         }
 
         // Восстановление последнего запроса
-        if (!string.IsNullOrEmpty(_library.Data.LastSearchQuery))
+        if (!string.IsNullOrEmpty(LibService.Data.LastSearchQuery))
         {
-            SearchQuery = _library.Data.LastSearchQuery;
+            SearchQuery = LibService.Data.LastSearchQuery;
             _ = ExecuteSearchAsync();
         }
 
@@ -65,12 +60,14 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
         HistoryClickCommand = ReactiveCommand.Create<string>(query =>
         {
+            if (string.IsNullOrEmpty(query)) return;
             SearchQuery = query;
             _ = ExecuteSearchAsync();
         });
 
         RemoveHistoryCommand = ReactiveCommand.Create<string>(query =>
         {
+            if (string.IsNullOrEmpty(query)) return;
             RecentSearches.Remove(query);
             UpdateHistoryStorage();
         });
@@ -78,9 +75,9 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        if (_library.HasTrack(track.Id))
+        if (LibService.HasTrack(track.Id))
         {
-            var existing = _library.GetTrack(track.Id);
+            var existing = LibService.GetTrack(track.Id);
             if (existing != null)
             {
                 track.IsLiked = existing.IsLiked;
@@ -115,9 +112,9 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         _currentQuery = SearchQuery.Trim();
 
         // Сохраняем запрос и историю
-        _library.Data.LastSearchQuery = _currentQuery;
+        LibService.Data.LastSearchQuery = _currentQuery;
         AddToHistory(_currentQuery);
-        _library.Save();
+        LibService.Save();
 
         try
         {
@@ -129,6 +126,11 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
                 var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
                 tracks = track != null ? [track] : [];
                 await InitializeItemsAsync(tracks, canFetchMore: false);
+
+                if (track != null && LibService.Data.AutoPlayOnUrlPaste)
+                {
+                    _ = _audio.PlayTrackAsync(track);
+                }
             }
             else if (queryType == QueryType.Playlist)
             {
@@ -187,8 +189,8 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 
     private void UpdateHistoryStorage()
     {
-        _library.Data.SearchHistory = RecentSearches.ToList();
-        _library.Save();
+        LibService.Data.SearchHistory = RecentSearches.ToList();
+        LibService.Save();
     }
 
     private void PlayTrackWithContext(TrackInfo track)
@@ -196,7 +198,7 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         // Атомарно устанавливаем очередь и начинаем воспроизведение
         var tracks = Items.Select(x => x.Track).ToList();
         _ = _audio.StartQueueAsync(tracks, track);
-        _library.AddToRecentlyPlayed(track);
+        LibService.AddToRecentlyPlayed(track);
     }
 
     public void Dispose()

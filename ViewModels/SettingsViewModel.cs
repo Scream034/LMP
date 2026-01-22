@@ -101,6 +101,48 @@ public class SettingsViewModel : ViewModelBase
     /// <summary>Автоматически воспроизводить при вставке URL</summary>
     [Reactive] public bool AutoPlayOnPaste { get; set; }
 
+    // Fake-Account
+
+    [Reactive] public string FakeAccountName { get; set; } = string.Empty;
+    [Reactive] public string FakeAccountAvatar { get; set; } = string.Empty;
+    [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
+
+    /// <summary>Есть ли привязанный публичный канал</summary>
+    public bool HasFakeAccount => _library.HasFakeAccount;
+
+    /// <summary>Показывать предупреждение об ограничениях (Fake Account без Google авторизации)</summary>
+    public bool ShowFakeAccountWarning => HasFakeAccount && !IsAuthenticated;
+
+    /// <summary>Отображаемое имя аккаунта</summary>
+    public string AccountDisplayName
+    {
+        get
+        {
+            if (IsAuthenticated)
+                return UserName ?? UserEmail ?? L["Auth_NotSignedIn"];
+
+            if (HasFakeAccount)
+                return FakeAccountName;
+
+            return L["Auth_NotSignedIn"];
+        }
+    }
+
+    /// <summary>Статус аккаунта</summary>
+    public string AccountStatusText
+    {
+        get
+        {
+            if (IsAuthenticated)
+                return UserEmail ?? L["Auth_LoggedIn"];
+
+            if (HasFakeAccount)
+                return L["Account_LimitedAccess"];
+
+            return L["Auth_Guest"];
+        }
+    }
+
     // ЯЗЫКИ
 
     /// <summary>Список доступных языков</summary>
@@ -119,18 +161,6 @@ public class SettingsViewModel : ViewModelBase
 
     /// <summary>Имя пользователя</summary>
     [Reactive] public string? UserName { get; private set; }
-
-    [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
-
-    /// <summary>Отображаемый email или заглушка</summary>
-    public string DisplayEmail => string.IsNullOrWhiteSpace(UserEmail)
-        ? L["Auth_NotSignedIn"]
-        : UserEmail;
-
-    /// <summary>Текст статуса авторизации</summary>
-    public string AuthStatusText => IsAuthenticated
-        ? L["Auth_LoggedIn"]
-        : L["Auth_Guest"];
 
     // КОМАНДЫ
 
@@ -173,6 +203,8 @@ public class SettingsViewModel : ViewModelBase
         QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
 
         FakeChannelInput = _library.Data.FakeAccountChannelUrl ?? "";
+        FakeAccountName = _library.Data.FakeAccountName ?? "";
+        FakeAccountAvatar = _library.Data.FakeAccountAvatarUrl ?? "";
 
         LoadSettings();
         UpdateAuthState();
@@ -182,18 +214,17 @@ public class SettingsViewModel : ViewModelBase
         // Обновление локализованных текстов при смене языка
         LocalizationService.Instance.LanguageChanged += (s, e) =>
         {
-            this.RaisePropertyChanged(nameof(DisplayEmail));
-            this.RaisePropertyChanged(nameof(AuthStatusText));
+            this.RaisePropertyChanged(nameof(AccountDisplayName));
+            this.RaisePropertyChanged(nameof(AccountStatusText));
             QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
         };
 
-        // Обновление текстов при изменении состояния авторизации
-        this.WhenAnyValue(x => x.IsAuthenticated, x => x.UserEmail)
-            .Subscribe(_ =>
-            {
-                this.RaisePropertyChanged(nameof(DisplayEmail));
-                this.RaisePropertyChanged(nameof(AuthStatusText));
-            });
+        // Обновление текстов при изменении состояния авторизации или Fake Account
+        this.WhenAnyValue(
+                x => x.IsAuthenticated,
+                x => x.UserEmail,
+                x => x.FakeAccountName)
+            .Subscribe(_ => RaiseAccountPropertiesChanged());
 
         // Автосохранение выбранного языка
         this.WhenAnyValue(x => x.SelectedLanguage)
@@ -276,6 +307,11 @@ public class SettingsViewModel : ViewModelBase
                 if (info != null)
                 {
                     _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
+                    FakeAccountName = info.Value.Name;
+                    FakeAccountAvatar = info.Value.AvatarUrl;
+
+                    RaiseAccountPropertiesChanged();
+
                     await _dialog.ShowInfoAsync(L["Dialog_Success"], string.Format(L["Dialog_Merge_Success"], info.Value.Name));
                 }
                 else
@@ -293,6 +329,9 @@ public class SettingsViewModel : ViewModelBase
         {
             _library.ClearFakeAccount();
             FakeChannelInput = "";
+            FakeAccountName = "";
+            FakeAccountAvatar = "";
+            RaiseAccountPropertiesChanged();
         });
 
         // Выбор папки загрузки
@@ -361,6 +400,19 @@ public class SettingsViewModel : ViewModelBase
         });
     }
 
+    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+
+    /// <summary>
+    /// Уведомляет об изменении всех свойств, связанных с аккаунтом
+    /// </summary>
+    private void RaiseAccountPropertiesChanged()
+    {
+        this.RaisePropertyChanged(nameof(HasFakeAccount));
+        this.RaisePropertyChanged(nameof(ShowFakeAccountWarning));
+        this.RaisePropertyChanged(nameof(AccountDisplayName));
+        this.RaisePropertyChanged(nameof(AccountStatusText));
+    }
+
     // ЗАГРУЗКА НАСТРОЕК
 
     /// <summary>
@@ -375,6 +427,8 @@ public class SettingsViewModel : ViewModelBase
         EnableSmoothLoading = _library.Data.EnableSmoothLoading;
         MaxVolumeLimit = _library.Data.MaxVolumeLimit;
         TargetGainDb = _library.Data.TargetGainDb;
+        FakeAccountName = _library.Data.FakeAccountName ?? "";
+        FakeAccountAvatar = _library.Data.FakeAccountAvatarUrl ?? "";
 
         SelectedLanguage = Languages.FirstOrDefault(x => x.Code == _library.Data.LanguageCode)
             ?? Languages[0];
@@ -411,6 +465,7 @@ public class SettingsViewModel : ViewModelBase
         IsAuthenticated = _auth.IsAuthenticated;
         UserEmail = _auth.State.UserEmail;
         UserName = _auth.State.UserName;
+        RaiseAccountPropertiesChanged();
     }
 
     /// <summary>
@@ -429,7 +484,7 @@ public class SettingsViewModel : ViewModelBase
             _ => "webm"
         };
 
-        //  Всегда применяем новую глобальную настройку, даже если пользователь ранее выбрал формат вручную.
+        // Всегда применяем новую глобальную настройку, даже если пользователь ранее выбрал формат вручную.
         // Мы предполагаем, что изменение глобальной настройки является явным действием, которое должно переопределить текущее состояние.
         // Передаем 0 в качестве битрейта, чтобы провайдер выбрал лучший доступный битрейт для этого контейнера.
         currentTrack.PreferredContainer = targetContainer;

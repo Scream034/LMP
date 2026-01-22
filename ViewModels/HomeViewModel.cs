@@ -14,7 +14,6 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
-    private readonly LibraryService _library;
     private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
@@ -41,14 +40,12 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         AudioEngine audio,
-        LibraryService library,
         TrackViewModelFactory vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
-        _library = library;
         _vmFactory = vmFactory;
 
         UpdateGreeting();
@@ -70,9 +67,9 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        if (_library.HasTrack(track.Id))
+        if (LibService.HasTrack(track.Id))
         {
-            var existing = _library.GetTrack(track.Id);
+            var existing = LibService.GetTrack(track.Id);
             if (existing != null)
             {
                 track.IsDownloaded = existing.IsDownloaded;
@@ -128,7 +125,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
             List<TrackInfo> tracks;
             if (category.IsSpecial)
             {
-                tracks = _library.GetRecentlyPlayed(100);
+                tracks = LibService.GetRecentlyPlayed(100);
                 if (ct.IsCancellationRequested) return;
                 await InitializeItemsAsync(tracks, canFetchMore: false);
             }
@@ -195,7 +192,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         // Атомарно устанавливаем очередь и начинаем воспроизведение
         var tracks = Items.Select(x => x.Track).ToList();
         _ = _audio.StartQueueAsync(tracks, track);
-        _library.AddToRecentlyPlayed(track);
+        LibService.AddToRecentlyPlayed(track);
     }
 
     private void UpdateGreeting()

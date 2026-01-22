@@ -138,6 +138,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     }
 
     // === Volume ===
+    public void ToggleMute()
+    {
+        Log.Info($"[AudioEngine] ToggleMute: {_volumePercent} ({_library.Data.LastVolume})");
+    
+        if (_volumePercent > 0)
+        {
+            _library.Data.LastVolume = _volumePercent; // Запоминаем текущую
+            SetVolumeInstant(0);
+        }
+        else
+        {
+            // Восстанавливаем из LastVolume, если там пусто - ставим 50
+            int restoreVol = _library.Data.LastVolume > 0 ? _library.Data.LastVolume : 50;
+            SetVolumeInstant(restoreVol);
+        }
+    }
+
     public float GetVolume() => _volumePercent;
 
     public void SetVolumeInstant(float value)

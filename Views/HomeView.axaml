@@ -34,20 +34,28 @@
                 Margin="0,0,0,16">
                 <Grid ColumnDefinitions="*, *, *, *">
                     <StackPanel Grid.Column="0">
-                        <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10"
+                            Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18"
+                            FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1">
-                        <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10"
+                            Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18"
+                            FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
-                        <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18" FontWeight="Bold" Foreground="{StaticResource SystemWarnOrangeBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10"
+                            Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18"
+                            FontWeight="Bold" Foreground="{StaticResource SystemWarnOrangeBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3">
-                        <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10" Foreground="{StaticResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14" FontWeight="Bold" Foreground="{StaticResource SystemInfoBlueBrush}" />
+                        <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10"
+                            Foreground="{StaticResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14"
+                            FontWeight="Bold" Foreground="{StaticResource SystemInfoBlueBrush}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -90,14 +98,15 @@
             </i:Interaction.Behaviors>
 
             <!-- Централизованный список треков -->
-            <controls:TrackListControl 
+            <controls:TrackListControl
                 Items="{Binding ActiveTracks}"
                 IsLoading="{Binding IsLoading}"
                 IsLoadingMore="{Binding IsLoadingMore}"
                 IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
                 ReachedEnd="{Binding ReachedEnd}"
                 LoadMoreCommand="{Binding LoadMoreCommand}"
-                UseInternalScroll="False" />
+                UseInternalScroll="False"
+                EnableSmoothLoading="{Binding EnableSmoothLoading}" />
         </ScrollViewer>
     </Grid>
 </UserControl>

@@ -24,7 +24,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
-    private float _volumeBeforeMute;
 
     private DateTime _lastSeekTime = DateTime.MinValue;
     private long _lastDownloadedBytes;
@@ -104,7 +103,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         if (MaxVolume < 100) MaxVolume = 100;
 
         Volume = (int)_audio.GetVolume();
-        _volumeBeforeMute = Volume > 5 ? Volume : 50;
 
         ShuffleEnabled = _audio.ShuffleEnabled;
         RepeatMode = _audio.RepeatMode;
@@ -241,18 +239,7 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             _library.Save();
         });
 
-        ToggleMuteCommand = ReactiveCommand.Create(() =>
-        {
-            if (Volume > 0)
-            {
-                _volumeBeforeMute = Volume;
-                Volume = 0;
-            }
-            else
-            {
-                Volume = (int)(_volumeBeforeMute > 0 ? _volumeBeforeMute : 50);
-            }
-        });
+        ToggleMuteCommand = ReactiveCommand.Create(_audio.ToggleMute);
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>
         {

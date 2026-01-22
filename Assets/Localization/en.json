@@ -80,9 +80,8 @@
 
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",
-  "Settings_PublicSync": "Public Sync",
-  "Settings_ChannelUrl": "Channel URL",
-  "Settings_ChannelUrlDesc": "Sync public playlists without logging in.",
+  "Settings_ChannelUrl": "Public Channel",
+  "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
   "Settings_ChannelPlaceholder": "https://youtube.com/@channel",
   
   "Settings_Audio": "Audio",
@@ -92,6 +91,10 @@
   
   "Settings_Storage_Data": "Storage",
   "Settings_General": "General",
+  
+  "Account_LimitedAccess": "Limited Access",
+  "Account_LimitedAccess_Hint1": "• Only public playlists can be added",
+  "Account_LimitedAccess_Hint2": "• Likes and private data require Google sign-in",
   
   "Auth_NotSignedIn": "Not signed in",
   "Auth_LoggedIn": "Signed in",
@@ -111,9 +114,9 @@
   "Storage_ClearHistory": "Clear History",
   "Storage_ResetApp": "Reset App",
   
-  "Perf_SmoothLoading": "Smooth Loading",
   "General_Discord": "Discord RPC",
   "General_AutoPaste": "Auto-play from Clipboard",
+  "Perf_SmoothLoading": "Smooth Loading",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",

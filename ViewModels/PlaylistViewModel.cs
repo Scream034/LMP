@@ -10,7 +10,6 @@ namespace MyLiteMusicPlayer.ViewModels;
 
 public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
-    private readonly LibraryService _library;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
@@ -43,10 +42,10 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
             // Сохраняем только если значение валидное и в пикселях
             if (value.IsAbsolute && value.Value > 50)
             {
-                if (Math.Abs(_library.Data.PlaylistHeaderHeight - value.Value) > 1)
+                if (Math.Abs(LibService.Data.PlaylistHeaderHeight - value.Value) > 1)
                 {
-                    _library.Data.PlaylistHeaderHeight = value.Value;
-                    _library.Save();
+                    LibService.Data.PlaylistHeaderHeight = value.Value;
+                    LibService.Save();
                 }
             }
         }
@@ -71,14 +70,12 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
     public PlaylistViewModel(
-      LibraryService library,
       AudioEngine audio,
       DownloadService downloads,
       MusicLibraryManager manager,
       IDialogService dialog,
       TrackViewModelFactory vmFactory)
     {
-        _library = library;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
@@ -92,7 +89,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         IsShuffleActive = _audio.ShuffleEnabled;
 
         // Загружаем сохраненную высоту
-        _headerHeight = new GridLength(_library.Data.PlaylistHeaderHeight);
+        _headerHeight = new GridLength(LibService.Data.PlaylistHeaderHeight);
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
 
@@ -134,8 +131,8 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
         // ПОДПИСКИ НА ОБНОВЛЕНИЯ БИБЛИОТЕКИ
         _librarySubscription = Observable.FromEvent(
-                h => _library.OnDataChanged += h,
-                h => _library.OnDataChanged -= h)
+                h => LibService.OnDataChanged += h,
+                h => LibService.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(500))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
@@ -167,7 +164,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         // Это упрощенная логика, но достаточная для UX
         if (_audio.CurrentTrack != null && _audio.IsPlaying)
         {
-            IsPlayingThisPlaylist = _library.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId);
+            IsPlayingThisPlaylist = LibService.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId);
         }
         else
         {
@@ -189,7 +186,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         // Если трек из плейлиста на паузе - возобновляем
         if (_audio.CurrentTrack != null &&
             _audio.IsPaused &&
-            _library.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId))
+            LibService.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId))
         {
             _ = _audio.SetPlaybackStateAsync(true); // Play
             return;
@@ -253,7 +250,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     public async void LoadPlaylist(string playlistId)
     {
         _currentPlaylistId = playlistId;
-        var playlist = _library.GetPlaylist(playlistId);
+        var playlist = LibService.GetPlaylist(playlistId);
         if (playlist == null) return;
 
         PlaylistName = playlist.Name;
@@ -262,7 +259,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         IsCloud = playlist.IsFromAccount;
         IsReadOnly = !playlist.IsEditable;
 
-        var tracks = _library.GetPlaylistTracks(playlistId);
+        var tracks = LibService.GetPlaylistTracks(playlistId);
         TrackCount = tracks.Count;
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
@@ -303,12 +300,12 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
         _ = _audio.StartQueueAsync(tracks, track);
 
-        _library.AddToRecentlyPlayed(track);
+        LibService.AddToRecentlyPlayed(track);
     }
 
     private async Task MergePlaylistAsync()
     {
-        var otherPlaylists = _library.GetAllPlaylists()
+        var otherPlaylists = LibService.GetAllPlaylists()
             .Where(p => p.Id != _currentPlaylistId && p.IsLocal)
             .ToList();
 
@@ -323,7 +320,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         var targetId = otherPlaylists.First().Id;
         if (!string.IsNullOrEmpty(targetId))
         {
-            if (_library.MergePlaylists(_currentPlaylistId, targetId))
+            if (LibService.MergePlaylists(_currentPlaylistId, targetId))
                 await _dialog.ShowInfoAsync(L["Dialog_Success"], L["Merge_Success_Msg"]);
             else
                 await _dialog.ShowInfoAsync(L["Dialog_Error"], L["Merge_Error_Msg"]);

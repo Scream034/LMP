@@ -281,7 +281,6 @@ public class ProgressToWidthConverter : IMultiValueConverter
     }
 }
 
-// === НОВЫЙ КОНВЕРТЕР ===
 public class GreaterThanConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)

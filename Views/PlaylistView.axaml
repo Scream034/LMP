@@ -156,6 +156,7 @@
             IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
             ReachedEnd="{Binding ReachedEnd}"
             LoadMoreCommand="{Binding LoadMoreCommand}"
-            UseInternalScroll="True" />
+            UseInternalScroll="True"
+            EnableSmoothLoading="{Binding EnableSmoothLoading}" />
     </Grid>
 </UserControl>
