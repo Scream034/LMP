@@ -20,6 +20,8 @@ public class LibraryData
     public int LastVolume { get; set; } = 50;
     public bool ShuffleEnabled { get; set; }
     public RepeatMode RepeatMode { get; set; } = RepeatMode.None;
+    // Сохранение высоты хедера плейлиста (по умолчанию 320)
+    public double PlaylistHeaderHeight { get; set; } = 320;
 
     // --- Настройки звука ---
     public int MaxVolumeLimit { get; set; } = 100;

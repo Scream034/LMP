@@ -17,8 +17,6 @@
     </Application.Resources>
 
     <Application.DataTemplates>
-        <!-- === TRACK TEMPLATE === -->
-        <!-- ОПТИМИЗАЦИЯ: Включены скомпилированные привязки для скорости -->
         <DataTemplate DataType="{x:Type vm:TrackItemViewModel}" x:CompileBindings="True">
             <Panel Classes="track-row"
                 Classes.is-active="{Binding IsActive}"
@@ -26,66 +24,68 @@
                 Background="Transparent"
                 Margin="0,2">
 
-                <!-- 1. BACKGROUND -->
+                <!-- BACKGROUND -->
                 <Border Classes="track-bg" CornerRadius="6" />
 
-                <!-- 2. CONTENT -->
-                <Grid ColumnDefinitions="48, *, Auto, Auto, Auto" Margin="4">
+                <!-- CONTENT GRID -->
+                <!-- 0:Img(48) | 1:Text(*) | 2:Status(Auto) | 3:Like(40) | 4:Time(60) -->
+                <!-- Статус (Col 2) теперь Auto, чтобы вместить широкий бар -->
+                <Grid ColumnDefinitions="48, *, Auto, 40, 60" Margin="4">
 
-                    <!-- IMAGE + CONTROLS -->
+                    <!-- 0. IMAGE + PLAY BTN -->
                     <Panel Grid.Column="0" Width="48" Height="48" HorizontalAlignment="Left">
                         <Border CornerRadius="4" ClipToBounds="True">
                             <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
                                 Stretch="UniformToFill" />
                         </Border>
-
                         <Border CornerRadius="4" Classes="hover-overlay" />
-
                         <mi:MaterialIcon Kind="Play" Width="28" Height="28" Classes="icon-play"
                             HorizontalAlignment="Center" VerticalAlignment="Center" />
                         <mi:MaterialIcon Kind="Pause" Width="28" Height="28" Classes="icon-pause"
                             HorizontalAlignment="Center" VerticalAlignment="Center" />
-
-                        <Button Command="{Binding PlayCommand}"
-                            Background="Transparent"
-                            HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                            Cursor="Hand" />
+                        <Button Command="{Binding PlayCommand}" Background="Transparent"
+                            HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Cursor="Hand" />
                     </Panel>
 
-                    <!-- INFO -->
+                    <!-- 1. TEXT -->
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4" Margin="12,0">
-                        <TextBlock Text="{Binding Title}"
-                            Classes="track-title"
-                            FontWeight="Medium" FontSize="14"
-                            TextTrimming="CharacterEllipsis" MaxLines="1" />
-                        <TextBlock Text="{Binding Author}"
-                            FontSize="12"
+                        <TextBlock Text="{Binding Title}" Classes="track-title" FontWeight="Medium"
+                            FontSize="14" TextTrimming="CharacterEllipsis" MaxLines="1" />
+                        <TextBlock Text="{Binding Author}" FontSize="12"
                             Foreground="{StaticResource TextSecondaryBrush}"
                             TextTrimming="CharacterEllipsis" MaxLines="1" />
                     </StackPanel>
 
-                    <!-- STATUS (Downloaded) -->
-                    <Panel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0" Width="20">
-                        <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
+                    <!-- 2. STATUS -->
+                    <!-- Margin="8,0" отодвигает бар от текста слева и от лайка справа -->
+                    <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
+                        <!-- Галочка -->
+                        <mi:MaterialIcon Kind="CheckCircle" Width="18" Height="18"
                             Foreground="{StaticResource AccentBrush}"
-                            IsVisible="{Binding IsDownloaded}" />
-                        <ProgressBar Value="{Binding DownloadProgress}" Maximum="1" Width="20"
-                            Height="4"
+                            IsVisible="{Binding IsDownloaded}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+                        <!-- Прогресс бар -->
+                        <!-- Сделан шире (36), чтобы было видно прогресс -->
+                        <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
+                            Width="36" Height="4"
                             IsVisible="{Binding IsDownloading}"
-                            Foreground="{StaticResource AccentBrush}" />
+                            Foreground="{StaticResource AccentBrush}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Panel>
 
-                    <!-- LIKE -->
+                    <!-- 3. LIKE -->
                     <Button Grid.Column="3" Classes="icon-btn like-btn"
                         Command="{Binding ToggleLikeCommand}"
-                        VerticalAlignment="Center" Margin="0,0,8,0">
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
                         <mi:MaterialIcon
                             Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
                             Width="18" Height="18"
                             Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                     </Button>
 
-                    <!-- DURATION -->
+                    <!-- 4. DURATION -->
                     <TextBlock Grid.Column="4"
                         Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
                         VerticalAlignment="Center"
@@ -93,20 +93,17 @@
                         FontSize="13"
                         HorizontalAlignment="Right"
                         Margin="0,0,12,0"
-                        MinWidth="45"
                         TextAlignment="Right" />
                 </Grid>
 
-                <!-- 3. OUTLINE -->
-                <Rectangle Classes="track-outline"
-                    RadiusX="6" RadiusY="6"
-                    Fill="Transparent"
-                    StrokeThickness="1"
-                    IsHitTestVisible="False" />
+                <!-- OUTLINE -->
+                <Rectangle Classes="track-outline" RadiusX="6" RadiusY="6" Fill="Transparent"
+                    StrokeThickness="1" IsHitTestVisible="False" />
             </Panel>
         </DataTemplate>
     </Application.DataTemplates>
 
+    <!-- (Styles остаются без изменений, они скрыты для краткости) -->
     <Application.Styles>
         <FluentTheme />
         <materialIcons:MaterialIconStyles />
@@ -115,7 +112,6 @@
         <StyleInclude Source="avares://MyLiteMusicPlayer/Templates/LoadingSkeletons.axaml" />
         <StyleInclude Source="avares://MyLiteMusicPlayer/Templates/PlaylistCardTemplate.axaml" />
 
-        <!-- CSS LOGIC -->
         <Style Selector="Panel.track-row Border.track-bg">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Transitions">

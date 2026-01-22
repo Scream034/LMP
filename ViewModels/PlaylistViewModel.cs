@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using MyLiteMusicPlayer.Models;
 using MyLiteMusicPlayer.Services;
 using ReactiveUI;
@@ -26,8 +27,35 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     [Reactive] public bool IsCloud { get; private set; }
     [Reactive] public bool IsReadOnly { get; private set; }
 
+    [Reactive] public bool IsPlayingThisPlaylist { get; private set; }
+    [Reactive] public bool IsShuffleActive { get; private set; }
+    [Reactive] public bool IsDownloadingActive { get; private set; }
+
+    // Свойство для биндинга высоты RowDefinition
+    private GridLength _headerHeight;
+    public GridLength HeaderHeight
+    {
+        get => _headerHeight;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _headerHeight, value);
+
+            // Сохраняем только если значение валидное и в пикселях
+            if (value.IsAbsolute && value.Value > 50)
+            {
+                if (Math.Abs(_library.Data.PlaylistHeaderHeight - value.Value) > 1)
+                {
+                    _library.Data.PlaylistHeaderHeight = value.Value;
+                    _library.Save();
+                }
+            }
+        }
+    }
+
     private string _currentPlaylistId = "";
     private IDisposable? _librarySubscription;
+    private IDisposable? _audioStateSub;
+    private IDisposable? _trackChangeSub;
 
     public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
     public ReactiveCommand<Unit, Unit> DeletePlaylistCommand { get; }
@@ -59,6 +87,12 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         LocalizationService.Instance.LanguageChanged += (_, _) =>
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
+        // Инициализация состояния Shuffle
+        IsShuffleActive = _audio.ShuffleEnabled;
+
+        // Загружаем сохраненную высоту
+        _headerHeight = new GridLength(_library.Data.PlaylistHeaderHeight);
+
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
 
         PlayAllCommand = ReactiveCommand.Create(PlayAll, hasTracks);
@@ -88,10 +122,11 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
         RefreshPlaylistCommand = ReactiveCommand.Create(() => LoadPlaylist(_currentPlaylistId));
 
-        ShufflePlayCommand = ReactiveCommand.Create(PlayShuffle, hasTracks);
+        ShufflePlayCommand = ReactiveCommand.Create(ToggleShuffle, hasTracks);
         DownloadAllCommand = ReactiveCommand.Create(DownloadAll, hasTracks);
         MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
 
+        // ПОДПИСКИ НА ОБНОВЛЕНИЯ БИБЛИОТЕКИ
         _librarySubscription = Observable.FromEvent(
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
@@ -104,32 +139,107 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
                     LoadPlaylist(_currentPlaylistId);
                 }
             });
+
+        // ПОДПИСКИ НА АУДИО ДВИЖОК ДЛЯ ОБНОВЛЕНИЯ UI
+        _audioStateSub = Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
+            h => (p, u) => h((p, u)),
+            h => _audio.OnPlaybackStateChanged += h,
+            h => _audio.OnPlaybackStateChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => CheckPlaybackState());
+
+        _trackChangeSub = Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
+            h => _audio.OnTrackChanged += h,
+            h => _audio.OnTrackChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => CheckPlaybackState());
+    }
+
+    private void CheckPlaybackState()
+    {
+        // Логика: если играет трек, который есть в этом плейлисте - считаем, что плейлист активен
+        // Это упрощенная логика, но достаточная для UX
+        if (_audio.CurrentTrack != null && _audio.IsPlaying)
+        {
+            IsPlayingThisPlaylist = _library.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId);
+        }
+        else
+        {
+            IsPlayingThisPlaylist = false;
+        }
     }
 
     private void PlayAll()
     {
         if (AllItems.Count == 0) return;
+
+        // Если плейлист уже играет - это пауза/возобновление
+        if (IsPlayingThisPlaylist)
+        {
+            _ = _audio.SetPlaybackStateAsync(false); // Пауза
+            return;
+        }
+
+        // Если трек из плейлиста на паузе - возобновляем
+        if (_audio.CurrentTrack != null &&
+            _audio.IsPaused &&
+            _library.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId))
+        {
+            _ = _audio.SetPlaybackStateAsync(true); // Play
+            return;
+        }
+
+        // Иначе запускаем плейлист с начала
         _audio.ClearQueue();
         _audio.ShuffleEnabled = false;
+        IsShuffleActive = false;
+
         _audio.EnqueueRange(AllItems);
         _ = _audio.PlayTrackAsync(AllItems[0]);
     }
 
-    private void PlayShuffle()
+    private void ToggleShuffle()
     {
         if (AllItems.Count == 0) return;
-        _audio.ClearQueue();
-        _audio.ShuffleEnabled = true;
-        _audio.EnqueueRange(AllItems);
-        _ = _audio.PlayTrackAsync(AllItems[0]);
+
+        if (IsPlayingThisPlaylist && IsShuffleActive)
+        {
+            // Если уже играет и шаффл включен - выключаем его
+            _audio.ShuffleEnabled = false;
+            IsShuffleActive = false;
+        }
+        else
+        {
+            // Включаем шаффл и играем
+            _audio.ClearQueue();
+            _audio.ShuffleEnabled = true;
+            IsShuffleActive = true;
+
+            _audio.EnqueueRange(AllItems);
+            // При шаффле берем первый трек рандомно (в движке логика PlayNext учтет шаффл)
+            // Но чтобы начать сразу, выберем случайный из списка здесь
+            var randomTrack = AllItems[Random.Shared.Next(AllItems.Count)];
+            _ = _audio.PlayTrackAsync(randomTrack);
+        }
+
+        // Обновляем настройку в библиотеке
+        _library.Data.ShuffleEnabled = IsShuffleActive;
+        _library.Save();
     }
 
     private void DownloadAll()
     {
+        IsDownloadingActive = true;
+
         foreach (var track in AllItems.Where(t => !t.IsDownloaded))
         {
             _downloads.StartDownload(track);
         }
+
+        // Сбрасываем визуальную активность кнопки через пару секунд
+        Observable.Timer(TimeSpan.FromSeconds(2))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => IsDownloadingActive = false);
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -156,6 +266,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         CalculateTotalDuration(tracks);
 
         await InitializeItemsAsync(tracks, canFetchMore: false);
+        CheckPlaybackState(); // Проверяем состояние после загрузки
     }
 
     private void CalculateTotalDuration(List<TrackInfo> tracks)
@@ -174,7 +285,13 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
     private void PlayFromPlaylist(TrackInfo track)
     {
+        // При клике на конкретный трек
         _audio.ClearQueue();
+
+        // Если шаффл был активен глобально, здесь мы его можем либо оставить, либо сбросить
+        // Обычно при клике на трек в списке ожидается линейное воспроизведение от этого трека
+        // Но оставим как настроено пользователем
+
         _ = _audio.PlayTrackAsync(track);
         _audio.EnqueueRange(AllItems);
         _library.AddToRecentlyPlayed(track);
@@ -207,6 +324,8 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     public void Dispose()
     {
         _librarySubscription?.Dispose();
+        _audioStateSub?.Dispose();
+        _trackChangeSub?.Dispose();
         CancelLoading();
         GC.SuppressFinalize(this);
     }
