@@ -4,10 +4,11 @@
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:asyncImage="using:AsyncImageLoader"
     x:Class="MyLiteMusicPlayer.Views.PlayerBarView"
-    x:DataType="vm:PlayerBarViewModel">
+    x:DataType="vm:PlayerBarViewModel"
+    x:CompileBindings="True">
 
     <UserControl.Styles>
-        <!-- *Анимация пульсации для Seek (Рамка)* -->
+        <!-- (Стили оставлены без изменений, они корректны) -->
         <Style Selector="Border.seek-busy-indicator">
             <Style.Animations>
                 <Animation Duration="0:0:1.2" IterationCount="Infinite">
@@ -27,7 +28,6 @@
             </Style.Animations>
         </Style>
         
-        <!-- *Бегущий градиент для Seek (Полоски)* -->
         <Style Selector="Border.seek-gradient-runner">
             <Style.Animations>
                 <Animation Duration="0:0:1.5" IterationCount="Infinite">
@@ -50,11 +50,9 @@
             </Style.Animations>
         </Style>
 
-        <!-- *Стиль для полосок громкости (Исправлено)* -->
         <Style Selector="Border.volume-bar">
             <Setter Property="Width" Value="4" />
             <Setter Property="CornerRadius" Value="1" />
-            <!-- По умолчанию серый цвет -->
             <Setter Property="Background" Value="{StaticResource TextSecondaryBrush}" />
             <Setter Property="Transitions">
                 <Transitions>
@@ -64,12 +62,10 @@
             </Setter>
         </Style>
         
-        <!-- *Стиль для усиленной громкости (>100%)* -->
         <Style Selector="Border.volume-bar.boosted">
             <Setter Property="Background" Value="{StaticResource AccentBrush}" />
         </Style>
 
-        <!-- *Анимация появления Stream Info* -->
         <Style Selector="StackPanel.stream-info">
              <Setter Property="Opacity" Value="0.7" />
              <Style.Animations>
@@ -84,7 +80,6 @@
              </Style.Animations>
          </Style>
 
-         <!-- *Прыгающие точки загрузки* -->
          <Style Selector="Ellipse.loading-dot">
              <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
              <Style.Animations>
@@ -97,7 +92,6 @@
              </Style.Animations>
          </Style>
 
-        <!-- *Кастомный Слайдер (Spotify Style)* -->
         <Style Selector="Slider.spotify-slider">
             <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
             <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
@@ -132,14 +126,13 @@
     <Border Background="{StaticResource BgSecondaryBrush}" Height="94"
         BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="0,1,0,0">
         <Grid>
-            <!-- *Индикатор общей загрузки* -->
             <ProgressBar VerticalAlignment="Top" Height="2" IsIndeterminate="True"
                 Background="Transparent" Foreground="{StaticResource AccentBrush}"
                 IsVisible="{Binding IsLoading}" />
 
             <Grid ColumnDefinitions="3*, 4*, 3*" Margin="16,0">
                 
-                <!-- *ЛЕВО: Инфо* -->
+                <!-- LEVO -->
                 <Grid Grid.Column="0" ColumnDefinitions="Auto, *, Auto">
                     <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4"
                         ClipToBounds="True">
@@ -175,7 +168,7 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- *ЦЕНТР: Управление* -->
+                <!-- CENTER -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20">
                         <Button Classes="icon-btn" Command="{Binding ToggleShuffleCommand}">
@@ -206,7 +199,6 @@
                         </Button>
                     </StackPanel>
 
-                    <!-- *Seek Bar (ВОССТАНОВЛЕННАЯ СТРУКТУРА)* -->
                     <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,4,0,0">
                         <TextBlock
                             Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}"
@@ -214,12 +206,10 @@
                             Width="40" VerticalAlignment="Center" />
 
                         <Grid Grid.Column="1" Height="24" VerticalAlignment="Center">
-                            <!-- *Анимированная рамка (Busy Indicator)* -->
                             <Border CornerRadius="6" Margin="-6,-4" IsVisible="{Binding IsSeekBusy}"
                                 Classes="seek-busy-indicator"
                                 BorderBrush="{StaticResource AccentBrush}" />
                             
-                            <!-- *Бегущие полоски (Gradient Runner) - Восстановлено!* -->
                             <Canvas IsVisible="{Binding IsSeekBusy}" ClipToBounds="False" Margin="-2,0">
                                 <Border Canvas.Top="-2" Width="40" Height="2" CornerRadius="1"
                                     Background="{StaticResource AccentBrush}"
@@ -243,7 +233,6 @@
                                     IsHitTestVisible="False" VerticalAlignment="Center" />
                             </Panel>
 
-                            <!-- *Зона клика (SeekHitBox)* -->
                             <Border Name="SeekHitBox" Background="Transparent" Cursor="Hand"
                                 PointerPressed="OnSeekAreaPressed" PointerMoved="OnSeekAreaMoved"
                                 PointerReleased="OnSeekAreaReleased"
@@ -259,7 +248,6 @@
                                 </Border.Styles>
                             </Border>
 
-                            <!-- *Tooltip* -->
                             <Border Name="HoverTooltip"
                                 Background="{StaticResource BgSkeletonBrush}"
                                 BorderBrush="{StaticResource BgElevatedBrush}"
@@ -280,7 +268,6 @@
                             Width="40" TextAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
 
-                    <!-- *Stream Info Section* -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" 
                                 Classes="stream-info" IsVisible="{Binding ShowStreamInfo}">
                         <Button Classes="sidebar-btn" Padding="4,2" Margin="0,2,0,0"
@@ -334,7 +321,6 @@
                             </StackPanel>
                         </Button>
                         
-                        <!-- *Восстановленные точки загрузки* -->
                         <StackPanel Orientation="Horizontal" Spacing="3"
                                     IsVisible="{Binding IsSeekBusy}"
                                     VerticalAlignment="Center" Margin="4,0,0,0">
@@ -349,7 +335,7 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- *ПРАВО: Громкость (Исправлено)* -->
+                <!-- PRAVO: Volume -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
                     VerticalAlignment="Center" Spacing="12">
                     
@@ -357,7 +343,6 @@
                         Width="40">
                         <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
                             HorizontalAlignment="Center">
-                            <!-- Исправлена привязка Background через классы -->
                             <Border Classes="volume-bar" Classes.boosted="{Binding IsVolumeBoosted}"
                                 Height="6" Opacity="{Binding Bar1Opacity}" />
                             <Border Classes="volume-bar" Classes.boosted="{Binding IsVolumeBoosted}"

@@ -1,4 +1,3 @@
-// Services/ImageCacheService.cs
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
@@ -20,6 +19,9 @@ public class ImageCacheService : IDisposable
     private readonly LinkedList<string> _lruOrder = new();
     private readonly object _lruLock = new();
 
+    // Блокировка файлов по ключу для предотвращения IOException
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new();
+
     private const int MaxMemoryCacheItems = 100;
     private const int MaxDiskCacheMb = 200;
     private long _currentDiskCacheBytes = 0;
@@ -40,6 +42,14 @@ public class ImageCacheService : IDisposable
     }
 
     /// <summary>
+    /// Получить семафор для конкретного файла
+    /// </summary>
+    private SemaphoreSlim GetFileLock(string key)
+    {
+        return _fileLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+    }
+
+    /// <summary>
     /// Получить изображение (память → диск → интернет)
     /// </summary>
     public async Task<Bitmap?> GetImageAsync(string url, CancellationToken ct = default)
@@ -55,22 +65,43 @@ public class ImageCacheService : IDisposable
             return cached.Bitmap;
         }
 
-        // 2. Проверяем диск
+        // 2. Проверяем диск (С БЛОКИРОВКОЙ)
         var diskPath = GetDiskPath(key);
         if (File.Exists(diskPath))
         {
+            var fileLock = GetFileLock(key);
             try
             {
-                return await Task.Run(() =>
+                // Пытаемся быстро получить доступ к файлу
+                if (await fileLock.WaitAsync(100, ct))
                 {
-                    using var stream = File.OpenRead(diskPath);
-                    return Bitmap.DecodeToWidth(stream, 300);
-                });
+                    try
+                    {
+                        if (File.Exists(diskPath)) // Проверяем снова после лока
+                        {
+                            return await Task.Run(() =>
+                            {
+                                using var stream = File.OpenRead(diskPath);
+                                var bmp = Bitmap.DecodeToWidth(stream, 300);
+                                // Кэшируем в память, чтобы реже ходить на диск
+                                AddToMemoryCache(key, bmp);
+                                return bmp;
+                            });
+                        }
+                    }
+                    finally
+                    {
+                        fileLock.Release();
+                    }
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // Повреждённый файл — удаляем
-                try { File.Delete(diskPath); } catch { }
+                // Повреждённый файл — удаляем, если ошибка не ввода-вывода блокировки
+                if (ex is not IOException)
+                {
+                    try { File.Delete(diskPath); } catch { }
+                }
             }
         }
 
@@ -87,7 +118,7 @@ public class ImageCacheService : IDisposable
             .Where(url => !string.IsNullOrEmpty(url))
             .Where(url => !_memoryCache.ContainsKey(GetCacheKey(url)))
             .Take(20) // Не больше 20 за раз
-            .Select(url => GetImageAsync(url, ct));
+            .Select(url => EnsureCachedAsync(url, ct)); // Используем EnsureCachedAsync вместо GetImageAsync чтобы не декодировать Bitmap зря
 
         await Task.WhenAll(tasks);
     }
@@ -117,24 +148,35 @@ public class ImageCacheService : IDisposable
 
         if (File.Exists(diskPath)) return true;
 
+        var fileLock = GetFileLock(key);
+
+        // Ждем очередь на загрузку
         await _downloadSemaphore.WaitAsync(ct);
         try
         {
-            // Повторная проверка после получения семафора
-            if (File.Exists(diskPath)) return true;
-
-            var bytes = await _http.GetByteArrayAsync(url, ct);
-            await File.WriteAllBytesAsync(diskPath, bytes, ct);
-
-            Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
-
-            // Проверяем лимит
-            if (_currentDiskCacheBytes > MaxDiskCacheMb * 1024 * 1024)
+            // Блокируем конкретный файл
+            await fileLock.WaitAsync(ct);
+            try
             {
-                _ = Task.Run(CleanupDiskCacheAsync);
-            }
+                // Повторная проверка
+                if (File.Exists(diskPath)) return true;
 
-            return true;
+                var bytes = await _http.GetByteArrayAsync(url, ct);
+                await File.WriteAllBytesAsync(diskPath, bytes, ct);
+
+                Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
+
+                if (_currentDiskCacheBytes > MaxDiskCacheMb * 1024 * 1024)
+                {
+                    _ = Task.Run(CleanupDiskCacheAsync);
+                }
+
+                return true;
+            }
+            finally
+            {
+                fileLock.Release();
+            }
         }
         catch
         {
@@ -148,32 +190,52 @@ public class ImageCacheService : IDisposable
 
     private async Task<Bitmap?> DownloadAndCacheAsync(string url, string key, CancellationToken ct)
     {
-        await _downloadSemaphore.WaitAsync(ct);
+        var fileLock = GetFileLock(key);
 
+        await _downloadSemaphore.WaitAsync(ct);
         try
         {
-            // Повторная проверка после получения семафора
+            // Повторная проверка памяти
             if (_memoryCache.TryGetValue(key, out var cached))
             {
                 return cached.Bitmap;
             }
 
-            var bytes = await _http.GetByteArrayAsync(url, ct);
-            var diskPath = GetDiskPath(key);
-
-            // Сохраняем на диск
-            await File.WriteAllBytesAsync(diskPath, bytes, ct);
-            Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
-
-            return await Task.Run(() =>
+            await fileLock.WaitAsync(ct);
+            try
             {
-                using var stream = new MemoryStream(bytes);
-                return Bitmap.DecodeToWidth(stream, 300);
-            });
+                var diskPath = GetDiskPath(key);
+                
+                // Проверяем диск еще раз внутри лока (вдруг другой поток уже скачал)
+                if (File.Exists(diskPath))
+                {
+                     using var stream = File.OpenRead(diskPath);
+                     return Bitmap.DecodeToWidth(stream, 300);
+                }
+
+                var bytes = await _http.GetByteArrayAsync(url, ct);
+
+                // Сохраняем на диск
+                await File.WriteAllBytesAsync(diskPath, bytes, ct);
+                Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
+
+                var bmp = await Task.Run(() =>
+                {
+                    using var stream = new MemoryStream(bytes);
+                    return Bitmap.DecodeToWidth(stream, 300);
+                });
+
+                AddToMemoryCache(key, bmp);
+                return bmp;
+            }
+            finally
+            {
+                fileLock.Release();
+            }
         }
         catch (Exception ex)
         {
-            Log.Info($"Download failed: {ex.Message}");
+            Log.Info($"Download failed for {url}: {ex.Message}");
             return null;
         }
         finally
@@ -194,12 +256,16 @@ public class ImageCacheService : IDisposable
 
                 if (_memoryCache.TryRemove(oldest, out var removed))
                 {
-                    removed.Bitmap?.Dispose();
+                    // Внимание: мы не диспозим Bitmap здесь жестко, так как он может использоваться в UI
+                    // Avalonia сама разберется, или можно оставить Dispose на совести GC для Bitmap
+                    // removed.Bitmap?.Dispose(); 
                 }
             }
 
-            _memoryCache[key] = new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow };
-            _lruOrder.AddFirst(key);
+            if (_memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
+            {
+                _lruOrder.AddFirst(key);
+            }
         }
     }
 
@@ -247,13 +313,26 @@ public class ImageCacheService : IDisposable
                 if (_currentDiskCacheBytes - deleted <= targetSize)
                     break;
 
-                try
+                var key = Path.GetFileNameWithoutExtension(file.Name);
+                var fileLock = GetFileLock(key);
+                
+                // Пробуем удалить с блокировкой
+                if (await fileLock.WaitAsync(0))
                 {
-                    var size = file.Length;
-                    file.Delete();
-                    deleted += size;
+                    try
+                    {
+                        var size = file.Length;
+                        file.Delete();
+                        deleted += size;
+                        // Удаляем лок из словаря, раз файл удален
+                        _fileLocks.TryRemove(key, out _);
+                    }
+                    catch { }
+                    finally
+                    {
+                        fileLock.Release();
+                    }
                 }
-                catch { }
             }
 
             Interlocked.Add(ref _currentDiskCacheBytes, -deleted);
@@ -277,10 +356,7 @@ public class ImageCacheService : IDisposable
     {
         lock (_lruLock)
         {
-            foreach (var cached in _memoryCache.Values)
-            {
-                cached.Bitmap?.Dispose();
-            }
+            // Здесь тоже аккуратно с Dispose, если картинка сейчас на экране
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
@@ -295,7 +371,7 @@ public class ImageCacheService : IDisposable
         {
             foreach (var file in Directory.GetFiles(_cacheFolder))
             {
-                File.Delete(file);
+                try { File.Delete(file); } catch { }
             }
             _currentDiskCacheBytes = 0;
         }
@@ -314,6 +390,8 @@ public class ImageCacheService : IDisposable
         ClearMemoryCache();
         _downloadSemaphore.Dispose();
         _http.Dispose();
+        foreach(var lok in _fileLocks.Values) lok.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private class CachedImage

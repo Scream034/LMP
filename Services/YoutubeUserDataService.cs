@@ -61,6 +61,7 @@ public partial class YoutubeUserDataService
             var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
 
+            // Безопасное получение корневого элемента
             if (doc.RootElement.TryGetProperty("items", out var items))
             {
                 var batchTracks = new List<TrackInfo>();
@@ -70,14 +71,35 @@ public partial class YoutubeUserDataService
                 {
                     try
                     {
-                        var snippet = item.GetProperty("snippet");
-                        var videoId = snippet.GetProperty("resourceId").GetProperty("videoId").GetString();
+                        // Safe parsing logic to avoid KeyNotFoundException
+                        if (!item.TryGetProperty("snippet", out var snippet)) continue;
 
+                        // Check resourceId existence
+                        if (!snippet.TryGetProperty("resourceId", out var resourceIdEl) ||
+                            !resourceIdEl.TryGetProperty("videoId", out var videoIdEl))
+                            continue;
+
+                        var videoId = videoIdEl.GetString();
                         if (string.IsNullOrEmpty(videoId)) continue;
 
-                        var title = snippet.GetProperty("title").GetString() ?? "Unknown";
-                        var author = snippet.GetProperty("videoOwnerChannelTitle").GetString() ??
-                                     snippet.GetProperty("channelTitle").GetString() ?? "Unknown";
+                        // Safe title
+                        var title = snippet.TryGetProperty("title", out var titleEl) 
+                            ? titleEl.GetString() ?? "Unknown" 
+                            : "Unknown";
+                        
+                        // Filter out Deleted/Private videos
+                        if (title == "Deleted video" || title == "Private video") continue;
+
+                        // Safe author
+                        string author = "Unknown";
+                        if (snippet.TryGetProperty("videoOwnerChannelTitle", out var ownerEl))
+                        {
+                            author = ownerEl.GetString() ?? "Unknown";
+                        }
+                        else if (snippet.TryGetProperty("channelTitle", out var channelEl))
+                        {
+                            author = channelEl.GetString() ?? "Unknown";
+                        }
 
                         string thumbUrl = ParseBestThumbnail(snippet);
 
@@ -93,10 +115,13 @@ public partial class YoutubeUserDataService
                         batchTracks.Add(track);
                         videoIds.Add(videoId);
                     }
-                    catch { /* skip invalid items */ }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"[Sync] Error parsing item: {ex.Message}");
+                    }
                 }
 
-                // ✅ ИСПРАВЛЕНИЕ: Загружаем Duration батчем
+                // Загружаем Duration батчем
                 if (videoIds.Count > 0)
                 {
                     var durations = await FetchVideoDurationsAsync(client, videoIds);
@@ -114,6 +139,7 @@ public partial class YoutubeUserDataService
                 result.AddRange(batchTracks);
             }
 
+            // Безопасное получение токена следующей страницы
             nextPageToken = doc.RootElement.TryGetProperty("nextPageToken", out var token) 
                 ? token.GetString() 
                 : null;
@@ -152,13 +178,17 @@ public partial class YoutubeUserDataService
                 {
                     try
                     {
-                        var id = item.GetProperty("id").GetString();
-                        var durationStr = item.GetProperty("contentDetails")
-                                              .GetProperty("duration").GetString();
+                        if (!item.TryGetProperty("id", out var idEl)) continue;
+                        var id = idEl.GetString();
 
-                        if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(durationStr))
+                        if (item.TryGetProperty("contentDetails", out var cd) &&
+                            cd.TryGetProperty("duration", out var durEl))
                         {
-                            result[id] = ParseIso8601Duration(durationStr);
+                            var durationStr = durEl.GetString();
+                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(durationStr))
+                            {
+                                result[id] = ParseIso8601Duration(durationStr);
+                            }
                         }
                     }
                     catch { /* skip */ }
@@ -271,14 +301,21 @@ public partial class YoutubeUserDataService
             {
                 try
                 {
-                    var snippet = item.GetProperty("snippet");
+                    if (!item.TryGetProperty("snippet", out var snippet)) continue;
+                    
+                    var title = snippet.TryGetProperty("title", out var t) ? t.GetString() ?? "Unknown" : "Unknown";
+                    var channel = snippet.TryGetProperty("channelTitle", out var c) ? c.GetString() : "Unknown";
+                    var id = item.TryGetProperty("id", out var i) ? i.GetString() : "";
+
+                    if (string.IsNullOrEmpty(id)) continue;
+
                     string thumbUrl = ParseBestThumbnail(snippet);
 
                     result.Add(new Playlist
                     {
-                        YoutubeId = item.GetProperty("id").GetString(),
-                        Name = snippet.GetProperty("title").GetString() ?? "Unknown",
-                        Author = snippet.GetProperty("channelTitle").GetString(),
+                        YoutubeId = id,
+                        Name = title,
+                        Author = channel,
                         SyncMode = PlaylistSyncMode.TwoWaySync,
                         ThumbnailUrl = thumbUrl
                     });

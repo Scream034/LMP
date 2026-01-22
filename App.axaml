@@ -18,7 +18,8 @@
 
     <Application.DataTemplates>
         <!-- === TRACK TEMPLATE === -->
-        <DataTemplate DataType="{x:Type vm:TrackItemViewModel}">
+        <!-- ОПТИМИЗАЦИЯ: Включены скомпилированные привязки для скорости -->
+        <DataTemplate DataType="{x:Type vm:TrackItemViewModel}" x:CompileBindings="True">
             <Panel Classes="track-row"
                 Classes.is-active="{Binding IsActive}"
                 Classes.is-playing="{Binding IsPlaying}"
@@ -104,8 +105,6 @@
                     IsHitTestVisible="False" />
             </Panel>
         </DataTemplate>
-        
-        <!-- PlaylistCardTemplate is now handled via Styles in Templates/PlaylistCardTemplate.axaml -->
     </Application.DataTemplates>
 
     <Application.Styles>
@@ -116,9 +115,7 @@
         <StyleInclude Source="avares://MyLiteMusicPlayer/Templates/LoadingSkeletons.axaml" />
         <StyleInclude Source="avares://MyLiteMusicPlayer/Templates/PlaylistCardTemplate.axaml" />
 
-        <!--                   CSS LOGIC                       -->
-
-        <!-- 1. BASE SETTINGS -->
+        <!-- CSS LOGIC -->
         <Style Selector="Panel.track-row Border.track-bg">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Transitions">
@@ -166,7 +163,7 @@
             <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
         </Style>
 
-        <!-- 2. HOVER -->
+        <!-- HOVER -->
         <Style Selector="Panel.track-row:pointerover Border.track-bg">
             <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
         </Style>
@@ -179,7 +176,7 @@
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- 3. ACTIVE TRACK -->
+        <!-- ACTIVE TRACK -->
         <Style Selector="Panel.track-row.is-active Border.track-bg">
             <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
         </Style>
@@ -196,7 +193,7 @@
             <Setter Property="Opacity" Value="1" />
         </Style>
 
-        <!-- 4. PLAYING TRACK -->
+        <!-- PLAYING TRACK -->
         <Style Selector="Panel.track-row.is-playing mi|MaterialIcon.icon-pause">
             <Setter Property="Opacity" Value="1" />
         </Style>

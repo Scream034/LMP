@@ -1,187 +1,166 @@
-<!-- Templates/LoadingSkeletons.axaml -->
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia">
 
     <!-- ============================================= -->
-    <!-- АНИМАЦИЯ ОБЛАКА СИНХРОНИЗАЦИИ                 -->
+    <!-- АНИМАЦИЯ ПЕРЕЛИВАНИЯ ОБЛАКА (CROSSFADE)       -->
+    <!-- ============================================= -->
+    
+    <Style Selector="Panel.cloud-crossfade-overlay">
+        <Style.Animations>
+            <Animation Duration="0:0:2" IterationCount="Infinite" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+                <KeyFrame Cue="50%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- ============================================= -->
+    <!-- АНИМАЦИЯ ЛУПЫ (ПОИСК)                         -->
     <!-- ============================================= -->
 
-    <!-- Фон акцентный - БОЛЬШОЙ (для MainWindow) -->
-    <Style Selector="Border.cloud-bg-accent-large">
-        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-        <Style.Animations>
-            <Animation Duration="0:0:1.8" IterationCount="Infinite" Easing="SineEaseInOut">
-                <KeyFrame KeyTime="0:0:0">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:0.9">
-                    <Setter Property="Opacity" Value="0.1" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:1.8">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
-    </Style>
-
-    <!-- Фон акцентный - МАЛЕНЬКИЙ (для LibraryView) -->
-    <Style Selector="Border.cloud-bg-accent-small">
-        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-        <Style.Animations>
-            <Animation Duration="0:0:1.8" IterationCount="Infinite" Easing="SineEaseInOut">
-                <KeyFrame KeyTime="0:0:0">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:0.9">
-                    <Setter Property="Opacity" Value="0.1" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:1.8">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
-    </Style>
-
-    <!-- Облако тёмное (базовый слой) -->
-    <Style Selector="mi|MaterialIcon.cloud-dark">
-        <Setter Property="Foreground" Value="#3A3A3A" />
-    </Style>
-
-    <!-- Облако яркое - БОЛЬШОЕ (для MainWindow, пульсирует в противофазе) -->
-    <Style Selector="mi|MaterialIcon.cloud-bright-large">
+    <Style Selector="mi|MaterialIcon.scanner">
         <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+        <Setter Property="RenderTransform">
+            <Setter.Value>
+                <TranslateTransform />
+            </Setter.Value>
+        </Setter>
         <Style.Animations>
-            <Animation Duration="0:0:1.8" IterationCount="Infinite" Easing="SineEaseInOut">
-                <KeyFrame KeyTime="0:0:0">
-                    <Setter Property="Opacity" Value="0.05" />
+            <!-- 
+               Шаг строки = 52px (высота) + 4px (margin) = 56px.
+               X сканирует от 0 до 1200 для покрытия всей ширины.
+            -->
+            <Animation Duration="0:0:4" IterationCount="Infinite" Easing="LinearEasing">
+                <!-- Строка 1 -->
+                <KeyFrame Cue="0%">
+                    <Setter Property="TranslateTransform.X" Value="0" />
+                    <Setter Property="TranslateTransform.Y" Value="18" />
+                    <Setter Property="Opacity" Value="0" />
                 </KeyFrame>
-                <KeyFrame KeyTime="0:0:0.9">
+                <KeyFrame Cue="5%">
                     <Setter Property="Opacity" Value="1" />
                 </KeyFrame>
-                <KeyFrame KeyTime="0:0:1.8">
-                    <Setter Property="Opacity" Value="0.05" />
+                <KeyFrame Cue="20%">
+                    <Setter Property="TranslateTransform.X" Value="1000" />
+                    <Setter Property="TranslateTransform.Y" Value="18" />
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="22%">
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+
+                <!-- Строка 2 -->
+                <KeyFrame Cue="25%">
+                    <Setter Property="TranslateTransform.X" Value="0" />
+                    <Setter Property="TranslateTransform.Y" Value="74" />
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+                <KeyFrame Cue="30%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="45%">
+                    <Setter Property="TranslateTransform.X" Value="1000" />
+                    <Setter Property="TranslateTransform.Y" Value="74" />
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="47%">
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+
+                <!-- Строка 3 -->
+                <KeyFrame Cue="50%">
+                    <Setter Property="TranslateTransform.X" Value="0" />
+                    <Setter Property="TranslateTransform.Y" Value="130" />
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+                <KeyFrame Cue="55%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="70%">
+                    <Setter Property="TranslateTransform.X" Value="1000" />
+                    <Setter Property="TranslateTransform.Y" Value="130" />
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="72%">
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+
+                <!-- Строка 4 -->
+                <KeyFrame Cue="75%">
+                    <Setter Property="TranslateTransform.X" Value="0" />
+                    <Setter Property="TranslateTransform.Y" Value="186" />
+                    <Setter Property="Opacity" Value="0" />
+                </KeyFrame>
+                <KeyFrame Cue="80%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="95%">
+                    <Setter Property="TranslateTransform.X" Value="1000" />
+                    <Setter Property="TranslateTransform.Y" Value="186" />
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0" />
                 </KeyFrame>
             </Animation>
         </Style.Animations>
     </Style>
 
-    <!-- Облако яркое - МАЛЕНЬКОЕ (для LibraryView) -->
-    <Style Selector="mi|MaterialIcon.cloud-bright-small">
-        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-        <Style.Animations>
-            <Animation Duration="0:0:1.8" IterationCount="Infinite" Easing="SineEaseInOut">
-                <KeyFrame KeyTime="0:0:0">
-                    <Setter Property="Opacity" Value="0.05" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:0.9">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:1.8">
-                    <Setter Property="Opacity" Value="0.05" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
-    </Style>
 
     <!-- ============================================= -->
     <!-- СКЕЛЕТОНЫ ЗАГРУЗКИ                            -->
     <!-- ============================================= -->
-
-    <!-- Анимация вращения для иконки -->
-    <Style Selector="mi|MaterialIcon.spinning">
-        <Setter Property="RenderTransformOrigin" Value="0.5, 0.5" />
-        <Setter Property="RenderTransform">
+    
+    <!-- Базовая строка трека (Минимализм + Full Width) -->
+    <Style Selector="ContentControl.track-skeleton-row">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Template">
             <Setter.Value>
-                <RotateTransform />
+                <ControlTemplate>
+                    <Border Height="52" Margin="0,2" Background="Transparent">
+                        <Grid ColumnDefinitions="52, *, 50" Margin="8,0">
+                            <!-- Иконка/Обложка -->
+                            <Border Grid.Column="0" Width="40" Height="40" 
+                                    Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
+                                    VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                            
+                            <!-- Текстовые блоки (Занимают всё свободное место '*') -->
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
+                                <Border Width="180" Height="10" Background="{StaticResource BgSkeletonBrush}"
+                                        HorizontalAlignment="Left" CornerRadius="2" />
+                                <Border Width="100" Height="7" Background="{StaticResource BgSkeletonDeepBrush}"
+                                        HorizontalAlignment="Left" Margin="0,6,0,0" CornerRadius="2" />
+                            </StackPanel>
+                            
+                            <!-- Длительность -->
+                            <Border Grid.Column="2" Width="30" Height="7" Background="{StaticResource BgSkeletonDeepBrush}"
+                                    VerticalAlignment="Center" HorizontalAlignment="Right" CornerRadius="2" />
+                        </Grid>
+                    </Border>
+                </ControlTemplate>
             </Setter.Value>
         </Setter>
-        <Style.Animations>
-            <Animation Duration="0:0:1" IterationCount="Infinite">
-                <KeyFrame KeyTime="0:0:0">
-                    <Setter Property="RotateTransform.Angle" Value="0" />
-                </KeyFrame>
-                <KeyFrame KeyTime="0:0:1">
-                    <Setter Property="RotateTransform.Angle" Value="360" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
     </Style>
 
-    <!-- Скелеты для подгрузки (IsLoadingMore) -->
+    <!-- Пагинация (Бесконечный скролл) -->
     <Style Selector="ContentControl.loading-skeletons">
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate>
-                    <StackPanel Spacing="8" Margin="0,16,0,80">
-                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
-                            <Grid.Effect>
-                                <BlurEffect Radius="2" />
-                            </Grid.Effect>
-                            <Border Grid.Column="0" Width="48" Height="48"
-                                Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                Classes="skeleton" />
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                <Border Width="200" Height="14"
-                                    Background="{StaticResource BgSkeletonBrush}"
-                                    HorizontalAlignment="Left" CornerRadius="2" Classes="skeleton" />
-                                <Border Width="120" Height="10"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    HorizontalAlignment="Left" Margin="0,6,0,0"
-                                    CornerRadius="2" Classes="skeleton" />
-                            </StackPanel>
-                            <Border Grid.Column="2" Width="40" Height="12"
-                                Background="{StaticResource BgSkeletonDeepBrush}" CornerRadius="2"
-                                Classes="skeleton"
-                                VerticalAlignment="Center" HorizontalAlignment="Right"
-                                Margin="0,0,16,0" />
-                        </Grid>
-
-                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
-                            <Grid.Effect>
-                                <BlurEffect Radius="5" />
-                            </Grid.Effect>
-                            <Border Grid.Column="0" Width="48" Height="48"
-                                Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                Classes="skeleton" />
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                <Border Width="180" Height="14"
-                                    Background="{StaticResource BgSkeletonBrush}"
-                                    HorizontalAlignment="Left" CornerRadius="2" Classes="skeleton" />
-                                <Border Width="100" Height="10"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    HorizontalAlignment="Left" Margin="0,6,0,0"
-                                    CornerRadius="2" Classes="skeleton" />
-                            </StackPanel>
-                            <Border Grid.Column="2" Width="35" Height="12"
-                                Background="{StaticResource BgSkeletonDeepBrush}" CornerRadius="2"
-                                Classes="skeleton"
-                                VerticalAlignment="Center" HorizontalAlignment="Right"
-                                Margin="0,0,16,0" />
-                        </Grid>
-
-                        <Grid ColumnDefinitions="50, *, 80" Margin="0,4">
-                            <Grid.Effect>
-                                <BlurEffect Radius="10" />
-                            </Grid.Effect>
-                            <Border Grid.Column="0" Width="48" Height="48"
-                                Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                Classes="skeleton" />
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                <Border Width="220" Height="14"
-                                    Background="{StaticResource BgSkeletonBrush}"
-                                    HorizontalAlignment="Left" CornerRadius="2" Classes="skeleton" />
-                                <Border Width="140" Height="10"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    HorizontalAlignment="Left" Margin="0,6,0,0"
-                                    CornerRadius="2" Classes="skeleton" />
-                            </StackPanel>
-                            <Border Grid.Column="2" Width="45" Height="12"
-                                Background="{StaticResource BgSkeletonDeepBrush}" CornerRadius="2"
-                                Classes="skeleton"
-                                VerticalAlignment="Center" HorizontalAlignment="Right"
-                                Margin="0,0,16,0" />
-                        </Grid>
+                    <StackPanel HorizontalAlignment="Stretch" Margin="0,4,0,24" Opacity="0.5">
+                        <StackPanel.Effect>
+                            <BlurEffect Radius="3"/>
+                        </StackPanel.Effect>
+                        <ContentControl Classes="track-skeleton-row" />
+                        <ContentControl Classes="track-skeleton-row" />
                     </StackPanel>
                 </DataTemplate>
             </Setter.Value>
@@ -193,110 +172,20 @@
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate>
-                    <StackPanel Spacing="24" Margin="0,60" HorizontalAlignment="Center">
-                        <StackPanel Spacing="12">
-                            <Grid ColumnDefinitions="50, *, 80">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="3" />
-                                </Grid.Effect>
-                                <Border Grid.Column="0" Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                    Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="250" Height="16"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        HorizontalAlignment="Left" CornerRadius="3"
-                                        Classes="skeleton" />
-                                    <Border Width="150" Height="12"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        HorizontalAlignment="Left" Margin="0,8,0,0"
-                                        CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                                <Border Grid.Column="2" Width="50" Height="14"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    CornerRadius="2" Classes="skeleton"
-                                    VerticalAlignment="Center" HorizontalAlignment="Right"
-                                    Margin="0,0,16,0" />
-                            </Grid>
-
-                            <Grid ColumnDefinitions="50, *, 80">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="6" />
-                                </Grid.Effect>
-                                <Border Grid.Column="0" Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                    Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="200" Height="16"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        HorizontalAlignment="Left" CornerRadius="3"
-                                        Classes="skeleton" />
-                                    <Border Width="120" Height="12"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        HorizontalAlignment="Left" Margin="0,8,0,0"
-                                        CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                                <Border Grid.Column="2" Width="45" Height="14"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    CornerRadius="2" Classes="skeleton"
-                                    VerticalAlignment="Center" HorizontalAlignment="Right"
-                                    Margin="0,0,16,0" />
-                            </Grid>
-
-                            <Grid ColumnDefinitions="50, *, 80">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="10" />
-                                </Grid.Effect>
-                                <Border Grid.Column="0" Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                    Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="280" Height="16"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        HorizontalAlignment="Left" CornerRadius="3"
-                                        Classes="skeleton" />
-                                    <Border Width="180" Height="12"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        HorizontalAlignment="Left" Margin="0,8,0,0"
-                                        CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                                <Border Grid.Column="2" Width="40" Height="14"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    CornerRadius="2" Classes="skeleton"
-                                    VerticalAlignment="Center" HorizontalAlignment="Right"
-                                    Margin="0,0,16,0" />
-                            </Grid>
-
-                            <Grid ColumnDefinitions="50, *, 80">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="15" />
-                                </Grid.Effect>
-                                <Border Grid.Column="0" Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
-                                    Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="220" Height="16"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        HorizontalAlignment="Left" CornerRadius="3"
-                                        Classes="skeleton" />
-                                    <Border Width="140" Height="12"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        HorizontalAlignment="Left" Margin="0,8,0,0"
-                                        CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                                <Border Grid.Column="2" Width="55" Height="14"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
-                                    CornerRadius="2" Classes="skeleton"
-                                    VerticalAlignment="Center" HorizontalAlignment="Right"
-                                    Margin="0,0,16,0" />
-                            </Grid>
+                    <StackPanel Spacing="24" Margin="0,60" HorizontalAlignment="Stretch">
+                        <StackPanel HorizontalAlignment="Stretch">
+                            <StackPanel.Effect>
+                                <BlurEffect Radius="3"/>
+                            </StackPanel.Effect>
+                            <ContentControl Classes="track-skeleton-row" />
+                            <ContentControl Classes="track-skeleton-row" />
+                            <ContentControl Classes="track-skeleton-row" />
                         </StackPanel>
-
+                        
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
                             <mi:MaterialIcon Kind="Loading" Width="16" Height="16"
                                 Foreground="{StaticResource TextMutedBrush}" Classes="spinning" />
-                            <TextBlock Text="Загружаем треки..."
-                                FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
+                            <TextBlock Text="Loading tracks..." FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
                         </StackPanel>
                     </StackPanel>
                 </DataTemplate>
@@ -304,134 +193,44 @@
         </Setter>
     </Style>
 
-    <!-- Загрузка из сети -->
-    <Style Selector="ContentControl.loading-network">
-        <Setter Property="ContentTemplate">
-            <Setter.Value>
-                <DataTemplate>
-                    <Border Background="{StaticResource BgOverlayBrush}" CornerRadius="12"
-                        Padding="32,24" Margin="0,16"
-                        HorizontalAlignment="Center">
-                        <StackPanel Spacing="16" HorizontalAlignment="Center">
-                            <StackPanel Spacing="8" Width="200">
-                                <Grid ColumnDefinitions="32, *">
-                                    <Grid.Effect>
-                                        <BlurEffect Radius="2" />
-                                    </Grid.Effect>
-                                    <Border Width="28" Height="28"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        CornerRadius="4" Classes="skeleton" />
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center"
-                                        Margin="8,0,0,0">
-                                        <Border Width="120" Height="10"
-                                            Background="{StaticResource BgSkeletonBrush}"
-                                            CornerRadius="2" Classes="skeleton" />
-                                        <Border Width="80" Height="8"
-                                            Background="{StaticResource BgSkeletonDeepBrush}"
-                                            Margin="0,4,0,0" CornerRadius="2" Classes="skeleton" />
-                                    </StackPanel>
-                                </Grid>
-
-                                <Grid ColumnDefinitions="32, *">
-                                    <Grid.Effect>
-                                        <BlurEffect Radius="5" />
-                                    </Grid.Effect>
-                                    <Border Width="28" Height="28"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        CornerRadius="4" Classes="skeleton" />
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center"
-                                        Margin="8,0,0,0">
-                                        <Border Width="100" Height="10"
-                                            Background="{StaticResource BgSkeletonBrush}"
-                                            CornerRadius="2" Classes="skeleton" />
-                                        <Border Width="60" Height="8"
-                                            Background="{StaticResource BgSkeletonDeepBrush}"
-                                            Margin="0,4,0,0" CornerRadius="2" Classes="skeleton" />
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                Spacing="10">
-                                <mi:MaterialIcon Kind="CloudDownload" Width="18" Height="18"
-                                    Foreground="{StaticResource AccentBrush}" Classes="spinning" />
-                                <TextBlock Text="Загружаем из сети..."
-                                    Foreground="{StaticResource TextPrimaryBrush}" FontSize="13"
-                                    FontWeight="Medium" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-                </DataTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <!-- Поиск -->
+    <!-- ПОИСК: Растягивающийся лоадер с лупой -->
     <Style Selector="ContentControl.loading-search">
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate>
-                    <StackPanel Spacing="20" Margin="0,40" HorizontalAlignment="Center">
-                        <StackPanel Spacing="10" Width="400">
-                            <Grid ColumnDefinitions="50, *">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="2" />
-                                </Grid.Effect>
-                                <Border Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}"
-                                    CornerRadius="4" Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="280" Height="14"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        CornerRadius="2" Classes="skeleton" />
-                                    <Border Width="180" Height="10"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        Margin="0,6,0,0" CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                            </Grid>
-
-                            <Grid ColumnDefinitions="50, *">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="5" />
-                                </Grid.Effect>
-                                <Border Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}"
-                                    CornerRadius="4" Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="240" Height="14"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        CornerRadius="2" Classes="skeleton" />
-                                    <Border Width="150" Height="10"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        Margin="0,6,0,0" CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                            </Grid>
-
-                            <Grid ColumnDefinitions="50, *">
-                                <Grid.Effect>
-                                    <BlurEffect Radius="10" />
-                                </Grid.Effect>
-                                <Border Width="48" Height="48"
-                                    Background="{StaticResource BgSkeletonBrush}"
-                                    CornerRadius="4" Classes="skeleton" />
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
-                                    <Border Width="300" Height="14"
-                                        Background="{StaticResource BgSkeletonBrush}"
-                                        CornerRadius="2" Classes="skeleton" />
-                                    <Border Width="200" Height="10"
-                                        Background="{StaticResource BgSkeletonDeepBrush}"
-                                        Margin="0,6,0,0" CornerRadius="2" Classes="skeleton" />
-                                </StackPanel>
-                            </Grid>
+                    <Grid HorizontalAlignment="Stretch" Margin="0,20">
+                        <!-- Контейнер для скелетонов (На всю ширину) -->
+                        <StackPanel HorizontalAlignment="Stretch" Spacing="4">
+                            <StackPanel.Effect>
+                                <BlurEffect Radius="5"/>
+                            </StackPanel.Effect>
+                            
+                            <!-- 4 заблюренных трека, использующих фон для видимости -->
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8">
+                                <ContentControl Classes="track-skeleton-row" />
+                            </Border>
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8">
+                                <ContentControl Classes="track-skeleton-row" />
+                            </Border>
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8">
+                                <ContentControl Classes="track-skeleton-row" />
+                            </Border>
+                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="8">
+                                <ContentControl Classes="track-skeleton-row" />
+                            </Border>
                         </StackPanel>
-
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
-                            <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
-                                Foreground="{StaticResource TextMutedBrush}" Classes="spinning" />
-                            <TextBlock Text="Ищем треки..."
-                                FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
+                        
+                        <!-- Лупа (Маленькая, гуляет поверх) -->
+                        <Canvas IsHitTestVisible="False">
+                             <mi:MaterialIcon Kind="Magnify" Width="20" Height="20" Classes="scanner"/>
+                        </Canvas>
+                        
+                        <!-- Подпись -->
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" 
+                                    VerticalAlignment="Bottom" Margin="0,260,0,0">
+                             <TextBlock Text="Searching..." FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
                         </StackPanel>
-                    </StackPanel>
+                    </Grid>
                 </DataTemplate>
             </Setter.Value>
         </Setter>
