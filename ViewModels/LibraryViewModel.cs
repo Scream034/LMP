@@ -177,7 +177,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
 
-            // OPTIMIZATION: Create lookups to avoid N+1 scans in the loop
             var existingLocalPlaylists = _library.GetAllPlaylists()
                 .Where(p => p.IsLocal)
                 .ToDictionary(p => p.Name, p => p);
@@ -195,7 +194,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 if (_isDisposed) return;
             }
             
-            // Fast lookup for decisions
             var decisionLookup = decisions.ToDictionary(d => d.PlaylistName, d => d.Action);
 
             ct.ThrowIfCancellationRequested();
@@ -237,14 +235,25 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     continue;
                 }
 
-                // O(1) lookup
                 existingLocalPlaylists.TryGetValue(candidate.Title, out var existing);
 
                 if (decision == MergeAction.Merge && existing != null)
                 {
+                    // Оптимизация: Алгоритмическая сложность
+                    // Преобразуем список существующих треков в HashSet для поиска O(1)
+                    // Вместо Contains на List (O(N)), что дает суммарную сложность O(M) вместо O(N*M)
+                    var existingTrackSet = new HashSet<string>(existing.TrackIds);
+                    bool changed = false;
+
                     foreach (var trackId in fullPlaylist.TrackIds)
                     {
-                        if (!existing.TrackIds.Contains(trackId)) existing.TrackIds.Add(trackId);
+                        if (existingTrackSet.Add(trackId))
+                        {
+                            existing.TrackIds.Add(trackId);
+                            changed = true;
+                        }
+
+                        // Обновляем метаданные трека
                         var t = _library.GetTrack(trackId);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
                         {
@@ -252,8 +261,12 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             _library.AddOrUpdateTrack(t);
                         }
                     }
-                    existing.UpdatedAt = DateTime.Now;
-                    _library.AddOrUpdatePlaylist(existing);
+
+                    if (changed)
+                    {
+                        existing.UpdatedAt = DateTime.Now;
+                        _library.AddOrUpdatePlaylist(existing);
+                    }
                     mergedCount++;
                 }
                 else

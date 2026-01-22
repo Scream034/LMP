@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Headers;
@@ -8,6 +9,7 @@ namespace MyLiteMusicPlayer.Services;
 
 /// <summary>
 /// Adaptive Streaming Buffer с приоритетной загрузкой по запросам VLC.
+/// Оптимизировано для минимизации нагрузки на GC (ArrayPool).
 /// </summary>
 public sealed class MemoryFirstCachingStream : Stream
 {
@@ -28,7 +30,10 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly RangeMap _diskRanges;
     private readonly int _totalChunks;
 
+    // Оптимизация: Храним арендованные буферы.
+    // Важно: Value в словаре - это массив из пула, который может быть больше ChunkSize.
     private readonly ConcurrentDictionary<int, byte[]> _chunks = new();
+    
     private readonly ConcurrentDictionary<int, Task> _pendingDownloads = new();
     private readonly SemaphoreSlim _downloadSemaphore;
     private readonly PriorityQueue<int, int> _downloadQueue = new();
@@ -36,6 +41,7 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly object _queueLock = new();
 
     private readonly ReaderWriterLockSlim _fileLock = new(LockRecursionPolicy.NoRecursion);
+    // Channel передает (Position, ArrayFromPool, Length)
     private readonly Channel<(long Pos, byte[] Data, int Len)> _diskChannel;
     private readonly ManualResetEventSlim _dataAvailable = new(false);
     private readonly CancellationTokenSource _disposeCts = new();
@@ -191,8 +197,17 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         if (_chunks.TryGetValue(idx, out var chunk))
         {
-            int available = Math.Min(count, chunk.Length - off);
-            if (available > 0) Buffer.BlockCopy(chunk, off, buf, bufOff, available);
+            // Оптимизация: chunk - это массив из пула, он может быть больше ChunkSize.
+            // Но логика разбиения на чанки гарантирует, что полезных данных там ровно ChunkSize (или остаток для последнего).
+            int usefulDataLength = (idx == _totalChunks - 1) 
+                ? (int)(_contentLength - ((long)idx * ChunkSize)) 
+                : ChunkSize;
+                
+            int available = Math.Min(count, usefulDataLength - off);
+            if (available > 0)
+            {
+                Buffer.BlockCopy(chunk, off, buf, bufOff, available);
+            }
             return available;
         }
 
@@ -318,6 +333,9 @@ public sealed class MemoryFirstCachingStream : Stream
             return;
         }
 
+        // Оптимизация: Арендуем массив из пула
+        byte[]? buffer = null;
+
         try
         {
             long start = (long)idx * ChunkSize;
@@ -332,23 +350,67 @@ public sealed class MemoryFirstCachingStream : Stream
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             resp.EnsureSuccessStatusCode();
 
-            var data = await resp.Content.ReadAsByteArrayAsync(cts.Token);
+            // Берем массив. Он может быть больше ChunkSize.
+            buffer = ArrayPool<byte>.Shared.Rent(ChunkSize);
+            
+            // Читаем в буфер. stream.ReadAsync заполнит столько, сколько скачано.
+            using var netStream = await resp.Content.ReadAsStreamAsync(cts.Token);
+            
+            int totalRead = 0;
+            int bytesRead;
+            // Нужно прочитать весь чанк в буфер
+            while ((bytesRead = await netStream.ReadAsync(buffer, totalRead, ChunkSize - totalRead, cts.Token)) > 0)
+            {
+                totalRead += bytesRead;
+            }
 
             if (!_chunks.ContainsKey(idx))
             {
-                _chunks[idx] = data;
-                Interlocked.Add(ref _bytesDownloaded, data.Length);
+                // Сохраняем арендованный буфер в словарь
+                _chunks[idx] = buffer;
+                
+                Interlocked.Add(ref _bytesDownloaded, totalRead);
                 _dataAvailable.Set();
 
-                if (!_disposing) _diskChannel.Writer.TryWrite((start, data, data.Length));
+                // Для записи на диск нам нужно скопировать или передать владение. 
+                // Чтобы не усложнять возврат из DiskWriter, здесь сделаем копию для диска? 
+                // Нет, DiskWriter просто пишет. Но буфер "принадлежит" _chunks.
+                // Передадим в канал копию? Это аллокация, но временная (Gen0). 
+                // Иначе придется делать RefCount для буфера из пула.
+                // Компромисс: сделаем копию только для записи на диск, чтобы _chunks владел основным буфером до Trim/Dispose.
+                
+                // Асинхронно пишем в канал
+                if (!_disposing)
+                {
+                    byte[] diskBuffer = ArrayPool<byte>.Shared.Rent(totalRead);
+                    Buffer.BlockCopy(buffer, 0, diskBuffer, 0, totalRead);
+                    _diskChannel.Writer.TryWrite((start, diskBuffer, totalRead));
+                }
+                
+                // buffer теперь "живет" в _chunks. Сбрасываем ссылку локальную, чтобы finally не вернул его.
+                buffer = null; 
+
                 if (_chunks.Count > MaxRamChunks) TrimRamCache();
+            }
+            else
+            {
+                // Чанк уже есть (гонка), возвращаем текущий
+                // finally блок сделает Return, т.к. buffer != null
             }
 
             tcs.SetResult();
         }
         catch (OperationCanceledException) { tcs.TrySetCanceled(); }
         catch (Exception ex) { tcs.TrySetException(ex); }
-        finally { _pendingDownloads.TryRemove(idx, out _); }
+        finally 
+        { 
+            _pendingDownloads.TryRemove(idx, out _);
+            if (buffer != null)
+            {
+                // Если buffer не null, значит мы его не положили в _chunks, возвращаем в пул
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
     }
 
     private void TrimRamCache()
@@ -367,7 +429,14 @@ public sealed class MemoryFirstCachingStream : Stream
             .OrderByDescending(i => Math.Abs(i - current))
             .Take(_chunks.Count / 3);
 
-        foreach (var i in toRemove) _chunks.TryRemove(i, out _);
+        foreach (var i in toRemove)
+        {
+            if (_chunks.TryRemove(i, out var buffer))
+            {
+                // Оптимизация: Возвращаем массив в пул при очистке RAM
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
     }
 
     private bool IsAllDownloaded()
@@ -383,7 +452,12 @@ public sealed class MemoryFirstCachingStream : Stream
         {
             await foreach (var (pos, data, len) in _diskChannel.Reader.ReadAllAsync(_disposeCts.Token))
             {
-                if (_disposing || _cacheFile == null) continue;
+                if (_disposing || _cacheFile == null)
+                {
+                    // Если стрим закрылся, возвращаем буферы (которые копии для диска)
+                    ArrayPool<byte>.Shared.Return(data);
+                    continue;
+                }
 
                 try
                 {
@@ -399,6 +473,11 @@ public sealed class MemoryFirstCachingStream : Stream
                     _diskRanges.MarkComplete(pos, pos + len);
                 }
                 catch { }
+                finally
+                {
+                    // Оптимизация: Возвращаем буфер записи в пул
+                    ArrayPool<byte>.Shared.Return(data);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -440,6 +519,11 @@ public sealed class MemoryFirstCachingStream : Stream
             }
             finally { _fileLock.ExitWriteLock(); }
 
+            // Оптимизация: Возвращаем ВСЕ буферы из словаря в пул
+            foreach (var buffer in _chunks.Values)
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
             _chunks.Clear();
             _pendingDownloads.Clear();
 

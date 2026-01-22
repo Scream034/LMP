@@ -12,29 +12,25 @@ namespace MyLiteMusicPlayer.ViewModels;
 
 public class PlayerBarViewModel : ViewModelBase, IDisposable
 {
-    // ЗАВИСИМОСТИ
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
     private readonly IClipboardService _clipboard;
     private readonly YoutubeProvider _youtube;
 
-    // ТАЙМЕРЫ
     private readonly DispatcherTimer _speedUpdateTimer;
-    private readonly DispatcherTimer _fallbackPositionTimer;
+    // Timer для fallback позиции тоже можно оставить, он редкий (500мс)
+    private readonly DispatcherTimer _fallbackPositionTimer; 
 
-    // СОСТОЯНИЕ УПРАВЛЕНИЯ
     private bool _isSeeking;
     private bool _justFinishedSeeking;
     private float _volumeBeforeMute;
 
-    // ТАЙМИНГИ
     private DateTime _lastSeekTime = DateTime.MinValue;
     private long _lastDownloadedBytes;
     private DateTime _lastSpeedCheck = DateTime.MinValue;
     private const int SeekCooldownMs = 250;
 
-    // СВОЙСТВА ТРЕКА
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
     [Reactive] public bool IsLoading { get; private set; }
     [Reactive] public bool IsPlaying { get; private set; }
@@ -48,7 +44,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 
-    // ПРОГРЕСС И ВРЕМЯ
     [Reactive] public TimeSpan Position { get; set; }
     [Reactive] public TimeSpan Duration { get; private set; }
     [Reactive] public double PositionSeconds { get; set; }
@@ -56,7 +51,6 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public double BufferedSeconds { get; private set; }
     [Reactive] public bool IsSeekBusy { get; private set; }
 
-    // ГРОМКОСТЬ
     [Reactive] public int Volume { get; set; }
     [Reactive] public int MaxVolume { get; private set; } = 100;
     [Reactive] public bool IsMuted { get; private set; }
@@ -65,23 +59,19 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
 
     public double VolumeSliderWidth => 100 + ((MaxVolume - 100) * 0.5);
 
-    // ВИЗУАЛИЗАЦИЯ ГРОМКОСТИ
+    // Свойства для визуализации громкости (оставил как есть, но оптимизация в AudioEngine handle)
     [Reactive] public double Bar1Opacity { get; set; } = 0.3;
     [Reactive] public double Bar2Opacity { get; set; } = 0.3;
     [Reactive] public double Bar3Opacity { get; set; } = 0.3;
     [Reactive] public double Bar4Opacity { get; set; } = 0.3;
     [Reactive] public double Bar5Opacity { get; set; } = 0.3;
     [Reactive] public double Bar5Thickness { get; set; } = 4;
-
-    // Новое свойство для переключения цвета через CSS-классы
     [Reactive] public bool IsVolumeBoosted { get; set; }
 
-    // ИНФОРМАЦИЯ О ПОТОКЕ
     [Reactive] public string StreamInfo { get; private set; } = "";
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
 
-    // КОМАНДЫ
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
@@ -122,18 +112,25 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnPlaybackStateChanged += (isPlaying, isPaused) =>
             Dispatcher.UIThread.Post(() => SyncPlaybackState(isPlaying, isPaused));
 
-        _audio.OnPositionChanged += pos => Dispatcher.UIThread.Post(() =>
-        {
-            if (!_isSeeking && !_justFinishedSeeking)
+        // Оптимизация: Throttle/Sample для обновлений позиции.
+        // VLC шлет события очень часто (каждые ~10мс). Мы ограничиваем обновление UI до 5 раз в секунду.
+        Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
+                h => _audio.OnPositionChanged += h,
+                h => _audio.OnPositionChanged -= h)
+            .Sample(TimeSpan.FromMilliseconds(200)) 
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(pos =>
             {
-                Position = pos;
-                PositionSeconds = pos.TotalSeconds;
-            }
-            if (IsSeekBusy && !IsLoading)
-            {
-                IsSeekBusy = false;
-            }
-        });
+                if (!_isSeeking && !_justFinishedSeeking)
+                {
+                    Position = pos;
+                    PositionSeconds = pos.TotalSeconds;
+                }
+                if (IsSeekBusy && !IsLoading)
+                {
+                    IsSeekBusy = false;
+                }
+            });
 
         this.WhenAnyValue(x => x.Volume)
             .Skip(1)
@@ -174,10 +171,12 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
         _speedUpdateTimer.Tick += (_, _) => UpdateDownloadSpeed();
         _speedUpdateTimer.Start();
 
+        // Оптимизация: Throttle для обновлений прогресса загрузки
         Observable.FromEvent<Action<string, float>, (string, float)>(
                 h => (id, p) => h((id, p)),
                 h => _downloads.OnProgress += h,
                 h => _downloads.OnProgress -= h)
+            .Sample(TimeSpan.FromMilliseconds(200)) // Не обновлять прогресс-бар чаще 5 раз/сек
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(x =>
             {
@@ -288,12 +287,12 @@ public class PlayerBarViewModel : ViewModelBase, IDisposable
             double boost = (vol - 100) / 100.0;
             Bar5Thickness = 4 + (boost * 6);
             if (Bar5Thickness > 12) Bar5Thickness = 12;
-            IsVolumeBoosted = true; // Включаем акцентный цвет
+            IsVolumeBoosted = true; 
         }
         else
         {
             Bar5Thickness = 4;
-            IsVolumeBoosted = false; // Обычный цвет
+            IsVolumeBoosted = false; 
         }
     }
 
