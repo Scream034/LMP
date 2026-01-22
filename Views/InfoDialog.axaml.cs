@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using System.Reactive;
 
@@ -8,16 +9,18 @@ namespace MyLiteMusicPlayer.Views.Dialogs;
 
 public partial class InfoDialog : Window
 {
+    private readonly static LocalizationService L = LocalizationService.Instance;
+
     private readonly IDisposable? _closeSub;
 
     public static readonly StyledProperty<string> DialogTitleProperty =
-        AvaloniaProperty.Register<InfoDialog, string>(nameof(DialogTitle), "Info");
+        AvaloniaProperty.Register<InfoDialog, string>(nameof(DialogTitle), L["Dialog_Info_Title"]);
 
     public static readonly StyledProperty<string> MessageProperty =
         AvaloniaProperty.Register<InfoDialog, string>(nameof(Message), "");
 
     public static readonly StyledProperty<string> ButtonTextProperty =
-        AvaloniaProperty.Register<InfoDialog, string>(nameof(ButtonText), "OK");
+        AvaloniaProperty.Register<InfoDialog, string>(nameof(ButtonText), L["Common_OK"]);
 
     public string DialogTitle
     {

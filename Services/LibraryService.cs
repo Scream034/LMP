@@ -14,14 +14,18 @@ public class LibraryService : IDisposable
 
     private readonly string _libraryPath;
     private readonly string _appFolder;
-    
-    // Оптимизация: Subject для сигналов сохранения с тротлингом
+
     private readonly Subject<Unit> _saveSignal = new();
     private readonly IDisposable _saveSubscription;
 
     public LibraryData Data { get; private set; } = new();
 
+    // --- Fake Account кэш (в памяти, не сохраняется) ---
+    private string? _fakeAccountName;
+    private string? _fakeAccountAvatarUrl;
+
     public event Action? OnDataChanged;
+    public event Action? OnFakeAccountChanged;
     public event Action<TrackInfo>? OnTrackUpdated;
 
     public LibraryService()
@@ -31,15 +35,11 @@ public class LibraryService : IDisposable
         Directory.CreateDirectory(_appFolder);
         _libraryPath = Path.Combine(_appFolder, LibraryFileName);
 
-        // Подписываемся на смену языка
         LocalizationService.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
 
-        // Оптимизация: Настройка конвейера сохранения
-        // Группируем запросы на сохранение, выполняя запись не чаще раза в 2 секунды
-        // Это устраняет микро-фризы UI при частых лайках
         _saveSubscription = _saveSignal
             .Throttle(TimeSpan.FromSeconds(2))
-            .ObserveOn(RxApp.TaskpoolScheduler) // Выполняем I/O строго в фоновом потоке
+            .ObserveOn(RxApp.TaskpoolScheduler)
             .Subscribe(async _ => await SaveInternalAsync());
 
         Load();
@@ -59,7 +59,50 @@ public class LibraryService : IDisposable
         }
     }
 
+    // --- Fake Account API ---
+
     public bool HasFakeAccount => !string.IsNullOrEmpty(Data.FakeAccountChannelUrl);
+    public string? FakeAccountUrl => Data.FakeAccountChannelUrl;
+    public string? FakeAccountName => _fakeAccountName;
+    public string? FakeAccountAvatarUrl => _fakeAccountAvatarUrl;
+
+    /// <summary>
+    /// Устанавливает Fake Account (только URL сохраняется, остальное в кэше)
+    /// </summary>
+    public void SetFakeAccount(string channelUrl, string name, string avatarUrl)
+    {
+        Data.FakeAccountChannelUrl = channelUrl;
+        _fakeAccountName = name;
+        _fakeAccountAvatarUrl = avatarUrl;
+        Save();
+        OnFakeAccountChanged?.Invoke();
+        OnDataChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Обновляет кэш Fake Account (без сохранения URL)
+    /// </summary>
+    public void UpdateFakeAccountCache(string name, string avatarUrl)
+    {
+        _fakeAccountName = name;
+        _fakeAccountAvatarUrl = avatarUrl;
+        OnFakeAccountChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Очищает Fake Account
+    /// </summary>
+    public void ClearFakeAccount()
+    {
+        Data.FakeAccountChannelUrl = null;
+        _fakeAccountName = null;
+        _fakeAccountAvatarUrl = null;
+        Save();
+        OnFakeAccountChanged?.Invoke();
+        OnDataChanged?.Invoke();
+    }
+
+    // --- Загрузка/Сохранение ---
 
     public void Load()
     {
@@ -80,26 +123,22 @@ public class LibraryService : IDisposable
         Directory.CreateDirectory(DownloadPath);
     }
 
-    // Оптимизация: Публичный метод теперь просто отправляет сигнал
     public void Save()
     {
         _saveSignal.OnNext(Unit.Default);
     }
 
-    // Оптимизация: Внутренняя асинхронная логика сохранения
     private async Task SaveInternalAsync()
     {
         try
         {
-            // Используем временный файл для атомарной записи (защита от краша при записи)
             var tempFile = _libraryPath + ".tmp";
-            
+
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
             {
                 await JsonSerializer.SerializeAsync(fs, Data, new JsonSerializerOptions { WriteIndented = true });
             }
 
-            // Атомарная замена файла
             File.Move(tempFile, _libraryPath, true);
         }
         catch (Exception ex)
@@ -111,6 +150,8 @@ public class LibraryService : IDisposable
     public void Reset()
     {
         Data = new LibraryData();
+        _fakeAccountName = null;
+        _fakeAccountAvatarUrl = null;
         EnsureLikedPlaylist();
         Save();
         OnDataChanged?.Invoke();
@@ -138,6 +179,8 @@ public class LibraryService : IDisposable
             value.Name = LocalizationService.Instance["Playlist_Liked"];
         }
     }
+
+    // ... остальные методы без изменений ...
 
     public Playlist GetLikedPlaylist()
     {
@@ -209,7 +252,6 @@ public class LibraryService : IDisposable
 
         if (!targetPlaylist.IsLocal) return false;
 
-        // Оптимизация: HashSet для быстрого поиска дубликатов O(1)
         var targetTrackIds = new HashSet<string>(targetPlaylist.TrackIds);
         int newTracksCount = 0;
 
@@ -425,31 +467,11 @@ public class LibraryService : IDisposable
         return $"local_{Guid.NewGuid():N}";
     }
 
-    public void SetFakeAccount(string url, string name, string avatarUrl)
-    {
-        Data.FakeAccountChannelUrl = url;
-        Data.FakeAccountName = name;
-        Data.FakeAccountAvatarUrl = avatarUrl;
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
-    public void ClearFakeAccount()
-    {
-        Data.FakeAccountChannelUrl = null;
-        Data.FakeAccountName = null;
-        Data.FakeAccountAvatarUrl = null;
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
     public void Dispose()
     {
-        // Перед уничтожением сервиса форсируем сохранение (если есть отложенные изменения)
         _saveSubscription.Dispose();
         _saveSignal.Dispose();
-        
-        // Синхронный сейв при закрытии для надежности
+
         try
         {
             var options = new JsonSerializerOptions { WriteIndented = true };

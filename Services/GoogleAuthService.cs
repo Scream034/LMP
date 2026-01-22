@@ -13,9 +13,7 @@ public class GoogleAuthService : IDisposable
     private readonly string _clientId;
     private readonly string _clientSecret;
 
-    // Порт должен совпадать с тем, что слушает HttpListener
     private const string RedirectUri = "http://127.0.0.1:8765/";
-
     private const string Scope = "https://www.googleapis.com/auth/youtube.readonly email profile openid";
 
     private readonly string _tokenPath;
@@ -36,7 +34,6 @@ public class GoogleAuthService : IDisposable
         Directory.CreateDirectory(appFolder);
         _tokenPath = Path.Combine(appFolder, "auth.json");
 
-        // Загружаем секреты
         var secrets = SecretsLoader.Load();
         _clientId = secrets.Google.ClientId;
         _clientSecret = secrets.Google.ClientSecret;
@@ -55,10 +52,8 @@ public class GoogleAuthService : IDisposable
                 if (state != null)
                 {
                     State = state;
-                    // Если токен есть, но просрочен (или скоро просрочится), пробуем обновить
                     if (State.IsAuthenticated && State.TokenExpiry <= DateTime.UtcNow.AddMinutes(5))
                     {
-                        // Запускаем обновление в фоне, не блокируя UI
                         _ = RefreshTokenAsync();
                     }
                 }
@@ -66,7 +61,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading tokens: {ex.Message}");
+            Log.Error($"Error loading tokens: {ex.Message}");
             State = new AuthState();
         }
     }
@@ -81,7 +76,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to save auth tokens: {ex.Message}");
+            Log.Error($"Failed to save auth tokens: {ex.Message}");
         }
     }
 
@@ -89,12 +84,10 @@ public class GoogleAuthService : IDisposable
     {
         try
         {
-            // 1. Подготовка параметров PKCE (защита от перехвата)
             string state = GenerateRandomString(32);
             string codeVerifier = GenerateRandomString(64);
             string codeChallenge = GenerateCodeChallenge(codeVerifier);
 
-            // 2. Формирование URL
             string authUrl = $"https://accounts.google.com/o/oauth2/v2/auth?" +
                 $"client_id={Uri.EscapeDataString(_clientId)}&" +
                 $"redirect_uri={Uri.EscapeDataString(RedirectUri)}&" +
@@ -103,30 +96,25 @@ public class GoogleAuthService : IDisposable
                 $"state={state}&" +
                 $"code_challenge={codeChallenge}&" +
                 $"code_challenge_method=S256&" +
-                $"access_type=offline&" + // Важно для получения Refresh Token
-                $"prompt=consent";        // Чтобы всегда спрашивал разрешение (для тестов)
+                $"access_type=offline&" +
+                $"prompt=consent";
 
-            // 3. Запуск локального HTTP сервера для перехвата ответа
             _listener = new HttpListener();
             _listener.Prefixes.Add(RedirectUri);
             _listener.Start();
 
-            Console.WriteLine($"Listening on {RedirectUri}...");
+            Log.Info($"[Auth] Listening on {RedirectUri}...");
 
-            // 4. Открытие браузера
             Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
 
-            // 5. Ожидание ответа
             var context = await _listener.GetContextAsync();
             var request = context.Request;
             var response = context.Response;
 
-            // 6. Парсинг ответа
             string? code = request.QueryString["code"];
             string? returnedState = request.QueryString["state"];
             string? error = request.QueryString["error"];
 
-            // 7. Ответ браузеру (красивая страничка)
             string responseHtml = "<html><body style='background:#121212;color:white;font-family:sans-serif;text-align:center;padding-top:50px;'>" +
                                   (code != null
                                       ? "<h1 style='color:#1DB954;'>Login Successful!</h1><p>You can close this tab and return to the app.</p>"
@@ -143,16 +131,15 @@ public class GoogleAuthService : IDisposable
 
             if (string.IsNullOrEmpty(code) || returnedState != state)
             {
-                Console.WriteLine($"OAuth error: {error} or State mismatch");
+                Log.Error($"[Auth] OAuth error: {error} or State mismatch");
                 return false;
             }
 
-            // 8. Обмен кода на токены
             return await ExchangeCodeAsync(code, codeVerifier);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Login critical error: {ex.Message}\n{ex.StackTrace}");
+            Log.Error($"[Auth] Login critical error: {ex.Message}");
             _listener?.Stop();
             return false;
         }
@@ -177,7 +164,7 @@ public class GoogleAuthService : IDisposable
             if (!response.IsSuccessStatusCode)
             {
                 var error = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"Token exchange failed: {error}");
+                Log.Error($"[Auth] Token exchange failed: {error}");
                 return false;
             }
 
@@ -186,17 +173,20 @@ public class GoogleAuthService : IDisposable
 
             State.AccessToken = tokenData.GetProperty("access_token").GetString();
 
-            // Refresh token приходит только при первом логине (или если access_type=offline + prompt=consent)
             if (tokenData.TryGetProperty("refresh_token", out var rt))
             {
                 State.RefreshToken = rt.GetString();
             }
 
             int expiresIn = tokenData.GetProperty("expires_in").GetInt32();
-            State.TokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60); // -60 сек для безопасности
+            State.TokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60);
             State.IsAuthenticated = true;
 
-            await FetchUserInfoAsync();
+            // Загружаем профиль и YouTube канал параллельно
+            await Task.WhenAll(
+                FetchUserProfileAsync(),
+                FetchYouTubeChannelAsync()
+            );
 
             SaveTokens();
             OnAuthStateChanged?.Invoke();
@@ -205,7 +195,7 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"ExchangeCodeAsync error: {ex.Message}");
+            Log.Error($"[Auth] ExchangeCodeAsync error: {ex.Message}");
             return false;
         }
     }
@@ -214,7 +204,7 @@ public class GoogleAuthService : IDisposable
     {
         if (string.IsNullOrEmpty(State.RefreshToken))
         {
-            Console.WriteLine("No refresh token available.");
+            Log.Warn("[Auth] No refresh token available.");
             return false;
         }
 
@@ -232,8 +222,8 @@ public class GoogleAuthService : IDisposable
 
             if (!response.IsSuccessStatusCode)
             {
-                Console.WriteLine("Failed to refresh token. Might be revoked.");
-                Logout(); // Если токен невалиден, разлогиниваемся
+                Log.Warn("[Auth] Failed to refresh token. Might be revoked.");
+                Logout();
                 return false;
             }
 
@@ -252,13 +242,16 @@ public class GoogleAuthService : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"RefreshTokenAsync error: {ex.Message}");
+            Log.Error($"[Auth] RefreshTokenAsync error: {ex.Message}");
             Logout();
             return false;
         }
     }
 
-    private async Task FetchUserInfoAsync()
+    /// <summary>
+    /// Загружает базовый профиль Google (email, имя)
+    /// </summary>
+    private async Task FetchUserProfileAsync()
     {
         try
         {
@@ -274,17 +267,89 @@ public class GoogleAuthService : IDisposable
                 string json = await response.Content.ReadAsStringAsync();
                 var userInfo = JsonSerializer.Deserialize<JsonElement>(json);
 
-                if (userInfo.TryGetProperty("email", out var email)) State.UserEmail = email.GetString();
-                if (userInfo.TryGetProperty("name", out var name)) State.UserName = name.GetString();
-                if (userInfo.TryGetProperty("picture", out var pic)) State.UserAvatarUrl = pic.GetString();
+                if (userInfo.TryGetProperty("email", out var email))
+                    State.UserEmail = email.GetString();
+                if (userInfo.TryGetProperty("name", out var name))
+                    State.UserName = name.GetString();
 
-                Console.WriteLine($"User info fetched: {State.UserName}");
+                Log.Info($"[Auth] Google profile loaded: {State.UserName}");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to fetch user info: {ex.Message}");
+            Log.Error($"[Auth] Failed to fetch user profile: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Загружает YouTube канал пользователя (ID, название, аватар)
+    /// </summary>
+    private async Task FetchYouTubeChannelAsync()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(State.AccessToken)) return;
+
+            var request = new HttpRequestMessage(HttpMethod.Get,
+                "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", State.AccessToken);
+
+            var response = await _http.SendAsync(request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Log.Warn("[Auth] Failed to fetch YouTube channel");
+                return;
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+
+            if (doc.RootElement.TryGetProperty("items", out var items) &&
+                items.GetArrayLength() > 0)
+            {
+                var channel = items[0];
+
+                if (channel.TryGetProperty("id", out var id))
+                    State.YouTubeChannelId = id.GetString();
+
+                if (channel.TryGetProperty("snippet", out var snippet))
+                {
+                    if (snippet.TryGetProperty("title", out var title))
+                        State.YouTubeChannelName = title.GetString();
+
+                    // Берём лучший аватар
+                    if (snippet.TryGetProperty("thumbnails", out var thumbs))
+                    {
+                        State.YouTubeAvatarUrl = GetBestThumbnail(thumbs);
+                    }
+                }
+
+                Log.Info($"[Auth] YouTube channel loaded: {State.YouTubeChannelName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to fetch YouTube channel: {ex.Message}");
+        }
+    }
+
+    private static string? GetBestThumbnail(JsonElement thumbnails)
+    {
+        // Приоритет: high -> medium -> default
+        if (thumbnails.TryGetProperty("high", out var high) &&
+            high.TryGetProperty("url", out var highUrl))
+            return highUrl.GetString();
+
+        if (thumbnails.TryGetProperty("medium", out var medium) &&
+            medium.TryGetProperty("url", out var medUrl))
+            return medUrl.GetString();
+
+        if (thumbnails.TryGetProperty("default", out var def) &&
+            def.TryGetProperty("url", out var defUrl))
+            return defUrl.GetString();
+
+        return null;
     }
 
     public void Logout()
@@ -310,7 +375,6 @@ public class GoogleAuthService : IDisposable
         return State.AccessToken;
     }
 
-    // Хелперы для PKCE и Random
     private static string GenerateRandomString(int length)
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";

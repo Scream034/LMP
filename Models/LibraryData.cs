@@ -11,10 +11,8 @@ public class LibraryData
     public string LastSearchQuery { get; set; } = "";
     public List<string> SearchHistory { get; set; } = [];
 
-    // --- Fake Account / Public Sync ---
+    // --- Fake Account (только URL, остальное кэшируется в памяти) ---
     public string? FakeAccountChannelUrl { get; set; }
-    public string? FakeAccountName { get; set; }
-    public string? FakeAccountAvatarUrl { get; set; }
 
     // --- Settings ---
     public float Volume { get; set; } = 0.5f;

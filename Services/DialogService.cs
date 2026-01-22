@@ -13,9 +13,11 @@ namespace MyLiteMusicPlayer.Services;
 
 public interface IDialogService
 {
-    Task<bool> ConfirmAsync(string title, string message, string confirmText = "OK", string cancelText = "Cancel");
+    Task<bool> ConfirmAsync(string title, string message);
+    Task<bool> ConfirmAsync(string title, string message, string confirmText, string cancelText);
     Task<string?> SelectFolderAsync(string? startPath = null);
-    Task ShowInfoAsync(string title, string message, string buttonText = "OK");
+    Task ShowInfoAsync(string title, string message);
+    Task ShowInfoAsync(string title, string message, string buttonText);
     Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items);
     Task<List<MergeDecision>> ShowMergeConflictResolutionDialogAsync(List<string> playlistNames);
     Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated);
@@ -23,6 +25,8 @@ public interface IDialogService
 
 public class DialogService : IDialogService
 {
+    private static readonly LocalizationService L = LocalizationService.Instance;
+
     private static Window? GetMainWindow()
     {
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -56,7 +60,7 @@ public class DialogService : IDialogService
         }
     }
 
-    public async Task<bool> ConfirmAsync(string title, string message, string confirmText = "OK", string cancelText = "Cancel")
+    public async Task<bool> ConfirmAsync(string title, string message, string confirmText, string cancelText)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -76,6 +80,11 @@ public class DialogService : IDialogService
         });
     }
 
+    public async Task<bool> ConfirmAsync(string title, string message)
+    {
+        return await ConfirmAsync(title, message, L["Common_OK"], L["Common_Cancel"]);
+    }
+
     public async Task<string?> SelectFolderAsync(string? startPath = null)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -93,7 +102,7 @@ public class DialogService : IDialogService
 
             var result = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions
             {
-                Title = "Select Download Folder",
+                Title = L["Dialog_SelectDownloadFolder_Title"],
                 SuggestedStartLocation = suggestedStartLocation,
                 AllowMultiple = false
             });
@@ -102,7 +111,7 @@ public class DialogService : IDialogService
         });
     }
 
-    public async Task ShowInfoAsync(string title, string message, string buttonText = "OK")
+    public async Task ShowInfoAsync(string title, string message, string buttonText)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -118,6 +127,11 @@ public class DialogService : IDialogService
 
             await ShowDialogSafeAsync<object>(dialog, window);
         });
+    }
+
+    public async Task ShowInfoAsync(string title, string message)
+    {
+        await ShowInfoAsync(title, message, L["Common_OK"]);
     }
 
     public async Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items)

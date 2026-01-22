@@ -10,183 +10,146 @@ using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.ViewModels;
 
-/// <summary>
-/// ViewModel для страницы настроек.
-/// Управляет:
-/// - Путем загрузки файлов
-/// - Настройками громкости и усиления
-/// - Выбором языка
-/// - Настройками качества аудио
-/// - Авторизацией Google
-/// - Discord RPC
-/// </summary>
 public class SettingsViewModel : ViewModelBase
 {
-    // ЗАВИСИМОСТИ
-
     private readonly LibraryService _library;
     private readonly GoogleAuthService _auth;
     private readonly IDialogService _dialog;
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
 
-    // НАСТРОЙКИ ПУТЕЙ И ЗАГРУЗКИ
-
-    /// <summary>Путь для загрузки файлов</summary>
+    // --- Настройки путей и загрузки ---
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
-
-    /// <summary>Размер пакета загрузки</summary>
     [Reactive] public int LoadBatchSize { get; set; }
-
-    /// <summary>Включить плавную загрузку</summary>
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
-    // НАСТРОЙКИ ЗВУКА
-
-    /// <summary>Максимальный уровень громкости (100-500)</summary>
+    // --- Настройки звука ---
     [Reactive] public int MaxVolumeLimit { get; set; }
-
-    /// <summary>Целевое усиление в децибелах (-20 до +20)</summary>
     [Reactive] public float TargetGainDb { get; set; }
 
-    // НАСТРОЙКИ КАЧЕСТВА
-
-    /// <summary>Предпочтение качества аудио</summary>
+    // --- Настройки качества ---
     public AudioQualityPreference QualityPreference
     {
         get => _library.Data.QualityPreference;
         set
         {
             if (_library.Data.QualityPreference == value) return;
-
             _library.Data.QualityPreference = value;
             _library.Save();
-
-            // Очищаем кэш YouTube при смене качества
             _youtube.ClearCache();
-
             this.RaisePropertyChanged();
-
-            Log.Info($"[Settings] Quality preference changed to: {value}");
-
-            // Применяем к текущему треку если он играет
             ApplyQualityToCurrentTrack(value);
         }
     }
 
-    /// <summary>Запоминать выбранный формат для каждого трека</summary>
     public bool RememberTrackFormat
     {
         get => _library.Data.RememberTrackFormat;
         set
         {
             if (_library.Data.RememberTrackFormat == value) return;
-
             _library.Data.RememberTrackFormat = value;
             _library.Save();
             this.RaisePropertyChanged();
-
-            Log.Info($"[Settings] Remember track format: {value}");
         }
     }
 
-    /// <summary>Список доступных настроек качества</summary>
-    [Reactive] public List<AudioQualityPreference> QualityOptions { get; private set; }
+    [Reactive] public List<AudioQualityPreference> QualityOptions { get; private set; } = [];
 
-    // ИНТЕГРАЦИИ
-
-    /// <summary>Включен ли Discord RPC</summary>
+    // --- Интеграции ---
     [Reactive] public bool DiscordRpcEnabled { get; set; }
-
-    /// <summary>Автоматически воспроизводить при вставке URL</summary>
     [Reactive] public bool AutoPlayOnPaste { get; set; }
 
-    // Fake-Account
+    // --- Языки ---
+    public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
+    [Reactive] public LanguageItem? SelectedLanguage { get; set; }
 
-    [Reactive] public string FakeAccountName { get; set; } = string.Empty;
-    [Reactive] public string FakeAccountAvatar { get; set; } = string.Empty;
+    // --- Авторизация ---
+    [Reactive] public bool IsAuthenticated { get; private set; }
+
+    // --- Fake Account ---
     [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
+    [Reactive] public bool IsLoadingFakeAccount { get; set; }
 
-    /// <summary>Есть ли привязанный публичный канал</summary>
-    public bool HasFakeAccount => _library.HasFakeAccount;
+    // ========== ЕДИНЫЙ API ДЛЯ АККАУНТА ==========
 
-    /// <summary>Показывать предупреждение об ограничениях (Fake Account без Google авторизации)</summary>
-    public bool ShowFakeAccountWarning => HasFakeAccount && !IsAuthenticated;
+    /// <summary>
+    /// Есть ли какой-либо аккаунт (Google или Fake)
+    /// </summary>
+    public bool HasAccount => IsAuthenticated || _library.HasFakeAccount;
 
-    /// <summary>Отображаемое имя аккаунта</summary>
-    public string AccountDisplayName
+    /// <summary>
+    /// Это ограниченный (Fake) аккаунт?
+    /// </summary>
+    public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
+
+    /// <summary>
+    /// Имя аккаунта (приоритет: Google YouTube Channel > Fake Account > Google Name > Guest)
+    /// </summary>
+    public string AccountName
     {
         get
         {
             if (IsAuthenticated)
-                return UserName ?? UserEmail ?? L["Auth_NotSignedIn"];
+                return _auth.State.YouTubeChannelName 
+                    ?? _auth.State.UserName 
+                    ?? L["Auth_NotSignedIn"];
 
-            if (HasFakeAccount)
-                return FakeAccountName;
+            if (_library.HasFakeAccount)
+                return _library.FakeAccountName ?? L["Auth_NotSignedIn"];
 
             return L["Auth_NotSignedIn"];
         }
     }
 
-    /// <summary>Статус аккаунта</summary>
-    public string AccountStatusText
+    /// <summary>
+    /// URL аватара аккаунта (приоритет: Google YouTube Avatar > Fake Account Avatar)
+    /// </summary>
+    public string? AccountAvatarUrl
     {
         get
         {
             if (IsAuthenticated)
-                return UserEmail ?? L["Auth_LoggedIn"];
+                return _auth.State.YouTubeAvatarUrl;
 
-            if (HasFakeAccount)
+            if (_library.HasFakeAccount)
+                return _library.FakeAccountAvatarUrl;
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Подзаголовок аккаунта (email для Google, статус для Fake)
+    /// </summary>
+    public string AccountSubtitle
+    {
+        get
+        {
+            if (IsAuthenticated)
+                return _auth.State.UserEmail ?? L["Auth_LoggedIn"];
+
+            if (_library.HasFakeAccount)
                 return L["Account_LimitedAccess"];
 
             return L["Auth_Guest"];
         }
     }
 
-    // ЯЗЫКИ
+    /// <summary>
+    /// Показывать предупреждение об ограничениях
+    /// </summary>
+    public bool ShowLimitedAccessWarning => IsFakeAccount;
 
-    /// <summary>Список доступных языков</summary>
-    public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
-
-    /// <summary>Выбранный язык</summary>
-    [Reactive] public LanguageItem? SelectedLanguage { get; set; }
-
-    // АВТОРИЗАЦИЯ
-
-    /// <summary>Авторизован ли пользователь</summary>
-    [Reactive] public bool IsAuthenticated { get; private set; }
-
-    /// <summary>Email пользователя</summary>
-    [Reactive] public string? UserEmail { get; private set; }
-
-    /// <summary>Имя пользователя</summary>
-    [Reactive] public string? UserName { get; private set; }
-
-    // КОМАНДЫ
-
-    /// <summary>Выбрать папку загрузки</summary>
+    // --- Команды ---
     public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
-
-    /// <summary>Очистить историю</summary>
     public ReactiveCommand<Unit, Unit> ClearHistoryCommand { get; }
-
-    /// <summary>Сбросить библиотеку</summary>
     public ReactiveCommand<Unit, Unit> ResetLibraryCommand { get; }
-
-    /// <summary>Войти в аккаунт</summary>
     public ReactiveCommand<Unit, Unit> LoginCommand { get; }
-
-    /// <summary>Выйти из аккаунта</summary>
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
-
     public ReactiveCommand<Unit, Unit> SetFakeAccountCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearFakeAccountCommand { get; }
 
-    // КОНСТРУКТОР
-
-    /// <summary>
-    /// Создает ViewModel настроек
-    /// </summary>
     public SettingsViewModel(
         LibraryService library,
         GoogleAuthService auth,
@@ -202,31 +165,31 @@ public class SettingsViewModel : ViewModelBase
 
         QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
 
-        FakeChannelInput = _library.Data.FakeAccountChannelUrl ?? "";
-        FakeAccountName = _library.Data.FakeAccountName ?? "";
-        FakeAccountAvatar = _library.Data.FakeAccountAvatarUrl ?? "";
+        FakeChannelInput = _library.FakeAccountUrl ?? "";
 
         LoadSettings();
         UpdateAuthState();
 
-        // ПОДПИСКИ
+        // --- Подписки ---
 
-        // Обновление локализованных текстов при смене языка
-        LocalizationService.Instance.LanguageChanged += (s, e) =>
+        // Обновление при смене языка
+        LocalizationService.Instance.LanguageChanged += (_, _) =>
         {
-            this.RaisePropertyChanged(nameof(AccountDisplayName));
-            this.RaisePropertyChanged(nameof(AccountStatusText));
+            RaiseAccountPropertiesChanged();
             QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
         };
 
-        // Обновление текстов при изменении состояния авторизации или Fake Account
-        this.WhenAnyValue(
-                x => x.IsAuthenticated,
-                x => x.UserEmail,
-                x => x.FakeAccountName)
-            .Subscribe(_ => RaiseAccountPropertiesChanged());
+        // Обновление при изменении авторизации
+        _auth.OnAuthStateChanged += () =>
+        {
+            UpdateAuthState();
+            RaiseAccountPropertiesChanged();
+        };
 
-        // Автосохранение выбранного языка
+        // Обновление при изменении Fake Account
+        _library.OnFakeAccountChanged += RaiseAccountPropertiesChanged;
+
+        // Автосохранение языка
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1)
             .WhereNotNull()
@@ -236,11 +199,9 @@ public class SettingsViewModel : ViewModelBase
                 LocalizationService.Instance.CurrentLanguage = lang.Code;
                 _library.Data.LanguageCode = lang.Code;
                 _library.Save();
-
-                Log.Info($"[Settings] Language changed to: {lang.Code}");
             });
 
-        // Максимальная громкость - применяем мгновенно
+        // Громкость
         this.WhenAnyValue(x => x.MaxVolumeLimit)
             .Skip(1)
             .Subscribe(v =>
@@ -248,11 +209,9 @@ public class SettingsViewModel : ViewModelBase
                 _library.Data.MaxVolumeLimit = v;
                 _library.Save();
                 _audio.UpdateAudioSettings();
-
-                Log.Info($"[Settings] MaxVolumeLimit changed to: {v}");
             });
 
-        // Усиление - применяем с небольшой задержкой (throttle)
+        // Усиление
         this.WhenAnyValue(x => x.TargetGainDb)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(300))
@@ -261,8 +220,6 @@ public class SettingsViewModel : ViewModelBase
                 _library.Data.TargetGainDb = v;
                 _library.Save();
                 _audio.UpdateAudioSettings();
-
-                Log.Info($"[Settings] TargetGainDb changed to: {v}dB");
             });
 
         // Плавная загрузка
@@ -281,11 +238,9 @@ public class SettingsViewModel : ViewModelBase
             {
                 _library.Data.DiscordRpcEnabled = v;
                 _library.Save();
-
-                Log.Info($"[Settings] Discord RPC: {v}");
             });
 
-        // Автовоспроизведение при вставке URL
+        // Автовоспроизведение
         this.WhenAnyValue(x => x.AutoPlayOnPaste)
             .Skip(1)
             .Subscribe(v =>
@@ -294,130 +249,128 @@ public class SettingsViewModel : ViewModelBase
                 _library.Save();
             });
 
+        // --- Команды ---
 
-        // КОМАНДЫ
-
-        SetFakeAccountCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (string.IsNullOrWhiteSpace(FakeChannelInput)) return;
-
-            try
-            {
-                var info = await _youtube.GetChannelInfoAsync(FakeChannelInput);
-                if (info != null)
-                {
-                    _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
-                    FakeAccountName = info.Value.Name;
-                    FakeAccountAvatar = info.Value.AvatarUrl;
-
-                    RaiseAccountPropertiesChanged();
-
-                    await _dialog.ShowInfoAsync(L["Dialog_Success"], string.Format(L["Dialog_Merge_Success"], info.Value.Name));
-                }
-                else
-                {
-                    await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Dialog_Merge_Error"]);
-                }
-            }
-            catch (Exception ex)
-            {
-                await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], ex.Message);
-            }
-        });
-
-        ClearFakeAccountCommand = ReactiveCommand.Create(() =>
-        {
-            _library.ClearFakeAccount();
-            FakeChannelInput = "";
-            FakeAccountName = "";
-            FakeAccountAvatar = "";
-            RaiseAccountPropertiesChanged();
-        });
-
-        // Выбор папки загрузки
+        SetFakeAccountCommand = ReactiveCommand.CreateFromTask(SetFakeAccountAsync);
+        ClearFakeAccountCommand = ReactiveCommand.Create(ClearFakeAccount);
         BrowseDownloadPathCommand = ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync);
-
-        // Очистка истории
-        ClearHistoryCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            var loc = LocalizationService.Instance;
-
-            bool confirmed = await _dialog.ConfirmAsync(
-                loc["Dialog_Confirm_Title"],
-                loc["Dialog_ClearHistoryMessage"]);
-
-            if (confirmed)
-            {
-                _library.ClearHistory();
-                await _dialog.ShowInfoAsync(loc["Dialog_Done_Title"], loc["Dialog_HistoryCleared"]);
-
-                Log.Info("[Settings] History cleared");
-            }
-        });
-
-        // Сброс библиотеки
-        ResetLibraryCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            var loc = LocalizationService.Instance;
-
-            bool confirmed = await _dialog.ConfirmAsync(
-                loc["Dialog_Warning_Title"],
-                loc["Dialog_ResetMessage"]);
-
-            if (confirmed)
-            {
-                _library.Reset();
-                LoadSettings();
-                await _dialog.ShowInfoAsync(loc["Dialog_Done_Title"], loc["Dialog_ResetComplete"]);
-
-                Log.Info("[Settings] Library reset");
-            }
-        });
-
-        // Вход в аккаунт
-        LoginCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            await _auth.StartLoginAsync();
-            UpdateAuthState();
-        });
-
-        // Выход из аккаунта
-        LogoutCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            var loc = LocalizationService.Instance;
-
-            bool confirmed = await _dialog.ConfirmAsync(
-                loc["Auth_Logout"],
-                loc["Dialog_LogoutMessage"]);
-
-            if (confirmed)
-            {
-                _auth.Logout();
-                UpdateAuthState();
-
-                Log.Info("[Settings] Logged out");
-            }
-        });
+        ClearHistoryCommand = ReactiveCommand.CreateFromTask(ClearHistoryAsync);
+        ResetLibraryCommand = ReactiveCommand.CreateFromTask(ResetLibraryAsync);
+        LoginCommand = ReactiveCommand.CreateFromTask(LoginAsync);
+        LogoutCommand = ReactiveCommand.CreateFromTask(LogoutAsync);
     }
 
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+    // --- Команды: Fake Account ---
 
-    /// <summary>
-    /// Уведомляет об изменении всех свойств, связанных с аккаунтом
-    /// </summary>
+    private async Task SetFakeAccountAsync()
+    {
+        if (string.IsNullOrWhiteSpace(FakeChannelInput)) return;
+
+        IsLoadingFakeAccount = true;
+
+        try
+        {
+            var info = await _youtube.GetChannelInfoAsync(FakeChannelInput);
+            if (info != null)
+            {
+                _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
+                await _dialog.ShowInfoAsync(L["Dialog_Success"],
+                    string.Format(L["Dialog_Merge_Success"], info.Value.Name));
+            }
+            else
+            {
+                await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Dialog_Merge_Error"]);
+            }
+        }
+        catch (Exception ex)
+        {
+            await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], ex.Message);
+        }
+        finally
+        {
+            IsLoadingFakeAccount = false;
+        }
+    }
+
+    private void ClearFakeAccount()
+    {
+        _library.ClearFakeAccount();
+        FakeChannelInput = "";
+    }
+
+    // --- Команды: Auth ---
+
+    private async Task LoginAsync()
+    {
+        await _auth.StartLoginAsync();
+        UpdateAuthState();
+    }
+
+    private async Task LogoutAsync()
+    {
+        bool confirmed = await _dialog.ConfirmAsync(
+            L["Auth_Logout"],
+            L["Dialog_LogoutMessage"]);
+
+        if (confirmed)
+        {
+            _auth.Logout();
+            UpdateAuthState();
+        }
+    }
+
+    // --- Команды: Storage ---
+
+    private async Task BrowseDownloadPathAsync()
+    {
+        var newPath = await _dialog.SelectFolderAsync(DownloadPath);
+        if (!string.IsNullOrEmpty(newPath))
+        {
+            DownloadPath = newPath;
+            _library.DownloadPath = newPath;
+            _library.Save();
+        }
+    }
+
+    private async Task ClearHistoryAsync()
+    {
+        bool confirmed = await _dialog.ConfirmAsync(
+            L["Dialog_Confirm_Title"],
+            L["Dialog_ClearHistoryMessage"]);
+
+        if (confirmed)
+        {
+            _library.ClearHistory();
+            await _dialog.ShowInfoAsync(L["Dialog_Done_Title"], L["Dialog_HistoryCleared"]);
+        }
+    }
+
+    private async Task ResetLibraryAsync()
+    {
+        bool confirmed = await _dialog.ConfirmAsync(
+            L["Dialog_Warning_Title"],
+            L["Dialog_ResetMessage"]);
+
+        if (confirmed)
+        {
+            _library.Reset();
+            LoadSettings();
+            await _dialog.ShowInfoAsync(L["Dialog_Done_Title"], L["Dialog_ResetComplete"]);
+        }
+    }
+
+    // --- Вспомогательные методы ---
+
     private void RaiseAccountPropertiesChanged()
     {
-        this.RaisePropertyChanged(nameof(HasFakeAccount));
-        this.RaisePropertyChanged(nameof(ShowFakeAccountWarning));
-        this.RaisePropertyChanged(nameof(AccountDisplayName));
-        this.RaisePropertyChanged(nameof(AccountStatusText));
+        this.RaisePropertyChanged(nameof(HasAccount));
+        this.RaisePropertyChanged(nameof(IsFakeAccount));
+        this.RaisePropertyChanged(nameof(AccountName));
+        this.RaisePropertyChanged(nameof(AccountAvatarUrl));
+        this.RaisePropertyChanged(nameof(AccountSubtitle));
+        this.RaisePropertyChanged(nameof(ShowLimitedAccessWarning));
     }
 
-    // ЗАГРУЗКА НАСТРОЕК
-
-    /// <summary>
-    /// Загружает текущие настройки из библиотеки
-    /// </summary>
     private void LoadSettings()
     {
         DownloadPath = _library.DownloadPath;
@@ -427,70 +380,31 @@ public class SettingsViewModel : ViewModelBase
         EnableSmoothLoading = _library.Data.EnableSmoothLoading;
         MaxVolumeLimit = _library.Data.MaxVolumeLimit;
         TargetGainDb = _library.Data.TargetGainDb;
-        FakeAccountName = _library.Data.FakeAccountName ?? "";
-        FakeAccountAvatar = _library.Data.FakeAccountAvatarUrl ?? "";
 
         SelectedLanguage = Languages.FirstOrDefault(x => x.Code == _library.Data.LanguageCode)
             ?? Languages[0];
-
-        Log.Info("[Settings] Settings loaded");
     }
 
-    // ВЫБОР ПАПКИ ЗАГРУЗКИ
-
-    /// <summary>
-    /// Открывает диалог выбора папки загрузки
-    /// </summary>
-    private async Task BrowseDownloadPathAsync()
-    {
-        var newPath = await _dialog.SelectFolderAsync(DownloadPath);
-
-        if (!string.IsNullOrEmpty(newPath))
-        {
-            DownloadPath = newPath;
-            _library.DownloadPath = newPath;
-            _library.Save();
-
-            Log.Info($"[Settings] Download path changed to: {newPath}");
-        }
-    }
-
-    // ОБНОВЛЕНИЕ СОСТОЯНИЯ АВТОРИЗАЦИИ
-
-    /// <summary>
-    /// Обновляет состояние авторизации из сервиса
-    /// </summary>
     private void UpdateAuthState()
     {
         IsAuthenticated = _auth.IsAuthenticated;
-        UserEmail = _auth.State.UserEmail;
-        UserName = _auth.State.UserName;
-        RaiseAccountPropertiesChanged();
     }
 
-    /// <summary>
-    /// Применяет изменение качества к текущему воспроизводимому треку
-    /// </summary>
     private void ApplyQualityToCurrentTrack(AudioQualityPreference preference)
     {
         var currentTrack = _audio.CurrentTrack;
         if (currentTrack == null || currentTrack.IsDownloaded) return;
 
-        // Определяем целевой контейнер
         string targetContainer = preference switch
         {
-            AudioQualityPreference.BestAvailable => "webm",  // Opus
-            AudioQualityPreference.Standard => "mp4",        // AAC
+            AudioQualityPreference.BestAvailable => "webm",
+            AudioQualityPreference.Standard => "mp4",
             _ => "webm"
         };
 
-        // Всегда применяем новую глобальную настройку, даже если пользователь ранее выбрал формат вручную.
-        // Мы предполагаем, что изменение глобальной настройки является явным действием, которое должно переопределить текущее состояние.
-        // Передаем 0 в качестве битрейта, чтобы провайдер выбрал лучший доступный битрейт для этого контейнера.
         currentTrack.PreferredContainer = targetContainer;
         currentTrack.PreferredBitrate = 0;
 
-        Log.Info($"[Settings] Applying quality {preference} to current track (Force switch to {targetContainer})...");
         _ = _audio.SwitchQualityAsync(targetContainer, 0);
     }
 }

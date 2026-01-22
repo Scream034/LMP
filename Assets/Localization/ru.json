@@ -124,6 +124,7 @@
   "Dialog_Confirm_Title": "Подтверждение",
   "Dialog_Warning_Title": "Внимание",
   "Dialog_Done_Title": "Готово",
+  "Dialog_SelectDownloadFolder_Title": "Выберите папку для загрузок",
   "Dialog_Success": "Успешно",
   
   "Dialog_ClearHistoryMessage": "Удалить историю поиска?",

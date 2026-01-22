@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using MyLiteMusicPlayer.Services;
 using ReactiveUI;
 using System.Reactive;
 
@@ -8,20 +9,22 @@ namespace MyLiteMusicPlayer.Views.Dialogs;
 
 public partial class ConfirmDialog : Window
 {
+    private readonly static LocalizationService L = LocalizationService.Instance;
+
     private readonly IDisposable? _confirmSub;
     private readonly IDisposable? _cancelSub;
 
     public static readonly StyledProperty<string> DialogTitleProperty =
-        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(DialogTitle), "Confirm");
+        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(DialogTitle), L["Dialog_Confirm_Title"]);
 
     public static readonly StyledProperty<string> MessageProperty =
-        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(Message), "Are you sure?");
+        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(Message), L["Dialog_Confirm_Title"]);
 
     public static readonly StyledProperty<string> ConfirmTextProperty =
-        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(ConfirmText), "OK");
+        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(ConfirmText), L["Common_OK"]);
 
     public static readonly StyledProperty<string> CancelTextProperty =
-        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(CancelText), "Cancel");
+        AvaloniaProperty.Register<ConfirmDialog, string>(nameof(CancelText), L["Common_Cancel"]);
 
     public string DialogTitle
     {

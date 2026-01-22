@@ -123,6 +123,7 @@
   "Dialog_Confirm_Title": "Confirm",
   "Dialog_Warning_Title": "Warning",
   "Dialog_Done_Title": "Done",
+  "Dialog_SelectDownloadFolder_Title": "Select Folder",
   "Dialog_Success": "Success",
   
   "Dialog_ClearHistoryMessage": "Clear your search history?",
