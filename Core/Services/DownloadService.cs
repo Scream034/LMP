@@ -8,7 +8,7 @@ public class DownloadService
     private readonly LibraryService _library;
 
     private readonly Dictionary<string, DownloadTask> _activeTasks = [];
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly SemaphoreSlim _downloadSemaphore = new(3);
 
     public event Action<string, float>? OnProgress;

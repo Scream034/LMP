@@ -9,7 +9,7 @@ namespace MyLiteMusicPlayer.Core.Models;
 public class RangeMap
 {
     private readonly List<(long Start, long End)> _ranges = new();
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     /// <summary>
     /// Общее количество скачанных байт

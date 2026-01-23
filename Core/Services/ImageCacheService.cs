@@ -17,7 +17,7 @@ public class ImageCacheService : IDisposable
     // LRU memory cache
     private readonly ConcurrentDictionary<string, CachedImage> _memoryCache = new();
     private readonly LinkedList<string> _lruOrder = new();
-    private readonly object _lruLock = new();
+    private readonly Lock _lruLock = new();
 
     // Блокировка файлов по ключу для предотвращения IOException
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new();
