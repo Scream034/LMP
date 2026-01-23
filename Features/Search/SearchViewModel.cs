@@ -44,35 +44,12 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private int InitialBatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize * 2 : 50;
     private int ScrollBatchSize => LibService.Data.SearchBatchSize > 0 ? LibService.Data.SearchBatchSize : 30;
-
-    /// <summary>
-    /// Строка запроса.
-    /// </summary>
+    
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Найдены ли результаты.
-    /// </summary>
     [Reactive] public bool HasResults { get; private set; }
-
-    /// <summary>
-    /// Текст ошибки.
-    /// </summary>
     [Reactive] public string? ErrorMessage { get; private set; }
-
-    /// <summary>
-    /// Результаты загружены из кэша?
-    /// </summary>
     [Reactive] public bool IsFromCache { get; private set; }
-
-    /// <summary>
-    /// Видимость кнопки "Принудительный поиск".
-    /// </summary>
     public bool ShowForceSearchButton => LibService.Data.EnableSearchCache && IsFromCache && !IsLoading;
-
-    /// <summary>
-    /// История поиска.
-    /// </summary>
     public ObservableCollection<string> RecentSearches { get; } = [];
 
     #endregion
@@ -101,14 +78,12 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         _audio = audio;
         _vmFactory = vmFactory;
 
-        // Загрузка истории
         if (LibService.Data.SearchHistory != null)
         {
             foreach (var item in LibService.Data.SearchHistory)
                 RecentSearches.Add(item);
         }
 
-        // Команды
         var canSearch = this.WhenAnyValue(x => x.SearchQuery, x => x.IsLoading,
             (q, loading) => !string.IsNullOrWhiteSpace(q) && !loading);
 
@@ -136,16 +111,28 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             UpdateHistoryStorage();
         });
 
-        // Обновление свойства кнопки принудительного поиска
+        SearchCommand.ThrownExceptions.Subscribe(ex => LogError("SearchCommand", ex));
+        ForceSearchCommand.ThrownExceptions.Subscribe(ex => LogError("ForceSearchCommand", ex));
+        HistoryClickCommand.ThrownExceptions.Subscribe(ex => LogError("HistoryClickCommand", ex));
+
         this.WhenAnyValue(x => x.IsFromCache, x => x.IsLoading)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowForceSearchButton)));
 
-        // Восстановление последнего запроса
         if (!string.IsNullOrEmpty(LibService.Data.LastSearchQuery))
         {
             SearchQuery = LibService.Data.LastSearchQuery;
             _ = ExecuteSearchAsync(false);
         }
+    }
+
+    private void LogError(string source, Exception ex)
+    {
+        // [FIX] Не логируем отмену как ошибку
+        if (ex is OperationCanceledException) return;
+        
+        Log.Error($"[{source}] Unhandled error: {ex.Message}");
+        ErrorMessage = L["Search_NetworkError"]; 
+        IsLoading = false;
     }
 
     #endregion
@@ -154,7 +141,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        // Синхронизация состояния с библиотекой (лайки, скачивание)
         if (LibService.HasTrack(track.Id))
         {
             var existing = LibService.GetTrack(track.Id);
@@ -168,18 +154,14 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     }
 
     protected override string GetItemId(TrackInfo item) => item.Id;
-
-    /// <summary>
-    /// Загружает следующую страницу результатов.
-    /// </summary>
+    
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
         if (TotalCount >= MaxResults) return [];
 
-        // Восстановление сессии при необходимости
         if (_searchSession == null && !string.IsNullOrEmpty(_currentQuery))
         {
-            var existingIds = AllItems.Select(t => t.Id).ToList();
+            var existingIds = GetLoadedItemsIds();
             _searchSession = _youtube.CreateSearchSession(_currentQuery, MaxResults, existingIds);
         }
 
@@ -193,11 +175,10 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 if (newTracks.Count > 0 && LibService.Data.EnableSearchCache)
                 {
-                    // Кэшируем результаты
-                    var allTracks = AllItems.Concat(newTracks).ToList();
+                    var currentItems = GetItemsSnapshot();
+                    var allTracks = currentItems.Concat(newTracks).ToList();
                     _ = _searchCache.SetAsync(_currentQuery, allTracks);
 
-                    // Предзагрузка картинок
                     var imageUrls = newTracks.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
                     _ = _imageCache.PrefetchAsync(imageUrls!, ct);
                 }
@@ -209,9 +190,20 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 return newTracks;
             }
+            // [FIX] Явно ловим OperationCanceledException и считаем это нормальным выходом,
+            // так как это означает, что пользователь начал новый поиск.
+            catch (OperationCanceledException)
+            {
+                return []; // Возвращаем пустой список, это не ошибка
+            }
             catch (HttpRequestException)
             {
                 ErrorMessage = L["Search_NetworkError"];
+                return [];
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[Search] FetchMore error: {ex.Message}");
                 return [];
             }
         }
@@ -235,33 +227,44 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     {
         if (!forceNetwork && !CanExecuteSearch()) return;
 
-        // [FIX] Отмена активных задач
-        _searchCts?.Cancel();
-        _searchCts?.Dispose();
-        _searchCts = new CancellationTokenSource();
-        var ct = _searchCts.Token;
-
-        // [FIX] Сброс сессии
-        _searchSession?.Dispose();
-        _searchSession = null;
-
-        CancelLoading();
-        IsLoading = true;
-        ErrorMessage = null;
-        IsFromCache = false;
-
-        // [FIX] Очистка текущих элементов и вызов Dispose для них
-        ClearItems();
-
-        HasResults = false;
-        _currentQuery = SearchQuery.Trim();
-        LibService.Data.LastSearchQuery = _currentQuery;
-        AddToHistory(_currentQuery);
-        LibService.Save();
-
+        CancellationTokenSource? currentCts = null;
         try
         {
-            await Task.Delay(50, ct); // UI breathing room
+            _searchCts?.Cancel();
+            _searchCts?.Dispose();
+            _searchCts = new CancellationTokenSource();
+            currentCts = _searchCts;
+            var ct = currentCts.Token;
+            
+            try
+            {
+                _searchSession?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[Search] Session dispose warning (safe to ignore): {ex.Message}");
+            }
+            _searchSession = null;
+
+            CancelLoading();
+            IsLoading = true;
+            ErrorMessage = null;
+            IsFromCache = false;
+
+            ClearItems();
+
+            HasResults = false;
+            _currentQuery = SearchQuery.Trim();
+            
+            try 
+            {
+                LibService.Data.LastSearchQuery = _currentQuery;
+                AddToHistory(_currentQuery);
+                LibService.Save();
+            }
+            catch (Exception ex) { Log.Error($"History save error: {ex.Message}"); }
+
+            await Task.Delay(50, ct); 
 
             var queryType = YoutubeProvider.DetectQueryType(_currentQuery);
 
@@ -280,19 +283,17 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         }
         catch (OperationCanceledException)
         {
-            // Ignore
+            // Ignore - это нормальное поведение при отмене
         }
         catch (Exception ex)
         {
-            if (!ct.IsCancellationRequested)
-            {
-                ErrorMessage = ex.Message;
-                Log.Error($"[Search] Error: {ex.Message}");
-            }
+            ErrorMessage = ex.Message;
+            Log.Error($"[Search] Error executing search: {ex}");
         }
         finally
         {
-            if (!ct.IsCancellationRequested)
+            // Устанавливаем IsLoading в false, только если это была последняя запущенная задача
+            if (currentCts == _searchCts && !currentCts!.IsCancellationRequested)
             {
                 IsLoading = false;
                 IsFetchingFromNetwork = false;
@@ -303,7 +304,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private async Task HandleDirectUrlAsync(CancellationToken ct)
     {
         var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
-        if (ct.IsCancellationRequested) return;
+        ct.ThrowIfCancellationRequested();
 
         var tracks = track != null ? [track] : new List<TrackInfo>();
         await InitializeItemsAsync(tracks, canFetchMore: false);
@@ -321,7 +322,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     {
         IsFetchingFromNetwork = true;
         var playlist = await _youtube.GetPlaylistAsync(_currentQuery);
-        if (ct.IsCancellationRequested) return;
+        ct.ThrowIfCancellationRequested();
 
         var tracks = playlist?.Tracks ?? [];
         IsFetchingFromNetwork = false;
@@ -333,11 +334,10 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private async Task HandleSearchAsync(CancellationToken ct, bool forceNetwork)
     {
-        // 1. Кэш
         if (!forceNetwork && LibService.Data.EnableSearchCache)
         {
             var cached = await _searchCache.GetAsync(_currentQuery, minCount: 20);
-            if (ct.IsCancellationRequested) return;
+            ct.ThrowIfCancellationRequested();
 
             if (cached != null && cached.Count >= 20)
             {
@@ -351,7 +351,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             }
         }
 
-        // 2. Сеть
         IsFetchingFromNetwork = true;
         IsFromCache = false;
 
@@ -360,12 +359,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         var (tracks, session) = await _youtube.SearchWithSessionAsync(_currentQuery, InitialBatchSize, MaxResults, ct);
         _searchSession = session;
 
-        if (ct.IsCancellationRequested)
-        {
-            session?.Dispose();
-            return;
-        }
-
+        ct.ThrowIfCancellationRequested();
+        
         IsFetchingFromNetwork = false;
 
         if (tracks.Count > 0 && LibService.Data.EnableSearchCache)
@@ -412,16 +407,14 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         if (disposing)
         {
-            // [FIX] Отменяем и очищаем всё специфичное для поиска
             _searchCts?.Cancel();
             _searchCts?.Dispose();
             _searchCts = null;
 
-            _searchSession?.Dispose();
+            try { _searchSession?.Dispose(); } catch { }
             _searchSession = null;
         }
 
-        // [FIX] Вызов базового Dispose для очистки Items
         base.Dispose(disposing);
 
         _isDisposed = true;

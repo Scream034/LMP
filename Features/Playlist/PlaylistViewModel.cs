@@ -23,7 +23,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     private readonly IDialogService _dialog;
     private readonly TrackViewModelFactory _vmFactory;
 
-    // [FIX] Явный делегат для отписки
     private readonly EventHandler<string> _languageChangedHandler;
     
     private string _currentPlaylistId = "";
@@ -51,7 +50,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     [Reactive] public bool IsShuffleActive { get; private set; }
     [Reactive] public bool IsDownloadingActive { get; private set; }
 
-    // Свойство для биндинга высоты RowDefinition
     private GridLength _headerHeight;
     public GridLength HeaderHeight
     {
@@ -104,7 +102,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         _dialog = dialog;
         _vmFactory = vmFactory;
 
-        // [FIX] Подписка на локализацию
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
@@ -146,10 +143,10 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
         AddToQueueCommand = ReactiveCommand.Create(() =>
         {
-            _audio.EnqueueRange(AllItems);
+            // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+            _audio.EnqueueRange(GetItemsSnapshot());
         }, hasTracks);
 
-        // Подписки на библиотеку
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
@@ -163,7 +160,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
                 }
             });
 
-        // Подписки на аудио движок
         _audioStateSub = Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
             h => (p, u) => h((p, u)),
             h => _audio.OnPlaybackStateChanged += h,
@@ -196,7 +192,9 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     private void PlayAll()
     {
-        if (AllItems.Count == 0) return;
+        // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+        var allTracks = GetItemsSnapshot();
+        if (allTracks.Count == 0) return;
 
         if (IsPlayingThisPlaylist)
         {
@@ -216,16 +214,18 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
 
-        _audio.EnqueueRange(AllItems);
-        _ = _audio.PlayTrackAsync(AllItems[0]);
+        _audio.EnqueueRange(allTracks);
+        _ = _audio.PlayTrackAsync(allTracks[0]);
     }
 
     private void ToggleShuffle()
     {
-        if (AllItems.Count == 0) return;
+        // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+        var allTracks = GetItemsSnapshot();
+        if (allTracks.Count == 0) return;
 
         _audio.ClearQueue();
-        _audio.EnqueueRange(AllItems);
+        _audio.EnqueueRange(allTracks);
         _audio.ShuffleQueue();
 
         var queue = _audio.Queue;
@@ -243,7 +243,8 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     private void DownloadAll()
     {
         IsDownloadingActive = true;
-        foreach (var track in AllItems.Where(t => !t.IsDownloaded))
+        // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+        foreach (var track in GetItemsSnapshot().Where(t => !t.IsDownloaded))
         {
             _downloads.StartDownload(track);
         }
@@ -336,7 +337,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         if (_isDisposed) return;
         _isDisposed = true;
 
-        // [FIX] Отписка от событий
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
 
         _librarySubscription?.Dispose();

@@ -31,7 +31,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     private readonly AudioEngine _audio;
     private readonly TrackViewModelFactory _vmFactory;
 
-    // [FIX] Явный делегат для отписки
     private readonly EventHandler<string> _languageChangedHandler;
     
     private string _currentQuery = "";
@@ -81,7 +80,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         UpdateGreeting();
 
-        // [FIX] Инициализация и подписка
         _languageChangedHandler = (_, _) => InitializeCategories();
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
         
@@ -133,7 +131,8 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         if (result.Count > 0)
         {
-            var allTracks = AllItems.Concat(result).ToList();
+            // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+            var allTracks = GetItemsSnapshot().Concat(result).ToList();
             _ = _searchCache.SetAsync(_currentQuery, allTracks);
             var imageUrls = result.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
             _ = _imageCache.PrefetchAsync(imageUrls!, ct);
@@ -151,7 +150,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         var category = SelectedCategory;
         if (category == null) return;
 
-        // Отмена предыдущей загрузки
         _categoryCts?.Cancel();
         _categoryCts?.Dispose();
         _categoryCts = new CancellationTokenSource();
@@ -163,7 +161,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         try
         {
-            await Task.Delay(50, ct); // Debounce
+            await Task.Delay(50, ct); 
 
             List<TrackInfo> tracks;
             if (category.IsSpecial)
@@ -302,14 +300,12 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         if (_isDisposed) return;
         _isDisposed = true;
 
-        // [FIX] Отписка от событий
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
 
         _categoryCts?.Cancel();
         _categoryCts?.Dispose();
         CancelLoading();
 
-        // Вызов базового Dispose для очистки Items
         base.Dispose();
     }
 

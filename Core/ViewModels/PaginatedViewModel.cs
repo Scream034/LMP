@@ -16,7 +16,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     protected readonly LibraryService LibService;
 
-    // [FIX] Объект синхронизации для защиты _allItems
+    // Объект синхронизации для защиты _allItems
     private readonly Lock _syncRoot = new();
 
     private readonly List<TSource> _allItems = [];
@@ -47,14 +47,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
 
-    // [FIX] Доступ к счетчику через lock не обязателен, если чтение атомарно, но для порядка используем lock внутри методов
     protected int TotalCount { get { lock(_syncRoot) return _allItems.Count; } }
     protected int DisplayedCount => _displayedCount;
     
-    // [FIX] Внимание: прямой доступ к AllItems небезопасен из других потоков. 
-    // Используйте GetLoadedItems() или GetSnapshot().
-    protected IReadOnlyList<TSource> AllItems => _allItems; 
-
     protected CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
 
     #endregion
@@ -76,6 +71,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             (loading, hasMore, initial, fetching) => !loading && !initial && !fetching && hasMore);
 
         LoadMoreCommand = ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore);
+        
+        // Safety net
+        LoadMoreCommand.ThrownExceptions.Subscribe(ex => Log.Error($"[Paginated] LoadMore Error: {ex.Message}"));
     }
 
     #endregion
@@ -96,7 +94,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     {
         if (_isDisposed) return;
 
-        // [FIX] Очистка выполняется в UI потоке для безопасности Items
         await Dispatcher.UIThread.InvokeAsync(ClearItemsInternal);
 
         _loadCts = new CancellationTokenSource();
@@ -122,19 +119,32 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     protected void ClearItems()
     {
-        // [FIX] Оборачиваем в Dispatcher, чтобы гарантировать поток UI для Items.Clear
         if (Dispatcher.UIThread.CheckAccess())
             ClearItemsInternal();
         else
             Dispatcher.UIThread.Post(ClearItemsInternal);
     }
 
-    // [FIX] Метод для безопасного получения списка ID (для передачи в SearchSession)
+    /// <summary>
+    /// Безопасно возвращает список ID загруженных элементов.
+    /// </summary>
     protected List<string> GetLoadedItemsIds()
     {
         lock (_syncRoot)
         {
             return _allItems.Select(GetItemId).ToList();
+        }
+    }
+
+    /// <summary>
+    /// [FIX] Безопасно возвращает снимок всех данных (для кэширования).
+    /// Используйте это вместо обращения к Items или _allItems из фоновых потоков.
+    /// </summary>
+    protected List<TSource> GetItemsSnapshot()
+    {
+        lock (_syncRoot)
+        {
+            return [.. _allItems];
         }
     }
 
@@ -147,7 +157,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         _loadGeneration = Guid.NewGuid();
         CancelLoading();
 
-        // Items.Clear() должен вызываться в UI потоке (гарантируется вызовом выше)
         var itemsDisposeCopy = Items.ToList(); 
         Items.Clear(); 
         
@@ -272,11 +281,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
             if (_isDisposed || token.IsCancellationRequested || _loadGeneration != currentGen) return;
 
-            // [FIX] Безопасное чтение данных под локом
             List<TSource> batchSource;
             lock (_syncRoot)
             {
-                // Повторная проверка внутри лока
                 total = _allItems.Count;
                 int countToTake = Math.Min(BatchSize, total - _displayedCount);
                 if (countToTake <= 0) return;
@@ -291,7 +298,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                 batchVMs.Add(vm);
             }
 
-            // [FIX] Обновление UI
             await Dispatcher.UIThread.InvokeAsync(() => 
             {
                 if (!_isDisposed && _loadGeneration == currentGen)
@@ -318,6 +324,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                 _ = TryFetchMoreAsync(currentGen);
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Error($"[Paginated] Error loading batch: {ex.Message}");
+        }
         finally
         {
             if (_loadGeneration == currentGen)
@@ -371,17 +381,11 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         {
             LibService.OnDataChanged -= OnLibraryDataChanged;
             
-            // Запускаем очистку синхронно, но безопасно, т.к. это Dispose
             CancelLoading();
             
-            // Важно очистить VM, даже если мы не в UI потоке
-            // Копируем Items в новый лист для безопасного перебора
             var itemsToDispose = new List<TViewModel>();
             try 
             {
-                // Попытка доступа к Items может быть небезопасной не из UI потока,
-                // но при Dispose ViewModel уже обычно отсоединена от View.
-                // Если мы здесь, значит View уже не должна рендерить это.
                 if (Dispatcher.UIThread.CheckAccess())
                 {
                     itemsToDispose.AddRange(Items);
@@ -389,13 +393,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                 }
                 else
                 {
-                    // Если мы в другом потоке, постим в UI и ждем (или просто забиваем на Items.Clear, но диспозим VM)
-                    // Лучше просто забить на Items.Clear() (View сама отпишется), но вызвать Dispose у элементов.
-                    // Однако доступ к Items не из UI потока - риск.
-                    // Решение: Dispatcher.UIThread.Post для очистки Items, а сами элементы не достаем.
-                    // Но нам НУЖНО их задиспозить.
-                    // КОМПРОМИСС: Используем _allItems или предполагаем, что Items доступен (AvaloniaList не совсем thread-safe).
-                    // Правильный путь:
                     Dispatcher.UIThread.Post(() => 
                     {
                         var copy = Items.ToList();
@@ -404,7 +401,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                     });
                 }
             }
-            catch { } // Игнорируем ошибки доступа при уничтожении
+            catch { }
 
             lock (_syncRoot)
             {
