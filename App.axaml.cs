@@ -1,10 +1,9 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Microsoft.Extensions.DependencyInjection;
-using MyLiteMusicPlayer.ViewModels;
-using MyLiteMusicPlayer.Views;
-using MyLiteMusicPlayer.Services;
+using MyLiteMusicPlayer.Features.Shell;
+using MyLiteMusicPlayer.Core.Services;
 using AsyncImageLoader;
 
 namespace MyLiteMusicPlayer;
@@ -74,3 +73,5 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 }
+
+

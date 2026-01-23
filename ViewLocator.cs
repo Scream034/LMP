@@ -1,7 +1,7 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
-using MyLiteMusicPlayer.ViewModels;
+using MyLiteMusicPlayer.Core.ViewModels;
 
 namespace MyLiteMusicPlayer;
 
@@ -34,3 +34,4 @@ public class ViewLocator : IDataTemplate
         return data is ViewModelBase;
     }
 }
+

@@ -1,0 +1,326 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:MyLiteMusicPlayer.Features.Settings"
+    xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
+    x:Class="MyLiteMusicPlayer.Features.Settings.SettingsView"
+    x:DataType="vm:SettingsViewModel"
+    x:CompileBindings="True">
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section-header">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,16" />
+        </Style>
+        <Style Selector="Grid.setting-row">
+            <Setter Property="Margin" Value="0,0,0,16" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.setting-title">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.setting-desc">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer>
+        <StackPanel Spacing="32" MaxWidth="700" Margin="32">
+
+            <!-- Заголовок -->
+            <TextBlock Text="{Binding L[Settings_Title]}" FontSize="32" FontWeight="Bold" />
+
+            <!-- СЕКЦИЯ: АККАУНТ -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_Account_Language]}" />
+
+                <!-- Карточка аккаунта -->
+                <Border Background="{StaticResource BgSecondaryBrush}"
+                    Padding="16" CornerRadius="8">
+                    <StackPanel Spacing="12">
+                        <!-- Основная информация -->
+                        <Grid ColumnDefinitions="Auto, *, Auto">
+                            <!-- Аватар (если есть) -->
+                            <Border Width="48" Height="48"
+                                CornerRadius="24"
+                                ClipToBounds="True"
+                                IsVisible="{Binding AccountAvatarUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                Margin="0,0,12,0">
+                                <Image
+                                    asyncImageLoader:ImageLoader.Source="{Binding AccountAvatarUrl}"
+                                    Stretch="UniformToFill" />
+                            </Border>
+
+                            <!-- Иконка по умолчанию (если нет аватара) -->
+                            <Border Width="48" Height="48"
+                                CornerRadius="24"
+                                Background="{StaticResource BgHighlightBrush}"
+                                IsVisible="{Binding AccountAvatarUrl, Converter={x:Static StringConverters.IsNullOrEmpty}}"
+                                Margin="0,0,12,0">
+                                <TextBlock Text="👤"
+                                    FontSize="24"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center" />
+                            </Border>
+
+                            <!-- Имя и статус -->
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding AccountName}"
+                                    FontWeight="SemiBold"
+                                    FontSize="15" />
+                                <TextBlock Text="{Binding AccountSubtitle}"
+                                    Foreground="{StaticResource TextSecondaryBrush}"
+                                    FontSize="13" />
+                            </StackPanel>
+
+                            <!-- Кнопки -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center">
+                                <Button Command="{Binding LoginCommand}"
+                                    Content="{Binding L[Auth_Login]}"
+                                    IsVisible="{Binding !IsAuthenticated}"
+                                    Classes="accent" />
+                                <Button Command="{Binding LogoutCommand}"
+                                    Content="{Binding L[Auth_Logout]}"
+                                    IsVisible="{Binding IsAuthenticated}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Предупреждение об ограничениях -->
+                        <Border IsVisible="{Binding ShowLimitedAccessWarning}"
+                            Background="{StaticResource BgHighlightBrush}"
+                            Padding="12"
+                            CornerRadius="6">
+                            <StackPanel Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="⚠️" FontSize="14" />
+                                    <TextBlock Text="{Binding L[Account_LimitedAccess]}"
+                                        FontWeight="SemiBold"
+                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                                </StackPanel>
+                                <StackPanel Spacing="4" Margin="26,0,0,0">
+                                    <TextBlock Text="{Binding L[Account_LimitedAccess_Hint1]}"
+                                        FontSize="12"
+                                        Foreground="{StaticResource TextMutedBrush}" />
+                                    <TextBlock Text="{Binding L[Account_LimitedAccess_Hint2]}"
+                                        FontSize="12"
+                                        Foreground="{StaticResource TextMutedBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- Привязка публичного канала (только если не авторизован в Google) -->
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto"
+                    IsVisible="{Binding !IsAuthenticated}">
+                    <StackPanel Margin="0,0,16,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Settings_ChannelUrl]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_ChannelUrlDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                        <TextBox Width="250" Text="{Binding FakeChannelInput}"
+                            Watermark="{Binding L[Settings_ChannelPlaceholder]}"
+                            IsEnabled="{Binding !IsLoadingFakeAccount}" />
+                        <Button Content="{Binding L[Common_Set]}"
+                            Command="{Binding SetFakeAccountCommand}"
+                            IsEnabled="{Binding !IsLoadingFakeAccount}" />
+                        <Button Content="{Binding L[Common_Clear]}"
+                            Command="{Binding ClearFakeAccountCommand}"
+                            IsVisible="{Binding IsFakeAccount}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Язык -->
+                <Grid ColumnDefinitions="*, Auto" Classes="setting-row">
+                    <TextBlock Classes="setting-title" Text="{Binding L[Language]}" />
+                    <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding Languages}"
+                        SelectedItem="{Binding SelectedLanguage}"
+                        DisplayMemberBinding="{Binding Name}"
+                        MinWidth="140" />
+                </Grid>
+            </StackPanel>
+
+            <!-- СЕКЦИЯ: АУДИО -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_Audio]}" />
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Audio_MaxVolume]}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding L[Audio_MaxVolumeDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding MaxVolumeLimit, StringFormat='{}{0}%'}"
+                            HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4" />
+                        <Slider Minimum="100" Maximum="400" Value="{Binding MaxVolumeLimit}"
+                            TickFrequency="100" IsSnapToTickEnabled="True" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Audio_Gain]}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding L[Audio_GainDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding TargetGainDb, StringFormat='{}{0:F1} dB'}"
+                            HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4" />
+                        <Slider Minimum="-12" Maximum="12" Value="{Binding TargetGainDb}" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Settings_AudioQuality]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_AudioQualityDesc]}" />
+                    </StackPanel>
+                    <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding QualityOptions}"
+                        SelectedItem="{Binding QualityPreference}"
+                        HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock
+                                    Text="{Binding Converter={StaticResource AudioQualityToString}}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L[Settings_RememberFormat]}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding RememberTrackFormat}"
+                        OnContent="" OffContent="" />
+                </Grid>
+            </StackPanel>
+
+            <!-- СЕКЦИЯ: ОБЩЕЕ -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_General]}" />
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L[General_Discord]}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiscordRpcEnabled}"
+                        OnContent="" OffContent="" />
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="setting-title" Text="{Binding L[General_AutoPaste]}" />
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoPlayOnPaste}"
+                        OnContent="" OffContent="" />
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title" Text="{Binding L[Perf_SmoothLoading]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Perf_SmoothLoadingDesc]}" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSmoothLoading}"
+                        OnContent="" OffContent="" />
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title"
+                            Text="{Binding L[Settings_SearchBatchSize]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_SearchBatchSizeDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding SearchBatchSize, StringFormat='{}{0}'}"
+                            HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4" />
+                        <Slider Minimum="20" Maximum="80" Value="{Binding SearchBatchSize}"
+                            TickFrequency="10" IsSnapToTickEnabled="True" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <TextBlock Classes="setting-title" Text="{Binding L[Settings_SearchCache]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_SearchCacheDesc]}" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSearchCache}"
+                        OnContent="" OffContent="" />
+                </Grid>
+
+                <!-- Время жизни кэша поиска (показывать только если кэш включен) -->
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200"
+                    IsVisible="{Binding EnableSearchCache}">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title"
+                            Text="{Binding L[Settings_SearchCacheTtl]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_SearchCacheTtlDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4">
+                            <TextBlock.Text>
+                                <MultiBinding StringFormat="{}{0} {1}">
+                                    <Binding Path="SearchCacheTtlMinutes" />
+                                    <Binding Path="L[Common_Minutes]" />
+                                </MultiBinding>
+                            </TextBlock.Text>
+                        </TextBlock>
+                        <Slider Minimum="10" Maximum="1440" Value="{Binding SearchCacheTtlMinutes}"
+                            TickFrequency="5" IsSnapToTickEnabled="True" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Размер порции загрузки -->
+                <Grid Classes="setting-row" ColumnDefinitions="*, 200">
+                    <StackPanel Margin="0,0,24,0">
+                        <TextBlock Classes="setting-title"
+                            Text="{Binding L[Settings_LoadBatchSize]}" />
+                        <TextBlock Classes="setting-desc"
+                            Text="{Binding L[Settings_LoadBatchSizeDesc]}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding LoadBatchSize, StringFormat='{}{0}'}"
+                            HorizontalAlignment="Right" FontWeight="Bold" Margin="0,0,0,4" />
+                        <Slider Minimum="20" Maximum="80" Value="{Binding LoadBatchSize}"
+                            TickFrequency="5" IsSnapToTickEnabled="True" />
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+
+            <!-- СЕКЦИЯ: ХРАНИЛИЩЕ -->
+            <StackPanel Spacing="16">
+                <TextBlock Classes="section-header" Text="{Binding L[Settings_Storage_Data]}" />
+
+                <Grid Classes="setting-row" ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <TextBlock Classes="setting-title" Text="{Binding L[Storage_Path]}" />
+                        <TextBlock Classes="setting-desc" Text="{Binding DownloadPath}"
+                            TextTrimming="CharacterEllipsis" MaxWidth="400" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                        Content="{Binding L[Storage_Change]}"
+                        Command="{Binding BrowseDownloadPathCommand}" />
+                </Grid>
+
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,8,0,0">
+                    <Button Content="{Binding L[Storage_ClearHistory]}"
+                        Command="{Binding ClearHistoryCommand}"
+                        Background="Transparent"
+                        BorderBrush="{StaticResource BgHighlightBrush}"
+                        BorderThickness="1" />
+                    <Button Content="{Binding L[Storage_ResetApp]}"
+                        Command="{Binding ResetLibraryCommand}"
+                        Foreground="{StaticResource SystemErrorBrush}"
+                        Background="Transparent" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

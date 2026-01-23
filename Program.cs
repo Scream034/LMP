@@ -1,8 +1,15 @@
-﻿using Avalonia;
+﻿
+using MyLiteMusicPlayer.Core.Services;
+using MyLiteMusicPlayer.Features.Home;
+using MyLiteMusicPlayer.Features.Library;
+using MyLiteMusicPlayer.Features.Player;
+using MyLiteMusicPlayer.Features.Playlist;
+using MyLiteMusicPlayer.Features.Search;
+using MyLiteMusicPlayer.Features.Settings;
+using MyLiteMusicPlayer.Features.Shell;
 using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
-using MyLiteMusicPlayer.Services;
-using MyLiteMusicPlayer.ViewModels;
+using Avalonia;
 
 namespace MyLiteMusicPlayer;
 
@@ -81,3 +88,5 @@ class Program
         Log.Info("Services registered successfully.");
     }
 }
+
+
