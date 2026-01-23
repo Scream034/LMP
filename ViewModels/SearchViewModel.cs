@@ -82,9 +82,6 @@ public class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
         {
             if (string.IsNullOrEmpty(query)) return;
 
-            // Debounce защита
-            if (!CanExecuteSearch()) return;
-
             SearchQuery = query;
             await ExecuteSearchAsync(forceNetwork: false);
         });
