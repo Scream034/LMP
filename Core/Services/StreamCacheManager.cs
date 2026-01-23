@@ -5,9 +5,6 @@ using MyLiteMusicPlayer.Core.Models;
 
 namespace MyLiteMusicPlayer.Core.Services;
 
-/// <summary>
-/// Метаданные кэшированного потока
-/// </summary>
 public class StreamCacheMetadata
 {
     public string TrackId { get; set; } = "";
@@ -18,42 +15,27 @@ public class StreamCacheMetadata
     public string RangesJson { get; set; } = "[]";
 }
 
-/// <summary>
-/// Управляет файлами кэша стримов.
-/// Каждый трек имеет:
-/// - .cache файл (сырые аудио-данные)
-/// - .meta файл (метаданные + информация о скачанных диапазонах)
-/// </summary>
 public class StreamCacheManager : IDisposable
 {
     private readonly string _cacheFolder;
     private readonly long _maxCacheSizeBytes;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
 
-    public StreamCacheManager(long maxCacheSizeMb = 2048) // 2GB по умолчанию
+    public StreamCacheManager(long maxCacheSizeMb = 2048)
     {
         _maxCacheSizeBytes = maxCacheSizeMb * 1024 * 1024;
-
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "StreamCache");
         Directory.CreateDirectory(_cacheFolder);
-
-        // Фоновая очистка при старте
         _ = Task.Run(CleanupOldCacheAsync);
     }
 
-    /// <summary>
-    /// Получает путь к кэш-файлу для трека
-    /// </summary>
     public string GetCachePath(string trackId)
     {
         var safeId = GetSafeFileName(trackId);
         return Path.Combine(_cacheFolder, $"{safeId}.cache");
     }
 
-    /// <summary>
-    /// Получает путь к файлу метаданных
-    /// </summary>
     public string GetMetaPath(string trackId)
     {
         var safeId = GetSafeFileName(trackId);
@@ -61,30 +43,34 @@ public class StreamCacheManager : IDisposable
     }
 
     /// <summary>
-    /// Загружает или создаёт метаданные для трека
+    /// Попытка получить метаданные без создания новых.
+    /// Используется для проверки наличия кэша перед сетевыми запросами.
     /// </summary>
-    public StreamCacheMetadata LoadOrCreateMetadata(string trackId, string url, long contentLength)
+    public StreamCacheMetadata? TryGetMetadata(string trackId)
     {
         var metaPath = GetMetaPath(trackId);
-        
-        if (File.Exists(metaPath))
+        if (!File.Exists(metaPath)) return null;
+
+        try
         {
-            try
-            {
-                var json = File.ReadAllText(metaPath);
-                var meta = JsonSerializer.Deserialize<StreamCacheMetadata>(json);
-                
-                if (meta != null && meta.ContentLength == contentLength)
-                {
-                    meta.LastAccessedAt = DateTime.UtcNow;
-                    SaveMetadata(trackId, meta);
-                    return meta;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Info($"Failed to load metadata: {ex.Message}");
-            }
+            var json = File.ReadAllText(metaPath);
+            return JsonSerializer.Deserialize<StreamCacheMetadata>(json);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public StreamCacheMetadata LoadOrCreateMetadata(string trackId, string url, long contentLength)
+    {
+        var meta = TryGetMetadata(trackId);
+        
+        if (meta != null && meta.ContentLength == contentLength)
+        {
+            meta.LastAccessedAt = DateTime.UtcNow;
+            SaveMetadata(trackId, meta);
+            return meta;
         }
 
         // Создаём новые метаданные
@@ -98,20 +84,14 @@ public class StreamCacheManager : IDisposable
             RangesJson = "[]"
         };
 
-        // Удаляем старый кэш-файл если существует (размер изменился)
+        // Сброс кэша при несовпадении размеров
         var cachePath = GetCachePath(trackId);
-        if (File.Exists(cachePath))
-        {
-            try { File.Delete(cachePath); } catch { }
-        }
+        if (File.Exists(cachePath)) try { File.Delete(cachePath); } catch { }
 
         SaveMetadata(trackId, newMeta);
         return newMeta;
     }
 
-    /// <summary>
-    /// Сохраняет метаданные
-    /// </summary>
     public void SaveMetadata(string trackId, StreamCacheMetadata meta)
     {
         try
@@ -120,82 +100,37 @@ public class StreamCacheManager : IDisposable
             var json = JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(metaPath, json);
         }
-        catch (Exception ex)
-        {
-            Log.Info($"Failed to save metadata: {ex.Message}");
-        }
+        catch (Exception ex) { Log.Info($"Failed to save metadata: {ex.Message}"); }
     }
 
-    /// <summary>
-    /// Обновляет RangeMap в метаданных
-    /// </summary>
     public void UpdateRanges(string trackId, RangeMap ranges)
     {
-        var metaPath = GetMetaPath(trackId);
-        if (!File.Exists(metaPath)) return;
-
-        try
+        var meta = TryGetMetadata(trackId);
+        if (meta != null)
         {
-            var json = File.ReadAllText(metaPath);
-            var meta = JsonSerializer.Deserialize<StreamCacheMetadata>(json);
-            if (meta != null)
-            {
-                meta.RangesJson = ranges.Serialize();
-                meta.LastAccessedAt = DateTime.UtcNow;
-                SaveMetadata(trackId, meta);
-            }
+            meta.RangesJson = ranges.Serialize();
+            meta.LastAccessedAt = DateTime.UtcNow;
+            SaveMetadata(trackId, meta);
         }
-        catch { }
     }
 
-    /// <summary>
-    /// Загружает RangeMap из метаданных
-    /// </summary>
     public RangeMap LoadRanges(string trackId)
     {
-        var metaPath = GetMetaPath(trackId);
-        if (!File.Exists(metaPath)) return new RangeMap();
-
-        try
-        {
-            var json = File.ReadAllText(metaPath);
-            var meta = JsonSerializer.Deserialize<StreamCacheMetadata>(json);
-            if (meta != null)
-            {
-                return RangeMap.Deserialize(meta.RangesJson);
-            }
-        }
-        catch { }
-
-        return new RangeMap();
+        var meta = TryGetMetadata(trackId);
+        return meta != null ? RangeMap.Deserialize(meta.RangesJson) : new RangeMap();
     }
 
-    /// <summary>
-    /// Проверяет, полностью ли скачан трек
-    /// </summary>
     public bool IsFullyCached(string trackId)
     {
-        var metaPath = GetMetaPath(trackId);
-        var cachePath = GetCachePath(trackId);
+        var meta = TryGetMetadata(trackId);
+        if (meta == null) return false;
+        
+        if (!File.Exists(GetCachePath(trackId))) return false;
 
-        if (!File.Exists(metaPath) || !File.Exists(cachePath)) 
-            return false;
-
-        try
-        {
-            var json = File.ReadAllText(metaPath);
-            var meta = JsonSerializer.Deserialize<StreamCacheMetadata>(json);
-            if (meta == null) return false;
-
-            var ranges = RangeMap.Deserialize(meta.RangesJson);
-            return ranges.IsFullyDownloaded(meta.ContentLength);
-        }
-        catch { return false; }
+        var ranges = RangeMap.Deserialize(meta.RangesJson);
+        return ranges.IsFullyDownloaded(meta.ContentLength);
     }
 
-    /// <summary>
-    /// Очистка старого кэша
-    /// </summary>
     private async Task CleanupOldCacheAsync()
     {
         if (!await _cleanupLock.WaitAsync(0)) return;
@@ -208,12 +143,10 @@ public class StreamCacheManager : IDisposable
 
             long totalSize = files.Sum(f => f.Length);
             
-            if (totalSize <= _maxCacheSizeBytes)
-                return;
+            if (totalSize <= _maxCacheSizeBytes) return;
 
             Log.Info($"Cache size {totalSize / 1024 / 1024}MB exceeds limit, cleaning...");
 
-            // Сортируем по времени последнего доступа
             var metaFiles = files
                 .Select(f => new
                 {
@@ -224,30 +157,24 @@ public class StreamCacheManager : IDisposable
                 .OrderBy(x => x.LastAccess)
                 .ToList();
 
-            long targetSize = _maxCacheSizeBytes * 70 / 100; // Удаляем до 70%
+            long targetSize = _maxCacheSizeBytes * 70 / 100;
             long deleted = 0;
 
             foreach (var item in metaFiles)
             {
                 if (totalSize - deleted <= targetSize) break;
-
                 try
                 {
                     var size = item.CacheFile.Length;
                     item.CacheFile.Delete();
                     if (item.MetaFile.Exists) item.MetaFile.Delete();
                     deleted += size;
-                    Log.Info($"Deleted {item.CacheFile.Name}");
                 }
                 catch { }
             }
-
             Log.Info($"Cleaned {deleted / 1024 / 1024}MB");
         }
-        finally
-        {
-            _cleanupLock.Release();
-        }
+        finally { _cleanupLock.Release(); }
     }
 
     private static DateTime GetLastAccessTime(string metaPath)
@@ -256,9 +183,13 @@ public class StreamCacheManager : IDisposable
         {
             if (File.Exists(metaPath))
             {
+                // Читаем только начало файла для скорости или используем FileInfo CreationTime как фоллбек, 
+                // но здесь у нас LastAccessedAt внутри JSON.
+                // Для простоты читаем весь, это редкая операция (при очистке)
                 var json = File.ReadAllText(metaPath);
-                var meta = JsonSerializer.Deserialize<StreamCacheMetadata>(json);
-                return meta?.LastAccessedAt ?? DateTime.MinValue;
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("LastAccessedAt", out var prop) && prop.TryGetDateTime(out var dt))
+                    return dt;
             }
         }
         catch { }
@@ -272,9 +203,6 @@ public class StreamCacheManager : IDisposable
         return Convert.ToHexString(bytes)[..32];
     }
 
-    /// <summary>
-    /// Статистика кэша
-    /// </summary>
     public (int FileCount, long SizeMb) GetStats()
     {
         try
@@ -283,31 +211,18 @@ public class StreamCacheManager : IDisposable
             long size = files.Sum(f => new FileInfo(f).Length);
             return (files.Length, size / 1024 / 1024);
         }
-        catch
-        {
-            return (0, 0);
-        }
+        catch { return (0, 0); }
     }
 
-    /// <summary>
-    /// Очистить весь кэш
-    /// </summary>
     public void ClearAll()
     {
         try
         {
-            foreach (var file in Directory.GetFiles(_cacheFolder))
-            {
-                File.Delete(file);
-            }
+            foreach (var file in Directory.GetFiles(_cacheFolder)) File.Delete(file);
             Log.Info("All cache cleared");
         }
         catch { }
     }
 
-    public void Dispose()
-    {
-        _cleanupLock.Dispose();
-    }
+    public void Dispose() => _cleanupLock.Dispose();
 }
-

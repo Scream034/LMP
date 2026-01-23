@@ -136,40 +136,73 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         if (_disposed || _disposing) return false;
 
+        // Объявляем переменную здесь, чтобы using работал корректно с try-catch логикой
+        CancellationTokenSource? linkedCts = null;
+
         try
         {
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadCts.Token, _disposeCts.Token);
-            _downloadLoop ??= Task.Run(() => DownloadLoopAsync(linkedCts.Token), linkedCts.Token);
-
-            if (HasChunk(0)) return true;
-
-            var sw = Stopwatch.StartNew();
-            EnqueueUrgent(0);
-
-            // ИСПРАВЛЕНИЕ: Ждем дольше, но проверяем отмену
-            while (!HasChunk(0))
+            // ЗАЩИТА 1: Перехватываем ObjectDisposedException при создании
+            // Если _downloadCts был уничтожен в другом потоке (Dispose) прямо перед этим моментом
+            try
             {
-                if (_disposed || _disposing || linkedCts.IsCancellationRequested) return false;
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadCts.Token, _disposeCts.Token);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false; // Стрим уже уничтожен
+            }
 
-                if (!_dataAvailable.Wait(200, linkedCts.Token))
+            using (linkedCts)
+            {
+                // ЗАЩИТА 2: Извлекаем токен в локальную переменную (структуру).
+                // Если использовать linkedCts.Token внутри лямбды, это создаст замыкание на класс CTS.
+                // Если метод PreBufferAsync завершится раньше старта Task.Run, CTS будет Disposed, и обращение вызовет краш.
+                var token = linkedCts.Token;
+
+                _downloadLoop ??= Task.Run(() => DownloadLoopAsync(token), token);
+
+                if (HasChunk(0)) return true;
+
+                var sw = Stopwatch.StartNew();
+                EnqueueUrgent(0);
+
+                // Цикл ожидания первого чанка
+                while (!HasChunk(0))
                 {
-                    // Если прошло больше тайм-аута И мы всё ещё не скачали 0-й чанк
-                    if (sw.ElapsedMilliseconds > ChunkDownloadTimeoutMs)
+                    if (_disposed || _disposing || token.IsCancellationRequested) return false;
+
+                    try
                     {
-                        Log.Error($"PreBuffer timeout for {_trackId} after {sw.ElapsedMilliseconds}ms");
+                        // Используем локальный token вместо linkedCts.Token
+                        if (!_dataAvailable.Wait(200, token))
+                        {
+                            if (sw.ElapsedMilliseconds > ChunkDownloadTimeoutMs)
+                            {
+                                Log.Error($"PreBuffer timeout for {_trackId} after {sw.ElapsedMilliseconds}ms");
+                                return false;
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
                         return false;
                     }
+
+                    if (!HasChunk(0)) _dataAvailable.Reset();
                 }
-                _dataAvailable.Reset();
+                return true;
             }
-            return true;
         }
         catch (OperationCanceledException) { return false; }
         catch (Exception ex)
         {
+            // Игнорируем ObjectDisposedException, если он все-таки просочился
+            if (ex is ObjectDisposedException) return false;
+
             Log.Error($"PreBuffer Error: {ex.Message}");
             return false;
         }
+        // linkedCts Dispose вызовется автоматически при выходе из using
     }
 
     public void CancelPendingReads()

@@ -428,8 +428,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private async Task PlayTrackInternalAsync(TrackInfo track, int session, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-
-        // 1. Stop previous playback immediately
         await StopPlaybackAsync();
 
         MemoryFirstCachingStream? cacheStream = null;
@@ -438,49 +436,47 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            // 2. Refresh Stream URL
-            // Added specific catch for cancellation to avoid "Failed to get stream URL" error on skip
+            // 1. Get Stream Details (Uses Cache preferentially)
             StreamDetails? stream = null;
-            try
-            {
-                stream = await GetOrRefreshStreamAsync(track, ct);
-            }
+            try { stream = await GetOrRefreshStreamAsync(track, ct); }
             catch (OperationCanceledException) { return; }
 
             if (stream == null)
             {
                 if (ct.IsCancellationRequested) return;
-                throw new Exception("Failed to get stream URL (Network or API error)");
+                throw new Exception("Failed to get stream URL");
             }
 
-            if (_session != session) return; // Session check
+            if (_session != session) return;
             ct.ThrowIfCancellationRequested();
 
             SetStreamInfo(stream.Codec, stream.Bitrate, stream.Container);
 
-            // 3. Get Content Length
+            // 2. Get Content Length (AVOID NETWORK IF CACHED)
+            // If stream.Size was populated from cache metadata, we assume it's valid and skip HEAD request.
             long size = stream.Size > 0 ? stream.Size : await TryGetContentLengthAsync(stream.Url, ct);
 
             if (_session != session || ct.IsCancellationRequested) return;
 
-            // 4. Create Stream
+            // 3. Create Stream
             if (size <= 0)
             {
-                // Fallback to direct streaming if size is unknown
                 StartPlayback(new Media(_libVLC, stream.Url, FromType.FromLocation), null, track);
                 return;
             }
 
+            // If we are using cached stream.Url, it might be old.
+            // But if it's fully downloaded, MemoryFirstCachingStream won't use the URL.
             cacheStream = new MemoryFirstCachingStream(track.Id, stream.Url, size, _httpClient, _cacheManager);
 
-            // 5. Pre-buffer
+            // 4. Pre-buffer
+            // If chunks are on disk, this returns instantly.
             var preBufferResult = await cacheStream.PreBufferAsync(ct);
 
             if (!preBufferResult)
             {
                 cacheStream.Dispose();
                 cacheStream = null;
-
                 if (ct.IsCancellationRequested || _session != session) return;
                 throw new Exception("PreBuffer failed (Timeout or Network)");
             }
@@ -491,30 +487,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 return;
             }
 
-            // 6. Start Playback
             StartPlayback(new Media(_libVLC, new StreamMediaInput(cacheStream)), cacheStream, track);
-            cacheStream = null; // Передали владение
-
+            cacheStream = null;
             Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");
         }
-        catch (OperationCanceledException)
-        {
-            cacheStream?.Dispose();
-        }
+        catch (OperationCanceledException) { cacheStream?.Dispose(); }
         catch (Exception ex)
         {
             cacheStream?.Dispose();
-            // Only log actual errors, not cancellations
             if (!ct.IsCancellationRequested && _session == session)
             {
                 Log.Error($"[AudioEngine] Error: {ex.Message}");
                 RaiseEvent(() => OnError?.Invoke(ex.Message));
             }
         }
-        finally
-        {
-            IsLoading = false;
-        }
+        finally { IsLoading = false; }
     }
 
     private void StartPlayback(Media media, MemoryFirstCachingStream? stream, TrackInfo track)
@@ -931,6 +918,22 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, CancellationToken ct)
     {
+        // 1. Check persistence cache FIRST (Skip Network if Fully Cached)
+        // This solves the "Requesting..." lag when network is bad but file is on disk.
+        if (_cacheManager.IsFullyCached(track.Id))
+        {
+            var meta = _cacheManager.TryGetMetadata(track.Id);
+            if (meta != null && meta.ContentLength > 0)
+            {
+                Log.Info($"[AudioEngine] Track {track.Id} is fully cached. Skipping API refresh.");
+                // Return cached details. URL might be old, but MemoryFirstCachingStream won't use it 
+                // if the file is fully on disk.
+                return new StreamDetails(meta.SourceUrl, meta.ContentLength,
+                    track.CachedBitrate, track.CachedCodec, track.CachedContainer);
+            }
+        }
+
+        // 2. Normal flow for non-cached tracks
         bool needFresh = string.IsNullOrEmpty(track.StreamUrl)
             || string.IsNullOrEmpty(track.CachedCodec)
             || track.CachedBitrate <= 0;
