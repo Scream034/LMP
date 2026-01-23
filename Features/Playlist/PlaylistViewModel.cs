@@ -10,13 +10,32 @@ using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.Features.Playlist;
 
-public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
+/// <summary>
+/// ViewModel для отображения содержимого плейлиста и управления им.
+/// </summary>
+public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
+    #region Fields
+
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
     private readonly IDialogService _dialog;
     private readonly TrackViewModelFactory _vmFactory;
+
+    // [FIX] Явный делегат для отписки
+    private readonly EventHandler<string> _languageChangedHandler;
+    
+    private string _currentPlaylistId = "";
+    private IDisposable? _librarySubscription;
+    private IDisposable? _audioStateSub;
+    private IDisposable? _trackChangeSub;
+    
+    private bool _isDisposed;
+
+    #endregion
+
+    #region Properties
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
@@ -40,8 +59,6 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         set
         {
             this.RaiseAndSetIfChanged(ref _headerHeight, value);
-
-            // Сохраняем только если значение валидное и в пикселях
             if (value.IsAbsolute && value.Value > 50)
             {
                 if (Math.Abs(LibService.Data.PlaylistHeaderHeight - value.Value) > 1)
@@ -53,10 +70,12 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         }
     }
 
-    private string _currentPlaylistId = "";
-    private IDisposable? _librarySubscription;
-    private IDisposable? _audioStateSub;
-    private IDisposable? _trackChangeSub;
+    public string FormattedTrackCount =>
+        LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
+
+    #endregion
+
+    #region Commands
 
     public ReactiveCommand<Unit, Unit> PlayAllCommand { get; }
     public ReactiveCommand<Unit, Unit> DeletePlaylistCommand { get; }
@@ -68,8 +87,9 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     public ReactiveCommand<Unit, Unit> RefreshPlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
 
-    public string FormattedTrackCount =>
-        LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
+    #endregion
+
+    #region Constructor
 
     public PlaylistViewModel(
       AudioEngine audio,
@@ -84,13 +104,11 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         _dialog = dialog;
         _vmFactory = vmFactory;
 
-        LocalizationService.Instance.LanguageChanged += (_, _) =>
-            this.RaisePropertyChanged(nameof(FormattedTrackCount));
+        // [FIX] Подписка на локализацию
+        _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
+        LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
-        // Инициализация состояния Shuffle
         IsShuffleActive = _audio.ShuffleEnabled;
-
-        // Загружаем сохраненную высоту
         _headerHeight = new GridLength(LibService.Data.PlaylistHeaderHeight);
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
@@ -131,7 +149,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
             _audio.EnqueueRange(AllItems);
         }, hasTracks);
 
-        // ПОДПИСКИ НА ОБНОВЛЕНИЯ БИБЛИОТЕКИ
+        // Подписки на библиотеку
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
@@ -145,7 +163,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
                 }
             });
 
-        // ПОДПИСКИ НА АУДИО ДВИЖОК ДЛЯ ОБНОВЛЕНИЯ UI
+        // Подписки на аудио движок
         _audioStateSub = Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
             h => (p, u) => h((p, u)),
             h => _audio.OnPlaybackStateChanged += h,
@@ -160,10 +178,12 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
             .Subscribe(_ => CheckPlaybackState());
     }
 
+    #endregion
+
+    #region Methods
+
     private void CheckPlaybackState()
     {
-        // Логика: если играет трек, который есть в этом плейлисте - считаем, что плейлист активен
-        // Это упрощенная логика, но достаточная для UX
         if (_audio.CurrentTrack != null && _audio.IsPlaying)
         {
             IsPlayingThisPlaylist = LibService.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId);
@@ -178,23 +198,20 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     {
         if (AllItems.Count == 0) return;
 
-        // Если плейлист уже играет - это пауза/возобновление
         if (IsPlayingThisPlaylist)
         {
-            _ = _audio.SetPlaybackStateAsync(false); // Пауза
+            _ = _audio.SetPlaybackStateAsync(false);
             return;
         }
 
-        // Если трек из плейлиста на паузе - возобновляем
         if (_audio.CurrentTrack != null &&
             _audio.IsPaused &&
             LibService.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId))
         {
-            _ = _audio.SetPlaybackStateAsync(true); // Play
+            _ = _audio.SetPlaybackStateAsync(true);
             return;
         }
 
-        // Иначе запускаем плейлист с начала
         _audio.ClearQueue();
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
@@ -207,38 +224,30 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
     {
         if (AllItems.Count == 0) return;
 
-        // 1. Очищаем очередь и добавляем все треки плейлиста
         _audio.ClearQueue();
         _audio.EnqueueRange(AllItems);
-
-        // 2. Перемешиваем очередь
         _audio.ShuffleQueue();
 
-        // 3. Запускаем воспроизведение (первый трек после перемешивания)
         var queue = _audio.Queue;
         if (queue.Count > 0)
         {
             _ = _audio.PlayTrackAsync(queue[0]);
         }
 
-        // 4. Визуальная обратная связь
         IsShuffleActive = true;
         Observable.Timer(TimeSpan.FromMilliseconds(800))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => IsShuffleActive = false);
     }
 
-
     private void DownloadAll()
     {
         IsDownloadingActive = true;
-
         foreach (var track in AllItems.Where(t => !t.IsDownloaded))
         {
             _downloads.StartDownload(track);
         }
 
-        // Сбрасываем визуальную активность кнопки через пару секунд
         Observable.Timer(TimeSpan.FromSeconds(2))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => IsDownloadingActive = false);
@@ -268,7 +277,7 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         CalculateTotalDuration(tracks);
 
         await InitializeItemsAsync(tracks, canFetchMore: false);
-        CheckPlaybackState(); // Проверяем состояние после загрузки
+        CheckPlaybackState();
     }
 
     private void CalculateTotalDuration(List<TrackInfo> tracks)
@@ -287,21 +296,10 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
 
     private void PlayFromPlaylist(TrackInfo track)
     {
-        // Вместо Clear -> Play -> EnqueueRange (что создавало дубль),
-        // используем атомарную установку очереди
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
-
-        // Передаем ВЕСЬ список (Items - это только загруженные, AllItems - все известные)
-        // Важно: PaginatedViewModel обычно держит загруженные в Items. 
-        // Если плейлист огромный, здесь может потребоваться логика подгрузки, 
-        // но для Lite версии берем Items или загружаем все.
-
-        // В текущей реализации Items - это ViewModel, нам нужны модели
         var tracks = Items.Select(vm => vm.Track).ToList();
-
         _ = _audio.StartQueueAsync(tracks, track);
-
         LibService.AddToRecentlyPlayed(track);
     }
 
@@ -329,14 +327,25 @@ public class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewMode
         }
     }
 
-    public void Dispose()
+    #endregion
+
+    #region IDisposable Implementation
+
+    public new void Dispose()
     {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
+        // [FIX] Отписка от событий
+        LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
+
         _librarySubscription?.Dispose();
         _audioStateSub?.Dispose();
         _trackChangeSub?.Dispose();
         CancelLoading();
-        GC.SuppressFinalize(this);
+
+        base.Dispose();
     }
+
+    #endregion
 }
-
-

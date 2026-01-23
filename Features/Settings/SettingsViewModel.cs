@@ -1,7 +1,4 @@
-﻿// SettingsViewModel.cs
-// ViewModel для страницы настроек приложения
-
-using System.Reactive;
+﻿using System.Reactive;
 using System.Reactive.Linq;
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.Services;
@@ -11,8 +8,13 @@ using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.Features.Settings;
 
-public class SettingsViewModel : ViewModelBase
+/// <summary>
+/// ViewModel для управления настройками приложения.
+/// </summary>
+public sealed class SettingsViewModel : ViewModelBase, IDisposable
 {
+    #region Fields
+
     private readonly LibraryService _library;
     private readonly SearchCacheService _searchCache;
     private readonly GoogleAuthService _auth;
@@ -20,17 +22,43 @@ public class SettingsViewModel : ViewModelBase
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
 
+    // [FIX] Поля для хранения делегатов событий (для корректной отписки)
+    private readonly EventHandler<string> _languageChangedHandler;
+    private readonly Action _authStateChangedHandler;
+    private readonly Action _fakeAccountChangedHandler;
+    
+    // [FIX] Флаг освобождения ресурсов
+    private bool _isDisposed;
+
+    #endregion
+
+    #region Properties
+
     // --- Настройки путей и загрузки ---
+    
+    /// <summary>Путь для скачивания треков.</summary>
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
+    
+    /// <summary>Размер пакета загрузки при пагинации.</summary>
     [Reactive] public int LoadBatchSize { get; set; }
+    
+    /// <summary>Размер пакета при поиске.</summary>
     [Reactive] public int SearchBatchSize { get; set; }
+    
+    /// <summary>Включить скелетоны и плавную загрузку.</summary>
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
     // --- Настройки звука ---
+    
+    /// <summary>Лимит максимальной громкости (%).</summary>
     [Reactive] public int MaxVolumeLimit { get; set; }
+    
+    /// <summary>Целевое усиление (Gain) в дБ.</summary>
     [Reactive] public float TargetGainDb { get; set; }
 
     // --- Настройки качества ---
+    
+    /// <summary>Предпочтительное качество аудио.</summary>
     public AudioQualityPreference QualityPreference
     {
         get => _library.Data.QualityPreference;
@@ -45,6 +73,7 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Запоминать формат последнего воспроизведенного трека.</summary>
     public bool RememberTrackFormat
     {
         get => _library.Data.RememberTrackFormat;
@@ -57,39 +86,50 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Список доступных опций качества.</summary>
     [Reactive] public List<AudioQualityPreference> QualityOptions { get; private set; } = [];
 
     // --- Интеграции ---
+    
+    /// <summary>Включить Discord Rich Presence.</summary>
     [Reactive] public bool DiscordRpcEnabled { get; set; }
+    
+    /// <summary>Автоматически воспроизводить при вставке URL.</summary>
     [Reactive] public bool AutoPlayOnPaste { get; set; }
+    
+    /// <summary>Время жизни кэша поиска (минуты).</summary>
     [Reactive] public int SearchCacheTtlMinutes { get; set; }
 
     // --- Языки ---
+    
+    /// <summary>Список доступных языков.</summary>
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
+    
+    /// <summary>Выбранный язык интерфейса.</summary>
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
 
     // --- Авторизация ---
+    
+    /// <summary>Пользователь авторизован в Google.</summary>
     [Reactive] public bool IsAuthenticated { get; private set; }
 
     // --- Fake Account ---
+    
+    /// <summary>Ввод URL канала для фейкового аккаунта.</summary>
     [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
+    
+    /// <summary>Идет ли процесс загрузки информации о канале.</summary>
     [Reactive] public bool IsLoadingFakeAccount { get; set; }
 
-    // ========== ЕДИНЫЙ API ДЛЯ АККАУНТА ==========
+    // --- ЕДИНЫЙ API ДЛЯ АККАУНТА ---
 
-    /// <summary>
-    /// Есть ли какой-либо аккаунт (Google или Fake)
-    /// </summary>
+    /// <summary>Есть ли какой-либо аккаунт (Google или Fake).</summary>
     public bool HasAccount => IsAuthenticated || _library.HasFakeAccount;
 
-    /// <summary>
-    /// Это ограниченный (Fake) аккаунт?
-    /// </summary>
+    /// <summary>Это ограниченный (Fake) аккаунт?</summary>
     public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
 
-    /// <summary>
-    /// Имя аккаунта (приоритет: Google YouTube Channel > Fake Account > Google Name > Guest)
-    /// </summary>
+    /// <summary>Имя аккаунта.</summary>
     public string AccountName
     {
         get
@@ -106,9 +146,7 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// URL аватара аккаунта (приоритет: Google YouTube Avatar > Fake Account Avatar)
-    /// </summary>
+    /// <summary>URL аватара аккаунта.</summary>
     public string? AccountAvatarUrl
     {
         get
@@ -123,9 +161,7 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Подзаголовок аккаунта (email для Google, статус для Fake)
-    /// </summary>
+    /// <summary>Подзаголовок аккаунта.</summary>
     public string AccountSubtitle
     {
         get
@@ -140,11 +176,10 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Показывать предупреждение об ограничениях
-    /// </summary>
+    /// <summary>Показывать предупреждение об ограничениях.</summary>
     public bool ShowLimitedAccessWarning => IsFakeAccount;
 
+    /// <summary>Включить кэширование поиска.</summary>
     public bool EnableSearchCache
     {
         get => _library.Data.EnableSearchCache;
@@ -157,7 +192,10 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    // --- Команды ---
+    #endregion
+
+    #region Commands
+
     public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearHistoryCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetLibraryCommand { get; }
@@ -165,6 +203,10 @@ public class SettingsViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
     public ReactiveCommand<Unit, Unit> SetFakeAccountCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearFakeAccountCommand { get; }
+
+    #endregion
+
+    #region Constructors
 
     public SettingsViewModel(
         LibraryService library,
@@ -181,8 +223,8 @@ public class SettingsViewModel : ViewModelBase
         _audio = audio;
         _youtube = youtube;
 
+        // Инициализация коллекций и данных
         QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
-
         FakeChannelInput = _library.FakeAccountUrl ?? "";
 
         SearchCacheTtlMinutes = _library.Data.SearchCacheTtlMinutes > 0
@@ -193,29 +235,47 @@ public class SettingsViewModel : ViewModelBase
             ? _library.Data.LoadBatchSize
             : 20;
 
-
         LoadSettings();
         UpdateAuthState();
 
-        // --- Подписки ---
-
-        // Обновление при смене языка
-        LocalizationService.Instance.LanguageChanged += (_, _) =>
+        // [FIX] Инициализация обработчиков событий
+        _languageChangedHandler = (_, _) =>
         {
             RaiseAccountPropertiesChanged();
             QualityOptions = [.. Enum.GetValues<AudioQualityPreference>()];
         };
 
-        // Обновление при изменении авторизации
-        _auth.OnAuthStateChanged += () =>
+        _authStateChangedHandler = () =>
         {
             UpdateAuthState();
             RaiseAccountPropertiesChanged();
         };
 
-        // Обновление при изменении Fake Account
-        _library.OnFakeAccountChanged += RaiseAccountPropertiesChanged;
+        _fakeAccountChangedHandler = RaiseAccountPropertiesChanged;
 
+        // [FIX] Подписка на события
+        LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
+        _auth.OnAuthStateChanged += _authStateChangedHandler;
+        _library.OnFakeAccountChanged += _fakeAccountChangedHandler;
+
+        InitializeReactiveSubscriptions();
+
+        // [FIX] Прямая инициализация команд в конструкторе (исправляет CS0206 и CS8618)
+        SetFakeAccountCommand = ReactiveCommand.CreateFromTask(SetFakeAccountAsync);
+        ClearFakeAccountCommand = ReactiveCommand.Create(ClearFakeAccount);
+        BrowseDownloadPathCommand = ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync);
+        ClearHistoryCommand = ReactiveCommand.CreateFromTask(ClearHistoryAsync);
+        ResetLibraryCommand = ReactiveCommand.CreateFromTask(ResetLibraryAsync);
+        LoginCommand = ReactiveCommand.CreateFromTask(LoginAsync);
+        LogoutCommand = ReactiveCommand.CreateFromTask(LogoutAsync);
+    }
+
+    #endregion
+
+    #region Initialization Methods
+
+    private void InitializeReactiveSubscriptions()
+    {
         // Автосохранение языка
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1)
@@ -234,7 +294,6 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
-                Log.Info($"New volume limit: {v}");
                 _library.Data.MaxVolumeLimit = v;
                 _library.Save();
                 _audio.UpdateAudioSettings();
@@ -246,7 +305,6 @@ public class SettingsViewModel : ViewModelBase
             .Throttle(TimeSpan.FromMilliseconds(300))
             .Subscribe(v =>
             {
-                Log.Info($"New target gain: {v}");
                 _library.Data.TargetGainDb = v;
                 _library.Save();
                 _audio.UpdateAudioSettings();
@@ -257,7 +315,6 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
-                Log.Info($"New smooth loading setting: {v}");
                 _library.Data.EnableSmoothLoading = v;
                 _library.Save();
             });
@@ -267,7 +324,6 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
-                Log.Info($"New Discord RPC setting: {v}");
                 _library.Data.DiscordRpcEnabled = v;
                 _library.Save();
             });
@@ -277,21 +333,21 @@ public class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(v =>
             {
-                Log.Info($"New autoplay setting: {v}");
                 _library.Data.AutoPlayOnUrlPaste = v;
                 _library.Save();
             });
 
+        // Размер пакета поиска
         this.WhenAnyValue(x => x.SearchBatchSize)
             .Skip(1)
             .Where(v => v >= 10 && v <= 100)
             .Subscribe(v =>
             {
-                Log.Info($"New search batch size: {v}");
                 _library.Data.SearchBatchSize = v;
                 _library.Save();
             });
 
+        // TTL кэша поиска
         this.WhenAnyValue(x => x.SearchCacheTtlMinutes)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(500))
@@ -300,11 +356,10 @@ public class SettingsViewModel : ViewModelBase
             {
                 _library.Data.SearchCacheTtlMinutes = val;
                 _library.Save();
-
-                // Очищаем просроченные записи при изменении TTL
                 _ = _searchCache.CleanupExpiredAsync();
             });
 
+        // Размер пакета загрузки
         this.WhenAnyValue(x => x.LoadBatchSize)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(300))
@@ -314,19 +369,11 @@ public class SettingsViewModel : ViewModelBase
                 _library.Data.LoadBatchSize = val;
                 _library.Save();
             });
-
-        // --- Команды ---
-
-        SetFakeAccountCommand = ReactiveCommand.CreateFromTask(SetFakeAccountAsync);
-        ClearFakeAccountCommand = ReactiveCommand.Create(ClearFakeAccount);
-        BrowseDownloadPathCommand = ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync);
-        ClearHistoryCommand = ReactiveCommand.CreateFromTask(ClearHistoryAsync);
-        ResetLibraryCommand = ReactiveCommand.CreateFromTask(ResetLibraryAsync);
-        LoginCommand = ReactiveCommand.CreateFromTask(LoginAsync);
-        LogoutCommand = ReactiveCommand.CreateFromTask(LogoutAsync);
     }
 
-    // --- Команды: Fake Account ---
+    #endregion
+
+    #region Action Methods
 
     private async Task SetFakeAccountAsync()
     {
@@ -364,8 +411,6 @@ public class SettingsViewModel : ViewModelBase
         FakeChannelInput = "";
     }
 
-    // --- Команды: Auth ---
-
     private async Task LoginAsync()
     {
         await _auth.StartLoginAsync();
@@ -384,8 +429,6 @@ public class SettingsViewModel : ViewModelBase
             UpdateAuthState();
         }
     }
-
-    // --- Команды: Storage ---
 
     private async Task BrowseDownloadPathAsync()
     {
@@ -425,7 +468,9 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    // --- Вспомогательные методы ---
+    #endregion
+
+    #region Helper Methods
 
     private void RaiseAccountPropertiesChanged()
     {
@@ -474,6 +519,26 @@ public class SettingsViewModel : ViewModelBase
 
         _ = _audio.SwitchQualityAsync(targetContainer, 0);
     }
+
+    #endregion
+
+    #region IDisposable Implementation
+
+    /// <summary>
+    /// Освобождает ресурсы и отписывается от событий.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
+        // [FIX] Отписка от событий
+        LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
+        _auth.OnAuthStateChanged -= _authStateChangedHandler;
+        _library.OnFakeAccountChanged -= _fakeAccountChangedHandler;
+
+        GC.SuppressFinalize(this);
+    }
+
+    #endregion
 }
-
-

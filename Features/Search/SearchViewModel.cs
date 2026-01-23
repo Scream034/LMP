@@ -1,13 +1,4 @@
-﻿// ============================================================================
-// Файл: Features/Search/SearchViewModel.cs
-// Описание: ViewModel страницы поиска.
-// Исправления:
-//   - [FIX] Корректное переопределение Dispose.
-//   - [FIX] Очистка сессии поиска YouTube (освобождение буферов).
-//   - [FIX] Отмена активных задач через CancellationTokenSource.
-// ============================================================================
-
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using MyLiteMusicPlayer.Core.Models;
@@ -407,7 +398,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void PlayTrackWithContext(TrackInfo track)
     {
-        _ = _audio.StartQueueAsync(Items.Select(x => x.Track), track);
+        _ =_audio.StartQueueAsync(Items.Select(x => x.Track), track);
         LibService.AddToRecentlyPlayed(track);
     }
 

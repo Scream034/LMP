@@ -10,21 +10,42 @@ using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.Features.Home;
 
-public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
+/// <summary>
+/// ViewModel для домашней страницы с категориями и треками.
+/// </summary>
+public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
+    #region Constants
+
+    private const int DefaultBatchSize = 30;
+    private const int DefaultLoadDelay = 150;
+    private const int DefaultPrefetch = 20;
+
+    #endregion
+
+    #region Fields
+
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly TrackViewModelFactory _vmFactory;
 
+    // [FIX] Явный делегат для отписки
+    private readonly EventHandler<string> _languageChangedHandler;
+    
     private string _currentQuery = "";
     private int _fetchOffset = 0;
     private CancellationTokenSource? _categoryCts;
+    private bool _isDisposed;
 
-    protected override int BatchSize => 30;
-    protected override int LoadDelayMs => 150;
-    protected override int PrefetchThreshold => 20;
+    #endregion
+
+    #region Properties
+
+    protected override int BatchSize => DefaultBatchSize;
+    protected override int LoadDelayMs => DefaultLoadDelay;
+    protected override int PrefetchThreshold => DefaultPrefetch;
 
     [Reactive] public string Greeting { get; private set; } = string.Empty;
     [Reactive] public bool ShowDebugInfo { get; set; }
@@ -34,8 +55,16 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
     public DebugStats Stats { get; } = new();
     public Avalonia.Collections.AvaloniaList<TrackItemViewModel> ActiveTracks => Items;
 
+    #endregion
+
+    #region Commands
+
     public ReactiveCommand<Unit, bool> ToggleDebugCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
+
+    #endregion
+
+    #region Constructors
 
     public HomeViewModel(
         YoutubeProvider youtube,
@@ -52,7 +81,10 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
         UpdateGreeting();
 
-        LocalizationService.Instance.LanguageChanged += (_, _) => InitializeCategories();
+        // [FIX] Инициализация и подписка
+        _languageChangedHandler = (_, _) => InitializeCategories();
+        LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
+        
         InitializeCategories();
 
         ToggleDebugCommand = ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo);
@@ -66,6 +98,10 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
         _ = LoadTracksAsync();
     }
+
+    #endregion
+
+    #region Overrides
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
@@ -106,6 +142,10 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         return result;
     }
 
+    #endregion
+
+    #region Private Methods
+
     private async Task LoadTracksAsync(bool force = false)
     {
         var category = SelectedCategory;
@@ -113,6 +153,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
         // Отмена предыдущей загрузки
         _categoryCts?.Cancel();
+        _categoryCts?.Dispose();
         _categoryCts = new CancellationTokenSource();
         var ct = _categoryCts.Token;
 
@@ -122,7 +163,7 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
         try
         {
-            await Task.Delay(50, ct); // Небольшой дебаунс для быстрых кликов
+            await Task.Delay(50, ct); // Debounce
 
             List<TrackInfo> tracks;
             if (category.IsSpecial)
@@ -191,7 +232,6 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
 
     private void PlayWithContext(TrackInfo track)
     {
-        // Атомарно устанавливаем очередь и начинаем воспроизведение
         var tracks = Items.Select(x => x.Track).ToList();
         _ = _audio.StartQueueAsync(tracks, track);
         LibService.AddToRecentlyPlayed(track);
@@ -253,12 +293,27 @@ public class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, 
         Stats.MemoryUsage = $"{GC.GetTotalMemory(false) / 1024 / 1024} MB";
     }
 
-    public void Dispose()
+    #endregion
+
+    #region IDisposable Implementation
+
+    public new void Dispose()
     {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
+        // [FIX] Отписка от событий
+        LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
+
         _categoryCts?.Cancel();
+        _categoryCts?.Dispose();
         CancelLoading();
-        GC.SuppressFinalize(this);
+
+        // Вызов базового Dispose для очистки Items
+        base.Dispose();
     }
+
+    #endregion
 }
 
 public class CategoryItem
@@ -276,5 +331,3 @@ public class DebugStats : ReactiveObject
     [Reactive] public int CachedTracks { get; set; }
     [Reactive] public string MemoryUsage { get; set; } = "0 MB";
 }
-
-

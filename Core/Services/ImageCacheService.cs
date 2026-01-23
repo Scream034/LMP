@@ -1,12 +1,4 @@
-﻿// ============================================================================
-// Файл: Core/Services/ImageCacheService.cs
-// Описание: Сервис кэширования изображений.
-// Исправления:
-//   - [FIX] Явный вызов Dispose() для Bitmap. Это критично для освобождения нативной памяти Skia.
-//   - [FIX] Агрессивная очистка памяти при ClearMemoryCache().
-// ============================================================================
-
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media.Imaging;

@@ -1,13 +1,4 @@
-﻿// ============================================================================
-// Файл: Core/ViewModels/PaginatedViewModel.cs
-// Описание: Базовый абстрактный класс для ViewModel, поддерживающих пагинацию.
-// Исправления:
-//   - [FIX] Полная реализация IDisposable.
-//   - [FIX] Принудительный вызов Dispose() для всех элементов списка при очистке.
-//   - [FIX] Защита от выполнения асинхронных операций после уничтожения объекта.
-// ============================================================================
-
-using System.Reactive;
+﻿using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Collections;
 using Avalonia.Threading;
@@ -18,140 +9,63 @@ using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.Core.ViewModels;
 
-/// <summary>
-/// Базовый класс для ViewModel, отображающих списки с поддержкой ленивой загрузки (Infinite Scroll).
-/// Управляет жизненным циклом элементов списка и предотвращает утечки памяти.
-/// </summary>
-/// <typeparam name="TSource">Тип модели данных (например, TrackInfo).</typeparam>
-/// <typeparam name="TViewModel">Тип ViewModel элемента списка (например, TrackItemViewModel).</typeparam>
 public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IDisposable
     where TViewModel : class
 {
-    #region Constants
-
-    private const int DefaultLoadDelayMs = 200;
-    private const int DefaultPrefetchThreshold = 15;
-
-    #endregion
-
     #region Fields
 
-    /// <summary>
-    /// Ссылка на сервис библиотеки для доступа к глобальным настройкам.
-    /// </summary>
     protected readonly LibraryService LibService;
 
-    // [FIX] Храним полный список исходных данных.
+    // [FIX] Объект синхронизации для защиты _allItems
+    private readonly Lock _syncRoot = new();
+
     private readonly List<TSource> _allItems = [];
-
-    // [FIX] Храним ID загруженных элементов для исключения дубликатов.
     private readonly HashSet<string> _loadedIds = [];
-
-    // [FIX] Токен отмены для текущей операции загрузки.
-    private CancellationTokenSource? _loadCts;
-
-    // [FIX] Флаг освобождения ресурсов.
-    private bool _isDisposed;
-
-    // Количество элементов, уже добавленных в Items (UI).
+    
     private int _displayedCount;
-
-    // Флаг, указывающий на возможность загрузки дополнительных данных из внешнего источника.
+    private CancellationTokenSource? _loadCts;
     private bool _canFetchMore;
+    private bool _isDisposed;
+    private Guid _loadGeneration = Guid.NewGuid();
 
     #endregion
 
     #region Properties
 
-    /// <summary>
-    /// Размер порции данных для загрузки за один раз.
-    /// </summary>
     protected virtual int BatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize : 20;
+    protected virtual int LoadDelayMs => 200;
+    protected virtual int PrefetchThreshold => 15;
 
-    /// <summary>
-    /// Искусственная задержка перед загрузкой для плавности UI.
-    /// </summary>
-    protected virtual int LoadDelayMs => DefaultLoadDelayMs;
-
-    /// <summary>
-    /// Количество оставшихся элементов, при котором начинается фоновая загрузка следующей порции.
-    /// </summary>
-    protected virtual int PrefetchThreshold => DefaultPrefetchThreshold;
-
-    /// <summary>
-    /// Указывает, происходит ли сейчас первичная загрузка или полная перезагрузка.
-    /// </summary>
     [Reactive] public bool IsLoading { get; protected set; }
-
-    /// <summary>
-    /// Указывает, происходит ли добавление элементов в конец списка (локально или из сети).
-    /// </summary>
     [Reactive] public bool IsLoadingMore { get; protected set; }
-
-    /// <summary>
-    /// Указывает, выполняется ли активный сетевой запрос.
-    /// </summary>
     [Reactive] public bool IsFetchingFromNetwork { get; protected set; }
-
-    /// <summary>
-    /// Указывает, есть ли еще данные для отображения.
-    /// </summary>
     [Reactive] public bool HasMoreItems { get; protected set; }
-
-    /// <summary>
-    /// Указывает, что достигнут конец списка и данных больше нет.
-    /// </summary>
     [Reactive] public bool ReachedEnd { get; protected set; }
-
-    /// <summary>
-    /// Включает отображение скелетонов/плавной загрузки.
-    /// </summary>
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
-    /// <summary>
-    /// Коллекция ViewModel для привязки к UI.
-    /// </summary>
     public AvaloniaList<TViewModel> Items { get; } = [];
 
-    /// <summary>
-    /// Команда для загрузки следующей порции данных.
-    /// </summary>
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
 
-    /// <summary>
-    /// Общее количество элементов в буфере.
-    /// </summary>
-    protected int TotalCount => _allItems.Count;
-
-    /// <summary>
-    /// Количество элементов, отображаемых в данный момент.
-    /// </summary>
+    // [FIX] Доступ к счетчику через lock не обязателен, если чтение атомарно, но для порядка используем lock внутри методов
+    protected int TotalCount { get { lock(_syncRoot) return _allItems.Count; } }
     protected int DisplayedCount => _displayedCount;
+    
+    // [FIX] Внимание: прямой доступ к AllItems небезопасен из других потоков. 
+    // Используйте GetLoadedItems() или GetSnapshot().
+    protected IReadOnlyList<TSource> AllItems => _allItems; 
 
-    /// <summary>
-    /// Доступ только для чтения к исходным данным.
-    /// </summary>
-    protected IReadOnlyList<TSource> AllItems => _allItems;
-
-    /// <summary>
-    /// Токен отмены текущей операции.
-    /// </summary>
     protected CancellationToken LoadCancellationToken => _loadCts?.Token ?? CancellationToken.None;
 
     #endregion
 
     #region Constructors
 
-    /// <summary>
-    /// Инициализирует новый экземпляр <see cref="PaginatedViewModel{TSource, TViewModel}"/>.
-    /// </summary>
     protected PaginatedViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
         EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
-
-        // [FIX] Подписка на событие изменения настроек. 
-        // В Dispose обязательно должна быть отписка.
+        
         LibService.OnDataChanged += OnLibraryDataChanged;
 
         var canLoadMore = this.WhenAnyValue(
@@ -168,102 +82,92 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Abstract Methods
 
-    /// <summary>
-    /// Фабричный метод для создания ViewModel элемента.
-    /// </summary>
     protected abstract TViewModel CreateItemViewModel(TSource item);
-
-    /// <summary>
-    /// Получает уникальный ID элемента для дедупликации.
-    /// </summary>
     protected virtual string GetItemId(TSource item) => item?.GetHashCode().ToString() ?? "";
-
-    /// <summary>
-    /// Загружает данные из внешнего источника (сети/базы).
-    /// </summary>
-    protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct)
+    protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct) 
         => Task.FromResult(new List<TSource>());
-
-    /// <summary>
-    /// Хук, вызываемый после создания ViewModel.
-    /// </summary>
     protected virtual void OnItemCreated(TSource source, TViewModel viewModel) { }
 
     #endregion
 
     #region Public Methods
 
-    /// <summary>
-    /// Инициализирует список начальным набором данных.
-    /// </summary>
     protected async Task InitializeItemsAsync(IEnumerable<TSource> items, bool canFetchMore = true)
     {
         if (_isDisposed) return;
 
-        // [FIX] Полная очистка предыдущего состояния
-        ClearItemsInternal();
+        // [FIX] Очистка выполняется в UI потоке для безопасности Items
+        await Dispatcher.UIThread.InvokeAsync(ClearItemsInternal);
 
         _loadCts = new CancellationTokenSource();
         _canFetchMore = canFetchMore;
 
         if (items != null)
         {
-            AppendSourceItems(items);
+            lock (_syncRoot)
+            {
+                AppendSourceItems(items);
+            }
         }
 
         UpdateHasMoreItems();
+        
+        Log.Info($"[Paginated] Initialized with {TotalCount} items.");
 
-        Log.Info($"[Paginated] Initialized with {_allItems.Count} items.");
-
-        // Сразу загружаем первую порцию данных
-        if (_allItems.Count > 0)
+        if (TotalCount > 0)
         {
             await LoadNextBatchAsync(skipDelay: true);
         }
     }
 
-    /// <summary>
-    /// Очищает список и освобождает ресурсы.
-    /// </summary>
     protected void ClearItems()
     {
-        ClearItemsInternal();
+        // [FIX] Оборачиваем в Dispatcher, чтобы гарантировать поток UI для Items.Clear
+        if (Dispatcher.UIThread.CheckAccess())
+            ClearItemsInternal();
+        else
+            Dispatcher.UIThread.Post(ClearItemsInternal);
+    }
+
+    // [FIX] Метод для безопасного получения списка ID (для передачи в SearchSession)
+    protected List<string> GetLoadedItemsIds()
+    {
+        lock (_syncRoot)
+        {
+            return _allItems.Select(GetItemId).ToList();
+        }
     }
 
     #endregion
 
     #region Internal Logic
 
-    /// <summary>
-    /// Внутренняя логика очистки с освобождением ресурсов.
-    /// </summary>
     private void ClearItemsInternal()
     {
+        _loadGeneration = Guid.NewGuid();
         CancelLoading();
 
-        // [FIX] Критически важно: вызываем Dispose для каждого элемента, который сейчас в списке.
-        // Это разрывает подписки на события в TrackItemViewModel.
-        foreach (var item in Items)
+        // Items.Clear() должен вызываться в UI потоке (гарантируется вызовом выше)
+        var itemsDisposeCopy = Items.ToList(); 
+        Items.Clear(); 
+        
+        foreach (var item in itemsDisposeCopy)
         {
-            if (item is IDisposable d)
-            {
-                d.Dispose();
-            }
+            if (item is IDisposable d) d.Dispose();
         }
-
-        Items.Clear();
-        _allItems.Clear();
-        _loadedIds.Clear();
-
+        
+        lock (_syncRoot)
+        {
+            _allItems.Clear();
+            _loadedIds.Clear();
+        }
+        
         _displayedCount = 0;
         HasMoreItems = false;
         ReachedEnd = false;
         _canFetchMore = false;
     }
 
-    /// <summary>
-    /// Отменяет текущую задачу загрузки.
-    /// </summary>
     protected void CancelLoading()
     {
         _loadCts?.Cancel();
@@ -283,6 +187,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
     }
 
+    // Должен вызываться под lock(_syncRoot)
     private int AppendSourceItems(IEnumerable<TSource> items)
     {
         int count = 0;
@@ -298,11 +203,17 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         }
         return count;
     }
-
+    
     protected void AppendToBuffer(IEnumerable<TSource> newItems)
     {
         if (_isDisposed) return;
-        int added = AppendSourceItems(newItems);
+        
+        int added;
+        lock (_syncRoot)
+        {
+            added = AppendSourceItems(newItems);
+        }
+
         if (added > 0)
         {
             HasMoreItems = true;
@@ -312,7 +223,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     private void UpdateHasMoreItems()
     {
-        int remaining = _allItems.Count - _displayedCount;
+        int total;
+        lock (_syncRoot) total = _allItems.Count;
+        
+        int remaining = total - _displayedCount;
         HasMoreItems = remaining > 0 || _canFetchMore;
     }
 
@@ -320,16 +234,21 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     {
         if (_isDisposed) return;
 
-        int bufferRemaining = _allItems.Count - _displayedCount;
+        var currentGen = _loadGeneration;
+        int total;
+        lock (_syncRoot) total = _allItems.Count;
 
-        // Если буфер пуст, пробуем загрузить из сети
+        int bufferRemaining = total - _displayedCount;
+
         if (bufferRemaining <= 0)
         {
             if (_canFetchMore)
             {
-                await TryFetchMoreAsync();
-                // Пересчитываем после попытки загрузки
-                bufferRemaining = _allItems.Count - _displayedCount;
+                await TryFetchMoreAsync(currentGen);
+                if (_loadGeneration != currentGen || _isDisposed) return;
+                
+                lock (_syncRoot) total = _allItems.Count;
+                bufferRemaining = total - _displayedCount;
             }
 
             if (bufferRemaining <= 0 && !_canFetchMore)
@@ -351,14 +270,20 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             if (!skipDelay && _displayedCount > 0 && LoadDelayMs > 0)
                 await Task.Delay(LoadDelayMs, token);
 
-            if (_isDisposed || token.IsCancellationRequested) return;
+            if (_isDisposed || token.IsCancellationRequested || _loadGeneration != currentGen) return;
 
-            int countToTake = Math.Min(BatchSize, _allItems.Count - _displayedCount);
-            if (countToTake <= 0) return;
+            // [FIX] Безопасное чтение данных под локом
+            List<TSource> batchSource;
+            lock (_syncRoot)
+            {
+                // Повторная проверка внутри лока
+                total = _allItems.Count;
+                int countToTake = Math.Min(BatchSize, total - _displayedCount);
+                if (countToTake <= 0) return;
+                batchSource = _allItems.GetRange(_displayedCount, countToTake);
+            }
 
-            var batchSource = _allItems.GetRange(_displayedCount, countToTake);
-            var batchVMs = new List<TViewModel>(countToTake);
-
+            var batchVMs = new List<TViewModel>(batchSource.Count);
             foreach (var item in batchSource)
             {
                 var vm = CreateItemViewModel(item);
@@ -366,35 +291,41 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                 batchVMs.Add(vm);
             }
 
-            // [FIX] Обновляем коллекцию строго в UI потоке
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            // [FIX] Обновление UI
+            await Dispatcher.UIThread.InvokeAsync(() => 
             {
-                if (!_isDisposed)
+                if (!_isDisposed && _loadGeneration == currentGen)
                 {
                     Items.AddRange(batchVMs);
                     _displayedCount += batchVMs.Count;
                 }
                 else
                 {
-                    foreach (var vm in batchVMs) if (vm is IDisposable d) d.Dispose();
+                    foreach(var vm in batchVMs) 
+                        if(vm is IDisposable d) d.Dispose();
                 }
             });
 
-            int remaining = _allItems.Count - _displayedCount;
+            if (_loadGeneration != currentGen) return;
+
+            lock (_syncRoot) total = _allItems.Count;
+            int remaining = total - _displayedCount;
             HasMoreItems = remaining > 0 || _canFetchMore;
+
             if (remaining == 0 && !_canFetchMore) ReachedEnd = true;
 
             if (remaining < PrefetchThreshold && remaining >= 0 && _canFetchMore)
-                _ = TryFetchMoreAsync();
+                _ = TryFetchMoreAsync(currentGen);
         }
         catch (OperationCanceledException) { }
         finally
         {
-            IsLoadingMore = false;
+            if (_loadGeneration == currentGen)
+                IsLoadingMore = false;
         }
     }
 
-    private async Task TryFetchMoreAsync()
+    private async Task TryFetchMoreAsync(Guid expectedGen)
     {
         if (IsFetchingFromNetwork || !_canFetchMore || _isDisposed) return;
 
@@ -404,26 +335,11 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             var ct = _loadCts?.Token ?? CancellationToken.None;
             var newItems = await FetchMoreFromNetworkAsync(ct);
 
-            if (_isDisposed || ct.IsCancellationRequested) return;
+            if (_isDisposed || ct.IsCancellationRequested || _loadGeneration != expectedGen) return;
 
             if (newItems != null && newItems.Count > 0)
             {
-                // [FIX] Добавляем в буфер, но НЕ трогаем UI коллекцию Items напрямую отсюда.
-                // LoadNextBatchAsync подхватит эти элементы при следующем вызове.
-                AppendSourceItems(newItems);
-
-                // Если это была первая загрузка и UI пуст - инициируем отображение
-                if (_displayedCount == 0)
-                {
-                    // Вызов через LoadNextBatch, чтобы пройти через стандартный путь
-                    _ = LoadNextBatchAsync(skipDelay: true);
-                }
-                else
-                {
-                    // Просто обновляем флаги
-                    HasMoreItems = true;
-                    ReachedEnd = false;
-                }
+                AppendToBuffer(newItems);
             }
             else
             {
@@ -438,36 +354,68 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         }
         finally
         {
-            IsFetchingFromNetwork = false;
+            if (_loadGeneration == expectedGen)
+                IsFetchingFromNetwork = false;
         }
     }
 
     #endregion
 
-    #region IDisposable Implementation
+    #region IDisposable
 
-    /// <summary>
-    /// Освобождает ресурсы.
-    /// </summary>
     protected virtual void Dispose(bool disposing)
     {
         if (_isDisposed) return;
 
         if (disposing)
         {
-            // [FIX] Отписка от событий
             LibService.OnDataChanged -= OnLibraryDataChanged;
+            
+            // Запускаем очистку синхронно, но безопасно, т.к. это Dispose
+            CancelLoading();
+            
+            // Важно очистить VM, даже если мы не в UI потоке
+            // Копируем Items в новый лист для безопасного перебора
+            var itemsToDispose = new List<TViewModel>();
+            try 
+            {
+                // Попытка доступа к Items может быть небезопасной не из UI потока,
+                // но при Dispose ViewModel уже обычно отсоединена от View.
+                // Если мы здесь, значит View уже не должна рендерить это.
+                if (Dispatcher.UIThread.CheckAccess())
+                {
+                    itemsToDispose.AddRange(Items);
+                    Items.Clear();
+                }
+                else
+                {
+                    // Если мы в другом потоке, постим в UI и ждем (или просто забиваем на Items.Clear, но диспозим VM)
+                    // Лучше просто забить на Items.Clear() (View сама отпишется), но вызвать Dispose у элементов.
+                    // Однако доступ к Items не из UI потока - риск.
+                    // Решение: Dispatcher.UIThread.Post для очистки Items, а сами элементы не достаем.
+                    // Но нам НУЖНО их задиспозить.
+                    // КОМПРОМИСС: Используем _allItems или предполагаем, что Items доступен (AvaloniaList не совсем thread-safe).
+                    // Правильный путь:
+                    Dispatcher.UIThread.Post(() => 
+                    {
+                        var copy = Items.ToList();
+                        Items.Clear();
+                        foreach(var i in copy) if (i is IDisposable d) d.Dispose();
+                    });
+                }
+            }
+            catch { } // Игнорируем ошибки доступа при уничтожении
 
-            // [FIX] Полная очистка
-            ClearItemsInternal();
+            lock (_syncRoot)
+            {
+                _allItems.Clear();
+                _loadedIds.Clear();
+            }
         }
 
         _isDisposed = true;
     }
 
-    /// <summary>
-    /// Освобождает все ресурсы, связанные с этой ViewModel.
-    /// </summary>
     public void Dispose()
     {
         Dispose(true);

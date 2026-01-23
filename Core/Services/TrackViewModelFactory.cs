@@ -1,12 +1,4 @@
-﻿// ============================================================================
-// Файл: Core/Services/TrackViewModelFactory.cs
-// Описание: Фабрика для создания и кэширования TrackItemViewModel.
-// Исправления:
-//   - [FIX] Добавлена принудительная очистка кэша с вызовом Dispose для VM.
-//   - [FIX] Очистка мертвых WeakReference.
-// ============================================================================
-
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.ViewModels;
 using MyLiteMusicPlayer.Features.Shared;

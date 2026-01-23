@@ -1,14 +1,4 @@
-﻿// ============================================================================
-// Файл: Features/Shared/TrackItemViewModel.cs
-// Описание: ViewModel для отображения трека.
-// Исправления:
-//   - [FIX] Использование паттерна "Explicit Delegate Fields" для подписки на события.
-//     Это предотвращает создание новых экземпляров делегатов при отписке
-//     и гарантирует корректное удаление ссылок в сервисах.
-//   - [FIX] Полная реализация IDisposable.
-// ============================================================================
-
-using System.Reactive;
+﻿using System.Reactive;
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.Services;
 using MyLiteMusicPlayer.Core.ViewModels;
