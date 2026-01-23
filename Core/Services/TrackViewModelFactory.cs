@@ -1,4 +1,12 @@
-﻿using System.Collections.Concurrent;
+﻿// ============================================================================
+// Файл: Core/Services/TrackViewModelFactory.cs
+// Описание: Фабрика для создания и кэширования TrackItemViewModel.
+// Исправления:
+//   - [FIX] Добавлена принудительная очистка кэша с вызовом Dispose для VM.
+//   - [FIX] Очистка мертвых WeakReference.
+// ============================================================================
+
+using System.Collections.Concurrent;
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.ViewModels;
 using MyLiteMusicPlayer.Features.Shared;
@@ -6,60 +14,77 @@ using MyLiteMusicPlayer.Features.Shared;
 namespace MyLiteMusicPlayer.Core.Services;
 
 /// <summary>
-/// Фабрика для переиспользования TrackItemViewModel.
-/// Экономит RAM при большом количестве треков.
+/// Фабрика для создания <see cref="TrackItemViewModel"/>.
+/// Использует кэширование на основе WeakReference для предотвращения дублирования VM.
 /// </summary>
-public class TrackViewModelFactory(
-    AudioEngine audio,
-    LibraryService library,
-    DownloadService downloads,
-    MusicLibraryManager manager)
+public class TrackViewModelFactory
 {
-    private readonly AudioEngine _audio = audio;
-    private readonly LibraryService _library = library;
-    private readonly DownloadService _downloads = downloads;
-    private readonly MusicLibraryManager _manager = manager;
+    #region Fields
 
-    // Кэш VM по ID трека
+    private readonly AudioEngine _audio;
+    private readonly LibraryService _library;
+    private readonly DownloadService _downloads;
+    private readonly MusicLibraryManager _manager;
+
+    // Кэш: ID -> Слабая ссылка на VM
     private readonly ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> _cache = new();
 
+    #endregion
+
+    #region Constructor
+
+    public TrackViewModelFactory(
+        AudioEngine audio,
+        LibraryService library,
+        DownloadService downloads,
+        MusicLibraryManager manager)
+    {
+        _audio = audio;
+        _library = library;
+        _downloads = downloads;
+        _manager = manager;
+    }
+
+    #endregion
+
+    #region Public Methods
+
     /// <summary>
-    /// Получает или создаёт ViewModel для трека
+    /// Возвращает существующую или создает новую ViewModel для трека.
     /// </summary>
     public TrackItemViewModel GetOrCreate(TrackInfo track, Action<TrackInfo>? playAction = null)
     {
-        // Пробуем получить из кэша
-        if (_cache.TryGetValue(track.Id, out var weakRef) &&
-            weakRef.TryGetTarget(out var existing))
+        // 1. Проверяем кэш
+        if (_cache.TryGetValue(track.Id, out var weakRef) && weakRef.TryGetTarget(out var existing))
         {
-            // Обновляем playAction для нового контекста
+            // Обновляем контекст использования
             existing.UpdatePlayAction(playAction);
-
-            // Синхронизируем данные трека
+            
+            // Синхронизируем состояние
             existing.IsLiked = track.IsLiked;
             existing.IsDownloaded = track.IsDownloaded;
-            existing.IsQueueContext = false; // Сбрасываем контекст
-
+            existing.IsQueueContext = false;
+            
             return existing;
         }
 
-        // Создаём новый VM с правильной сигнатурой
+        // 2. Создаем новую
         var vm = new TrackItemViewModel(
             track,
             _audio,
             _library,
             _downloads,
-            _manager,      // ← ИСПРАВЛЕНО: передаём manager
+            _manager,
             playAction);
 
-        // Кэшируем через WeakReference (GC может освободить если не используется)
+        // 3. Сохраняем в кэш
         _cache[track.Id] = new WeakReference<TrackItemViewModel>(vm);
 
         return vm;
     }
 
     /// <summary>
-    /// Создаёт VM специально для контекста очереди
+    /// Создает VM для использования в очереди воспроизведения.
     /// </summary>
     public TrackItemViewModel CreateForQueue(TrackInfo track, Action<TrackInfo>? playAction = null)
     {
@@ -69,9 +94,9 @@ public class TrackViewModelFactory(
     }
 
     /// <summary>
-    /// Очистка неиспользуемых VM
+    /// Удаляет "мертвые" ссылки из кэша (объекты, собранные GC).
     /// </summary>
-    public void CleanupCache()  // ← Переименовано для ясности
+    public void CleanupCache()
     {
         var deadKeys = _cache
             .Where(kvp => !kvp.Value.TryGetTarget(out _))
@@ -82,10 +107,16 @@ public class TrackViewModelFactory(
         {
             _cache.TryRemove(key, out _);
         }
+        
+        if (deadKeys.Count > 0)
+        {
+            Log.Info($"[TrackFactory] Cleaned {deadKeys.Count} dead items.");
+        }
     }
 
     /// <summary>
-    /// Полная очистка кэша
+    /// Полностью очищает кэш. Вызывает Dispose у всех еще живых VM.
+    /// Рекомендуется вызывать при смене профиля или глобальной очистке.
     /// </summary>
     public void Clear()
     {
@@ -93,11 +124,12 @@ public class TrackViewModelFactory(
         {
             if (kvp.Value.TryGetTarget(out var vm))
             {
-                vm.Cleanup();
+                // [FIX] Принудительно убиваем VM, чтобы она отписалась от событий
+                vm.Dispose();
             }
         }
         _cache.Clear();
     }
+
+    #endregion
 }
-
-
