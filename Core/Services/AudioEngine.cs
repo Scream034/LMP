@@ -417,38 +417,54 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// </summary>
     private async Task CleanupCurrentMediaAsync()
     {
+        // --- ИЗМЕНЕНО: Более надежная логика очистки для предотвращения дедлоков ---
+
         var oldMedia = _currentMedia;
         var oldStream = _currentStream;
+        var player = _player; // Создаем локальную копию, чтобы избежать проблем в многопоточной среде
 
-        // Detach references immediately
+        // Немедленно отсоединяем ссылки, чтобы новые операции не использовали старые объекты
         _currentMedia = null;
         _currentStream = null;
 
         if (oldStream == null && oldMedia == null) return;
 
-        // 1. CRITICAL FIX: Cancel stream reads FIRST.
-        // If VLC is blocked waiting for data in Read(), this forces it to return 0 (EOF).
-        // This allows _player.Stop() to actually complete.
+        // 1. CRITICAL FIX: Отменяем все ожидающие операции чтения в стриме.
+        // Это заставит любой заблокированный вызов Read() немедленно вернуться с ошибкой или 0,
+        // что разблокирует внутренние потоки VLC.
         try
         {
             oldStream?.CancelPendingReads();
         }
-        catch { }
-
-        // 2. Now it is safe to Stop VLC (it shouldn't hang now)
-        if (_player != null && _player.State != VLCState.Stopped)
+        catch (ObjectDisposedException) { /* Игнорируем, стрим уже уничтожен */ }
+        catch (Exception ex)
         {
-            // Still run in Task.Run to be safe, but now it will finish quickly
-            await Task.Run(() => Try(_player.Stop));
+            Log.Warn($"[AudioEngine] Error in CancelPendingReads: {ex.Message}");
         }
 
-        // 3. Perform full cleanup (File closing, saving metadata) in background
+        // 2. NEW: Отсоединяем медиа-объект от плеера ПЕРЕД вызовом Stop().
+        // Это важнейший шаг, который говорит VLC "забыть" о старом стриме,
+        // предотвращая попытки чтения из него во время остановки.
+        if (player != null && player.Media == oldMedia)
+        {
+            player.Media = null;
+        }
+
+        // 3. Теперь безопасно останавливаем плеер. Он больше не привязан к старому стриму и не должен зависнуть.
+        if (player != null && player.State != VLCState.Stopped && player.State != VLCState.Error)
+        {
+            // Запускаем в фоновом потоке, но ждем завершения.
+            await Task.Run(() => Try(player.Stop));
+        }
+
+        // 4. Запускаем полную очистку ресурсов (закрытие файла, сохранение метаданных)
+        // в фоновом режиме, не блокируя основной поток.
         _ = Task.Run(() =>
         {
             try
             {
-                // Small delay to ensure VLC has fully exited its callbacks
-                Thread.Sleep(50);
+                // Небольшая задержка, чтобы дать VLC время полностью завершить свои внутренние обратные вызовы
+                Thread.Sleep(100);
                 oldStream?.Dispose();
                 oldMedia?.Dispose();
             }
@@ -826,7 +842,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             {
                 await SeekAsync(TimeSpan.Zero);
             }
-        } finally
+        }
+        finally
         {
             _isNavigating = false;
             _navigationLock.Release();
@@ -1013,22 +1030,27 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, CancellationToken ct)
     {
-        // 1. Check persistence cache FIRST (Skip Network if Fully Cached)
-        // This solves the "Requesting..." lag when network is bad but file is on disk.
+        // 1. ИЗМЕНЕНО: Проверяем кэш и сразу читаем сохраненный формат
         if (_cacheManager.IsFullyCached(track.Id))
         {
             var meta = _cacheManager.TryGetMetadata(track.Id);
-            if (meta != null && meta.ContentLength > 0)
+            // Проверяем, что в метаданных есть информация о формате (для совместимости со старым кэшем)
+            if (meta != null && meta.ContentLength > 0 && !string.IsNullOrEmpty(meta.Codec))
             {
-                Log.Info($"[AudioEngine] Track {track.Id} is fully cached. Skipping API refresh.");
-                // Return cached details. URL might be old, but MemoryFirstCachingStream won't use it 
-                // if the file is fully on disk.
+                Log.Info($"[AudioEngine] Track {track.Id} is fully cached. Using saved format: {meta.Codec}/{meta.Bitrate}kbps");
+
+                // Заполняем временные поля в TrackInfo для отображения в UI
+                track.CachedBitrate = meta.Bitrate;
+                track.CachedCodec = meta.Codec;
+                track.CachedContainer = meta.Container;
+
+                // Возвращаем данные из мета-файла, а не из полей TrackInfo
                 return new StreamDetails(meta.SourceUrl, meta.ContentLength,
-                    track.CachedBitrate, track.CachedCodec, track.CachedContainer);
+                    meta.Bitrate, meta.Codec, meta.Container);
             }
         }
 
-        // 2. Normal flow for non-cached tracks
+        // 2. Обычный путь, если трек не закэширован или в кэше нет инфо о формате
         bool needFresh = string.IsNullOrEmpty(track.StreamUrl)
             || string.IsNullOrEmpty(track.CachedCodec)
             || track.CachedBitrate <= 0;
@@ -1047,9 +1069,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (!result.HasValue) return null;
 
+            // Обновляем временные поля в объекте TrackInfo
             track.CachedCodec = result.Value.Codec;
             track.CachedBitrate = result.Value.Bitrate;
             track.CachedContainer = result.Value.Container;
+
+            // 3. Сохраняем полученную информацию о формате в .meta файл кэша
+            _cacheManager.UpdateStreamInfo(track.Id, result.Value.Codec, result.Value.Bitrate, result.Value.Container);
 
             return new StreamDetails(result.Value.Url, result.Value.Size,
                 result.Value.Bitrate, result.Value.Codec, result.Value.Container);

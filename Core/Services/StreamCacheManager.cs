@@ -13,6 +13,9 @@ public class StreamCacheMetadata
     public DateTime CreatedAt { get; set; }
     public DateTime LastAccessedAt { get; set; }
     public string RangesJson { get; set; } = "[]";
+    public string Codec { get; set; } = "";
+    public int Bitrate { get; set; }
+    public string Container { get; set; } = "";
 }
 
 public class StreamCacheManager : IDisposable
@@ -65,7 +68,7 @@ public class StreamCacheManager : IDisposable
     public StreamCacheMetadata LoadOrCreateMetadata(string trackId, string url, long contentLength)
     {
         var meta = TryGetMetadata(trackId);
-        
+
         if (meta != null && meta.ContentLength == contentLength)
         {
             meta.LastAccessedAt = DateTime.UtcNow;
@@ -114,6 +117,19 @@ public class StreamCacheManager : IDisposable
         }
     }
 
+    public void UpdateStreamInfo(string trackId, string codec, int bitrate, string container)
+    {
+        var meta = TryGetMetadata(trackId);
+        if (meta != null)
+        {
+            meta.Codec = codec;
+            meta.Bitrate = bitrate;
+            meta.Container = container;
+            meta.LastAccessedAt = DateTime.UtcNow;
+            SaveMetadata(trackId, meta);
+        }
+    }
+
     public RangeMap LoadRanges(string trackId)
     {
         var meta = TryGetMetadata(trackId);
@@ -124,7 +140,7 @@ public class StreamCacheManager : IDisposable
     {
         var meta = TryGetMetadata(trackId);
         if (meta == null) return false;
-        
+
         if (!File.Exists(GetCachePath(trackId))) return false;
 
         var ranges = RangeMap.Deserialize(meta.RangesJson);
@@ -142,7 +158,7 @@ public class StreamCacheManager : IDisposable
                 .ToList();
 
             long totalSize = files.Sum(f => f.Length);
-            
+
             if (totalSize <= _maxCacheSizeBytes) return;
 
             Log.Info($"Cache size {totalSize / 1024 / 1024}MB exceeds limit, cleaning...");
