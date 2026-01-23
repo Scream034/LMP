@@ -16,7 +16,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase, IDisposable
     private readonly Action<Core.Models.Playlist> _addToQueueAction;
     private readonly Func<string, Task>? _onDelete;
     
-    // [FIX] Явный делегат для отписки
+    // Явный делегат для отписки
     private readonly EventHandler<string> _languageChangedHandler;
     
     private bool _isDisposed;
@@ -96,7 +96,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase, IDisposable
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)));
 
-        // [FIX] Сохраняем обработчик и подписываемся
+        // Сохраняем обработчик и подписываемся
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
     }
@@ -113,7 +113,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase, IDisposable
         if (_isDisposed) return;
         _isDisposed = true;
 
-        // [FIX] Отписка от статического события
+        // Отписка от статического события
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
 
         GC.SuppressFinalize(this);

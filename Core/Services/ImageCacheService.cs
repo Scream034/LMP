@@ -121,7 +121,7 @@ public sealed class ImageCacheService : IDisposable
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
-        // [FIX] Вместо Dispose вызываем GC, чтобы безопасно собрать неиспользуемые битмапы
+        // Вместо Dispose вызываем GC, чтобы безопасно собрать неиспользуемые битмапы
         GC.Collect(2, GCCollectionMode.Optimized);
         Log.Info("Memory cache cleared.");
     }
@@ -173,7 +173,7 @@ public sealed class ImageCacheService : IDisposable
                     // Грузим с диска
                     if (File.Exists(diskPath))
                     {
-                        // [FIX] Загрузка Bitmap должна быть в try-block с Dispose стрима
+                        // Загрузка Bitmap должна быть в try-block с Dispose стрима
                         return await Task.Run(() =>
                         {
                             try
@@ -230,7 +230,7 @@ public sealed class ImageCacheService : IDisposable
             {
                 var oldest = _lruOrder.Last!.Value;
                 _lruOrder.RemoveLast();
-                // [FIX] Просто удаляем из словаря, не вызывая Dispose.
+                // Просто удаляем из словаря, не вызывая Dispose.
                 // Ссылка на Bitmap пропадет, и он будет собран GC, когда перестанет использоваться в UI.
                 _memoryCache.TryRemove(oldest, out _);
             }

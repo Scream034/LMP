@@ -108,7 +108,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ShuffleEnabled = library.Data.ShuffleEnabled;
         RepeatMode = library.Data.RepeatMode;
         _volumePercent = NormalizeVolume(library.Data.Volume);
-        
+
         LibVLCSharp.Shared.Core.Initialize();
         _libVLC = new LibVLC(
             "--no-video", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
@@ -625,75 +625,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// <summary>
     /// Внутренний метод перехода на следующий трек
     /// </summary>
-    /// <param name="userInitiated">true если вызвано пользователем (кнопка Next), false если автоматически (трек закончился)</param>
-    private async Task PlayNextAsync(bool userInitiated)
-    {
-        if (_isDisposed) return;
-
-        if (!await _commandLock.WaitAsync(100))
-        {
-            Log.Warn("[AudioEngine] PlayNextAsync skipped - another command in progress");
-            return;
-        }
-
-        try
-        {
-            // RepeatOne работает ТОЛЬКО при автоматическом окончании трека
-            if (!userInitiated && RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
-            {
-                Log.Info("[AudioEngine] RepeatOne: Restarting current track");
-                await PlayCurrentIndexInternalAsync();
-                return;
-            }
-
-            bool hasNext = false;
-            lock (_queue)
-            {
-                if (_queue.Count == 0) return;
-
-                if (_currentIndex + 1 < _queue.Count)
-                {
-                    _currentIndex++;
-                    hasNext = true;
-                    Log.Info($"[AudioEngine] Next track: index {_currentIndex}");
-                }
-                else if (RepeatMode == RepeatMode.RepeatAll)
-                {
-                    _currentIndex = 0;
-                    hasNext = true;
-                    Log.Info("[AudioEngine] RepeatAll: Back to first track");
-                }
-                else
-                {
-                    Log.Info("[AudioEngine] Queue ended");
-                }
-            }
-
-            if (hasNext)
-            {
-                await PlayCurrentIndexInternalAsync();
-            }
-            else
-            {
-                // Освобождаем лок перед вызовом Stop (который тоже может использовать лок)
-                _commandLock.Release();
-                Stop();
-                return; // Важно: выходим, т.к. лок уже освобожден
-            }
-        }
-        finally
-        {
-            // Проверяем, не был ли лок уже освобожден
-            if (_commandLock.CurrentCount == 0)
-            {
-                _commandLock.Release();
-            }
-        }
-    }
-
-    /// <summary>
-    /// Внутренний метод перехода на следующий трек
-    /// </summary>
     private async Task PlayNextInternalAsync(bool userInitiated)
     {
         // RepeatOne работает ТОЛЬКО при автоматическом окончании трека
@@ -1167,7 +1098,26 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _library.Save();
     }
 
-    private static void RaiseEvent(Action action) => Try(action);
+    private static void RaiseEvent(Action action)
+    {
+        try
+        {
+            // Гарантируем выполнение на UI потоке
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            {
+                action();
+            }
+            else
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(action);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[AudioEngine] Event error: {ex.Message}");
+        }
+    }
+
     private static void Try(Action action) { try { action(); } catch { } }
     private static T TryGet<T>(Func<T> func, T fallback = default!) { try { return func(); } catch { return fallback; } }
 

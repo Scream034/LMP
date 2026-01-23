@@ -132,12 +132,12 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     {
         lock (_syncRoot)
         {
-            return _allItems.Select(GetItemId).ToList();
+            return [.. _allItems.Select(GetItemId)];
         }
     }
 
     /// <summary>
-    /// [FIX] Безопасно возвращает снимок всех данных (для кэширования).
+    /// Безопасно возвращает снимок всех данных (для кэширования).
     /// Используйте это вместо обращения к Items или _allItems из фоновых потоков.
     /// </summary>
     protected List<TSource> GetItemsSnapshot()

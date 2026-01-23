@@ -75,7 +75,7 @@
   "Playlist_Type": "ПЛЕЙЛИСТ",
   "Playlist_TracksCount": "трек|трека|треков",
   "Playlist_PlayAll": "Слушать всё",
-  "Playlist_Shuffle": "Перемешать",
+  "Playlist_ShufflePlay": "Перемешать",
   "Playlist_DownloadAll": "Скачать всё",
   "Playlist_Liked": "Любимое",
   "Playlist_CannotDeleteLiked": "Нельзя удалить плейлист «Любимое».",

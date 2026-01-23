@@ -22,12 +22,12 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
 
-    // [FIX] Поля для хранения делегатов событий (для корректной отписки)
+    // Поля для хранения делегатов событий (для корректной отписки)
     private readonly EventHandler<string> _languageChangedHandler;
     private readonly Action _authStateChangedHandler;
     private readonly Action _fakeAccountChangedHandler;
     
-    // [FIX] Флаг освобождения ресурсов
+    // Флаг освобождения ресурсов
     private bool _isDisposed;
 
     #endregion
@@ -238,7 +238,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         LoadSettings();
         UpdateAuthState();
 
-        // [FIX] Инициализация обработчиков событий
+        // Инициализация обработчиков событий
         _languageChangedHandler = (_, _) =>
         {
             RaiseAccountPropertiesChanged();
@@ -253,14 +253,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         _fakeAccountChangedHandler = RaiseAccountPropertiesChanged;
 
-        // [FIX] Подписка на события
+        // Подписка на события
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
         _auth.OnAuthStateChanged += _authStateChangedHandler;
         _library.OnFakeAccountChanged += _fakeAccountChangedHandler;
 
         InitializeReactiveSubscriptions();
 
-        // [FIX] Прямая инициализация команд в конструкторе (исправляет CS0206 и CS8618)
+        // Прямая инициализация команд в конструкторе (исправляет CS0206 и CS8618)
         SetFakeAccountCommand = ReactiveCommand.CreateFromTask(SetFakeAccountAsync);
         ClearFakeAccountCommand = ReactiveCommand.Create(ClearFakeAccount);
         BrowseDownloadPathCommand = ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync);
@@ -532,7 +532,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (_isDisposed) return;
         _isDisposed = true;
 
-        // [FIX] Отписка от событий
+        // Отписка от событий
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
         _auth.OnAuthStateChanged -= _authStateChangedHandler;
         _library.OnFakeAccountChanged -= _fakeAccountChangedHandler;

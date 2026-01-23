@@ -4,6 +4,8 @@
     xmlns:asyncImage="using:AsyncImageLoader"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:controls="using:MyLiteMusicPlayer.UI.Controls"
+    xmlns:i="using:Avalonia.Xaml.Interactivity"
+    xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
     x:Class="MyLiteMusicPlayer.Features.Playlist.PlaylistView"
     x:DataType="vm:PlaylistViewModel"
     x:CompileBindings="True">
@@ -16,7 +18,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- HEADER -->
+        <!-- HEADER (Оставлен без изменений) -->
         <Border Grid.Row="0"
             BorderBrush="{StaticResource BgHighlightBrush}"
             BorderThickness="0,0,0,1"
@@ -27,9 +29,7 @@
                 HorizontalAlignment="Left" VerticalAlignment="Bottom">
 
                 <Grid RowDefinitions="*, Auto" Width="800">
-
                     <Grid Grid.Row="0" ColumnDefinitions="Auto, *" Margin="0,0,0,16">
-                        <!-- Playlist Cover -->
                         <Border Grid.Column="0" Width="190" Height="190" CornerRadius="8"
                             ClipToBounds="True" Background="{StaticResource BgSkeletonBrush}"
                             BoxShadow="{StaticResource CardShadow}">
@@ -49,27 +49,14 @@
                             </Panel>
                         </Border>
 
-                        <!-- Metadata -->
                         <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
                             <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
                                 Foreground="{StaticResource TextSecondaryBrush}" LetterSpacing="1" />
-
-                            <!-- ИСПРАВЛЕНИЕ ОБРЕЗАНИЯ ТЕКСТА:
-                                 1. LineHeight удален.
-                                 2. Padding="0,0,0,12" (снизу) дает место для хвостиков букв р, у, д.
-                                 3. ClipToBounds="False" разрешает рисовать за пределами блока. -->
-                            <TextBlock Text="{Binding PlaylistName}"
-                                FontSize="48"
-                                FontWeight="Black"
-                                Margin="0,4,0,0"
-                                Padding="0,0,0,12"
-                                TextWrapping="Wrap"
-                                MaxLines="2"
+                            <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black"
+                                Margin="0,4,0,0" Padding="0,0,0,12" TextWrapping="Wrap" MaxLines="2"
                                 ClipToBounds="False" />
-
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <TextBlock Text="{Binding FormattedTrackCount}"
-                                    FontWeight="SemiBold"
+                                <TextBlock Text="{Binding FormattedTrackCount}" FontWeight="SemiBold"
                                     Foreground="{StaticResource TextPrimaryBrush}" />
                                 <TextBlock Text="•" Foreground="{StaticResource TextSecondaryBrush}" />
                                 <TextBlock Text="{Binding FormattedDuration}"
@@ -78,11 +65,8 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- В блоке Actions -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="24"
                         VerticalAlignment="Center">
-
-                        <!-- Play All -->
                         <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="56"
                             Height="56">
                             <Panel>
@@ -94,8 +78,6 @@
                                     IsVisible="{Binding IsPlayingThisPlaylist}" />
                             </Panel>
                         </Button>
-
-                        <!-- Shuffle -->
                         <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}"
                             ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
                             <mi:MaterialIcon Kind="ShuffleVariant" Width="24" Height="24"
@@ -107,21 +89,15 @@
                                 </mi:MaterialIcon.Transitions>
                             </mi:MaterialIcon>
                         </Button>
-
-                        <!-- НОВАЯ КНОПКА: Add to Queue -->
                         <Button Classes="icon-btn" Command="{Binding AddToQueueCommand}"
                             ToolTip.Tip="{Binding L[Queue_Add]}">
                             <mi:MaterialIcon Kind="PlaylistPlus" Width="24" Height="24" />
                         </Button>
-
-                        <!-- Download -->
                         <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}"
                             ToolTip.Tip="Download All">
                             <mi:MaterialIcon Kind="Download" Width="24" Height="24"
                                 Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                         </Button>
-
-                        <!-- Sync -->
                         <Button Classes="icon-btn" Command="{Binding RefreshPlaylistCommand}"
                             IsVisible="{Binding IsCloud}" ToolTip.Tip="Sync with YouTube">
                             <mi:MaterialIcon Kind="Sync" Width="24" Height="24" />
@@ -131,13 +107,8 @@
             </Viewbox>
         </Border>
 
-        <!-- SPLITTER -->
-        <GridSplitter Grid.Row="1"
-            ResizeDirection="Rows"
-            Background="Transparent"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Stretch"
-            ShowsPreview="False">
+        <GridSplitter Grid.Row="1" ResizeDirection="Rows" Background="Transparent"
+            HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ShowsPreview="False">
             <GridSplitter.Template>
                 <ControlTemplate>
                     <Border Background="Transparent" Padding="0,2" Cursor="SizeNorthSouth">
@@ -148,15 +119,24 @@
             </GridSplitter.Template>
         </GridSplitter>
 
-        <!-- LIST -->
-        <controls:TrackListControl Grid.Row="2" Margin="24,0"
-            Items="{Binding Items}"
-            IsLoading="{Binding IsLoading}"
-            IsLoadingMore="{Binding IsLoadingMore}"
-            IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
-            ReachedEnd="{Binding ReachedEnd}"
-            LoadMoreCommand="{Binding LoadMoreCommand}"
-            UseInternalScroll="True"
-            EnableSmoothLoading="{Binding EnableSmoothLoading}" />
+        <!-- Задача 2: LIST AREA
+             Оборачиваем TrackListControl в ScrollViewer и ставим UseInternalScroll="False".
+             Это позволяет футеру (loading/end of list) быть частью прокручиваемого контента,
+             а не прилипать к низу Grid.Row. -->
+        <ScrollViewer Grid.Row="2" Margin="24,0">
+            <i:Interaction.Behaviors>
+                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
+            </i:Interaction.Behaviors>
+
+            <controls:TrackListControl
+                Items="{Binding Items}"
+                IsLoading="{Binding IsLoading}"
+                IsLoadingMore="{Binding IsLoadingMore}"
+                IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
+                ReachedEnd="{Binding ReachedEnd}"
+                LoadMoreCommand="{Binding LoadMoreCommand}"
+                UseInternalScroll="False" 
+                EnableSmoothLoading="{Binding EnableSmoothLoading}" />
+        </ScrollViewer>
     </Grid>
 </UserControl>

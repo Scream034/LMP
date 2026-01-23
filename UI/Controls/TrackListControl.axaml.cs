@@ -17,7 +17,7 @@ public partial class TrackListControl : UserControl
 {
     #region Fields
 
-    // [FIX] Храним ссылку на обработчик события для корректной отписки
+    // Храним ссылку на обработчик события для корректной отписки
     private readonly EventHandler<string> _languageChangedHandler;
 
     #endregion
@@ -203,7 +203,7 @@ public partial class TrackListControl : UserControl
     {
         InitializeComponent();
 
-        // [FIX] Инициализируем обработчик, но НЕ подписываемся здесь.
+        // Инициализируем обработчик, но НЕ подписываемся здесь.
         // Подписка происходит только когда контрол присоединен к дереву.
         _languageChangedHandler = (_, _) =>
         {
@@ -224,7 +224,7 @@ public partial class TrackListControl : UserControl
 
     #region Lifecycle Methods
 
-    // [FIX] Подписываемся на события только когда контрол активен
+    // Подписываемся на события только когда контрол активен
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
@@ -232,7 +232,7 @@ public partial class TrackListControl : UserControl
         UpdateLocalizedTexts();
     }
 
-    // [FIX] Обязательно отписываемся при удалении из дерева, чтобы избежать утечек памяти
+    // Обязательно отписываемся при удалении из дерева, чтобы избежать утечек памяти
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;

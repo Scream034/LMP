@@ -10,11 +10,10 @@ using System.Reactive.Linq;
 
 namespace MyLiteMusicPlayer.Features.Home;
 
-/// <summary>
-/// ViewModel для домашней страницы с категориями и треками.
-/// </summary>
 public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
+    // ... (Остальной код без изменений: поля, конструктор, FetchMore) ...
+
     #region Constants
 
     private const int DefaultBatchSize = 30;
@@ -131,7 +130,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         if (result.Count > 0)
         {
-            // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
             var allTracks = GetItemsSnapshot().Concat(result).ToList();
             _ = _searchCache.SetAsync(_currentQuery, allTracks);
             var imageUrls = result.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
@@ -145,6 +143,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #region Private Methods
 
+    // ... (Методы LoadTracksAsync, InitializeCategories, etc без изменений) ...
     private async Task LoadTracksAsync(bool force = false)
     {
         var category = SelectedCategory;
@@ -227,14 +226,17 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         }
         catch { }
     }
-
+    
     private void PlayWithContext(TrackInfo track)
     {
-        var tracks = Items.Select(x => x.Track).ToList();
-        _ = _audio.StartQueueAsync(tracks, track);
+        // Задача 1: Не добавляем весь список Home в очередь.
+        // Используем PlayTrackAsync, который очищает очередь и играет только один трек.
+        _ = _audio.PlayTrackAsync(track);
+        
+        // Сохраняем в историю (Recently Played)
         LibService.AddToRecentlyPlayed(track);
     }
-
+    
     private void UpdateGreeting()
     {
         var hour = DateTime.Now.Hour;

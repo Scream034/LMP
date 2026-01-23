@@ -143,7 +143,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
         AddToQueueCommand = ReactiveCommand.Create(() =>
         {
-            // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+            // Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
             _audio.EnqueueRange(GetItemsSnapshot());
         }, hasTracks);
 
@@ -192,7 +192,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     private void PlayAll()
     {
-        // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+        // Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
         var allTracks = GetItemsSnapshot();
         if (allTracks.Count == 0) return;
 
@@ -220,7 +220,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     private void ToggleShuffle()
     {
-        // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+        // Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
         var allTracks = GetItemsSnapshot();
         if (allTracks.Count == 0) return;
 
@@ -243,7 +243,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     private void DownloadAll()
     {
         IsDownloadingActive = true;
-        // [FIX] Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
+        // Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
         foreach (var track in GetItemsSnapshot().Where(t => !t.IsDownloaded))
         {
             _downloads.StartDownload(track);

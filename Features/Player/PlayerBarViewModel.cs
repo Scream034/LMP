@@ -44,7 +44,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
 
-    // [FIX] Явные делегаты для событий C#
+    // Явные делегаты для событий C#
     private readonly Action<bool, bool> _playbackStateHandler;
     private readonly Action _queueChangedHandler;
     private readonly Action<TimeSpan> _positionChangedHandler;
@@ -150,7 +150,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         Log.Info($"[PlayerBar] Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
-        // [FIX] Инициализация делегатов
+        // Инициализация делегатов
         _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() => SyncPlaybackState(isPlaying, isPaused));
         _queueChangedHandler = () => Dispatcher.UIThread.Post(UpdateQueueState);
         _maxVolumeChangedHandler = newMax => Dispatcher.UIThread.Post(() => HandleMaxVolumeChanged(newMax));
@@ -171,7 +171,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
              }
         };
 
-        // [FIX] Подписка на события AudioEngine
+        // Подписка на события AudioEngine
         _audio.OnPlaybackStateChanged += _playbackStateHandler;
         _audio.OnQueueChanged += _queueChangedHandler;
         _audio.OnPositionChanged += _positionChangedHandler;
@@ -525,11 +525,11 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         _audio.SaveVolumeNow();
 
-        // [FIX] Остановка таймеров
+        // Остановка таймеров
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
 
-        // [FIX] Отписка от событий через явные делегаты
+        // Отписка от событий через явные делегаты
         _audio.OnPlaybackStateChanged -= _playbackStateHandler;
         _audio.OnQueueChanged -= _queueChangedHandler;
         _audio.OnPositionChanged -= _positionChangedHandler;
@@ -537,7 +537,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnTrackChanged -= _trackChangedHandler;
         _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
 
-        // [FIX] Очистка Rx подписок
+        // Очистка Rx подписок
         _librarySub?.Dispose();
         _downloadProgressSub?.Dispose();
         _nextSub.Dispose();

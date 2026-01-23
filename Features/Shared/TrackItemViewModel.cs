@@ -26,10 +26,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     
     private bool _isDisposed;
 
-    // [FIX] Явное хранение делегатов для гарантированной отписки.
-    // Если использовать лямбды напрямую (audio.Event += (s,e) => ...),
-    // то при отписке (audio.Event -= (s,e) => ...) создается НОВЫЙ делегат,
-    // и старый остается в памяти сервиса, удерживая весь ViewModel.
+    // Делегаты для гарантированной отписки
     private readonly Action<TrackInfo?> _onTrackChangedHandler;
     private readonly Action<bool, bool> _onPlaybackStateHandler;
     private readonly Action<TrackInfo> _onTrackUpdatedHandler;
@@ -39,6 +36,12 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     #endregion
 
     #region Properties
+
+    /// <summary>
+    /// Проверка, не был ли объект уже уничтожен.
+    /// Критично для фабрики, использующей WeakReference.
+    /// </summary>
+    public bool IsDisposed => _isDisposed;
 
     /// <summary>
     /// Данные трека.
@@ -122,9 +125,6 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #region Constructors
 
-    /// <summary>
-    /// Инициализирует новый экземпляр <see cref="TrackItemViewModel"/>.
-    /// </summary>
     public TrackItemViewModel(
         TrackInfo track,
         AudioEngine audio,
@@ -140,29 +140,23 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _manager = manager;
         _onPlay = onPlay;
 
-        // Копируем данные для отображения (immutable поля)
         Title = track.Title;
         Author = track.Author;
         Duration = track.Duration;
         ThumbnailUrl = track.ThumbnailUrl;
 
-        // [FIX] Инициализация делегатов.
-        // Ссылаемся на методы экземпляра. 
-        // Это безопасно, так как мы явно отпишемся в Dispose.
         _onTrackChangedHandler = OnAudioTrackChanged;
         _onPlaybackStateHandler = OnAudioPlaybackStateChanged;
         _onTrackUpdatedHandler = OnLibraryTrackUpdated;
         _onDownloadProgressHandler = OnDownloadProgress;
         _onDownloadCompletedHandler = OnDownloadCompleted;
 
-        // [FIX] Подписка.
         _audio.OnTrackChanged += _onTrackChangedHandler;
         _audio.OnPlaybackStateChanged += _onPlaybackStateHandler;
         _library.OnTrackUpdated += _onTrackUpdatedHandler;
         _downloads.OnProgress += _onDownloadProgressHandler;
         _downloads.OnCompleted += _onDownloadCompletedHandler;
 
-        // Начальное состояние
         IsDownloading = _downloads.IsDownloading(track.Id);
         if (IsDownloading) 
             DownloadProgress = _downloads.GetProgress(track.Id);
@@ -172,7 +166,6 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
         UpdateActiveState(_audio.CurrentTrack, _audio.IsPlaying);
 
-        // Команды
         PlayCommand = ReactiveCommand.CreateFromTask(ExecutePlayAsync);
         ToggleLikeCommand = ReactiveCommand.CreateFromTask(ExecuteToggleLikeAsync);
         AddToQueueCommand = ReactiveCommand.Create(ExecuteAddToQueue);
@@ -197,7 +190,6 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     private void OnLibraryTrackUpdated(TrackInfo updatedTrack)
     {
-        // Проверяем ID, так как событие глобальное
         if (updatedTrack.Id == Id)
         {
             IsLiked = updatedTrack.IsLiked;
@@ -265,26 +257,17 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _audio.Enqueue(Track);
     }
 
-    /// <summary>
-    /// Обновляет действие воспроизведения при переиспользовании VM.
-    /// </summary>
     public void UpdatePlayAction(Action<TrackInfo>? onPlay)
     {
         _onPlay = onPlay;
     }
 
-    /// <summary>
-    /// Принудительно задает состояние активности (используется в очереди).
-    /// </summary>
     public void SetActive(bool isActive)
     {
         IsActive = isActive;
         IsPlaying = isActive && _audio.IsPlaying;
     }
 
-    /// <summary>
-    /// Метод для совместимости, вызывает Dispose.
-    /// </summary>
     public void Cleanup()
     {
         Dispose();
@@ -299,15 +282,12 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         if (_isDisposed) return;
         _isDisposed = true;
 
-        // [FIX] ГАРАНТИРОВАННАЯ ОТПИСКА.
-        // Используем те же экземпляры делегатов, что и при подписке.
         _audio.OnTrackChanged -= _onTrackChangedHandler;
         _audio.OnPlaybackStateChanged -= _onPlaybackStateHandler;
         _library.OnTrackUpdated -= _onTrackUpdatedHandler;
         _downloads.OnProgress -= _onDownloadProgressHandler;
         _downloads.OnCompleted -= _onDownloadCompletedHandler;
         
-        // Помогаем GC
         GC.SuppressFinalize(this);
     }
 

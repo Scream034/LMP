@@ -10,21 +10,16 @@ using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.Features.Search;
 
-/// <summary>
-/// ViewModel для страницы поиска.
-/// Поддерживает поиск YouTube, работу с кэшем и историю.
-/// </summary>
 public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 {
-    #region Constants
+    // ... (Остальной код SearchViewModel без изменений) ...
 
+    #region Constants
     private const int DebounceMs = 300;
     private const int MaxResults = 300;
-
     #endregion
-
+    
     #region Fields
-
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
@@ -37,11 +32,9 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private DateTime _lastSearchTime = DateTime.MinValue;
     
     private bool _isDisposed;
-
     #endregion
 
     #region Properties
-
     private int InitialBatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize * 2 : 50;
     private int ScrollBatchSize => LibService.Data.SearchBatchSize > 0 ? LibService.Data.SearchBatchSize : 30;
     
@@ -51,19 +44,14 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     [Reactive] public bool IsFromCache { get; private set; }
     public bool ShowForceSearchButton => LibService.Data.EnableSearchCache && IsFromCache && !IsLoading;
     public ObservableCollection<string> RecentSearches { get; } = [];
-
     #endregion
 
     #region Commands
-
     public ReactiveCommand<Unit, Unit> SearchCommand { get; }
     public ReactiveCommand<Unit, Unit> ForceSearchCommand { get; }
     public ReactiveCommand<string, Unit> HistoryClickCommand { get; }
     public ReactiveCommand<string, Unit> RemoveHistoryCommand { get; }
-
     #endregion
-
-    #region Constructor
 
     public SearchViewModel(
         YoutubeProvider youtube,
@@ -124,20 +112,14 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             _ = ExecuteSearchAsync(false);
         }
     }
-
+    
     private void LogError(string source, Exception ex)
     {
-        // [FIX] Не логируем отмену как ошибку
         if (ex is OperationCanceledException) return;
-        
         Log.Error($"[{source}] Unhandled error: {ex.Message}");
         ErrorMessage = L["Search_NetworkError"]; 
         IsLoading = false;
     }
-
-    #endregion
-
-    #region Overrides
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
@@ -190,11 +172,9 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 return newTracks;
             }
-            // [FIX] Явно ловим OperationCanceledException и считаем это нормальным выходом,
-            // так как это означает, что пользователь начал новый поиск.
             catch (OperationCanceledException)
             {
-                return []; // Возвращаем пустой список, это не ошибка
+                return []; 
             }
             catch (HttpRequestException)
             {
@@ -210,10 +190,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         return [];
     }
-
-    #endregion
-
-    #region Private Methods
 
     private bool CanExecuteSearch()
     {
@@ -236,14 +212,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             currentCts = _searchCts;
             var ct = currentCts.Token;
             
-            try
-            {
-                _searchSession?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[Search] Session dispose warning (safe to ignore): {ex.Message}");
-            }
+            try { _searchSession?.Dispose(); } catch { }
             _searchSession = null;
 
             CancelLoading();
@@ -281,10 +250,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                 await HandleSearchAsync(ct, forceNetwork);
             }
         }
-        catch (OperationCanceledException)
-        {
-            // Ignore - это нормальное поведение при отмене
-        }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             ErrorMessage = ex.Message;
@@ -292,7 +258,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         }
         finally
         {
-            // Устанавливаем IsLoading в false, только если это была последняя запущенная задача
             if (currentCts == _searchCts && !currentCts!.IsCancellationRequested)
             {
                 IsLoading = false;
@@ -300,6 +265,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             }
         }
     }
+    
+    // ... (Методы HandleDirectUrlAsync, HandlePlaylistAsync, HandleSearchAsync и др. без изменений) ...
 
     private async Task HandleDirectUrlAsync(CancellationToken ct)
     {
@@ -387,38 +354,32 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void UpdateHistoryStorage()
     {
-        LibService.Data.SearchHistory = RecentSearches.ToList();
+        LibService.Data.SearchHistory = [.. RecentSearches];
         LibService.Save();
     }
 
     private void PlayTrackWithContext(TrackInfo track)
     {
-        _ =_audio.StartQueueAsync(Items.Select(x => x.Track), track);
+        // Задача 1: Не добавляем весь результат поиска в очередь.
+        // Очищаем очередь и играем только этот трек.
+        _ = _audio.PlayTrackAsync(track);
+        
+        // Сохраняем в историю
         LibService.AddToRecentlyPlayed(track);
     }
-
-    #endregion
-
-    #region IDisposable
-
+    
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-
         if (disposing)
         {
             _searchCts?.Cancel();
             _searchCts?.Dispose();
             _searchCts = null;
-
             try { _searchSession?.Dispose(); } catch { }
             _searchSession = null;
         }
-
         base.Dispose(disposing);
-
         _isDisposed = true;
     }
-
-    #endregion
 }
