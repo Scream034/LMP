@@ -124,10 +124,7 @@ public partial class YoutubeProvider
 
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(10));
-
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, cts.Token);
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, ct);
             var audioStreams = manifest.GetAudioOnlyStreams()
                 .OrderByDescending(s => s.Bitrate)
                 .ToList();
@@ -162,7 +159,6 @@ public partial class YoutubeProvider
         }
         catch (OperationCanceledException)
         {
-            NotifyError($"[YouTube] [{videoId}] Request timed out");
             return null;
         }
         catch (Exception ex)

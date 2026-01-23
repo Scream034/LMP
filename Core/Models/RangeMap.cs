@@ -3,17 +3,20 @@
 namespace MyLiteMusicPlayer.Core.Models;
 
 /// <summary>
-/// Отслеживает, какие байтовые диапазоны файла уже скачаны.
-/// Поддерживает сохранение/загрузку для persistence между сессиями.
+/// Serializable item for JSON storage
 /// </summary>
+public class RangeItem
+{
+    public long Start { get; set; }
+    public long End { get; set; }
+}
+
 public class RangeMap
 {
-    private readonly List<(long Start, long End)> _ranges = new();
+    // ИСПРАВЛЕНИЕ: Используем класс вместо ValueTuple для надежной сериализации
+    private readonly List<RangeItem> _ranges = new();
     private readonly Lock _lock = new();
 
-    /// <summary>
-    /// Общее количество скачанных байт
-    /// </summary>
     public long DownloadedBytes
     {
         get
@@ -25,9 +28,6 @@ public class RangeMap
         }
     }
 
-    /// <summary>
-    /// Проверяет, скачан ли полностью указанный диапазон
-    /// </summary>
     public bool IsRangeComplete(long start, long end)
     {
         lock (_lock)
@@ -41,67 +41,29 @@ public class RangeMap
         }
     }
 
-    /// <summary>
-    /// Находит первый не скачанный участок в диапазоне
-    /// </summary>
-    public (long Start, long End)? FindMissingRange(long start, long end)
-    {
-        lock (_lock)
-        {
-            long current = start;
-            
-            var sortedRanges = _ranges.OrderBy(r => r.Start).ToList();
-            
-            foreach (var range in sortedRanges)
-            {
-                if (range.Start <= current && range.End > current)
-                {
-                    current = range.End;
-                }
-                else if (range.Start > current)
-                {
-                    return (current, Math.Min(range.Start, end));
-                }
-                
-                if (current >= end)
-                    return null;
-            }
-            
-            if (current < end)
-                return (current, end);
-                
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Помечает диапазон как скачанный
-    /// </summary>
     public void MarkComplete(long start, long end)
     {
         lock (_lock)
         {
-            _ranges.Add((start, end));
+            _ranges.Add(new RangeItem { Start = start, End = end });
             MergeRanges();
         }
     }
 
-    /// <summary>
-    /// Объединяет пересекающиеся диапазоны
-    /// </summary>
     private void MergeRanges()
     {
         if (_ranges.Count < 2) return;
 
         var sorted = _ranges.OrderBy(r => r.Start).ToList();
-        var merged = new List<(long Start, long End)>();
+        var merged = new List<RangeItem>();
 
         var current = sorted[0];
         for (int i = 1; i < sorted.Count; i++)
         {
             if (sorted[i].Start <= current.End)
             {
-                current = (current.Start, Math.Max(current.End, sorted[i].End));
+                // Расширяем текущий диапазон
+                current.End = Math.Max(current.End, sorted[i].End);
             }
             else
             {
@@ -122,15 +84,12 @@ public class RangeMap
     {
         lock (_lock)
         {
-            return _ranges.Count == 1 && 
-                   _ranges[0].Start == 0 && 
+            return _ranges.Count == 1 &&
+                   _ranges[0].Start == 0 &&
                    _ranges[0].End >= totalLength;
         }
     }
 
-    /// <summary>
-    /// Сериализация для сохранения на диск
-    /// </summary>
     public string Serialize()
     {
         lock (_lock)
@@ -139,15 +98,14 @@ public class RangeMap
         }
     }
 
-    /// <summary>
-    /// Десериализация из файла
-    /// </summary>
     public static RangeMap Deserialize(string json)
     {
         var map = new RangeMap();
+        if (string.IsNullOrWhiteSpace(json)) return map;
+
         try
         {
-            var ranges = JsonSerializer.Deserialize<List<(long, long)>>(json);
+            var ranges = JsonSerializer.Deserialize<List<RangeItem>>(json);
             if (ranges != null)
             {
                 lock (map._lock)
@@ -156,12 +114,11 @@ public class RangeMap
                 }
             }
         }
-        catch { }
+        catch (Exception)
+        {
+            // Если JSON старого формата (кортежи), пробуем проигнорировать или восстановить.
+            // Сейчас просто возвращаем пустой, но новый формат (RangeItem) исправит проблему в будущем.
+        }
         return map;
-    }
-
-    public void Clear()
-    {
-        lock (_lock) { _ranges.Clear(); }
     }
 }

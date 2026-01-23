@@ -11,6 +11,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private const int ApiCooldownMs = 200;
     private const int QualitySwitchTimeoutSec = 8;
     private const int MaxHistorySize = 100;
+    private const int RefreshTimeoutS = 60;
 
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;
@@ -48,6 +49,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private volatile bool _streamInfoReady;
     private volatile bool _volumeSavePending;
     private volatile bool _isNavigating;
+    private volatile bool _suppressAutoNext;
 
     // === Properties ===
 
@@ -99,8 +101,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _httpClient = new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-            MaxConnectionsPerServer = 4,
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+            MaxConnectionsPerServer = 3,
             ConnectTimeout = TimeSpan.FromSeconds(5)
         })
         { Timeout = TimeSpan.FromMinutes(5) };
@@ -275,6 +277,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         Log.Info($"[AudioEngine] Playing index {_currentIndex}: {trackToPlay.Title}");
         SyncTrackPreferences(trackToPlay);
 
+        _suppressAutoNext = true; // Говорим плееру: "Я сам меняю трек, не лезь с авто-переключением"
+
         // Отменяем все предыдущие операции
         var oldCts = _cts;
         _cts = new CancellationTokenSource();
@@ -336,37 +340,52 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         });
     }
 
+
     /// <summary>
-    /// Асинхронно очищает текущий медиа и стрим с гарантированным освобождением ресурсов
+    /// Асинхронно очищает текущий медиа и стрим БЕЗ блокировки UI
     /// </summary>
     private async Task CleanupCurrentMediaAsync()
     {
         var oldMedia = _currentMedia;
         var oldStream = _currentStream;
 
+        // Detach references immediately
         _currentMedia = null;
         _currentStream = null;
 
         if (oldStream == null && oldMedia == null) return;
 
-        // Останавливаем плеер
+        // 1. CRITICAL FIX: Cancel stream reads FIRST.
+        // If VLC is blocked waiting for data in Read(), this forces it to return 0 (EOF).
+        // This allows _player.Stop() to actually complete.
+        try
+        {
+            oldStream?.CancelPendingReads();
+        }
+        catch { }
+
+        // 2. Now it is safe to Stop VLC (it shouldn't hang now)
         if (_player != null && _player.State != VLCState.Stopped)
         {
-            Try(_player.Stop);
+            // Still run in Task.Run to be safe, but now it will finish quickly
+            await Task.Run(() => Try(_player.Stop));
         }
 
-        // Очищаем асинхронно но БЕЗ ожидания - ресурсы освободятся сами
+        // 3. Perform full cleanup (File closing, saving metadata) in background
         _ = Task.Run(() =>
         {
-            // Даём VLC время отпустить ресурсы
-            Thread.Sleep(50);
-
-            Try(() => oldStream?.Dispose());
-            Try(() => oldMedia?.Dispose());
+            try
+            {
+                // Small delay to ensure VLC has fully exited its callbacks
+                Thread.Sleep(50);
+                oldStream?.Dispose();
+                oldMedia?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[AudioEngine] Background cleanup error: {ex.Message}");
+            }
         });
-
-        // Небольшая пауза для UI
-        await Task.Delay(30);
     }
 
     public async Task SwitchQualityAsync(string container, int targetBitrate = 0)
@@ -410,6 +429,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         var sw = Stopwatch.StartNew();
 
+        // 1. Stop previous playback immediately
         await StopPlaybackAsync();
 
         MemoryFirstCachingStream? cacheStream = null;
@@ -418,31 +438,42 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            var stream = await GetOrRefreshStreamAsync(track, ct);
-            if (stream == null) throw new Exception("Failed to get stream URL");
-
-            if (_session != session)
+            // 2. Refresh Stream URL
+            // Added specific catch for cancellation to avoid "Failed to get stream URL" error on skip
+            StreamDetails? stream = null;
+            try
             {
-                Log.Info($"[AudioEngine] Session changed ({session} -> {_session}), aborting");
-                return;
+                stream = await GetOrRefreshStreamAsync(track, ct);
             }
+            catch (OperationCanceledException) { return; }
+
+            if (stream == null)
+            {
+                if (ct.IsCancellationRequested) return;
+                throw new Exception("Failed to get stream URL (Network or API error)");
+            }
+
+            if (_session != session) return; // Session check
             ct.ThrowIfCancellationRequested();
 
             SetStreamInfo(stream.Codec, stream.Bitrate, stream.Container);
 
+            // 3. Get Content Length
             long size = stream.Size > 0 ? stream.Size : await TryGetContentLengthAsync(stream.Url, ct);
 
-            if (_session != session) return;
-            ct.ThrowIfCancellationRequested();
+            if (_session != session || ct.IsCancellationRequested) return;
 
+            // 4. Create Stream
             if (size <= 0)
             {
+                // Fallback to direct streaming if size is unknown
                 StartPlayback(new Media(_libVLC, stream.Url, FromType.FromLocation), null, track);
                 return;
             }
 
             cacheStream = new MemoryFirstCachingStream(track.Id, stream.Url, size, _httpClient, _cacheManager);
 
+            // 5. Pre-buffer
             var preBufferResult = await cacheStream.PreBufferAsync(ct);
 
             if (!preBufferResult)
@@ -450,15 +481,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 cacheStream.Dispose();
                 cacheStream = null;
 
-                // Проверяем - это отмена или реальная ошибка?
-                if (ct.IsCancellationRequested || _session != session)
-                {
-                    // Отмена - не показываем ошибку
-                    IsLoading = false;
-                    return;
-                }
-
-                throw new Exception("PreBuffer failed");
+                if (ct.IsCancellationRequested || _session != session) return;
+                throw new Exception("PreBuffer failed (Timeout or Network)");
             }
 
             if (_session != session || ct.IsCancellationRequested)
@@ -467,21 +491,28 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 return;
             }
 
+            // 6. Start Playback
             StartPlayback(new Media(_libVLC, new StreamMediaInput(cacheStream)), cacheStream, track);
             cacheStream = null; // Передали владение
+
             Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");
         }
         catch (OperationCanceledException)
         {
-            // Нормальная отмена - просто выходим без ошибки
             cacheStream?.Dispose();
-            IsLoading = false;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             cacheStream?.Dispose();
-            Log.Error($"[AudioEngine] Error: {ex.Message}");
-            RaiseEvent(() => OnError?.Invoke(ex.Message));
+            // Only log actual errors, not cancellations
+            if (!ct.IsCancellationRequested && _session == session)
+            {
+                Log.Error($"[AudioEngine] Error: {ex.Message}");
+                RaiseEvent(() => OnError?.Invoke(ex.Message));
+            }
+        }
+        finally
+        {
             IsLoading = false;
         }
     }
@@ -502,20 +533,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task StopPlaybackAsync()
     {
-        if (_player == null) return;
-        Try(() => { if (_player.State != VLCState.Stopped) _player.Stop(); });
-
-        var (oldStream, oldMedia) = (_currentStream, _currentMedia);
-        (_currentStream, _currentMedia, _isPlayerReady) = (null, null, false);
-
-        if (oldStream != null || oldMedia != null)
-        {
-            await Task.Run(() =>
-            {
-                Try(() => oldStream?.Dispose());
-                Try(() => oldMedia?.Dispose());
-            });
-        }
+        // Используем тот же неблокирующий метод
+        await CleanupCurrentMediaAsync();
+        _isPlayerReady = false;
     }
 
     public async Task SetPlaybackStateAsync(bool shouldPlay)
@@ -556,6 +576,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void Stop()
     {
+        _suppressAutoNext = true; // Чтобы при Stop() не сработал переход на следующий
         Interlocked.Increment(ref _session);
         Try(() => _cts?.Cancel());
         _ = StopPlaybackAsync();
@@ -921,7 +942,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             await ThrottleApiCall(ct);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(8));
+            cts.CancelAfter(TimeSpan.FromSeconds(RefreshTimeoutS));
 
             var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
             _lastApiCall = DateTime.UtcNow;
@@ -961,6 +982,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcPlaying()
     {
         if (_isDisposed) return;
+        _suppressAutoNext = false; // Возвращаем авто-переход для нормального конца трека
         _isPlayerReady = true;
 
         IsLoading = false;
@@ -992,6 +1014,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcEndReached()
     {
         if (_isDisposed) return;
+        else if (_suppressAutoNext)
+        {
+            Log.Info("[AudioEngine] EndReached ignored (manual navigation)");
+            return;
+        }
 
         Log.Info("[AudioEngine] Track ended, preparing next...");
 
