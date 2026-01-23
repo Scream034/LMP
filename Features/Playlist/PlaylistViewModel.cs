@@ -2,6 +2,7 @@
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.Services;
 using MyLiteMusicPlayer.Core.ViewModels;
+using MyLiteMusicPlayer.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;

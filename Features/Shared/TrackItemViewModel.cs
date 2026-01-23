@@ -1,10 +1,11 @@
 ﻿using System.Reactive;
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.Services;
+using MyLiteMusicPlayer.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Core.ViewModels;
+namespace MyLiteMusicPlayer.Features.Shared;
 
 public class TrackItemViewModel : ViewModelBase
 {

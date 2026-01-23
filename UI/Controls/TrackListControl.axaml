@@ -4,7 +4,7 @@
     xmlns:i="using:Avalonia.Xaml.Interactivity"
     xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Home"
-    xmlns:corevm="using:MyLiteMusicPlayer.Core.ViewModels"
+    xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
     x:Class="MyLiteMusicPlayer.UI.Controls.TrackListControl"
     x:Name="Root"
     x:CompileBindings="True">
@@ -146,7 +146,7 @@
                 </ListBox.Styles>
 
                 <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="corevm:TrackItemViewModel">
+                    <DataTemplate x:DataType="svm:TrackItemViewModel">
                         <Border Classes="track-row" Classes.isActive="{Binding IsActive}">
                             <ContentControl Content="{Binding}" />
                         </Border>

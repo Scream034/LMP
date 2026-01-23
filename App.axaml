@@ -1,7 +1,7 @@
 ﻿<Application xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:MyLiteMusicPlayer"
-    xmlns:vm="using:MyLiteMusicPlayer.Core.ViewModels"
+    xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
     xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
     xmlns:asyncImage="using:AsyncImageLoader"
     xmlns:mi="using:Material.Icons.Avalonia"
@@ -17,7 +17,7 @@
     </Application.Resources>
 
     <Application.DataTemplates>
-        <DataTemplate DataType="{x:Type vm:TrackItemViewModel}" x:CompileBindings="True">
+        <DataTemplate DataType="{x:Type svm:TrackItemViewModel}" x:CompileBindings="True">
             <Panel Classes="track-row"
                 Classes.is-active="{Binding IsActive}"
                 Classes.is-playing="{Binding IsPlaying}"
