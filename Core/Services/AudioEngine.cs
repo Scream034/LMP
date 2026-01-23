@@ -234,112 +234,183 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         await PlayCurrentIndexAsync();
     }
-
     private async Task PlayCurrentIndexAsync()
     {
-        if (_isNavigating) return;
+        if (_isDisposed) return;
 
+        // 1. Захватываем лок только для определения следующего трека
         if (!await _navigationLock.WaitAsync(500))
         {
             Log.Warn("[AudioEngine] PlayCurrentIndexAsync timeout waiting for lock");
             return;
         }
 
+        TrackInfo? trackToPlay;
+        int session;
+
         try
         {
-            await PlayCurrentIndexInternalAsync();
+            if (_isNavigating) return; // Двойная проверка
+            _isNavigating = true;
+
+            lock (_queue)
+            {
+                if (_currentIndex < 0 || _currentIndex >= _queue.Count)
+                {
+                    Log.Warn($"[AudioEngine] Invalid index: {_currentIndex}, queue size: {_queue.Count}");
+                    _isNavigating = false;
+                    return;
+                }
+                trackToPlay = _queue[_currentIndex];
+            }
+
+            if (trackToPlay == null)
+            {
+                Log.Warn("[AudioEngine] Track at current index is null");
+                _isNavigating = false;
+                return;
+            }
+
+            // Получаем "билет" на выполнение этой сессии воспроизведения
+            session = Interlocked.Increment(ref _session);
         }
         finally
         {
+            // 2. ОСВОБОЖДАЕМ ЛОК КАК МОЖНО СКОРЕЕ!
             _navigationLock.Release();
         }
+
+        // 3. Вся долгая работа (остановка, загрузка) происходит уже БЕЗ блокировки
+        await LoadAndPlayTrackAsync(trackToPlay, session);
     }
 
-    private async Task PlayCurrentIndexInternalAsync()
+    private async Task LoadAndPlayTrackAsync(TrackInfo trackToPlay, int session)
     {
-        TrackInfo? trackToPlay;
-        lock (_queue)
+        try
         {
-            if (_currentIndex < 0 || _currentIndex >= _queue.Count)
+            Log.Info($"[AudioEngine] Playing index {_currentIndex}: {trackToPlay.Title}");
+            SyncTrackPreferences(trackToPlay);
+
+            _suppressAutoNext = true;
+
+            // Отменяем предыдущие операции
+            var oldCts = _cts;
+            _cts = new CancellationTokenSource();
+            if (oldCts != null) Try(oldCts.Cancel);
+
+            // Ждём освобождения ресурсов от старого трека
+            await CleanupCurrentMediaAsync();
+
+            // Проверяем, не устарела ли наша сессия, пока мы ждали
+            if (_session != session)
             {
-                Log.Warn($"[AudioEngine] Invalid index: {_currentIndex}, queue size: {_queue.Count}");
-                return;
-            }
-            trackToPlay = _queue[_currentIndex];
-        }
-
-        if (trackToPlay == null)
-        {
-            Log.Warn("[AudioEngine] Track at current index is null");
-            return;
-        }
-
-        Log.Info($"[AudioEngine] Playing index {_currentIndex}: {trackToPlay.Title}");
-        SyncTrackPreferences(trackToPlay);
-
-        _suppressAutoNext = true; // Говорим плееру: "Я сам меняю трек, не лезь с авто-переключением"
-
-        // Отменяем все предыдущие операции
-        var oldCts = _cts;
-        _cts = new CancellationTokenSource();
-        var session = Interlocked.Increment(ref _session);
-
-        if (oldCts != null)
-        {
-            Try(oldCts.Cancel);
-            // Не Dispose сразу - пусть задачи завершатся
-        }
-
-        // Ждём освобождения ресурсов
-        await CleanupCurrentMediaAsync();
-
-        ResetStreamInfo();
-
-        IsLoading = true;
-        CurrentTrack = trackToPlay;
-        _isPlayerReady = false;
-
-        RaiseEvent(() => OnTrackChanged?.Invoke(trackToPlay));
-        RaiseEvent(() => OnQueueChanged?.Invoke());
-
-        var cts = _cts;
-
-        // Запускаем загрузку в фоне
-        _ = Task.Run(async () =>
-        {
-            // Ждём с таймаутом
-            if (!await _loadLock.WaitAsync(2000))
-            {
-                Log.Warn("[AudioEngine] Could not acquire load lock - forcing release");
+                Log.Info("[AudioEngine] Session changed during cleanup, aborting load");
                 return;
             }
 
-            try
+            ResetStreamInfo();
+
+            IsLoading = true;
+            CurrentTrack = trackToPlay;
+            _isPlayerReady = false;
+
+            RaiseEvent(() => OnTrackChanged?.Invoke(trackToPlay));
+            RaiseEvent(() => OnQueueChanged?.Invoke());
+
+            var cts = _cts;
+
+            // Запускаем загрузку в фоне
+            _ = Task.Run(async () =>
             {
-                if (_session != session || cts.IsCancellationRequested)
+                if (!await _loadLock.WaitAsync(2000))
                 {
-                    Log.Info("[AudioEngine] Session changed, aborting load");
+                    Log.Warn("[AudioEngine] Could not acquire load lock - forcing release");
                     return;
                 }
 
-                await PlayTrackInternalAsync(trackToPlay, session, cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                Log.Info("[AudioEngine] Playback cancelled");
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[AudioEngine] PlayTrackInternal error: {ex.Message}");
-                IsLoading = false;
-            }
-            finally
-            {
-                _loadLock.Release();
-            }
-        });
+                try
+                {
+                    // Финальная проверка сессии перед началом загрузки
+                    if (_session != session || cts.IsCancellationRequested)
+                    {
+                        Log.Info("[AudioEngine] Session changed, aborting load");
+                        return;
+                    }
+
+                    await PlayTrackInternalAsync(trackToPlay, session, cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    Log.Info("[AudioEngine] Playback cancelled");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[AudioEngine] PlayTrackInternal error: {ex.Message}");
+                    IsLoading = false;
+                }
+                finally
+                {
+                    _loadLock.Release();
+                }
+            });
+        }
+        finally
+        {
+            // Вне зависимости от результата, помечаем, что навигация завершена
+            _isNavigating = false;
+        }
     }
 
+    /// <summary>
+    /// Внутренний метод для перезапуска текущего трека.
+    /// ВАЖНО: Вызывается ТОЛЬКО из кода, который уже удерживает _navigationLock.
+    /// </summary>
+    private async Task RestartCurrentTrackInternalAsync()
+    {
+        TrackInfo? trackToPlay = CurrentTrack;
+        if (trackToPlay == null)
+        {
+            Log.Warn("[AudioEngine] Restart requested, but CurrentTrack is null.");
+            return;
+        }
+
+        Log.Info($"[AudioEngine] Restarting track: {trackToPlay.Title}");
+
+        // Используем тот же механизм сессий для отмены старых операций
+        var session = Interlocked.Increment(ref _session);
+        _suppressAutoNext = true;
+
+        var oldCts = _cts;
+        _cts = new CancellationTokenSource();
+        if (oldCts != null) Try(oldCts.Cancel);
+
+        await CleanupCurrentMediaAsync();
+
+        if (_session != session)
+        {
+            Log.Info("[AudioEngine] Session changed during restart cleanup, aborting.");
+            return;
+        }
+
+        ResetStreamInfo();
+        _isPlayerReady = false;
+
+        var cts = _cts;
+
+        // Запускаем загрузку точно так же, как в основном методе
+        _ = Task.Run(async () =>
+        {
+            if (!await _loadLock.WaitAsync(2000)) return;
+            try
+            {
+                if (_session != session || cts.IsCancellationRequested) return;
+                await PlayTrackInternalAsync(trackToPlay, session, cts.Token);
+            }
+            catch (OperationCanceledException) { Log.Info("[AudioEngine] Restart cancelled."); }
+            catch (Exception ex) { Log.Error($"[AudioEngine] Restart error: {ex.Message}"); }
+            finally { _loadLock.Release(); }
+        });
+    }
 
     /// <summary>
     /// Асинхронно очищает текущий медиа и стрим БЕЗ блокировки UI
@@ -611,22 +682,44 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_isDisposed || _isNavigating) return;
 
-        if (!await _navigationLock.WaitAsync(50))
+        // Блокировка здесь больше не нужна, она теперь внутри PlayCurrentIndexAsync
+        // Но мы можем использовать _isNavigating как быстрый флаг
+
+        bool hasNext = false;
+        lock (_queue)
         {
-            Log.Info("[AudioEngine] PlayNextAsync skipped - navigation in progress");
-            return;
+            if (_queue.Count == 0) return;
+
+            if (RepeatMode == RepeatMode.RepeatOne)
+            {
+                // При ручном переключении RepeatOne должен сбрасываться на обычное "дальше"
+            }
+
+            if (_currentIndex + 1 < _queue.Count)
+            {
+                _currentIndex++;
+                hasNext = true;
+                Log.Info($"[AudioEngine] Next track: index {_currentIndex}");
+            }
+            else if (RepeatMode == RepeatMode.RepeatAll)
+            {
+                _currentIndex = 0;
+                hasNext = true;
+                Log.Info("[AudioEngine] RepeatAll: Back to first track");
+            }
+            else
+            {
+                Log.Info("[AudioEngine] Queue ended");
+            }
         }
 
-        _isNavigating = true;
-
-        try
+        if (hasNext)
         {
-            await PlayNextInternalAsync(userInitiated: true);
+            await PlayCurrentIndexAsync();
         }
-        finally
+        else
         {
-            _isNavigating = false;
-            _navigationLock.Release();
+            Stop();
         }
     }
 
@@ -639,7 +732,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (!userInitiated && RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
         {
             Log.Info("[AudioEngine] RepeatOne: Restarting current track");
-            await PlayCurrentIndexInternalAsync();
+            await RestartCurrentTrackInternalAsync();
             return;
         }
 
@@ -668,13 +761,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (hasNext)
         {
-            await PlayCurrentIndexInternalAsync();
+            await RestartCurrentTrackInternalAsync();
         }
         else
         {
             Stop();
         }
     }
+
 
     /// <summary>
     /// Переключает на предыдущий трек
@@ -683,6 +777,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_isDisposed || _isNavigating) return;
 
+        // Захватываем лок в начале, чтобы обе ветки были потокобезопасны
         if (!await _navigationLock.WaitAsync(50))
         {
             Log.Info("[AudioEngine] PlayPreviousAsync skipped - navigation in progress");
@@ -693,12 +788,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         try
         {
+
             // Если проиграло более 3 сек, возвращаемся в начало трека
             if (CurrentPosition.TotalSeconds > 3 && _isPlayerReady)
             {
                 if (_player != null)
                 {
-                    _player.Time = 0;
+                    await SeekAsync(TimeSpan.Zero);
                 }
                 return;
             }
@@ -724,14 +820,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (hasPrev)
             {
-                await PlayCurrentIndexInternalAsync();
+                await RestartCurrentTrackInternalAsync();
             }
             else if (_isPlayerReady && _player != null)
             {
-                _player.Time = 0;
+                await SeekAsync(TimeSpan.Zero);
             }
-        }
-        finally
+        } finally
         {
             _isNavigating = false;
             _navigationLock.Release();
