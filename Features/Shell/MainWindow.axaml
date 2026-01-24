@@ -1,4 +1,4 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:shell="using:MyLiteMusicPlayer.Features.Shell"
     xmlns:home="using:MyLiteMusicPlayer.Features.Home"
@@ -21,7 +21,7 @@
     Title="Lite Music Player"
     Width="1200" Height="800"
     MinWidth="900" MinHeight="600"
-    Background="{StaticResource BgPrimaryBrush}"
+    Background="{DynamicResource BgPrimaryBrush}"
     WindowStartupLocation="CenterScreen">
 
     <Grid RowDefinitions="*, Auto">
@@ -30,7 +30,7 @@
         <Grid Grid.Row="0" ColumnDefinitions="240, *">
 
             <!-- SIDEBAR -->
-            <Border Grid.Column="0" Background="{StaticResource BgSecondaryBrush}"
+            <Border Grid.Column="0" Background="{DynamicResource BgSecondaryBrush}"
                 Padding="16,16,16,16">
                 <Panel>
                     <!-- Sidebar Items (Navigation) -->
@@ -39,10 +39,10 @@
                         <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12"
                             Margin="4,4,4,28">
                             <mi:MaterialIcon Kind="Music" Width="36" Height="36"
-                                Foreground="{StaticResource AccentBrush}" />
+                                Foreground="{DynamicResource AccentBrush}" />
                             <TextBlock Text="LitePlayer" FontSize="22" FontWeight="Bold"
                                 VerticalAlignment="Center"
-                                Foreground="{StaticResource TextPrimaryBrush}" />
+                                Foreground="{DynamicResource TextPrimaryBrush}" />
                         </StackPanel>
 
                         <!-- Nav Buttons -->
@@ -125,18 +125,18 @@
                                 Spacing="24">
                                 <Panel Width="80" Height="80" HorizontalAlignment="Center">
                                     <Border Width="80" Height="80" CornerRadius="40"
-                                        Background="{StaticResource AccentBrush}" />
+                                        Background="{DynamicResource AccentBrush}" />
                                     <mi:MaterialIcon Kind="CloudSync" Width="40" Height="40"
-                                        Foreground="{StaticResource TextDarkBrush}"
+                                        Foreground="{DynamicResource TextDarkBrush}"
                                         HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Panel>
                                 <StackPanel Spacing="6" HorizontalAlignment="Center">
                                     <TextBlock Text="{Binding NavigationLockReason}" FontSize="16"
                                         FontWeight="Bold"
-                                        Foreground="{StaticResource TextPrimaryBrush}"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
                                         TextAlignment="Center" />
                                     <TextBlock Text="{Binding L[Nav_PleaseWait]}" FontSize="13"
-                                        Foreground="{StaticResource TextMutedBrush}"
+                                        Foreground="{DynamicResource TextMutedBrush}"
                                         TextAlignment="Center" />
                                 </StackPanel>
                             </StackPanel>
@@ -146,7 +146,7 @@
             </Border>
 
             <!-- CONTENT AREA -->
-            <Border Grid.Column="1" Background="{StaticResource BgPrimaryBrush}" ClipToBounds="True">
+            <Border Grid.Column="1" Background="{DynamicResource BgPrimaryBrush}" ClipToBounds="True">
                 <Panel>
                     <ContentControl Content="{Binding CurrentPage}">
                         <ContentControl.ContentTemplate>

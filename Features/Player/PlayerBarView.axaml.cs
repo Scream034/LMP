@@ -14,7 +14,7 @@ public partial class PlayerBarView : UserControl
     {
         InitializeComponent();
         
-        // Подписка на изменения для обновления визуала слайдеров
+        // Подписка на изменение размеров контейнеров для пересчета позиций
         SeekHitBox.PropertyChanged += OnSeekHitBoxPropertyChanged;
         VolumeHitBox.PropertyChanged += OnVolumeHitBoxPropertyChanged;
     }
@@ -25,26 +25,30 @@ public partial class PlayerBarView : UserControl
         
         if (DataContext is PlayerBarViewModel vm)
         {
+            // Используем WeakEventManager или просто подписку с отпиской, 
+            // но в рамках UserControl, живущего долго, прямая подписка допустима.
             vm.PropertyChanged += (s, args) =>
             {
+                // Оптимизация: обновляем UI только при изменении конкретных свойств
                 switch (args.PropertyName)
                 {
                     case nameof(vm.PositionSeconds):
                     case nameof(vm.DurationSeconds):
-                        UpdateSeekVisual();
+                        if (!_isDraggingSeek) UpdateSeekVisual();
                         break;
                     case nameof(vm.BufferedSeconds):
                         UpdateBufferVisual();
                         break;
                     case nameof(vm.Volume):
                     case nameof(vm.MaxVolume):
-                        UpdateVolumeVisual();
+                        if (!_isDraggingVolume) UpdateVolumeVisual();
                         break;
                 }
             };
         }
     }
 
+    // Обработка изменения размера окна/контрола
     private void OnSeekHitBoxPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (e.Property.Name == "Bounds")
@@ -62,7 +66,7 @@ public partial class PlayerBarView : UserControl
         }
     }
 
-    #region Visual Updates
+    #region Visual Updates (Direct Manipulation for Performance)
 
     private void UpdateSeekVisual()
     {
@@ -72,10 +76,12 @@ public partial class PlayerBarView : UserControl
         if (width <= 0 || vm.DurationSeconds <= 0) return;
 
         double ratio = vm.PositionSeconds / vm.DurationSeconds;
+        ratio = Math.Clamp(ratio, 0, 1);
         double progressWidth = width * ratio;
         
+        // Прямое изменение свойств контролов быстрее, чем Binding для частых обновлений
         ProgressBar.Width = progressWidth;
-        Canvas.SetLeft(SeekThumb, progressWidth - 6); // 6 = половина ширины thumb
+        Canvas.SetLeft(SeekThumb, progressWidth - 6); // 6 = radius of thumb
     }
 
     private void UpdateBufferVisual()
@@ -86,6 +92,7 @@ public partial class PlayerBarView : UserControl
         if (width <= 0 || vm.DurationSeconds <= 0) return;
 
         double ratio = vm.BufferedSeconds / vm.DurationSeconds;
+        ratio = Math.Clamp(ratio, 0, 1);
         BufferBar.Width = width * ratio;
     }
 
@@ -97,6 +104,7 @@ public partial class PlayerBarView : UserControl
         if (width <= 0 || vm.MaxVolume <= 0) return;
 
         double ratio = (double)vm.Volume / vm.MaxVolume;
+        ratio = Math.Clamp(ratio, 0, 1);
         double progressWidth = width * ratio;
         
         VolumeBar.Width = progressWidth;
@@ -121,16 +129,17 @@ public partial class PlayerBarView : UserControl
         HoverTimeText.Text = hoverTime.TotalHours >= 1
             ? hoverTime.ToString(@"h\:mm\:ss")
             : hoverTime.ToString(@"m\:ss");
+        
         UpdateTooltipPosition(HoverTooltip, hitBox, e);
 
-        // Обновляем thumb при наведении
+        // Если тянем - обновляем визуально Thumb сразу (отзывчивость)
         double thumbX = ratio * hitBox.Bounds.Width - 6;
-        Canvas.SetLeft(SeekThumb, thumbX);
-
+        
         if (_isDraggingSeek)
         {
+            Canvas.SetLeft(SeekThumb, thumbX);
+            ProgressBar.Width = thumbX + 6; // Обновляем полосу прогресса при перетаскивании
             vm.UpdateSeekPosition(hoverSeconds);
-            SeekThumb.Classes.Add("dragging");
         }
     }
 
@@ -141,12 +150,20 @@ public partial class PlayerBarView : UserControl
         if (!vm.HasTrack) return;
 
         _isDraggingSeek = true;
-        e.Pointer.Capture(hitBox);
+        e.Pointer.Capture(hitBox); // Захват мыши, чтобы можно было уводить курсор за пределы
         vm.StartSeek();
         SeekThumb.Classes.Add("dragging");
 
+        // Сразу прыгаем в точку клика
         double ratio = GetClickRatio(hitBox, e);
-        vm.UpdateSeekPosition(ratio * vm.DurationSeconds);
+        double pos = ratio * vm.DurationSeconds;
+        
+        // Визуальное обновление моментально
+        double thumbX = ratio * hitBox.Bounds.Width - 6;
+        Canvas.SetLeft(SeekThumb, thumbX);
+        ProgressBar.Width = thumbX + 6;
+        
+        vm.UpdateSeekPosition(pos);
     }
 
     private void OnSeekAreaReleased(object? sender, PointerReleasedEventArgs e)
@@ -168,7 +185,7 @@ public partial class PlayerBarView : UserControl
         if (!_isDraggingSeek)
         {
             HoverTooltip.IsVisible = false;
-            UpdateSeekVisual(); // Возвращаем thumb на актуальную позицию
+            UpdateSeekVisual(); // Возврат на реальную позицию, если просто увели мышь
         }
     }
 
@@ -187,14 +204,15 @@ public partial class PlayerBarView : UserControl
         VolumeTooltipText.Text = $"{volumePercent}%";
         UpdateTooltipPosition(VolumeTooltip, hitBox, e);
 
-        // Обновляем thumb при наведении
-        double thumbX = ratio * hitBox.Bounds.Width - 6;
-        Canvas.SetLeft(VolumeThumb, thumbX);
-
         if (_isDraggingVolume)
         {
+            double thumbX = ratio * hitBox.Bounds.Width - 6;
+            Canvas.SetLeft(VolumeThumb, thumbX);
+            VolumeBar.Width = thumbX + 6;
+            
             vm.Volume = volumePercent;
-            VolumeThumb.Classes.Add("dragging");
+            // Note: UpdateVolumeVisual вызывается через PropertyChanged ViewModel, 
+            // но при драге мы обновляем UI напрямую для плавности.
         }
     }
 
@@ -208,6 +226,11 @@ public partial class PlayerBarView : UserControl
         VolumeThumb.Classes.Add("dragging");
 
         double ratio = GetClickRatio(hitBox, e);
+        double thumbX = ratio * hitBox.Bounds.Width - 6;
+        
+        Canvas.SetLeft(VolumeThumb, thumbX);
+        VolumeBar.Width = thumbX + 6;
+
         vm.Volume = (int)(ratio * vm.MaxVolume);
     }
 
@@ -230,7 +253,7 @@ public partial class PlayerBarView : UserControl
         if (!_isDraggingVolume)
         {
             VolumeTooltip.IsVisible = false;
-            UpdateVolumeVisual(); // Возвращаем thumb на актуальную позицию
+            UpdateVolumeVisual();
         }
     }
 
@@ -248,11 +271,17 @@ public partial class PlayerBarView : UserControl
     {
         var point = e.GetCurrentPoint(hitBox);
         double tooltipX = point.Position.X - (tooltip.Bounds.Width / 2);
+        
+        // Ограничиваем, чтобы тултип не вылезал за границы бара
         tooltipX = Math.Clamp(tooltipX, 0, hitBox.Bounds.Width - tooltip.Bounds.Width);
         
         if (tooltip.RenderTransform is TranslateTransform tr)
         {
             tr.X = tooltipX;
+        }
+        else
+        {
+            tooltip.RenderTransform = new TranslateTransform(tooltipX, 0);
         }
     }
 

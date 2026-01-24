@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿// === ФАЙЛ: Core/Services/AudioEngine.cs ===
+using System.Diagnostics;
 using LibVLCSharp.Shared;
 using MyLiteMusicPlayer.Core.Models;
 using MyLiteMusicPlayer.Core.ViewModels;
@@ -17,7 +18,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private readonly LibraryService _library;
     private readonly StreamCacheManager _cacheManager;
     private readonly HttpClient _httpClient;
-    private readonly LibVLC _libVLC;
+
+    // LibVLC теперь не readonly, так как мы его пересоздаем при смене профиля
+    private LibVLC _libVLC = null!;
 
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private readonly SemaphoreSlim _commandLock = new(1, 1);
@@ -50,6 +53,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private volatile bool _volumeSavePending;
     private volatile bool _isNavigating;
     private volatile bool _suppressAutoNext;
+
+    // Конфигурация стриминга (кэшируется при старте / смене профиля)
+    private StreamingConfig _currentStreamingConfig;
 
     // === Properties ===
 
@@ -92,11 +98,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<bool, bool>? OnPlaybackStateChanged;
     public event Action? OnQueueChanged;
 
-    public AudioEngine(YoutubeProvider youtube, LibraryService library)
+    public AudioEngine(YoutubeProvider youtube, LibraryService library, StreamCacheManager cacheManager)
     {
         _youtube = youtube;
         _library = library;
-        _cacheManager = new StreamCacheManager();
+        _cacheManager = cacheManager;
 
         _httpClient = new HttpClient(new SocketsHttpHandler
         {
@@ -111,23 +117,47 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         RepeatMode = library.Data.RepeatMode;
         _volumePercent = NormalizeVolume(library.Data.Volume);
 
+        // Инициализация профиля
+        _currentStreamingConfig = GetConfigForProfile(library.Data.InternetProfile);
+
+        InitializeLibVLC();
+        InitializePlayer();
+
+        _ = VolumeSaveLoopAsync();
+        Log.Info($"[AudioEngine] Initialized. Volume: {_volumePercent}%, Profile: {library.Data.InternetProfile}");
+    }
+
+    private void InitializeLibVLC()
+    {
+        if (_libVLC != null)
+        {
+            _libVLC.Dispose();
+        }
+
         LibVLCSharp.Shared.Core.Initialize();
+
+        // Динамические параметры на основе профиля
+        var caching = _currentStreamingConfig.VlcNetworkCachingMs;
+
         _libVLC = new LibVLC(
             "--no-video", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
-            "--network-caching=1024", "--file-caching=1024", "--live-caching=1024",
+            $"--network-caching={caching}",
+            $"--file-caching={caching}",
+            $"--live-caching={caching}",
             "--http-reconnect", "--http-continuous",
             "--audio-resampler=speex", "--aout=wasapi",
             "--clock-jitter=0", "--clock-synchro=0",
             "--avcodec-skiploopfilter=0", "--avcodec-skip-frame=0", "--avcodec-skip-idct=0"
         );
-
-        InitializePlayer();
-        _ = VolumeSaveLoopAsync();
-        Log.Info($"[AudioEngine] Initialized. Volume: {_volumePercent}%");
     }
 
     private void InitializePlayer()
     {
+        if (_player != null)
+        {
+            _player.Dispose();
+        }
+
         _player = new MediaPlayer(_libVLC);
         _player.Playing += (_, _) => OnVlcPlaying();
         _player.Paused += OnVlcPaused;
@@ -138,12 +168,63 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ApplyVolume();
     }
 
+    public void ReinitializeWithProfile(InternetProfile profile)
+    {
+        Log.Info($"[AudioEngine] Switching profile to {profile}...");
+
+        // 1. Stop gracefully
+        Stop();
+
+        // 2. Update config
+        _currentStreamingConfig = GetConfigForProfile(profile);
+
+        // 3. Re-init engine (requires UI thread usually for cleanup, but LibVLC handles it)
+        InitializeLibVLC();
+        InitializePlayer();
+
+        Log.Info("[AudioEngine] Profile switched.");
+    }
+
+    private static StreamingConfig GetConfigForProfile(InternetProfile profile)
+    {
+        return profile switch
+        {
+            InternetProfile.Low => new StreamingConfig
+            {
+                ChunkSize = 64 * 1024,
+                ReadAheadChunks = 1,
+                MaxConcurrentDownloads = 2,
+                VlcNetworkCachingMs = 4000
+            },
+            InternetProfile.Medium => new StreamingConfig
+            {
+                ChunkSize = 128 * 1024,
+                ReadAheadChunks = 3,
+                MaxConcurrentDownloads = 3,
+                VlcNetworkCachingMs = 2000
+            },
+            InternetProfile.High => new StreamingConfig
+            {
+                ChunkSize = 256 * 1024,
+                ReadAheadChunks = 5,
+                MaxConcurrentDownloads = 4,
+                VlcNetworkCachingMs = 1000
+            },
+            InternetProfile.Ultra => new StreamingConfig
+            {
+                ChunkSize = 512 * 1024,
+                ReadAheadChunks = 8,
+                MaxConcurrentDownloads = 6,
+                VlcNetworkCachingMs = 500
+            },
+            _ => new StreamingConfig()
+        };
+    }
+
     // === Volume ===
 
     public void ToggleMute()
     {
-        Log.Info($"[AudioEngine] ToggleMute: {_volumePercent} ({_library.Data.LastVolume})");
-
         if (_volumePercent > 0)
         {
             _library.Data.LastVolume = _volumePercent;
@@ -178,7 +259,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (!_volumeSavePending) return;
         _volumeSavePending = false;
         _library.Save();
-        Log.Info("[AudioEngine] Volume saved");
     }
 
     private void ApplyVolume()
@@ -234,30 +314,25 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         await PlayCurrentIndexAsync();
     }
+
     private async Task PlayCurrentIndexAsync()
     {
         if (_isDisposed) return;
 
-        // 1. Захватываем лок только для определения следующего трека
-        if (!await _navigationLock.WaitAsync(500))
-        {
-            Log.Warn("[AudioEngine] PlayCurrentIndexAsync timeout waiting for lock");
-            return;
-        }
+        if (!await _navigationLock.WaitAsync(500)) return;
 
         TrackInfo? trackToPlay;
         int session;
 
         try
         {
-            if (_isNavigating) return; // Двойная проверка
+            if (_isNavigating) return;
             _isNavigating = true;
 
             lock (_queue)
             {
                 if (_currentIndex < 0 || _currentIndex >= _queue.Count)
                 {
-                    Log.Warn($"[AudioEngine] Invalid index: {_currentIndex}, queue size: {_queue.Count}");
                     _isNavigating = false;
                     return;
                 }
@@ -266,88 +341,60 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (trackToPlay == null)
             {
-                Log.Warn("[AudioEngine] Track at current index is null");
                 _isNavigating = false;
                 return;
             }
 
-            // Получаем "билет" на выполнение этой сессии воспроизведения
             session = Interlocked.Increment(ref _session);
         }
         finally
         {
-            // 2. ОСВОБОЖДАЕМ ЛОК КАК МОЖНО СКОРЕЕ!
             _navigationLock.Release();
         }
 
-        // 3. Вся долгая работа (остановка, загрузка) происходит уже БЕЗ блокировки
         await LoadAndPlayTrackAsync(trackToPlay, session);
     }
 
-    /// <summary>
-    /// "Мозг" навигации вперед. Определяет следующий индекс для воспроизведения.
-    /// Возвращает true, если нужно начать воспроизведение, и false, если очередь закончилась.
-    /// </summary>
-    /// <param name="userInitiated">True, если действие вызвано пользователем (кнопка "далее").</param>
-    /// <returns>True, если есть следующий трек для воспроизведения.</returns>
     private bool TryAdvanceQueue(bool userInitiated)
     {
         lock (_queue)
         {
             if (_queue.Count == 0) return false;
 
-            // Логика для RepeatOne: срабатывает только при автоматическом окончании трека
             if (!userInitiated && RepeatMode == RepeatMode.RepeatOne)
-            {
-                Log.Info("[AudioEngine] RepeatOne: Preparing to restart current track.");
-                return true; // Индекс не меняем, просто говорим, что нужно играть
-            }
+                return true;
 
-            // Есть ли следующий трек в списке?
             if (_currentIndex + 1 < _queue.Count)
             {
                 _currentIndex++;
-                Log.Info($"[AudioEngine] Advancing to next track: index {_currentIndex}");
                 return true;
             }
 
-            // Мы в конце списка. Проверяем режим RepeatAll.
             if (RepeatMode == RepeatMode.RepeatAll)
             {
                 _currentIndex = 0;
-                Log.Info("[AudioEngine] RepeatAll: Wrapping back to first track.");
                 return true;
             }
 
-            // Очередь закончилась, и повтор выключен
-            Log.Info("[AudioEngine] Queue ended.");
             return false;
         }
     }
 
-    /// <summary>
-    /// "Мозг" навигации назад. Определяет предыдущий индекс для воспроизведения.
-    /// </summary>
-    /// <returns>True, если есть предыдущий трек для воспроизведения.</returns>
     private bool TryRetreatQueue()
     {
         lock (_queue)
         {
             if (_queue.Count == 0) return false;
 
-            // Есть ли предыдущий трек?
             if (_currentIndex - 1 >= 0)
             {
                 _currentIndex--;
-                Log.Info($"[AudioEngine] Retreating to previous track: index {_currentIndex}");
                 return true;
             }
 
-            // Мы в начале списка. Проверяем режим RepeatAll.
             if (RepeatMode == RepeatMode.RepeatAll)
             {
                 _currentIndex = _queue.Count - 1;
-                Log.Info("[AudioEngine] RepeatAll: Wrapping around to last track.");
                 return true;
             }
 
@@ -359,25 +406,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         try
         {
-            Log.Info($"[AudioEngine] Playing index {_currentIndex}: {trackToPlay.Title}");
             SyncTrackPreferences(trackToPlay);
 
             _suppressAutoNext = true;
 
-            // Отменяем предыдущие операции
             var oldCts = _cts;
             _cts = new CancellationTokenSource();
             if (oldCts != null) Try(oldCts.Cancel);
 
-            // Ждём освобождения ресурсов от старого трека
             await CleanupCurrentMediaAsync();
 
-            // Проверяем, не устарела ли наша сессия, пока мы ждали
-            if (_session != session)
-            {
-                Log.Info("[AudioEngine] Session changed during cleanup, aborting load");
-                return;
-            }
+            if (_session != session) return;
 
             ResetStreamInfo();
 
@@ -390,30 +429,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             var cts = _cts;
 
-            // Запускаем загрузку в фоне
             _ = Task.Run(async () =>
             {
-                if (!await _loadLock.WaitAsync(2000))
-                {
-                    Log.Warn("[AudioEngine] Could not acquire load lock - forcing release");
-                    return;
-                }
+                if (!await _loadLock.WaitAsync(2000)) return;
 
                 try
                 {
-                    // Финальная проверка сессии перед началом загрузки
-                    if (_session != session || cts.IsCancellationRequested)
-                    {
-                        Log.Info("[AudioEngine] Session changed, aborting load");
-                        return;
-                    }
-
+                    if (_session != session || cts.IsCancellationRequested) return;
                     await PlayTrackInternalAsync(trackToPlay, session, cts.Token);
                 }
-                catch (OperationCanceledException)
-                {
-                    Log.Info("[AudioEngine] Playback cancelled");
-                }
+                catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
                     Log.Error($"[AudioEngine] PlayTrackInternal error: {ex.Message}");
@@ -427,27 +452,15 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
         finally
         {
-            // Вне зависимости от результата, помечаем, что навигация завершена
             _isNavigating = false;
         }
     }
 
-    /// <summary>
-    /// Внутренний метод для перезапуска текущего трека.
-    /// ВАЖНО: Вызывается ТОЛЬКО из кода, который уже удерживает _navigationLock.
-    /// </summary>
     private async Task RestartCurrentTrackInternalAsync()
     {
         TrackInfo? trackToPlay = CurrentTrack;
-        if (trackToPlay == null)
-        {
-            Log.Warn("[AudioEngine] Restart requested, but CurrentTrack is null.");
-            return;
-        }
+        if (trackToPlay == null) return;
 
-        Log.Info($"[AudioEngine] Restarting track: {trackToPlay.Title}");
-
-        // Используем тот же механизм сессий для отмены старых операций
         var session = Interlocked.Increment(ref _session);
         _suppressAutoNext = true;
 
@@ -457,18 +470,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         await CleanupCurrentMediaAsync();
 
-        if (_session != session)
-        {
-            Log.Info("[AudioEngine] Session changed during restart cleanup, aborting.");
-            return;
-        }
+        if (_session != session) return;
 
         ResetStreamInfo();
         _isPlayerReady = false;
 
         var cts = _cts;
 
-        // Запускаем загрузку точно так же, как в основном методе
         _ = Task.Run(async () =>
         {
             if (!await _loadLock.WaitAsync(2000)) return;
@@ -477,72 +485,41 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 if (_session != session || cts.IsCancellationRequested) return;
                 await PlayTrackInternalAsync(trackToPlay, session, cts.Token);
             }
-            catch (OperationCanceledException) { Log.Info("[AudioEngine] Restart cancelled."); }
+            catch (OperationCanceledException) { }
             catch (Exception ex) { Log.Error($"[AudioEngine] Restart error: {ex.Message}"); }
             finally { _loadLock.Release(); }
         });
     }
 
-    /// <summary>
-    /// Асинхронно очищает текущий медиа и стрим БЕЗ блокировки UI
-    /// </summary>
     private async Task CleanupCurrentMediaAsync()
     {
-        // --- ИЗМЕНЕНО: Более надежная логика очистки для предотвращения дедлоков ---
-
         var oldMedia = _currentMedia;
         var oldStream = _currentStream;
-        var player = _player; // Создаем локальную копию, чтобы избежать проблем в многопоточной среде
+        var player = _player;
 
-        // Немедленно отсоединяем ссылки, чтобы новые операции не использовали старые объекты
         _currentMedia = null;
         _currentStream = null;
 
         if (oldStream == null && oldMedia == null) return;
 
-        // 1. CRITICAL FIX: Отменяем все ожидающие операции чтения в стриме.
-        // Это заставит любой заблокированный вызов Read() немедленно вернуться с ошибкой или 0,
-        // что разблокирует внутренние потоки VLC.
-        try
-        {
-            oldStream?.CancelPendingReads();
-        }
-        catch (ObjectDisposedException) { /* Игнорируем, стрим уже уничтожен */ }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioEngine] Error in CancelPendingReads: {ex.Message}");
-        }
+        try { oldStream?.CancelPendingReads(); } catch { }
 
-        // 2. NEW: Отсоединяем медиа-объект от плеера ПЕРЕД вызовом Stop().
-        // Это важнейший шаг, который говорит VLC "забыть" о старом стриме,
-        // предотвращая попытки чтения из него во время остановки.
-        if (player != null && player.Media == oldMedia)
-        {
-            player.Media = null;
-        }
+        if (player != null && player.Media == oldMedia) player.Media = null;
 
-        // 3. Теперь безопасно останавливаем плеер. Он больше не привязан к старому стриму и не должен зависнуть.
         if (player != null && player.State != VLCState.Stopped && player.State != VLCState.Error)
         {
-            // Запускаем в фоновом потоке, но ждем завершения.
             await Task.Run(() => Try(player.Stop));
         }
 
-        // 4. Запускаем полную очистку ресурсов (закрытие файла, сохранение метаданных)
-        // в фоновом режиме, не блокируя основной поток.
         _ = Task.Run(() =>
         {
             try
             {
-                // Небольшая задержка, чтобы дать VLC время полностью завершить свои внутренние обратные вызовы
                 Thread.Sleep(100);
                 oldStream?.Dispose();
                 oldMedia?.Dispose();
             }
-            catch (Exception ex)
-            {
-                Log.Warn($"[AudioEngine] Background cleanup error: {ex.Message}");
-            }
+            catch { }
         });
     }
 
@@ -573,7 +550,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(QualitySwitchTimeoutSec));
             await _playbackStartedTcs.Task.WaitAsync(cts.Token);
         }
-        catch (OperationCanceledException) { Log.Warn("[AudioEngine] Quality switch timeout"); }
+        catch (OperationCanceledException) { }
         finally { _playbackStartedTcs = null; }
 
         if (position.TotalSeconds > 1)
@@ -594,7 +571,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            // 1. Get Stream Details
             StreamDetails? stream = null;
             try { stream = await GetOrRefreshStreamAsync(track, ct); }
             catch (OperationCanceledException) { return; }
@@ -610,11 +586,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             SetStreamInfo(stream.Codec, stream.Bitrate, stream.Container);
 
-            // ОПРЕДЕЛЯЕМ, является ли это ручным выбором качества
             bool isManualQualityOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
             long size = stream.Size;
-            // Если размера нет в кэше и это не ручной выбор, пробуем узнать HEAD запросом
             if (size <= 0 && !isManualQualityOverride)
             {
                 size = await TryGetContentLengthAsync(stream.Url, ct);
@@ -622,16 +596,32 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (_session != session || ct.IsCancellationRequested) return;
 
-            // 3. Create Stream
             if (size > 0)
             {
-                // Если это ручной выбор, добавляем к ID параметры формата, 
-                // чтобы не испортить основной кэш трека (который обычно BestAvailable)
                 string cacheId = isManualQualityOverride
                     ? $"{track.Id}_{stream.Container}_{stream.Bitrate}"
                     : track.Id;
 
-                cacheStream = new MemoryFirstCachingStream(cacheId, stream.Url, size, _httpClient, _cacheManager);
+                // ИЗМЕНЕНИЕ: Передаем функцию рефреша (urlRefresher)
+                cacheStream = new MemoryFirstCachingStream(
+                    cacheId,
+                    stream.Url,
+                    size,
+                    _httpClient,
+                    _cacheManager,
+                    _currentStreamingConfig,
+                    // Лямбда для обновления ссылки при 403 ошибке:
+                    urlRefresher: async (token) =>
+                    {
+                        // Принудительно чистим кэш провайдера для этого трека (опционально, но желательно)
+                        // В текущем API YoutubeProvider это не exposed, 
+                        // но GetOrRefreshStreamAsync сам попытается обновить если нужно.
+
+                        // Метод GetOrRefreshStreamAsync внутри делает refresh через YoutubeProvider.RefreshStreamUrlAsync
+                        var newStream = await GetOrRefreshStreamAsync(track, token);
+                        return newStream?.Url;
+                    }
+                );
 
                 var preBufferResult = await cacheStream.PreBufferAsync(ct);
                 if (!preBufferResult)
@@ -650,13 +640,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (cacheStream != null)
             {
-                // Играем через кэш
                 StartPlayback(new Media(_libVLC, new StreamMediaInput(cacheStream)), cacheStream, track);
-                cacheStream = null; // Ownership transferred
+                cacheStream = null;
             }
             else
             {
-                // Играем напрямую по ссылке (Смена формата или ошибка кэша)
                 StartPlayback(new Media(_libVLC, stream.Url, FromType.FromLocation), null, track);
             }
 
@@ -691,7 +679,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task StopPlaybackAsync()
     {
-        // Используем тот же неблокирующий метод
         await CleanupCurrentMediaAsync();
         _isPlayerReady = false;
     }
@@ -734,7 +721,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void Stop()
     {
-        _suppressAutoNext = true; // Чтобы при Stop() не сработал переход на следующий
+        _suppressAutoNext = true;
         Interlocked.Increment(ref _session);
         Try(() => _cts?.Cancel());
         _ = StopPlaybackAsync();
@@ -761,129 +748,47 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             _queue.Clear();
             _queue.AddRange(tracks);
-
             _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
-
-            if (_currentIndex == -1 && _queue.Count > 0)
-            {
-                _currentIndex = 0;
-            }
+            if (_currentIndex == -1 && _queue.Count > 0) _currentIndex = 0;
         }
 
         RaiseEvent(() => OnQueueChanged?.Invoke());
-
         await PlayCurrentIndexAsync();
     }
 
-    /// <summary>
-    /// <summary>
-    /// Переключает на следующий трек (ручное действие пользователя)
-    /// </summary>
     public async Task PlayNextAsync()
     {
         if (_isDisposed || _isNavigating) return;
-
-        if (TryAdvanceQueue(userInitiated: true))
-        {
-            await PlayCurrentIndexAsync();
-        }
-        else
-        {
-            Stop();
-        }
+        if (TryAdvanceQueue(userInitiated: true)) await PlayCurrentIndexAsync();
+        else Stop();
     }
 
-    /// <summary>
-    /// Внутренний метод перехода на следующий трек
-    /// </summary>
-    private async Task PlayNextInternalAsync(bool userInitiated)
-    {
-        // RepeatOne работает ТОЛЬКО при автоматическом окончании трека
-        if (!userInitiated && RepeatMode == RepeatMode.RepeatOne && CurrentTrack != null)
-        {
-            Log.Info("[AudioEngine] RepeatOne: Restarting current track");
-            await RestartCurrentTrackInternalAsync();
-            return;
-        }
-
-        bool hasNext = false;
-        lock (_queue)
-        {
-            if (_queue.Count == 0) return;
-
-            if (_currentIndex + 1 < _queue.Count)
-            {
-                _currentIndex++;
-                hasNext = true;
-                Log.Info($"[AudioEngine] Next track: index {_currentIndex}");
-            }
-            else if (RepeatMode == RepeatMode.RepeatAll)
-            {
-                _currentIndex = 0;
-                hasNext = true;
-                Log.Info("[AudioEngine] RepeatAll: Back to first track");
-            }
-            else
-            {
-                Log.Info("[AudioEngine] Queue ended");
-            }
-        }
-
-        if (hasNext)
-        {
-            await RestartCurrentTrackInternalAsync();
-        }
-        else
-        {
-            Stop();
-        }
-    }
-
-
-    /// <summary>
-    /// Переключает на предыдущий трек
-    /// </summary>
     public async Task PlayPreviousAsync()
     {
         if (_isDisposed || _isNavigating) return;
 
-        // Если трек играл достаточно долго, просто перезапускаем его
         if (CurrentPosition.TotalSeconds > 3 && _isPlayerReady)
         {
-            Log.Info("[AudioEngine] Position > 3s, restarting track.");
-            await PlayCurrentIndexAsync(); // Просто вызываем воспроизведение текущего индекса
+            await PlayCurrentIndexAsync();
             return;
         }
 
-        // Иначе переключаемся на предыдущий
-        if (TryRetreatQueue())
-        {
-            await PlayCurrentIndexAsync();
-        }
-        else if (_isPlayerReady && _player != null)
-        {
-            // Если предыдущего нет, перематываем на начало
-            _player.Time = 0;
-        }
+        if (TryRetreatQueue()) await PlayCurrentIndexAsync();
+        else if (_isPlayerReady && _player != null) _player.Time = 0;
     }
 
     public void Enqueue(TrackInfo track)
     {
         lock (_queue)
         {
-            if (_queue.Any(t => t.Id == track.Id))
-                return;
-
+            if (_queue.Any(t => t.Id == track.Id)) return;
             _queue.Add(track);
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
 
         if (CurrentTrack == null && !IsPlaying && !IsLoading)
         {
-            lock (_queue)
-            {
-                _currentIndex = _queue.Count - 1;
-            }
+            lock (_queue) _currentIndex = _queue.Count - 1;
             _ = PlayCurrentIndexAsync();
         }
     }
@@ -897,18 +802,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             var existingIds = _queue.Select(t => t.Id).ToHashSet();
             var newTracks = list.Where(t => !existingIds.Contains(t.Id)).ToList();
-
             if (newTracks.Count == 0) return;
-
             _queue.AddRange(newTracks);
         }
 
         RaiseEvent(() => OnQueueChanged?.Invoke());
-
-        if (CurrentTrack == null && !IsPlaying && !IsLoading)
-        {
-            _ = PlayNextAsync();
-        }
+        if (CurrentTrack == null && !IsPlaying && !IsLoading) _ = PlayNextAsync();
     }
 
     public void ClearQueue()
@@ -917,7 +816,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             _queue.Clear();
             _currentIndex = -1;
-
             if (CurrentTrack != null)
             {
                 _queue.Add(CurrentTrack);
@@ -932,10 +830,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         lock (_queue)
         {
             if (_queue.Count < 2) return;
-
-            var current = (_currentIndex >= 0 && _currentIndex < _queue.Count)
-                ? _queue[_currentIndex]
-                : null;
+            var current = (_currentIndex >= 0 && _currentIndex < _queue.Count) ? _queue[_currentIndex] : null;
 
             var rng = Random.Shared;
             int n = _queue.Count;
@@ -971,16 +866,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (index == _currentIndex)
             {
-                if (index == _queue.Count - 1)
-                {
-                    _currentIndex--;
-                }
+                if (index == _queue.Count - 1) _currentIndex--;
                 needStop = _queue.Count == 1;
             }
-            else if (index < _currentIndex)
-            {
-                _currentIndex--;
-            }
+            else if (index < _currentIndex) _currentIndex--;
 
             _queue.RemoveAt(index);
             changed = true;
@@ -1001,18 +890,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             _queue.RemoveAt(oldIndex);
             _queue.Insert(newIndex, item);
 
-            if (_currentIndex == oldIndex)
-            {
-                _currentIndex = newIndex;
-            }
-            else if (oldIndex < _currentIndex && newIndex >= _currentIndex)
-            {
-                _currentIndex--;
-            }
-            else if (oldIndex > _currentIndex && newIndex <= _currentIndex)
-            {
-                _currentIndex++;
-            }
+            if (_currentIndex == oldIndex) _currentIndex = newIndex;
+            else if (oldIndex < _currentIndex && newIndex >= _currentIndex) _currentIndex--;
+            else if (oldIndex > _currentIndex && newIndex <= _currentIndex) _currentIndex++;
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }
@@ -1047,29 +927,22 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, CancellationToken ct)
     {
-        // ИСПРАВЛЕНИЕ: Проверяем наличие ручного выбора формата
         bool hasUserOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
-        // 1. Проверяем кэш ТОЛЬКО если нет ручного переопределения
         if (!hasUserOverride && _cacheManager.IsFullyCached(track.Id))
         {
             var meta = _cacheManager.TryGetMetadata(track.Id);
             if (meta != null && meta.ContentLength > 0 && !string.IsNullOrEmpty(meta.Codec))
             {
-                Log.Info($"[AudioEngine] Track {track.Id} is fully cached. Using saved format.");
+                Log.Info($"[AudioEngine] Track {track.Id} is fully cached.");
                 track.CachedBitrate = meta.Bitrate;
                 track.CachedCodec = meta.Codec;
                 track.CachedContainer = meta.Container;
-
-                return new StreamDetails(meta.SourceUrl, meta.ContentLength,
-                    meta.Bitrate, meta.Codec, meta.Container);
+                return new StreamDetails(meta.SourceUrl, meta.ContentLength, meta.Bitrate, meta.Codec, meta.Container);
             }
         }
 
-        // 2. Если есть Override или нет кэша - запрашиваем свежую ссылку
-        bool needFresh = string.IsNullOrEmpty(track.StreamUrl)
-            || string.IsNullOrEmpty(track.CachedCodec)
-            || hasUserOverride; // <-- Важно
+        bool needFresh = string.IsNullOrEmpty(track.StreamUrl) || string.IsNullOrEmpty(track.CachedCodec) || hasUserOverride;
 
         if (!needFresh)
             return new(track.StreamUrl, -1, track.CachedBitrate, track.CachedCodec, track.CachedContainer);
@@ -1080,18 +953,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(RefreshTimeoutS));
 
-            // Тут YoutubeProvider сам разберется с track.TransientContainer внутри
             var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
             _lastApiCall = DateTime.UtcNow;
 
             if (!result.HasValue) return null;
 
-            // В кэш сохраняем только если это стандартное воспроизведение (не override),
-            // чтобы не перезаписать метаданные "хорошего" файла временным выбором.
             if (!hasUserOverride)
-            {
                 _cacheManager.UpdateStreamInfo(track.Id, result.Value.Codec, result.Value.Bitrate, result.Value.Container);
-            }
 
             return new StreamDetails(result.Value.Url, result.Value.Size,
                 result.Value.Bitrate, result.Value.Codec, result.Value.Container);
@@ -1122,13 +990,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcPlaying()
     {
         if (_isDisposed) return;
-        _suppressAutoNext = false; // Возвращаем авто-переход для нормального конца трека
+        _suppressAutoNext = false;
         _isPlayerReady = true;
-
         IsLoading = false;
         IsPlaying = true;
         IsPaused = false;
-
         ApplyVolume();
         NotifyPlaybackState();
         _playbackStartedTcs?.TrySetResult(true);
@@ -1154,13 +1020,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcEndReached()
     {
         if (_isDisposed) return;
-        if (_suppressAutoNext)
-        {
-            Log.Info("[AudioEngine] EndReached ignored (manual navigation)");
-            return;
-        }
-
-        Log.Info("[AudioEngine] Track ended, preparing next...");
+        if (_suppressAutoNext) return;
 
         IsPlaying = false;
         IsPaused = false;
@@ -1168,32 +1028,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         NotifyPlaybackState();
 
         var session = Interlocked.Increment(ref _session);
-
         _ = Task.Run(async () =>
         {
             try
             {
-                // Небольшая задержка, чтобы все события VLC завершились
                 if (_isDisposed || _session != session) return;
-
-                // Используем новый "мозг" для принятия решения
                 if (TryAdvanceQueue(userInitiated: false))
                 {
-                    if (_session == session) // Дополнительная проверка на случай быстрой смены
-                    {
-                        await PlayCurrentIndexAsync();
-                    }
+                    if (_session == session) await PlayCurrentIndexAsync();
                 }
-                else
-                {
-                    // Если очередь закончилась, останавливаем плеер
-                    Stop();
-                }
+                else Stop();
             }
-            catch (Exception ex)
-            {
-                Log.Error($"[AudioEngine] Error in OnVlcEndReached task: {ex.Message}");
-            }
+            catch (Exception ex) { Log.Error($"[AudioEngine] Error in OnVlcEndReached: {ex.Message}"); }
         });
     }
 
@@ -1214,8 +1060,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         RaiseEvent(() => OnPositionChanged?.Invoke(TimeSpan.FromMilliseconds(time)));
     }
 
-    private void NotifyPlaybackState() =>
-        RaiseEvent(() => OnPlaybackStateChanged?.Invoke(IsPlaying, IsPaused));
+    private void NotifyPlaybackState() => RaiseEvent(() => OnPlaybackStateChanged?.Invoke(IsPlaying, IsPaused));
 
     // === Helpers ===
 
@@ -1236,10 +1081,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             saved.PreferredContainer = track.PreferredContainer;
             saved.PreferredBitrate = track.PreferredBitrate;
         }
-        else
-        {
-            _library.Data.Tracks[track.Id] = track.Clone();
-        }
+        else _library.Data.Tracks[track.Id] = track.Clone();
         _library.Save();
     }
 
@@ -1247,20 +1089,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         try
         {
-            // Гарантируем выполнение на UI потоке
-            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-            {
-                action();
-            }
-            else
-            {
-                Avalonia.Threading.Dispatcher.UIThread.Post(action);
-            }
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess()) action();
+            else Avalonia.Threading.Dispatcher.UIThread.Post(action);
         }
-        catch (Exception ex)
-        {
-            Log.Error($"[AudioEngine] Event error: {ex.Message}");
-        }
+        catch (Exception ex) { Log.Error($"[AudioEngine] Event error: {ex.Message}"); }
     }
 
     private static void Try(Action action) { try { action(); } catch { } }
@@ -1301,7 +1133,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         Try(_navigationLock.Dispose);
         Try(_apiLock.Dispose);
         Try(_httpClient.Dispose);
-        Try(_cacheManager.Dispose);
 
         Log.Info("[AudioEngine] Disposed");
     }

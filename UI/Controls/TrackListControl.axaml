@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
@@ -26,10 +26,10 @@
             <Setter Property="Background" Value="#1AFFFFFF" />
         </Style>
         <Style Selector="Border.track-row.isActive">
-            <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         </Style>
         <Style Selector="Border.track-row.isActive:pointerover">
-            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
         </Style>
         
         <!-- Анимация точек -->
@@ -92,7 +92,7 @@
                                 VerticalAlignment="Bottom" Margin="0,280,0,0">
                         <TextBlock Text="{Binding SearchingText, ElementName=Root}" 
                                    FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{StaticResource AccentBrush}" Opacity="0.8" />
+                                   Foreground="{DynamicResource AccentBrush}" Opacity="0.8" />
                     </StackPanel>
                 </Grid>
             </Panel>
@@ -101,7 +101,7 @@
                 Width="150"
                 VerticalAlignment="Center"
                 HorizontalAlignment="Center"
-                Foreground="{StaticResource AccentBrush}"
+                Foreground="{DynamicResource AccentBrush}"
                 IsVisible="{Binding !EnableSmoothLoading, ElementName=Root}" />
         </Panel>
 
@@ -166,13 +166,13 @@
                     
                     <TextBlock Text="{Binding LoadingMoreText, ElementName=Root}"
                                FontSize="13"
-                               Foreground="{StaticResource TextMutedBrush}" />
+                               Foreground="{DynamicResource TextMutedBrush}" />
                     
-                    <TextBlock Text="." FontSize="13" Foreground="{StaticResource AccentBrush}" 
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
                                Classes="dot1" Margin="2,0,0,0" />
-                    <TextBlock Text="." FontSize="13" Foreground="{StaticResource AccentBrush}" 
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
                                Classes="dot2" />
-                    <TextBlock Text="." FontSize="13" Foreground="{StaticResource AccentBrush}" 
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
                                Classes="dot3" />
                 </StackPanel>
 
@@ -193,9 +193,9 @@
                         Opacity="0.5">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
-                                         Foreground="{StaticResource TextMutedBrush}" />
+                                         Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding EndOfListText, ElementName=Root}"
-                                   Foreground="{StaticResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
                                    FontSize="13" />
                     </StackPanel>
                 </Border>

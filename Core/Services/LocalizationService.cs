@@ -10,7 +10,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
     public static LocalizationService Instance = new();
 
     private string _currentLanguage = "en"; // Дефолт - английский
-    private Dictionary<string, string> _resources = new();
+    private Dictionary<string, string> _resources = [];
     private bool _isInitialized;
 
     public event PropertyChangedEventHandler? PropertyChanged;

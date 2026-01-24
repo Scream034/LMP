@@ -1,14 +1,19 @@
+
 {
   "Common_AppName": "Lite Player",
   "Common_Cancel": "Cancel",
   "Common_Confirm": "Continue",
   "Common_OK": "OK",
+  "Common_Apply": "Apply",
+  "Common_Reset": "Reset",
   "Common_Set": "Set",
   "Common_Clear": "Clear",
+  "Common_Enable": "Enable",
   "Common_Loading": "Loading...",
   "Common_Search": "Search",
   "Common_Minutes": "min",
-  
+  "Common_Files": "files",
+
   "Nav_Home": "Home",
   "Nav_Search": "Search",
   "Nav_Library": "Library",
@@ -16,7 +21,7 @@
   "Nav_Queue": "Queue",
   "Nav_Settings": "Settings",
   "Nav_PleaseWait": "Please wait...",
-  
+
   "Home_Greeting_Morning": "Good morning",
   "Home_Greeting_Afternoon": "Good afternoon",
   "Home_Greeting_Evening": "Good evening",
@@ -24,7 +29,7 @@
   "Home_LoadMore": "Load more",
   "Home_LoadingSkeleton": "Loading tracks...",
   "Home_EndOfList": "No more tracks",
-  
+
   "Home_Debug_Total": "TOTAL",
   "Home_Debug_Displayed": "SHOWN",
   "Home_Debug_Cached": "CACHED",
@@ -48,13 +53,79 @@
   "Search_FromCache": "Results from cache",
   "Search_ForceRefresh": "Refresh from network",
   "Search_NetworkError": "Network error. Please try again.",
-  "Settings_SearchCache": "Cache search results",
-  "Settings_SearchCacheDesc": "Save search results for faster loading",
-  "Settings_SearchCacheTtl": "Search cache lifetime",
-  "Settings_SearchCacheTtlDesc": "How long to keep search results cached before refreshing",
-  "Settings_LoadBatchSize": "Items per page",
-  "Settings_LoadBatchSizeDesc": "Number of tracks loaded at once when scrolling lists",
 
+  "Settings_Title": "Settings",
+  "Settings_Account_Language": "Account & Language",
+  "Settings_Network": "Network & Streaming",
+  "Settings_NetProfile": "Internet Profile",
+  "Settings_NetProfileDesc": "Adjusts buffer size and quality based on connection.",
+  "Settings_Proxy": "Proxy Settings",
+  "Settings_RestartRequired": "Restart required to apply network changes.",
+  "Settings_Storage_Data": "Storage & Cache",
+  "Settings_ImageCache": "Image Cache",
+  "Settings_AudioCache": "Audio Cache",
+  "Settings_Limits": "Cache Limits",
+  "Settings_Appearance": "Appearance",
+  "Settings_AccentColor": "Accent Color",
+  "Settings_AdvancedColors": "Advanced Colors",
+
+  "Settings_ChannelUrl": "Public Channel",
+  "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
+  "Settings_ChannelPlaceholder": "https://youtube.com/@channel",
+
+  "Settings_Audio": "Audio",
+  "Settings_AudioQuality": "Quality",
+  "Settings_AudioQualityDesc": "Preferred audio format/bitrate.",
+  "Settings_RememberFormat": "Remember format per track",
+  "Settings_SearchBatchSize": "Search batch size",
+  "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
+
+  "Settings_General": "General",
+
+  "Theme_Custom": "Custom",
+  "Theme_Presets": "Theme Presets",
+  "Theme_PresetsDesc": "Quickly switch between predefined color schemes.",
+  "Theme_SelectPreset": "Select a preset...",
+  "Theme_AccentColor": "Accent Color",
+  "Theme_AccentColorDesc": "Buttons, links, and highlights",
+  "Theme_BgPrimary": "Background Primary",
+  "Theme_BgPrimaryDesc": "Main window background",
+  "Theme_BgSecondary": "Background Secondary",
+  "Theme_BgSecondaryDesc": "Cards, sidebar, panels",
+  "Theme_BgElevated": "Background Elevated",
+  "Theme_BgElevatedDesc": "Dialogs and dropdown menus",
+  "Theme_TextPrimary": "Text Primary",
+  "Theme_TextPrimaryDesc": "Main text color",
+  "Theme_TextSecondary": "Text Secondary",
+  "Theme_TextSecondaryDesc": "Subtitles and descriptions",
+
+  "Account_LimitedAccess": "Limited Access",
+  "Account_LimitedAccess_Hint1": "• Only public playlists can be added",
+  "Account_LimitedAccess_Hint2": "• Likes and private data require Google sign-in",
+
+  "Auth_NotSignedIn": "Not signed in",
+  "Auth_LoggedIn": "Signed in",
+  "Auth_Guest": "Guest Mode",
+  "Auth_Login": "Sign In",
+  "Auth_Logout": "Sign Out",
+
+  "Language": "Language",
+
+  "Audio_MaxVolume": "Volume Limit",
+  "Audio_MaxVolumeDesc": "Allow volume above 100% (Software boost).",
+  "Audio_Gain": "Normalization (dB)",
+  "Audio_GainDesc": "Adjusts playback volume to be consistent.",
+
+  "Storage_Path": "Download Folder",
+  "Storage_Change": "Change",
+  "Storage_ClearHistory": "Clear History",
+  "Storage_ResetApp": "Reset App",
+
+  "General_Discord": "Discord RPC",
+  "General_AutoPaste": "Auto-play from Clipboard",
+  "Perf_SmoothLoading": "Smooth Loading",
+  "Perf_SmoothLoadingDesc": "May improve performance",
+  
   "Library_Title": "Library",
   "Library_NewPlaylist": "New Playlist",
   "Library_SyncYoutube": "Sync YouTube",
@@ -102,49 +173,6 @@
   "Track_CopyLink": "Copy Link",
   "Track_Copied": "Copied!",
 
-  "Settings_Title": "Settings",
-  "Settings_Account_Language": "Account & Language",
-  "Settings_ChannelUrl": "Public Channel",
-  "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
-  "Settings_ChannelPlaceholder": "https://youtube.com/@channel",
-  
-  "Settings_Audio": "Audio",
-  "Settings_AudioQuality": "Quality",
-  "Settings_AudioQualityDesc": "Preferred audio format/bitrate.",
-  "Settings_RememberFormat": "Remember format per track",
-  "Settings_SearchBatchSize": "Search batch size",
-  "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
-  
-  "Settings_Storage_Data": "Storage",
-  "Settings_General": "General",
-  
-  "Account_LimitedAccess": "Limited Access",
-  "Account_LimitedAccess_Hint1": "• Only public playlists can be added",
-  "Account_LimitedAccess_Hint2": "• Likes and private data require Google sign-in",
-  
-  "Auth_NotSignedIn": "Not signed in",
-  "Auth_LoggedIn": "Signed in",
-  "Auth_Guest": "Guest Mode",
-  "Auth_Login": "Sign In",
-  "Auth_Logout": "Sign Out",
-  
-  "Language": "Language",
-  
-  "Audio_MaxVolume": "Volume Limit",
-  "Audio_MaxVolumeDesc": "Allow volume above 100% (Software boost).",
-  "Audio_Gain": "Normalization (dB)",
-  "Audio_GainDesc": "Adjusts playback volume to be consistent.",
-  
-  "Storage_Path": "Download Folder",
-  "Storage_Change": "Change",
-  "Storage_ClearHistory": "Clear History",
-  "Storage_ResetApp": "Reset App",
-  
-  "General_Discord": "Discord RPC",
-  "General_AutoPaste": "Auto-play from Clipboard",
-  "Perf_SmoothLoading": "Smooth Loading",
-  "Perf_SmoothLoadingDesc": "May improve performance",
-
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
   "Dialog_Confirm_Title": "Confirm",
@@ -152,13 +180,13 @@
   "Dialog_Done_Title": "Done",
   "Dialog_SelectDownloadFolder_Title": "Select Folder",
   "Dialog_Success": "Success",
-  
+
   "Dialog_ClearHistoryMessage": "Clear your search history?",
   "Dialog_HistoryCleared": "History cleared.",
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
-  
+
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",
   "Dialog_Merge_Success_Msg": "Playlists merged successfully.",
@@ -190,7 +218,7 @@
 
   "Quality_BestAvailable": "High (Opus)",
   "Quality_Standard": "Standard (AAC)",
-  
+
   "Stream_SelectQuality": "Select Quality",
   "Stream_LocalFile": "Local File",
   "Stream_Loading": "Buffering...",

@@ -1,4 +1,4 @@
-﻿<Application xmlns="https://github.com/avaloniaui"
+<Application xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:MyLiteMusicPlayer"
     xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
@@ -49,7 +49,7 @@
                         <TextBlock Text="{Binding Title}" Classes="track-title" FontWeight="Medium"
                             FontSize="14" TextTrimming="CharacterEllipsis" MaxLines="1" />
                         <TextBlock Text="{Binding Author}" FontSize="12"
-                            Foreground="{StaticResource TextSecondaryBrush}"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
                             TextTrimming="CharacterEllipsis" MaxLines="1" />
                     </StackPanel>
 
@@ -57,7 +57,7 @@
                     <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
                         <!-- ZIndex повышен, цвет AccentBrush -->
                         <mi:MaterialIcon Kind="CheckCircle" Width="18" Height="18"
-                            Foreground="{StaticResource AccentBrush}"
+                            Foreground="{DynamicResource AccentBrush}"
                             IsVisible="{Binding IsDownloaded}"
                             HorizontalAlignment="Center" VerticalAlignment="Center"
                             ZIndex="5" />
@@ -65,7 +65,7 @@
                         <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
                             Width="36" Height="4"
                             IsVisible="{Binding IsDownloading}"
-                            Foreground="{StaticResource AccentBrush}"
+                            Foreground="{DynamicResource AccentBrush}"
                             HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Panel>
 
@@ -88,14 +88,14 @@
                         ToolTip.Tip="{Binding L[Queue_Add]}"
                         IsVisible="{Binding ShowAddToQueue}">
                         <mi:MaterialIcon Kind="PlaylistPlus" Width="18" Height="18"
-                            Foreground="{StaticResource TextSecondaryBrush}" />
+                            Foreground="{DynamicResource TextSecondaryBrush}" />
                     </Button>
 
                     <!-- 5. DURATION -->
                     <TextBlock Grid.Column="5"
                         Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
                         VerticalAlignment="Center"
-                        Foreground="{StaticResource TextSecondaryBrush}"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
                         FontSize="13"
                         HorizontalAlignment="Right"
                         Margin="0,0,12,0"
@@ -159,7 +159,7 @@
         </Style>
 
         <Style Selector="Panel.track-row mi|MaterialIcon.icon-pause">
-            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Opacity" Value="0" />
             <Setter Property="Transitions">
                 <Transitions>
@@ -173,12 +173,12 @@
         </Style>
 
         <Style Selector="Panel.track-row TextBlock.track-title">
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         </Style>
 
         <!-- HOVER -->
         <Style Selector="Panel.track-row:pointerover Border.track-bg">
-            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
         </Style>
 
         <Style Selector="Panel.track-row:pointerover Border.hover-overlay">
@@ -191,11 +191,11 @@
 
         <!-- ACTIVE TRACK -->
         <Style Selector="Panel.track-row.is-active Border.track-bg">
-            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
         </Style>
 
         <Style Selector="Panel.track-row.is-active TextBlock.track-title">
-            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
 
         <Style Selector="Panel.track-row.is-active Border.hover-overlay">

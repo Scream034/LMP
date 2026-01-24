@@ -1,4 +1,4 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Playlist"
     xmlns:mi="using:Material.Icons.Avalonia"
@@ -11,9 +11,9 @@
     CanResize="False"
     ShowInTaskbar="False"
     SystemDecorations="BorderOnly"
-    Background="{StaticResource BgPrimaryBrush}">
+    Background="{DynamicResource BgPrimaryBrush}">
 
-    <Border BorderBrush="{StaticResource BgHighlightBrush}"
+    <Border BorderBrush="{DynamicResource BgHighlightBrush}"
         BorderThickness="1"
         CornerRadius="8"
         Padding="24">
@@ -21,12 +21,12 @@
 
             <!-- Заголовок с иконкой -->
             <StackPanel Orientation="Horizontal" Spacing="12">
-                <Border Background="{StaticResource SystemErrorBgBrush}"
+                <Border Background="{DynamicResource SystemErrorBgBrush}"
                     CornerRadius="20"
                     Width="40" Height="40">
                     <mi:MaterialIcon Kind="DeleteOutline"
                         Width="20" Height="20"
-                        Foreground="{StaticResource SystemErrorBrush}"
+                        Foreground="{DynamicResource SystemErrorBrush}"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center" />
                 </Border>
@@ -34,43 +34,43 @@
                     <TextBlock Text="{Binding L[Delete_Title]}"
                         FontSize="18"
                         FontWeight="Bold"
-                        Foreground="{StaticResource TextPrimaryBrush}" />
+                        Foreground="{DynamicResource TextPrimaryBrush}" />
                     <TextBlock Text="{Binding PlaylistName}"
                         FontSize="13"
-                        Foreground="{StaticResource TextSecondaryBrush}" />
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
                 </StackPanel>
             </StackPanel>
 
             <!-- Описание -->
             <TextBlock Text="{Binding L[Delete_Description]}"
                 TextWrapping="Wrap"
-                Foreground="{StaticResource TextSecondaryBrush}"
+                Foreground="{DynamicResource TextSecondaryBrush}"
                 FontSize="13" />
 
             <!-- Опции удаления -->
             <StackPanel Spacing="8">
                 <!-- Только локально -->
-                <Border Background="{StaticResource BgElevatedBrush}"
+                <Border Background="{DynamicResource BgElevatedBrush}"
                     CornerRadius="8"
                     Padding="12"
                     Cursor="Hand">
                     <Border.Styles>
                         <Style Selector="Border:pointerover">
-                            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
                         </Style>
                     </Border.Styles>
                     <RadioButton IsChecked="{Binding IsLocalOnly}" GroupName="DeleteMode">
                         <StackPanel Orientation="Horizontal" Spacing="12" Margin="8,0,0,0">
                             <mi:MaterialIcon Kind="FolderRemove"
                                 Width="24" Height="24"
-                                Foreground="{StaticResource TextSecondaryBrush}" />
+                                Foreground="{DynamicResource TextSecondaryBrush}" />
                             <StackPanel>
                                 <TextBlock Text="{Binding L[Delete_LocalOnly]}"
                                     FontWeight="Medium"
-                                    Foreground="{StaticResource TextPrimaryBrush}" />
+                                    Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <TextBlock Text="{Binding L[Delete_LocalOnlyHint]}"
                                     FontSize="11"
-                                    Foreground="{StaticResource TextMutedBrush}"
+                                    Foreground="{DynamicResource TextMutedBrush}"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                         </StackPanel>
@@ -78,28 +78,28 @@
                 </Border>
 
                 <!-- Удалить везде (только если есть связь с облаком) -->
-                <Border Background="{StaticResource BgElevatedBrush}"
+                <Border Background="{DynamicResource BgElevatedBrush}"
                     CornerRadius="8"
                     Padding="12"
                     Cursor="Hand"
                     IsVisible="{Binding CanDeleteFromCloud}">
                     <Border.Styles>
                         <Style Selector="Border:pointerover">
-                            <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
                         </Style>
                     </Border.Styles>
                     <RadioButton IsChecked="{Binding IsDeleteEverywhere}" GroupName="DeleteMode">
                         <StackPanel Orientation="Horizontal" Spacing="12" Margin="8,0,0,0">
                             <mi:MaterialIcon Kind="CloudOff"
                                 Width="24" Height="24"
-                                Foreground="{StaticResource SystemErrorBrush}" />
+                                Foreground="{DynamicResource SystemErrorBrush}" />
                             <StackPanel>
                                 <TextBlock Text="{Binding L[Delete_Everywhere]}"
                                     FontWeight="Medium"
-                                    Foreground="{StaticResource TextPrimaryBrush}" />
+                                    Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <TextBlock Text="{Binding L[Delete_EverywhereHint]}"
                                     FontSize="11"
-                                    Foreground="{StaticResource TextMutedBrush}"
+                                    Foreground="{DynamicResource TextMutedBrush}"
                                     TextWrapping="Wrap" />
                             </StackPanel>
                         </StackPanel>
@@ -119,7 +119,7 @@
                     Content="{Binding L[Button_Delete]}"
                     Command="{Binding ConfirmCommand}"
                     MinWidth="100"
-                    Background="{StaticResource SystemErrorBrush}"
+                    Background="{DynamicResource SystemErrorBrush}"
                     Foreground="White" />
             </Grid>
         </StackPanel>

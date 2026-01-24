@@ -21,51 +21,38 @@ public partial class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // 1. Инициализируем локализацию ДО создания UI
+            // 0. Load theme BEFORE any UI is created
+            var themeManager = Program.Services.GetRequiredService<ThemeManagerService>();
+            themeManager.LoadAndApplyThemeOnStartup();
+
+            // 1. Initialize localization
             var library = Program.Services.GetRequiredService<LibraryService>();
             LocalizationService.Instance.Initialize(library.Data.LanguageCode);
 
-            // 2. Теперь создаём UI
+            // 2. Create UI
             var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow
             {
                 DataContext = mainWindowVM
             };
-
             Log.Info("Main window created and shown.");
 
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
-            // 3. Фоновая инициализация
+            // 3. Background initialization tasks
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    Log.Info("Starting background services initialization...");
                     var youtube = Program.Services.GetRequiredService<YoutubeProvider>();
                     await youtube.InitializeAsync();
-                    Log.Info("YouTube provider is ready.");
-                }
-                catch (Exception ex)
-                {
-                    Log.Info($"Background initialization failed: {ex.Message}");
-                }
-            });
-
-            // 4. Фоновая инициализация лайкнутых треков
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    Log.Info("Starting liked tracks sync...");
                     var musicLibraryManager = Program.Services.GetRequiredService<MusicLibraryManager>();
                     await musicLibraryManager.SyncLikedTracksAsync();
-                    Log.Info("Liked tracks sync completed.");
                 }
                 catch (Exception ex)
                 {
-                    Log.Info($"Liked tracks sync failed: {ex.Message}");
+                    Log.Error($"Background initialization failed: {ex.Message}");
                 }
             });
         }

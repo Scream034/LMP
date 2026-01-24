@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Home"
     xmlns:mi="using:Material.Icons.Avalonia"
@@ -17,7 +17,7 @@
             <Grid ColumnDefinitions="*, Auto" Margin="0,0,0,16">
                 <TextBlock Text="{Binding Greeting}"
                     FontSize="32" FontWeight="Bold"
-                    Foreground="{StaticResource TextPrimaryBrush}" />
+                    Foreground="{DynamicResource TextPrimaryBrush}" />
 
                 <Button Grid.Column="1"
                     Command="{Binding ToggleDebugCommand}"
@@ -30,32 +30,32 @@
 
             <!-- Debug Panel -->
             <Border IsVisible="{Binding ShowDebugInfo}"
-                Background="{StaticResource BgSecondaryBrush}" CornerRadius="8" Padding="16,12"
+                Background="{DynamicResource BgSecondaryBrush}" CornerRadius="8" Padding="16,12"
                 Margin="0,0,0,16">
                 <Grid ColumnDefinitions="*, *, *, *">
                     <StackPanel Grid.Column="0">
                         <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
+                            Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                            FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1">
                         <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
+                            Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
+                            FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
                         <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
+                            Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18"
-                            FontWeight="Bold" Foreground="{StaticResource SystemWarnOrangeBrush}" />
+                            FontWeight="Bold" Foreground="{DynamicResource SystemWarnOrangeBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3">
                         <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10"
-                            Foreground="{StaticResource TextMutedBrush}" />
+                            Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14"
-                            FontWeight="Bold" Foreground="{StaticResource SystemInfoBlueBrush}" />
+                            FontWeight="Bold" Foreground="{DynamicResource SystemInfoBlueBrush}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -78,14 +78,14 @@
                 </ListBox.ItemTemplate>
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem">
-                        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+                        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
                         <Setter Property="Padding" Value="16,8" />
                         <Setter Property="CornerRadius" Value="20" />
                         <Setter Property="Cursor" Value="Hand" />
                     </Style>
                     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                        <Setter Property="Background" Value="{StaticResource TextPrimaryBrush}" />
-                        <Setter Property="Foreground" Value="{StaticResource BgPrimaryBrush}" />
+                        <Setter Property="Background" Value="{DynamicResource TextPrimaryBrush}" />
+                        <Setter Property="Foreground" Value="{DynamicResource BgPrimaryBrush}" />
                     </Style>
                 </ListBox.Styles>
             </ListBox>

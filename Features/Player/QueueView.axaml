@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Player"
     xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
@@ -13,12 +13,12 @@
         <StackPanel IsVisible="{Binding IsEmpty}" HorizontalAlignment="Center"
             VerticalAlignment="Center" Spacing="16">
             <mi:MaterialIcon Kind="PlaylistMusicOutline" Width="64" Height="64"
-                Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" />
+                Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
             <StackPanel HorizontalAlignment="Center">
                 <TextBlock Text="{Binding L[Queue_Empty]}" FontSize="20" FontWeight="Bold"
-                    Foreground="{StaticResource TextPrimaryBrush}" TextAlignment="Center" />
+                    Foreground="{DynamicResource TextPrimaryBrush}" TextAlignment="Center" />
                 <TextBlock Text="{Binding L[Queue_EmptySubtitle]}" FontSize="14"
-                    Foreground="{StaticResource TextSecondaryBrush}" TextAlignment="Center"
+                    Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center"
                     Margin="0,4,0,0" />
             </StackPanel>
         </StackPanel>
@@ -33,7 +33,7 @@
                     <TextBlock Text="{Binding L[Queue_Title]}" FontSize="32" FontWeight="Bold"
                         TextTrimming="CharacterEllipsis" MaxLines="1" />
                     <TextBlock Text="{Binding L[Queue_NowPlaying]}" FontSize="13"
-                        Foreground="{StaticResource AccentBrush}" Margin="0,4,0,0"
+                        Foreground="{DynamicResource AccentBrush}" Margin="0,4,0,0"
                         FontWeight="SemiBold" />
                 </StackPanel>
 
@@ -114,7 +114,7 @@
                                     </Style>
                                     <Style Selector="Border.track-row.isActive">
                                         <Setter Property="Background"
-                                            Value="{StaticResource BgElevatedBrush}" />
+                                            Value="{DynamicResource BgElevatedBrush}" />
                                     </Style>
                                 </Border.Styles>
                             </Border>
@@ -129,7 +129,7 @@
                                 ToolTip.Tip="{Binding L[Queue_Remove]}"> <!-- Tooltip: Remove -->
                                 <!-- Иконка КРЕСТИК (Close) или КОРЗИНА (Delete), а не Плюс -->
                                 <mi:MaterialIcon Kind="Close" Width="16" Height="16"
-                                    Foreground="{StaticResource TextMutedBrush}" />
+                                    Foreground="{DynamicResource TextMutedBrush}" />
                             </Button>
                         </Grid>
                     </DataTemplate>

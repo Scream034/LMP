@@ -1,4 +1,4 @@
-﻿<Styles xmlns="https://github.com/avaloniaui"
+<Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Library"
     xmlns:mi="using:Material.Icons.Avalonia"
@@ -8,7 +8,7 @@
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                    <Border Background="{StaticResource BgElevatedBrush}"
+                    <Border Background="{DynamicResource BgElevatedBrush}"
                         CornerRadius="8"
                         Width="160" Height="220"
                         Margin="0,0,16,16"
@@ -27,15 +27,15 @@
                                     <Border Width="136" Height="136" CornerRadius="4"
                                         ClipToBounds="True"
                                         Margin="0,0,0,12">
-                                        <Panel Background="{StaticResource BgElevatedBrush}">
+                                        <Panel Background="{DynamicResource BgElevatedBrush}">
                                             <!-- Icons / Images (как было) -->
                                             <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
-                                                Foreground="{StaticResource AccentBrush}"
+                                                Foreground="{DynamicResource AccentBrush}"
                                                 HorizontalAlignment="Center" VerticalAlignment="Center"
                                                 IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
 
                                             <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
-                                                Foreground="{StaticResource TextMutedBrush}"
+                                                Foreground="{DynamicResource TextMutedBrush}"
                                                 HorizontalAlignment="Center" VerticalAlignment="Center">
                                                 <mi:MaterialIcon.IsVisible>
                                                     <MultiBinding Converter="{x:Static BoolConverters.And}">
@@ -57,10 +57,10 @@
 
                                     <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="14"
                                         TextTrimming="CharacterEllipsis" MaxLines="1"
-                                        Foreground="{StaticResource TextPrimaryBrush}" />
+                                        Foreground="{DynamicResource TextPrimaryBrush}" />
                                     <TextBlock Text="{Binding FormattedTrackCount}" FontSize="12"
                                         Margin="0,4,0,0"
-                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                                        Foreground="{DynamicResource TextSecondaryBrush}" />
                                 </StackPanel>
                             </Button>
                             

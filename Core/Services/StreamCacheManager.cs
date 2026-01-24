@@ -1,4 +1,6 @@
-﻿using System.Security.Cryptography;
+﻿
+// === ФАЙЛ: Core/Services/StreamCacheManager.cs ===
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MyLiteMusicPlayer.Core.Models;
@@ -20,13 +22,13 @@ public class StreamCacheMetadata
 
 public class StreamCacheManager : IDisposable
 {
+    private readonly LibraryService _library;
     private readonly string _cacheFolder;
-    private readonly long _maxCacheSizeBytes;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
 
-    public StreamCacheManager(long maxCacheSizeMb = 2048)
+    public StreamCacheManager(LibraryService library)
     {
-        _maxCacheSizeBytes = maxCacheSizeMb * 1024 * 1024;
+        _library = library;
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "StreamCache");
         Directory.CreateDirectory(_cacheFolder);
@@ -45,24 +47,16 @@ public class StreamCacheManager : IDisposable
         return Path.Combine(_cacheFolder, $"{safeId}.meta");
     }
 
-    /// <summary>
-    /// Попытка получить метаданные без создания новых.
-    /// Используется для проверки наличия кэша перед сетевыми запросами.
-    /// </summary>
     public StreamCacheMetadata? TryGetMetadata(string trackId)
     {
         var metaPath = GetMetaPath(trackId);
         if (!File.Exists(metaPath)) return null;
-
         try
         {
             var json = File.ReadAllText(metaPath);
             return JsonSerializer.Deserialize<StreamCacheMetadata>(json);
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
     }
 
     public StreamCacheMetadata LoadOrCreateMetadata(string trackId, string url, long contentLength)
@@ -76,7 +70,6 @@ public class StreamCacheManager : IDisposable
             return meta;
         }
 
-        // Создаём новые метаданные
         var newMeta = new StreamCacheMetadata
         {
             TrackId = trackId,
@@ -87,7 +80,6 @@ public class StreamCacheManager : IDisposable
             RangesJson = "[]"
         };
 
-        // Сброс кэша при несовпадении размеров
         var cachePath = GetCachePath(trackId);
         if (File.Exists(cachePath)) try { File.Delete(cachePath); } catch { }
 
@@ -103,7 +95,7 @@ public class StreamCacheManager : IDisposable
             var json = JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(metaPath, json);
         }
-        catch (Exception ex) { Log.Info($"Failed to save metadata: {ex.Message}"); }
+        catch { }
     }
 
     public void UpdateRanges(string trackId, RangeMap ranges)
@@ -140,11 +132,34 @@ public class StreamCacheManager : IDisposable
     {
         var meta = TryGetMetadata(trackId);
         if (meta == null) return false;
-
         if (!File.Exists(GetCachePath(trackId))) return false;
-
         var ranges = RangeMap.Deserialize(meta.RangesJson);
         return ranges.IsFullyDownloaded(meta.ContentLength);
+    }
+    
+    public async Task ClearAllAsync()
+    {
+        await _cleanupLock.WaitAsync();
+        try
+        {
+            foreach (var file in Directory.GetFiles(_cacheFolder))
+            {
+                try { File.Delete(file); } catch { }
+            }
+            Log.Info("All stream cache cleared");
+        }
+        finally { _cleanupLock.Release(); }
+    }
+    
+    public (int FileCount, long SizeMb) GetStats()
+    {
+        try
+        {
+            var files = Directory.GetFiles(_cacheFolder, "*.cache");
+            long size = files.Sum(f => new FileInfo(f).Length);
+            return (files.Length, size / 1024 / 1024);
+        }
+        catch { return (0, 0); }
     }
 
     private async Task CleanupOldCacheAsync()
@@ -158,10 +173,11 @@ public class StreamCacheManager : IDisposable
                 .ToList();
 
             long totalSize = files.Sum(f => f.Length);
+            long maxCacheBytes = (long)_library.Data.Storage.AudioCacheLimitMb * 1024 * 1024;
 
-            if (totalSize <= _maxCacheSizeBytes) return;
+            if (totalSize <= maxCacheBytes) return;
 
-            Log.Info($"Cache size {totalSize / 1024 / 1024}MB exceeds limit, cleaning...");
+            Log.Info($"Stream cache size {totalSize / 1024 / 1024}MB exceeds limit {maxCacheBytes / 1024 / 1024}MB, cleaning...");
 
             var metaFiles = files
                 .Select(f => new
@@ -173,7 +189,7 @@ public class StreamCacheManager : IDisposable
                 .OrderBy(x => x.LastAccess)
                 .ToList();
 
-            long targetSize = _maxCacheSizeBytes * 70 / 100;
+            long targetSize = maxCacheBytes * 70 / 100;
             long deleted = 0;
 
             foreach (var item in metaFiles)
@@ -199,9 +215,6 @@ public class StreamCacheManager : IDisposable
         {
             if (File.Exists(metaPath))
             {
-                // Читаем только начало файла для скорости или используем FileInfo CreationTime как фоллбек, 
-                // но здесь у нас LastAccessedAt внутри JSON.
-                // Для простоты читаем весь, это редкая операция (при очистке)
                 var json = File.ReadAllText(metaPath);
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("LastAccessedAt", out var prop) && prop.TryGetDateTime(out var dt))
@@ -217,27 +230,6 @@ public class StreamCacheManager : IDisposable
         using var sha = SHA256.Create();
         var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(trackId));
         return Convert.ToHexString(bytes)[..32];
-    }
-
-    public (int FileCount, long SizeMb) GetStats()
-    {
-        try
-        {
-            var files = Directory.GetFiles(_cacheFolder, "*.cache");
-            long size = files.Sum(f => new FileInfo(f).Length);
-            return (files.Length, size / 1024 / 1024);
-        }
-        catch { return (0, 0); }
-    }
-
-    public void ClearAll()
-    {
-        try
-        {
-            foreach (var file in Directory.GetFiles(_cacheFolder)) File.Delete(file);
-            Log.Info("All cache cleared");
-        }
-        catch { }
     }
 
     public void Dispose() => _cleanupLock.Dispose();

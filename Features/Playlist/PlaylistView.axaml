@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Playlist"
     xmlns:asyncImage="using:AsyncImageLoader"
@@ -20,9 +20,9 @@
 
         <!-- HEADER (Оставлен без изменений) -->
         <Border Grid.Row="0"
-            BorderBrush="{StaticResource BgHighlightBrush}"
+            BorderBrush="{DynamicResource BgHighlightBrush}"
             BorderThickness="0,0,0,1"
-            Background="{StaticResource BgBaseBrush}"
+            Background="{DynamicResource BgBaseBrush}"
             Padding="24,16">
 
             <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
@@ -31,11 +31,11 @@
                 <Grid RowDefinitions="*, Auto" Width="800">
                     <Grid Grid.Row="0" ColumnDefinitions="Auto, *" Margin="0,0,0,16">
                         <Border Grid.Column="0" Width="190" Height="190" CornerRadius="8"
-                            ClipToBounds="True" Background="{StaticResource BgSkeletonBrush}"
+                            ClipToBounds="True" Background="{DynamicResource BgSkeletonBrush}"
                             BoxShadow="{StaticResource CardShadow}">
                             <Panel>
                                 <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
-                                    Foreground="{StaticResource TextMutedBrush}"
+                                    Foreground="{DynamicResource TextMutedBrush}"
                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
 
                                 <Image
@@ -51,16 +51,16 @@
 
                         <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
                             <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
-                                Foreground="{StaticResource TextSecondaryBrush}" LetterSpacing="1" />
+                                Foreground="{DynamicResource TextSecondaryBrush}" LetterSpacing="1" />
                             <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black"
                                 Margin="0,4,0,0" Padding="0,0,0,12" TextWrapping="Wrap" MaxLines="2"
                                 ClipToBounds="False" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <TextBlock Text="{Binding FormattedTrackCount}" FontWeight="SemiBold"
-                                    Foreground="{StaticResource TextPrimaryBrush}" />
-                                <TextBlock Text="•" Foreground="{StaticResource TextSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="•" Foreground="{DynamicResource TextSecondaryBrush}" />
                                 <TextBlock Text="{Binding FormattedDuration}"
-                                    Foreground="{StaticResource TextSecondaryBrush}" />
+                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
                         </StackPanel>
                     </Grid>
@@ -71,10 +71,10 @@
                             Height="56">
                             <Panel>
                                 <mi:MaterialIcon Kind="Play" Width="28" Height="28"
-                                    Foreground="{StaticResource TextDarkBrush}"
+                                    Foreground="{DynamicResource TextDarkBrush}"
                                     IsVisible="{Binding !IsPlayingThisPlaylist}" />
                                 <mi:MaterialIcon Kind="Pause" Width="28" Height="28"
-                                    Foreground="{StaticResource TextDarkBrush}"
+                                    Foreground="{DynamicResource TextDarkBrush}"
                                     IsVisible="{Binding IsPlayingThisPlaylist}" />
                             </Panel>
                         </Button>
@@ -112,7 +112,7 @@
             <GridSplitter.Template>
                 <ControlTemplate>
                     <Border Background="Transparent" Padding="0,2" Cursor="SizeNorthSouth">
-                        <Border Height="2" Width="40" Background="{StaticResource BgHighlightBrush}"
+                        <Border Height="2" Width="40" Background="{DynamicResource BgHighlightBrush}"
                             CornerRadius="1" />
                     </Border>
                 </ControlTemplate>

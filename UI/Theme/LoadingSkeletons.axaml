@@ -3,7 +3,7 @@
     xmlns:mi="using:Material.Icons.Avalonia">
 
     <!-- ============================================= -->
-    <!-- АНИМАЦИЯ ПЕРЕЛИВАНИЯ ОБЛАКА (CROSSFADE)       -->
+    <!-- РђРќРРњРђР¦РРЇ РџР•Р Р•Р›РР’РђРќРРЇ РћР‘Р›РђРљРђ (CROSSFADE)       -->
     <!-- ============================================= -->
 
     <Style Selector="Panel.cloud-crossfade-overlay">
@@ -23,7 +23,7 @@
     </Style>
 
     <!-- ============================================= -->
-    <!-- АНИМАЦИЯ ДЫХАНИЯ (BREATHING)                  -->
+    <!-- РђРќРРњРђР¦РРЇ Р”Р«РҐРђРќРРЇ (BREATHING)                  -->
     <!-- ============================================= -->
 
     <Style Selector="StackPanel.breathing">
@@ -41,11 +41,11 @@
     </Style>
 
     <!-- ============================================= -->
-    <!-- АНИМАЦИЯ ЛУПЫ (ПЛАВНОЕ ПАРЕНИЕ)               -->
+    <!-- РђРќРРњРђР¦РРЇ Р›РЈРџР« (РџР›РђР’РќРћР• РџРђР Р•РќРР•)               -->
     <!-- ============================================= -->
 
     <Style Selector="mi|MaterialIcon.scanner-smooth">
-        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         <Setter Property="RenderTransformOrigin" Value="50%,50%" />
         <Setter Property="RenderTransform">
             <Setter.Value>
@@ -57,13 +57,13 @@
             </Setter.Value>
         </Setter>
 
-        <!-- Тень для объема -->
+        <!-- РўРµРЅСЊ РґР»СЏ РѕР±СЉРµРјР° -->
         <Setter Property="Effect">
             <DropShadowEffect Color="Black" BlurRadius="8" Opacity="0.4" OffsetX="2" OffsetY="2" />
         </Setter>
 
         <Style.Animations>
-            <!-- 1. Движение по горизонтали (Широкая амплитуда) -->
+            <!-- 1. Р”РІРёР¶РµРЅРёРµ РїРѕ РіРѕСЂРёР·РѕРЅС‚Р°Р»Рё (РЁРёСЂРѕРєР°СЏ Р°РјРїР»РёС‚СѓРґР°) -->
             <Animation Duration="0:0:4" IterationCount="Infinite" PlaybackDirection="Alternate"
                 Easing="SineEaseInOut">
                 <KeyFrame Cue="0%">
@@ -71,12 +71,12 @@
                     <Setter Property="RotateTransform.Angle" Value="-15" />
                 </KeyFrame>
                 <KeyFrame Cue="100%">
-                    <Setter Property="TranslateTransform.X" Value="250" /> <!-- Двигаем вправо -->
-                    <Setter Property="RotateTransform.Angle" Value="15" />  <!-- Немного наклоняем -->
+                    <Setter Property="TranslateTransform.X" Value="250" /> <!-- Р”РІРёРіР°РµРј РІРїСЂР°РІРѕ -->
+                    <Setter Property="RotateTransform.Angle" Value="15" />  <!-- РќРµРјРЅРѕРіРѕ РЅР°РєР»РѕРЅСЏРµРј -->
                 </KeyFrame>
             </Animation>
 
-            <!-- 2. Движение по вертикали (Меньшая амплитуда, другой тайминг для эффекта восьмерки) -->
+            <!-- 2. Р”РІРёР¶РµРЅРёРµ РїРѕ РІРµСЂС‚РёРєР°Р»Рё (РњРµРЅСЊС€Р°СЏ Р°РјРїР»РёС‚СѓРґР°, РґСЂСѓРіРѕР№ С‚Р°Р№РјРёРЅРі РґР»СЏ СЌС„С„РµРєС‚Р° РІРѕСЃСЊРјРµСЂРєРё) -->
             <Animation Duration="0:0:2.5" IterationCount="Infinite" PlaybackDirection="Alternate"
                 Easing="SineEaseInOut">
                 <KeyFrame Cue="0%">
@@ -86,7 +86,7 @@
                 </KeyFrame>
                 <KeyFrame Cue="100%">
                     <Setter Property="TranslateTransform.Y" Value="120" />
-                    <Setter Property="ScaleTransform.ScaleX" Value="1.1" /> <!-- Пульсация размера -->
+                    <Setter Property="ScaleTransform.ScaleX" Value="1.1" /> <!-- РџСѓР»СЊСЃР°С†РёСЏ СЂР°Р·РјРµСЂР° -->
                     <Setter Property="ScaleTransform.ScaleY" Value="1.1" />
                 </KeyFrame>
             </Animation>
@@ -94,10 +94,10 @@
     </Style>
 
     <!-- ============================================= -->
-    <!-- СКЕЛЕТОНЫ ЗАГРУЗКИ                            -->
+    <!-- РЎРљР•Р›Р•РўРћРќР« Р—РђР“Р РЈР—РљР                            -->
     <!-- ============================================= -->
 
-    <!-- Базовая строка трека -->
+    <!-- Р‘Р°Р·РѕРІР°СЏ СЃС‚СЂРѕРєР° С‚СЂРµРєР° -->
     <Style Selector="ContentControl.track-skeleton-row">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="Template">
@@ -105,24 +105,24 @@
                 <ControlTemplate>
                     <Border Height="52" Margin="0,2" Background="Transparent">
                         <Grid ColumnDefinitions="52, *, 50" Margin="8,0">
-                            <!-- Иконка/Обложка -->
+                            <!-- РРєРѕРЅРєР°/РћР±Р»РѕР¶РєР° -->
                             <Border Grid.Column="0" Width="40" Height="40"
-                                Background="{StaticResource BgSkeletonBrush}" CornerRadius="4"
+                                Background="{DynamicResource BgSkeletonBrush}" CornerRadius="4"
                                 VerticalAlignment="Center" HorizontalAlignment="Left" />
 
-                            <!-- Текстовые блоки -->
+                            <!-- РўРµРєСЃС‚РѕРІС‹Рµ Р±Р»РѕРєРё -->
                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0">
                                 <Border Width="180" Height="10"
-                                    Background="{StaticResource BgSkeletonBrush}"
+                                    Background="{DynamicResource BgSkeletonBrush}"
                                     HorizontalAlignment="Left" CornerRadius="2" />
                                 <Border Width="100" Height="7"
-                                    Background="{StaticResource BgSkeletonDeepBrush}"
+                                    Background="{DynamicResource BgSkeletonDeepBrush}"
                                     HorizontalAlignment="Left" Margin="0,6,0,0" CornerRadius="2" />
                             </StackPanel>
 
-                            <!-- Длительность -->
+                            <!-- Р”Р»РёС‚РµР»СЊРЅРѕСЃС‚СЊ -->
                             <Border Grid.Column="2" Width="30" Height="7"
-                                Background="{StaticResource BgSkeletonDeepBrush}"
+                                Background="{DynamicResource BgSkeletonDeepBrush}"
                                 VerticalAlignment="Center" HorizontalAlignment="Right"
                                 CornerRadius="2" />
                         </Grid>
@@ -132,7 +132,7 @@
         </Setter>
     </Style>
 
-    <!-- Пагинация (Нижний лоадер) -->
+    <!-- РџР°РіРёРЅР°С†РёСЏ (РќРёР¶РЅРёР№ Р»РѕР°РґРµСЂ) -->
     <Style Selector="ContentControl.loading-skeletons">
         <Setter Property="ContentTemplate">
             <Setter.Value>
@@ -150,20 +150,20 @@
     </Style>
 
     <!-- 
-        ОБЩИЙ ШАБЛОН СПИСКА (для Initial и Search)
-        Используем один стиль StackPanel для идентичности
+        РћР‘Р©РР™ РЁРђР‘Р›РћРќ РЎРџРРЎРљРђ (РґР»СЏ Initial Рё Search)
+        РСЃРїРѕР»СЊР·СѓРµРј РѕРґРёРЅ СЃС‚РёР»СЊ StackPanel РґР»СЏ РёРґРµРЅС‚РёС‡РЅРѕСЃС‚Рё
     -->
     <Style Selector="StackPanel.skeleton-list-container">
         <Setter Property="Spacing" Value="4" />
         <Setter Property="Margin" Value="0,10" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
 
-        <!-- Единый Блюр -->
+        <!-- Р•РґРёРЅС‹Р№ Р‘Р»СЋСЂ -->
         <Setter Property="Effect">
             <BlurEffect Radius="6" />
         </Setter>
 
-        <!-- Единый Градиент исчезновения снизу -->
+        <!-- Р•РґРёРЅС‹Р№ Р“СЂР°РґРёРµРЅС‚ РёСЃС‡РµР·РЅРѕРІРµРЅРёСЏ СЃРЅРёР·Сѓ -->
         <Setter Property="OpacityMask">
             <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
                 <GradientStop Offset="0.0" Color="#FF000000" />
@@ -174,12 +174,12 @@
     </Style>
 
 
-    <!-- Начальная загрузка (IsLoading) -->
+    <!-- РќР°С‡Р°Р»СЊРЅР°СЏ Р·Р°РіСЂСѓР·РєР° (IsLoading) -->
     <Style Selector="ContentControl.loading-initial">
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate>
-                    <!-- Используем общий класс skeleton-list-container + анимацию breathing -->
+                    <!-- РСЃРїРѕР»СЊР·СѓРµРј РѕР±С‰РёР№ РєР»Р°СЃСЃ skeleton-list-container + Р°РЅРёРјР°С†РёСЋ breathing -->
                     <StackPanel Classes="breathing skeleton-list-container">
                         <ContentControl Classes="track-skeleton-row" />
                         <ContentControl Classes="track-skeleton-row" />

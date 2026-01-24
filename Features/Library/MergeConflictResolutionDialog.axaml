@@ -1,4 +1,4 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:MyLiteMusicPlayer.Features.Library"
         x:Class="MyLiteMusicPlayer.Features.Library.MergeConflictResolutionDialog"
@@ -7,9 +7,9 @@
         Width="600" Height="500"
         WindowStartupLocation="CenterOwner"
         SystemDecorations="BorderOnly"
-        Background="{StaticResource BgBaseBrush}">
+        Background="{DynamicResource BgBaseBrush}">
 
-    <Border BorderBrush="{StaticResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+    <Border BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
         <Grid RowDefinitions="Auto, Auto, *, Auto">
             
             <TextBlock Grid.Row="0" Text="{Binding L[Conflict_Header]}" FontSize="20" FontWeight="Bold" Margin="0,0,0,16"/>
@@ -25,11 +25,11 @@
                 <ItemsControl ItemsSource="{Binding Conflicts}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="6" Padding="12" Margin="0,0,0,8">
+                            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="6" Padding="12" Margin="0,0,0,8">
                                 <Grid ColumnDefinitions="*, Auto">
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Text="{Binding PlaylistName}" FontWeight="Bold" FontSize="16"/>
-                                        <TextBlock Text="Этот плейлист уже существует локально." FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <TextBlock Text="Этот плейлист уже существует локально." FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"/>
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16">

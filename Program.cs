@@ -55,6 +55,7 @@ class Program
 
         // --- Core Services ---
         services.AddSingleton<LibraryService>();
+        services.AddSingleton<ThemeManagerService>();
         services.AddSingleton<GoogleAuthService>();
         services.AddSingleton<YoutubeProvider>();
         services.AddSingleton<YoutubeUserDataService>();
@@ -63,6 +64,7 @@ class Program
         services.AddSingleton<IClipboardService, ClipboardService>();
 
         // --- Caching ---
+        services.AddSingleton<StreamCacheManager>();
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
         services.AddSingleton<MemoryMonitor>();

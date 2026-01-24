@@ -1,4 +1,4 @@
-﻿<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:MyLiteMusicPlayer.Features.Search"
     xmlns:mi="using:Material.Icons.Avalonia"
@@ -27,7 +27,7 @@
                 </TextBox>
 
                 <Button Command="{Binding SearchCommand}" Classes="icon-btn"
-                    Width="44" Height="44" Background="{StaticResource BgElevatedBrush}"
+                    Width="44" Height="44" Background="{DynamicResource BgElevatedBrush}"
                     ToolTip.Tip="{Binding L[Search_Button]}">
                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
                 </Button>
@@ -36,11 +36,11 @@
                 <Button Command="{Binding ForceSearchCommand}"
                     Classes="icon-btn"
                     Width="44" Height="44"
-                    Background="{StaticResource BgElevatedBrush}"
+                    Background="{DynamicResource BgElevatedBrush}"
                     IsVisible="{Binding ShowForceSearchButton}"
                     ToolTip.Tip="{Binding L[Search_ForceRefresh]}">
                     <mi:MaterialIcon Kind="Refresh" Width="20" Height="20"
-                        Foreground="{StaticResource AccentBrush}" />
+                        Foreground="{DynamicResource AccentBrush}" />
                 </Button>
             </StackPanel>
 
@@ -49,10 +49,10 @@
                 IsVisible="{Binding IsFromCache}"
                 Opacity="0.6">
                 <mi:MaterialIcon Kind="DatabaseOutline" Width="14" Height="14"
-                    Foreground="{StaticResource TextMutedBrush}" />
+                    Foreground="{DynamicResource TextMutedBrush}" />
                 <TextBlock Text="{Binding L[Search_FromCache]}"
                     FontSize="12"
-                    Foreground="{StaticResource TextMutedBrush}" />
+                    Foreground="{DynamicResource TextMutedBrush}" />
             </StackPanel>
 
             <!-- History Chips -->
@@ -67,7 +67,7 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Background="{StaticResource BgElevatedBrush}" CornerRadius="16"
+                            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="16"
                                 Padding="4,0,0,0">
                                 <StackPanel Orientation="Horizontal">
                                     <Button
@@ -76,7 +76,7 @@
                                         Background="Transparent" BorderThickness="0"
                                         Content="{Binding}"
                                         Padding="12,6"
-                                        Foreground="{StaticResource TextSecondaryBrush}" />
+                                        Foreground="{DynamicResource TextSecondaryBrush}" />
 
                                     <Button
                                         Command="{Binding #SearchRoot.DataContext.RemoveHistoryCommand}"
@@ -84,7 +84,7 @@
                                         Classes="icon-btn" Width="24" Height="24"
                                         Margin="0,0,4,0" Background="Transparent">
                                         <mi:MaterialIcon Kind="Close" Width="14" Height="14"
-                                            Foreground="{StaticResource TextMutedBrush}" />
+                                            Foreground="{DynamicResource TextMutedBrush}" />
                                     </Button>
                                 </StackPanel>
                             </Border>
@@ -95,13 +95,13 @@
 
             <Border
                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                Background="{StaticResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
+                Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
                 Margin="0,16,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                     <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20"
-                        Foreground="{StaticResource SystemErrorBrush}" />
+                        Foreground="{DynamicResource SystemErrorBrush}" />
                     <TextBlock Text="{Binding ErrorMessage}"
-                        Foreground="{StaticResource SystemErrorBrush}" VerticalAlignment="Center" />
+                        Foreground="{DynamicResource SystemErrorBrush}" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
         </StackPanel>
