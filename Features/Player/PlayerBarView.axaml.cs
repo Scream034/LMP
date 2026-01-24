@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 
 namespace MyLiteMusicPlayer.Features.Player;
 
@@ -14,9 +15,23 @@ public partial class PlayerBarView : UserControl
     {
         InitializeComponent();
         
-        // Подписка на изменение размеров контейнеров для пересчета позиций
         SeekHitBox.PropertyChanged += OnSeekHitBoxPropertyChanged;
         VolumeHitBox.PropertyChanged += OnVolumeHitBoxPropertyChanged;
+    }
+
+    // FIX: Принудительно скрываем тултипы при уходе контрола из дерева (сворачивание, переключение табов)
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        ForceHideTooltips();
+    }
+
+    private void ForceHideTooltips()
+    {
+        if (HoverTooltip != null) HoverTooltip.IsVisible = false;
+        if (VolumeTooltip != null) VolumeTooltip.IsVisible = false;
+        _isDraggingSeek = false;
+        _isDraggingVolume = false;
     }
 
     protected override void OnDataContextChanged(EventArgs e)
@@ -25,11 +40,8 @@ public partial class PlayerBarView : UserControl
         
         if (DataContext is PlayerBarViewModel vm)
         {
-            // Используем WeakEventManager или просто подписку с отпиской, 
-            // но в рамках UserControl, живущего долго, прямая подписка допустима.
             vm.PropertyChanged += (s, args) =>
             {
-                // Оптимизация: обновляем UI только при изменении конкретных свойств
                 switch (args.PropertyName)
                 {
                     case nameof(vm.PositionSeconds):
@@ -48,7 +60,6 @@ public partial class PlayerBarView : UserControl
         }
     }
 
-    // Обработка изменения размера окна/контрола
     private void OnSeekHitBoxPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (e.Property.Name == "Bounds")
@@ -66,7 +77,7 @@ public partial class PlayerBarView : UserControl
         }
     }
 
-    #region Visual Updates (Direct Manipulation for Performance)
+    #region Visual Updates
 
     private void UpdateSeekVisual()
     {
@@ -79,9 +90,8 @@ public partial class PlayerBarView : UserControl
         ratio = Math.Clamp(ratio, 0, 1);
         double progressWidth = width * ratio;
         
-        // Прямое изменение свойств контролов быстрее, чем Binding для частых обновлений
         ProgressBar.Width = progressWidth;
-        Canvas.SetLeft(SeekThumb, progressWidth - 6); // 6 = radius of thumb
+        Canvas.SetLeft(SeekThumb, progressWidth - 6);
     }
 
     private void UpdateBufferVisual()
@@ -120,10 +130,16 @@ public partial class PlayerBarView : UserControl
         if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
         if (vm.DurationSeconds <= 0) return;
 
+        // FIX: Если курсор ушел за пределы, скрываем тултип
+        if (!hitBox.IsPointerOver && !_isDraggingSeek)
+        {
+            HoverTooltip.IsVisible = false;
+            return;
+        }
+
         double ratio = GetClickRatio(hitBox, e);
         double hoverSeconds = ratio * vm.DurationSeconds;
 
-        // Показываем tooltip
         HoverTooltip.IsVisible = true;
         var hoverTime = TimeSpan.FromSeconds(hoverSeconds);
         HoverTimeText.Text = hoverTime.TotalHours >= 1
@@ -132,13 +148,11 @@ public partial class PlayerBarView : UserControl
         
         UpdateTooltipPosition(HoverTooltip, hitBox, e);
 
-        // Если тянем - обновляем визуально Thumb сразу (отзывчивость)
-        double thumbX = ratio * hitBox.Bounds.Width - 6;
-        
         if (_isDraggingSeek)
         {
+            double thumbX = ratio * hitBox.Bounds.Width - 6;
             Canvas.SetLeft(SeekThumb, thumbX);
-            ProgressBar.Width = thumbX + 6; // Обновляем полосу прогресса при перетаскивании
+            ProgressBar.Width = thumbX + 6;
             vm.UpdateSeekPosition(hoverSeconds);
         }
     }
@@ -150,15 +164,13 @@ public partial class PlayerBarView : UserControl
         if (!vm.HasTrack) return;
 
         _isDraggingSeek = true;
-        e.Pointer.Capture(hitBox); // Захват мыши, чтобы можно было уводить курсор за пределы
+        e.Pointer.Capture(hitBox);
         vm.StartSeek();
         SeekThumb.Classes.Add("dragging");
 
-        // Сразу прыгаем в точку клика
         double ratio = GetClickRatio(hitBox, e);
         double pos = ratio * vm.DurationSeconds;
         
-        // Визуальное обновление моментально
         double thumbX = ratio * hitBox.Bounds.Width - 6;
         Canvas.SetLeft(SeekThumb, thumbX);
         ProgressBar.Width = thumbX + 6;
@@ -185,17 +197,70 @@ public partial class PlayerBarView : UserControl
         if (!_isDraggingSeek)
         {
             HoverTooltip.IsVisible = false;
-            UpdateSeekVisual(); // Возврат на реальную позицию, если просто увели мышь
+            UpdateSeekVisual();
         }
+    }
+
+    private void OnSeekAreaCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        OnSeekAreaReleased(sender, null!);
+        HoverTooltip.IsVisible = false;
     }
 
     #endregion
 
     #region Volume Logic
 
+    // FEATURE: Скролл громкости
+    private void OnVolumeScroll(object? sender, PointerWheelEventArgs e)
+    {
+        if (DataContext is not PlayerBarViewModel vm) return;
+        
+        int step = 5;
+        // e.Delta.Y > 0 - вверх, < 0 - вниз
+        int delta = e.Delta.Y > 0 ? step : -step;
+        
+        int newVolume = Math.Clamp(vm.Volume + delta, 0, vm.MaxVolume);
+        
+        if (newVolume != vm.Volume)
+        {
+            vm.Volume = newVolume;
+            vm.OnVolumeChangeComplete();
+            
+            // Показываем тултип на короткое время при скролле
+            VolumeTooltip.IsVisible = true;
+            VolumeTooltipText.Text = $"{newVolume}%";
+            
+            // Центрируем тултип над слайдером если скроллим не над ним конкретно
+            if (VolumeHitBox.Bounds.Width > 0)
+            {
+                double thumbX = ((double)newVolume / vm.MaxVolume) * VolumeHitBox.Bounds.Width;
+                double tooltipX = thumbX - (VolumeTooltip.Bounds.Width / 2);
+                 if (VolumeTooltip.RenderTransform is TranslateTransform tr) tr.X = tooltipX;
+                 else VolumeTooltip.RenderTransform = new TranslateTransform(tooltipX, 0);
+            }
+            
+            // Таймер для скрытия тултипа после скролла (упрощенно через async)
+            // В реальном коде лучше CancellationToken, но для UI эффекта сойдет
+            _ = System.Threading.Tasks.Task.Delay(1000).ContinueWith(_ => 
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                   if (!_isDraggingVolume && !VolumeHitBox.IsPointerOver) VolumeTooltip.IsVisible = false;
+                }));
+        }
+        
+        e.Handled = true;
+    }
+
     private void OnVolumeAreaMoved(object? sender, PointerEventArgs e)
     {
         if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
+
+        // FIX: Если курсор ушел за пределы, скрываем тултип
+        if (!hitBox.IsPointerOver && !_isDraggingVolume)
+        {
+            VolumeTooltip.IsVisible = false;
+            return;
+        }
 
         double ratio = GetClickRatio(hitBox, e);
         int volumePercent = (int)(ratio * vm.MaxVolume);
@@ -211,8 +276,6 @@ public partial class PlayerBarView : UserControl
             VolumeBar.Width = thumbX + 6;
             
             vm.Volume = volumePercent;
-            // Note: UpdateVolumeVisual вызывается через PropertyChanged ViewModel, 
-            // но при драге мы обновляем UI напрямую для плавности.
         }
     }
 
@@ -257,6 +320,12 @@ public partial class PlayerBarView : UserControl
         }
     }
 
+    private void OnVolumeAreaCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        OnVolumeAreaReleased(sender, null!);
+        VolumeTooltip.IsVisible = false;
+    }
+
     #endregion
 
     #region Helpers
@@ -272,7 +341,6 @@ public partial class PlayerBarView : UserControl
         var point = e.GetCurrentPoint(hitBox);
         double tooltipX = point.Position.X - (tooltip.Bounds.Width / 2);
         
-        // Ограничиваем, чтобы тултип не вылезал за границы бара
         tooltipX = Math.Clamp(tooltipX, 0, hitBox.Bounds.Width - tooltip.Bounds.Width);
         
         if (tooltip.RenderTransform is TranslateTransform tr)

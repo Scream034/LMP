@@ -264,7 +264,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         // Volume updates TO audio engine
         this.WhenAnyValue(x => x.Volume)
-            .Skip(1)
             .Subscribe(v =>
             {
                 _audio.SetVolumeInstant(v);
@@ -376,6 +375,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         ToggleMuteCommand = ReactiveCommand.Create(() =>
         {
             _audio.ToggleMute();
+            Volume = (int)_audio.GetVolume();
             this.RaisePropertyChanged(nameof(VolumeTooltip));
         });
 
