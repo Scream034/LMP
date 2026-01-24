@@ -579,7 +579,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             ct.ThrowIfCancellationRequested();
 
             StreamDetails? stream = null;
-            try { stream = await GetOrRefreshStreamAsync(track, ct); }
+            try 
+            { 
+                // ИЗМЕНЕНИЕ: Передаем forceRefresh: false для первого запуска
+                stream = await GetOrRefreshStreamAsync(track, forceRefresh: false, ct); 
+            }
             catch (OperationCanceledException) { return; }
 
             if (stream == null)
@@ -620,12 +624,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     // Лямбда для обновления ссылки при 403 ошибке:
                     urlRefresher: async (token) =>
                     {
-                        // Принудительно чистим кэш провайдера для этого трека (опционально, но желательно)
-                        // В текущем API YoutubeProvider это не exposed, 
-                        // но GetOrRefreshStreamAsync сам попытается обновить если нужно.
-
-                        // Метод GetOrRefreshStreamAsync внутри делает refresh через YoutubeProvider.RefreshStreamUrlAsync
-                        var newStream = await GetOrRefreshStreamAsync(track, token);
+                        // При 403 ошибке мы ОБЯЗАНЫ запросить свежую ссылку в обход кэша
+                        var newStream = await GetOrRefreshStreamAsync(track, forceRefresh: true, token);
                         return newStream?.Url;
                     }
                 );
@@ -936,11 +936,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private record StreamDetails(string Url, long Size, int Bitrate, string Codec, string Container);
 
-    private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, CancellationToken ct)
+      private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, bool forceRefresh, CancellationToken ct)
     {
         bool hasUserOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
-        if (!hasUserOverride && _cacheManager.IsFullyCached(track.Id))
+        // ИЗМЕНЕНИЕ: Если forceRefresh, мы не доверяем локальному кэшу (метаданным), так как ссылка там старая
+        if (!forceRefresh && !hasUserOverride && _cacheManager.IsFullyCached(track.Id))
         {
             var meta = _cacheManager.TryGetMetadata(track.Id);
             if (meta != null && meta.ContentLength > 0 && !string.IsNullOrEmpty(meta.Codec))
@@ -953,7 +954,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             }
         }
 
-        bool needFresh = string.IsNullOrEmpty(track.StreamUrl) || string.IsNullOrEmpty(track.CachedCodec) || hasUserOverride;
+        bool needFresh = forceRefresh || string.IsNullOrEmpty(track.StreamUrl) || string.IsNullOrEmpty(track.CachedCodec) || hasUserOverride;
 
         if (!needFresh)
             return new(track.StreamUrl, -1, track.CachedBitrate, track.CachedCodec, track.CachedContainer);
@@ -964,7 +965,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(RefreshTimeoutS));
 
-            var result = await _youtube.RefreshStreamUrlAsync(track, cts.Token);
+            // ИЗМЕНЕНИЕ: Передаем forceRefresh в YoutubeProvider
+            var result = await _youtube.RefreshStreamUrlAsync(track, forceRefresh, cts.Token);
             _lastApiCall = DateTime.UtcNow;
 
             if (!result.HasValue) return null;

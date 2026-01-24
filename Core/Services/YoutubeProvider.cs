@@ -86,8 +86,9 @@ public partial class YoutubeProvider
 
     #region RefreshStreamUrlAsync
 
-    public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
+     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
         TrackInfo track,
+        bool forceRefresh = false, 
         CancellationToken ct = default)
     {
         string? videoId = ExtractVideoIdFromTrack(track);
@@ -98,7 +99,11 @@ public partial class YoutubeProvider
         }
 
         var sw = Stopwatch.StartNew();
-        NotifyStatus($"[YouTube] [{videoId}] Getting stream URL...");
+        // Меняем сообщение лога, чтобы видеть, что происходит обновление
+        if (forceRefresh)
+            NotifyStatus($"[YouTube] [{videoId}] 403 detected. Forcing stream URL refresh...");
+        else
+            NotifyStatus($"[YouTube] [{videoId}] Getting stream URL...");
 
         string? targetContainer = track.TransientContainer;
         int targetBitrate = track.TransientBitrate;
@@ -114,7 +119,8 @@ public partial class YoutubeProvider
 
         string cacheKey = GenerateCacheKey(videoId, targetContainer, targetBitrate);
 
-        if (TryGetFromCache(cacheKey, out var cached))
+        // ИЗМЕНЕНИЕ: Если forceRefresh == true, мы пропускаем блок с кэшем
+        if (!forceRefresh && TryGetFromCache(cacheKey, out var cached))
         {
             track.StreamUrl = cached.Url;
             NotifyStatus($"[YouTube] [{videoId}] Using cached URL ({cached.Codec}/{cached.Bitrate}kbps)");
