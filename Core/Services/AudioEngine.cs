@@ -267,7 +267,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         Try(() =>
         {
             float gain = MathF.Pow(10f, Math.Clamp(_library.Data.TargetGainDb, -20f, 20f) / 20f);
-            _player.Volume = Math.Clamp((int)Math.Round(_volumePercent * gain), 0, 500);
+            int finalVolume = Math.Clamp((int)Math.Round(_volumePercent * gain), 0, 500);
+
+            // Проверка на случай рассинхрона (диагностика)
+            if (_player.Volume != finalVolume)
+            {
+                // Log.Debug($"[AudioEngine] Enforcing volume: {finalVolume} (was {_player.Volume})");
+                _player.Volume = finalVolume;
+            }
         });
     }
 
@@ -672,7 +679,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (_player == null) return;
         _player.Media = media;
+
+        // Тут ApplyVolume полезен, чтобы начальный буфер (pre-buffer) не "ревел" на 100% 
+        // до срабатывания OnVlcPlaying, но он может быть проигнорирован VLC.
         ApplyVolume();
+
         _player.Play();
         AddToHistory(track);
     }
@@ -995,11 +1006,35 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         IsLoading = false;
         IsPlaying = true;
         IsPaused = false;
+
+        // 1. Применяем громкость немедленно (на случай, если Aout уже готов)
         ApplyVolume();
+
+        // 2. ВАЖНОЕ ИСПРАВЛЕНИЕ:
+        // Запускаем отложенную задачу для повторного применения громкости.
+        // VLC (особенно с WASAPI) может сбросить громкость на 100% или системный уровень
+        // в первые миллисекунды инициализации аудиопотока.
+        Task.Run(async () =>
+        {
+            try
+            {
+                // Ждем 250мс - этого достаточно для инициализации аудио-выхода, 
+                // но незаметно для уха пользователя, если произойдет коррекция.
+                await Task.Delay(250);
+
+                if (!_isDisposed && IsPlaying && _player != null)
+                {
+                    // Повторное применение берет актуальный _volumePercent,
+                    // так что если пользователь крутил ручку во время задержки, все будет ок.
+                    ApplyVolume();
+                }
+            }
+            catch { /* игнорируем ошибки таска */ }
+        });
+
         NotifyPlaybackState();
         _playbackStartedTcs?.TrySetResult(true);
     }
-
     private void OnVlcPaused(object? sender, EventArgs e)
     {
         if (_isDisposed) return;
