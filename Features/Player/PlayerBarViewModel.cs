@@ -12,16 +12,14 @@ using ReactiveUI.Fody.Helpers;
 
 namespace MyLiteMusicPlayer.Features.Player;
 
-/// <summary>
-/// ViewModel для нижней панели воспроизведения.
-/// Управляет состоянием плеера, громкостью, прогрессом и текущим треком.
-/// </summary>
 public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 {
     #region Constants
 
     private const int SeekCooldownMs = 250;
     private const int NavigationDebounceMs = 300;
+    private const int HintDisplayDurationMs = 1500;
+    private const int CopyHighlightDurationMs = 800;
 
     #endregion
 
@@ -36,15 +34,14 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
     
-    // Подписки Rx
     private readonly IDisposable? _librarySub;
     private readonly IDisposable? _downloadProgressSub;
     private readonly IDisposable _nextSub;
     private readonly IDisposable _prevSub;
+    private readonly IDisposable? _loadingSub; // Добавлено для корректной очистки
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
 
-    // Явные делегаты для событий C#
     private readonly Action<bool, bool> _playbackStateHandler;
     private readonly Action _queueChangedHandler;
     private readonly Action<TimeSpan> _positionChangedHandler;
@@ -62,7 +59,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #endregion
 
-    #region Properties
+    #region Properties - Playback State
 
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
     [Reactive] public bool IsLoading { get; private set; }
@@ -76,7 +73,21 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     public string SafeAuthor => CurrentTrack?.Author ?? "";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
 
-    public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
+    #endregion
+
+    #region Properties - Queue Info
+
+    [Reactive] public int CurrentTrackIndex { get; private set; }
+    [Reactive] public int TotalTracksInQueue { get; private set; }
+    [Reactive] public bool HasQueueToShuffle { get; private set; }
+    
+    public string QueuePositionText => TotalTracksInQueue > 0 
+        ? $"{CurrentTrackIndex + 1} / {TotalTracksInQueue}" 
+        : "";
+
+    #endregion
+
+    #region Properties - Seek & Duration
 
     [Reactive] public TimeSpan Position { get; set; }
     [Reactive] public TimeSpan Duration { get; private set; }
@@ -85,12 +96,13 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public double BufferedSeconds { get; private set; }
     [Reactive] public bool IsSeekBusy { get; private set; }
 
+    #endregion
+
+    #region Properties - Volume
+
     [Reactive] public int Volume { get; set; }
     [Reactive] public int MaxVolume { get; private set; } = 100;
     [Reactive] public bool IsMuted { get; private set; }
-
-    [Reactive] public bool ShuffleEnabled { get; private set; }
-    [Reactive] public RepeatMode RepeatMode { get; set; }
 
     public double VolumeSliderWidth => 100 + ((MaxVolume - 100) * 0.5);
 
@@ -102,11 +114,65 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public double Bar5Thickness { get; set; } = 4;
     [Reactive] public bool IsVolumeBoosted { get; set; }
 
+    #endregion
+
+    #region Properties - Repeat & Shuffle
+
+    [Reactive] public bool ShuffleEnabled { get; private set; }
+    [Reactive] public RepeatMode RepeatMode { get; set; }
+
+    [Reactive] public bool IsRepeatHintVisible { get; private set; }
+    [Reactive] public string RepeatHintText { get; private set; } = "";
+
+    #endregion
+
+    #region Properties - Like & Copy Hints
+
+    [Reactive] public bool IsLikeHintVisible { get; private set; }
+    [Reactive] public string LikeHintText { get; private set; } = "";
+
+    [Reactive] public bool IsCopyHintVisible { get; private set; }
+    [Reactive] public bool IsCopyHighlighted { get; private set; }
+
+    #endregion
+
+    #region Properties - Stream Info
+
     [Reactive] public string StreamInfo { get; private set; } = "";
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
+    
+    public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 
-    [Reactive] public bool HasQueueToShuffle { get; private set; }
+    #endregion
+
+    #region Properties - Tooltips
+
+    public string ShuffleTooltip => L["Player_Shuffle"] ?? "Shuffle";
+    public string PreviousTooltip => L["Player_Previous"] ?? "Previous";
+    public string NextTooltip => L["Player_Next"] ?? "Next";
+    
+    public string PlayPauseTooltip => IsPlaying 
+        ? (L["Player_Pause"] ?? "Pause") 
+        : (L["Player_Play"] ?? "Play");
+
+    public string RepeatTooltip => RepeatMode switch
+    {
+        RepeatMode.None => L["Player_Repeat_Off"] ?? "Repeat Off",
+        RepeatMode.RepeatAll => L["Player_Repeat_All"] ?? "Repeat Queue",
+        RepeatMode.RepeatOne => L["Player_Repeat_One"] ?? "Repeat Track",
+        _ => ""
+    };
+
+    public string LikeTooltip => IsLiked 
+        ? (L["Track_Unlike"] ?? "Remove from Liked") 
+        : (L["Track_Like"] ?? "Add to Liked");
+
+    public string CopyTooltip => L["Track_CopyLink"] ?? "Copy Link";
+
+    public string VolumeTooltip => IsMuted 
+        ? (L["Player_Unmute"] ?? "Unmute") 
+        : $"{L["Player_Volume"] ?? "Volume"}: {Volume}%";
 
     #endregion
 
@@ -140,7 +206,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _clipboard = clipboard;
         _youtube = youtube;
 
-        // Инициализация значений
+        // Initialize values
         MaxVolume = _library.Data.MaxVolumeLimit < 100 ? 100 : _library.Data.MaxVolumeLimit;
         Volume = (int)_audio.GetVolume();
         ShuffleEnabled = _audio.ShuffleEnabled;
@@ -150,8 +216,12 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         Log.Info($"[PlayerBar] Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
-        // Инициализация делегатов
-        _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() => SyncPlaybackState(isPlaying, isPaused));
+        // Event handlers (уже используют Dispatcher, это хорошо)
+        _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() => 
+        {
+            SyncPlaybackState(isPlaying, isPaused);
+            this.RaisePropertyChanged(nameof(PlayPauseTooltip));
+        });
         _queueChangedHandler = () => Dispatcher.UIThread.Post(UpdateQueueState);
         _maxVolumeChangedHandler = newMax => Dispatcher.UIThread.Post(() => HandleMaxVolumeChanged(newMax));
         _trackChangedHandler = t => Dispatcher.UIThread.Post(() => HandleTrackChanged(t));
@@ -171,7 +241,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
              }
         };
 
-        // Подписка на события AudioEngine
+        // Subscribe to AudioEngine events
         _audio.OnPlaybackStateChanged += _playbackStateHandler;
         _audio.OnQueueChanged += _queueChangedHandler;
         _audio.OnPositionChanged += _positionChangedHandler;
@@ -179,7 +249,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnTrackChanged += _trackChangedHandler;
         _audio.OnStreamInfoReady += _streamInfoReadyHandler;
 
-        // Rx подписки
+        // Rx subscriptions
         _librarySub = Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
                 h => _library.OnTrackUpdated += h,
                 h => _library.OnTrackUpdated -= h)
@@ -189,8 +259,10 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             {
                 IsLiked = t.IsLiked;
                 if (CurrentTrack != null) CurrentTrack.IsLiked = t.IsLiked;
+                this.RaisePropertyChanged(nameof(LikeTooltip));
             });
 
+        // Volume updates TO audio engine
         this.WhenAnyValue(x => x.Volume)
             .Skip(1)
             .Subscribe(v =>
@@ -198,16 +270,26 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 _audio.SetVolumeInstant(v);
                 IsMuted = v < 1;
                 UpdateVolumeBars();
+                this.RaisePropertyChanged(nameof(VolumeTooltip));
             });
 
-        _audio.WhenValueChanged(x => x.IsLoading)
+        this.WhenAnyValue(x => x.RepeatMode)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(RepeatTooltip)));
+
+        this.WhenAnyValue(x => x.IsLiked)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(LikeTooltip)));
+
+        // ИСПРАВЛЕНО: IsLoading подписка теперь переключается на UI поток
+        // Это предотвращает Call from invalid thread при обновлении команд
+        _loadingSub = _audio.WhenValueChanged(x => x.IsLoading)
+            .ObserveOn(RxApp.MainThreadScheduler) // !!! ВАЖНО !!!
             .Subscribe(l =>
             {
                 IsLoading = l;
                 IsSeekBusy = l;
             });
 
-        // Таймеры
+        // Timers
         _fallbackPositionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _fallbackPositionTimer.Tick += (_, _) => FallbackPositionUpdate();
         _fallbackPositionTimer.Start();
@@ -231,7 +313,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 }
             });
 
-        // Навигация (Debounce)
+        // Navigation
         _nextSub = _nextSubject
             .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -250,21 +332,23 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 finally { IsNavigating = false; }
             });
 
-        // Команды
-        var canExecute = this.WhenAnyValue(x => x.HasTrack);
-        var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating,
-            (hasTrack, isNav) => hasTrack && !isNav);
+        // Commands
+        var canExecute = this.WhenAnyValue(x => x.HasTrack, x => x.IsLoading, 
+            (hasTrack, loading) => hasTrack && !loading);
+        var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
+            (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
 
         PlayPauseCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             bool wantsToPlay = !_audio.IsPlaying;
             await _audio.SetPlaybackStateAsync(wantsToPlay);
-        }, canExecute);
+        }, this.WhenAnyValue(x => x.HasTrack));
 
         NextCommand = ReactiveCommand.Create(() => { IsNavigating = true; _nextSubject.OnNext(Unit.Default); }, canNavigate);
         PreviousCommand = ReactiveCommand.Create(() => { IsNavigating = true; _prevSubject.OnNext(Unit.Default); }, canNavigate);
 
-        var canShuffle = this.WhenAnyValue(x => x.HasQueueToShuffle);
+        var canShuffle = this.WhenAnyValue(x => x.HasQueueToShuffle, x => x.IsLoading,
+            (hasTracks, loading) => hasTracks && !loading);
         ShuffleQueueCommand = ReactiveCommand.Create(() =>
         {
             _audio.ShuffleQueue();
@@ -285,20 +369,34 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             _audio.RepeatMode = RepeatMode;
             _library.Data.RepeatMode = RepeatMode;
             _library.Save();
+            
+            ShowRepeatModeHint();
         });
 
-        ToggleMuteCommand = ReactiveCommand.Create(_audio.ToggleMute);
+        ToggleMuteCommand = ReactiveCommand.Create(() =>
+        {
+            _audio.ToggleMute();
+            this.RaisePropertyChanged(nameof(VolumeTooltip));
+        });
 
         ToggleLikeCommand = ReactiveCommand.Create(() =>
         {
-            if (CurrentTrack != null) _library.ToggleLike(CurrentTrack);
-        }, canExecute);
+            if (CurrentTrack != null)
+            {
+                _library.ToggleLike(CurrentTrack);
+                ShowLikeHint();
+            }
+        }, this.WhenAnyValue(x => x.HasTrack));
 
         CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             Log.Info($"[PlayerBar] Copying link: {CurrentTrack?.Url}");
-            if (CurrentTrack?.Url != null) await _clipboard.SetTextAsync(CurrentTrack.Url);
-        }, canExecute);
+            if (CurrentTrack?.Url != null)
+            {
+                await _clipboard.SetTextAsync(CurrentTrack.Url);
+                ShowCopyHint();
+            }
+        }, this.WhenAnyValue(x => x.HasTrack));
 
         LoadFormatsCommand = ReactiveCommand.CreateFromTask(async () =>
         {
@@ -314,6 +412,48 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             if (option == null) return;
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
         });
+    }
+
+    #endregion
+
+    #region Hint Methods
+
+    private async void ShowRepeatModeHint()
+    {
+        RepeatHintText = RepeatMode switch
+        {
+            RepeatMode.None => L["Player_Repeat_Off"] ?? "Repeat Off",
+            RepeatMode.RepeatAll => L["Player_Repeat_All"] ?? "Repeat Queue",
+            RepeatMode.RepeatOne => L["Player_Repeat_One"] ?? "Repeat Track",
+            _ => ""
+        };
+        
+        IsRepeatHintVisible = true;
+        await Task.Delay(HintDisplayDurationMs);
+        IsRepeatHintVisible = false;
+    }
+
+    private async void ShowLikeHint()
+    {
+        LikeHintText = IsLiked 
+            ? (L["Track_Added"] ?? "Added to Liked") 
+            : (L["Track_Removed"] ?? "Removed from Liked");
+        
+        IsLikeHintVisible = true;
+        await Task.Delay(HintDisplayDurationMs);
+        IsLikeHintVisible = false;
+    }
+
+    private async void ShowCopyHint()
+    {
+        IsCopyHighlighted = true;
+        IsCopyHintVisible = true;
+        
+        await Task.Delay(CopyHighlightDurationMs);
+        IsCopyHighlighted = false;
+        
+        await Task.Delay(HintDisplayDurationMs - CopyHighlightDurationMs);
+        IsCopyHintVisible = false;
     }
 
     #endregion
@@ -337,6 +477,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(SafeAuthor));
         this.RaisePropertyChanged(nameof(SafeThumbnail));
+        this.RaisePropertyChanged(nameof(PlayPauseTooltip));
 
         IsSeekBusy = true;
         _lastDownloadedBytes = 0;
@@ -371,7 +512,20 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private void UpdateQueueState()
     {
         var queue = _audio.Queue;
+        TotalTracksInQueue = queue.Count;
         HasQueueToShuffle = queue.Count > 1;
+        
+        if (CurrentTrack != null)
+        {
+            CurrentTrackIndex = queue.ToList().FindIndex(t => t.Id == CurrentTrack.Id);
+            if (CurrentTrackIndex < 0) CurrentTrackIndex = 0;
+        }
+        else
+        {
+            CurrentTrackIndex = 0;
+        }
+        
+        this.RaisePropertyChanged(nameof(QueuePositionText));
     }
 
     private void SyncPlaybackState(bool isPlaying, bool isPaused)
@@ -516,7 +670,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #endregion
 
-    #region IDisposable Implementation
+    #region IDisposable
 
     public void Dispose()
     {
@@ -525,11 +679,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         _audio.SaveVolumeNow();
 
-        // Остановка таймеров
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
 
-        // Отписка от событий через явные делегаты
         _audio.OnPlaybackStateChanged -= _playbackStateHandler;
         _audio.OnQueueChanged -= _queueChangedHandler;
         _audio.OnPositionChanged -= _positionChangedHandler;
@@ -537,8 +689,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnTrackChanged -= _trackChangedHandler;
         _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
 
-        // Очистка Rx подписок
         _librarySub?.Dispose();
+        _loadingSub?.Dispose();
         _downloadProgressSub?.Dispose();
         _nextSub.Dispose();
         _prevSub.Dispose();

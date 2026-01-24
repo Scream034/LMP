@@ -6,7 +6,6 @@
     <conv:BoolToOpacityConverter x:Key="BoolToOpacity" />
     <conv:NullToVisibilityConverter x:Key="NullToVisible" />
     <conv:InverseBoolConverter x:Key="InverseBool" />
-    <conv:RepeatModeToIconConverter x:Key="RepeatModeIcon" />
     <conv:VolumeToIconConverter x:Key="VolumeIcon" />
     <conv:BoolToSelectorConverter x:Key="BoolToSelector" />
     <conv:BoolToCursorConverter x:Key="BoolToCursor" />
@@ -17,5 +16,8 @@
     <conv:WebUrlConverter x:Key="WebUrlConverter" />
     <conv:ProgressToWidthConverter x:Key="ProgressToWidthConverter" />
     <conv:GreaterThanConverter x:Key="GreaterThanConverter" />
+    <conv:RepeatModeIconConverter x:Key="RepeatModeIcon" />
+    <conv:RepeatModeActiveConverter x:Key="RepeatModeActive" />
+    <conv:RepeatModeEqualsConverter x:Key="RepeatModeEquals" />
 
 </ResourceDictionary>

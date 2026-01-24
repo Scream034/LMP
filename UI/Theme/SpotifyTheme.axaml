@@ -1,4 +1,3 @@
-<!-- Styles/SpotifyTheme.axaml -->
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -17,11 +16,9 @@
             <Color x:Key="BgSkeletonDeep">#1a1a1a</Color>
             <Color x:Key="BgOverlay">#CC121212</Color>
 
-            <!-- Brand Colors (Mapped to System) -->
-            <!-- Используем DynamicResource для подхвата цвета Windows -->
+            <!-- Brand Colors -->
             <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource SystemAccentColor}" />
-            <SolidColorBrush x:Key="AccentHoverBrush"
-                Color="{DynamicResource SystemAccentColorLight1}" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="{DynamicResource SystemAccentColorLight1}" />
 
             <!-- Semantic Colors -->
             <Color x:Key="SystemError">#FF6B6B</Color>
@@ -72,7 +69,7 @@
         <Setter Property="FontFamily" Value="Inter, Segoe UI, sans-serif" />
     </Style>
 
-    <!-- Accent Button (Primary action) -->
+    <!-- Accent Button -->
     <Style Selector="Button.accent">
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}" />
@@ -86,44 +83,6 @@
     </Style>
     <Style Selector="Button.accent:disabled">
         <Setter Property="Opacity" Value="0.5" />
-    </Style>
-
-    <!-- Sidebar Button - Disabled State -->
-    <Style Selector="Button.sidebar-btn:disabled">
-        <Setter Property="Opacity" Value="0.4" />
-        <Setter Property="Cursor" Value="Arrow" />
-    </Style>
-
-    <!-- Sidebar Button - Disabled но активная страница -->
-    <Style Selector="Button.sidebar-btn.active:disabled">
-        <Setter Property="Opacity" Value="0.6" />
-        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
-    </Style>
-
-    <!-- Delete Button (показывается при hover) -->
-    <Style Selector="Button.delete-btn">
-        <Setter Property="Background" Value="#80000000" />
-        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
-        <Setter Property="Opacity" Value="0" />
-        <Setter Property="CornerRadius" Value="14" />
-        <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                <BrushTransition Property="Background" Duration="0:0:0.15" />
-                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
-            </Transitions>
-        </Setter>
-    </Style>
-
-    <!-- Показываем кнопку при hover на родительский Border -->
-    <Style Selector="Border:pointerover Button.delete-btn">
-        <Setter Property="Opacity" Value="1" />
-    </Style>
-
-    <Style Selector="Button.delete-btn:pointerover">
-        <Setter Property="Background" Value="{StaticResource SystemErrorBrush}" />
-        <Setter Property="Foreground" Value="White" />
     </Style>
 
     <!-- Sidebar Button -->
@@ -149,8 +108,16 @@
         <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
     </Style>
+    <Style Selector="Button.sidebar-btn:disabled">
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="Button.sidebar-btn.active:disabled">
+        <Setter Property="Opacity" Value="0.6" />
+        <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
+    </Style>
 
-    <!-- Icon Button (circular) -->
+    <!-- Icon Button -->
     <Style Selector="Button.icon-btn">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
@@ -159,6 +126,7 @@
         <Setter Property="CornerRadius" Value="16" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Background" Duration="0:0:0.2" />
@@ -173,7 +141,99 @@
         <Setter Property="RenderTransform" Value="scale(1.1)" />
     </Style>
 
-    <!-- Primary Button (Play) -->
+    <!-- Playback Control Button -->
+    <Style Selector="Button.playback-btn">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.playback-btn:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.1)" />
+    </Style>
+    <Style Selector="Button.playback-btn:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
+    </Style>
+    <Style Selector="Button.playback-btn.active">
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.playback-btn.active:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.playback-btn.disabled">
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+
+    <!-- Main Play/Pause Button (minimal, no background) -->
+    <Style Selector="Button.playback-btn-main">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Width" Value="48" />
+        <Setter Property="Height" Value="48" />
+        <Setter Property="CornerRadius" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.playback-btn-main:pointerover">
+        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.08)" />
+    </Style>
+    <Style Selector="Button.playback-btn-main:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
+    </Style>
+    <Style Selector="Button.playback-btn-main.disabled">
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+
+    <!-- Delete Button -->
+    <Style Selector="Button.delete-btn">
+        <Setter Property="Background" Value="#80000000" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border:pointerover Button.delete-btn">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.delete-btn:pointerover">
+        <Setter Property="Background" Value="{StaticResource SystemErrorBrush}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
+    <!-- Primary Button -->
     <Style Selector="Button.primary-btn">
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}" />
@@ -181,6 +241,7 @@
         <Setter Property="CornerRadius" Value="20" />
         <Setter Property="FontWeight" Value="Bold" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Background" Duration="0:0:0.2" />
@@ -193,7 +254,7 @@
         <Setter Property="RenderTransform" Value="scale(1.04)" />
     </Style>
 
-    <!-- Play Button (Large Circle) -->
+    <!-- Play Circle Button -->
     <Style Selector="Button.play-circle">
         <Setter Property="Background" Value="{StaticResource AccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource TextDarkBrush}" />
@@ -202,6 +263,7 @@
         <Setter Property="CornerRadius" Value="28" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Background" Duration="0:0:0.2" />
@@ -214,37 +276,201 @@
         <Setter Property="RenderTransform" Value="scale(1.06)" />
     </Style>
 
-    <!-- Slider (Seek/Volume) -->
-    <Style Selector="Slider.spotify-slider">
-        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-        <Setter Property="Background" Value="{StaticResource BgHighlightBrush}" />
-        <Setter Property="CornerRadius" Value="2" />
-    </Style>
-
-    <Style Selector="Slider.spotify-slider /template/ Track">
-        <Setter Property="Minimum" Value="{TemplateBinding Minimum}" />
-        <Setter Property="Maximum" Value="{TemplateBinding Maximum}" />
-        <Setter Property="Value" Value="{TemplateBinding Value}" />
-        <Setter Property="Height" Value="4" />
-    </Style>
-
-    <Style Selector="Slider.spotify-slider /template/ Thumb">
-        <Setter Property="Width" Value="12" />
-        <Setter Property="Height" Value="12" />
-        <Setter Property="Opacity" Value="0" />
+    <!-- Volume Bar -->
+    <Style Selector="Border.volume-bar">
+        <Setter Property="Width" Value="4" />
+        <Setter Property="CornerRadius" Value="1" />
+        <Setter Property="Background" Value="{StaticResource TextSecondaryBrush}" />
         <Setter Property="Transitions">
             <Transitions>
-                <DoubleTransition Property="Opacity" Duration="0:0:0.2" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.volume-bar.boosted">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    </Style>
+
+    <!-- Slider Thumb -->
+    <Style Selector="Ellipse.slider-thumb">
+        <Setter Property="Width" Value="12" />
+        <Setter Property="Height" Value="12" />
+        <Setter Property="Fill" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
                 <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Slider.spotify-slider:pointerover /template/ Thumb">
+    <Style Selector="Border.slider-area:pointerover Ellipse.slider-thumb">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Ellipse.slider-thumb.dragging">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="RenderTransform" Value="scale(1.2)" />
     </Style>
 
-    <!-- TextBox (Search) -->
+    <!-- Repeat Indicator (centered dot) -->
+    <Style Selector="Border.repeat-indicator">
+        <Setter Property="Width" Value="4" />
+        <Setter Property="Height" Value="4" />
+        <Setter Property="CornerRadius" Value="2" />
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform" Value="scale(0)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="BackEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.repeat-indicator.visible">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+
+    <!-- Mode Hint Popup -->
+    <Style Selector="Border.mode-hint">
+        <Setter Property="Background" Value="{StaticResource BgSkeletonBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="BoxShadow" Value="0 4 12 0 #40000000" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,1" />
+        <Setter Property="RenderTransform" Value="translateY(8px)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.mode-hint.visible">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="RenderTransform" Value="translateY(0)" />
+    </Style>
+
+    <!-- Seek Busy Indicator -->
+    <Style Selector="Border.seek-busy-indicator">
+        <Style.Animations>
+            <Animation Duration="0:0:1.2" IterationCount="Infinite">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.3" />
+                    <Setter Property="BorderThickness" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="50%">
+                    <Setter Property="Opacity" Value="1" />
+                    <Setter Property="BorderThickness" Value="2" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.3" />
+                    <Setter Property="BorderThickness" Value="1" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <Style Selector="Border.seek-gradient-runner">
+        <Style.Animations>
+            <Animation Duration="0:0:1.5" IterationCount="Infinite">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.5" />
+                </KeyFrame>
+                <KeyFrame Cue="25%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="50%">
+                    <Setter Property="Opacity" Value="0.5" />
+                </KeyFrame>
+                <KeyFrame Cue="75%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.5" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- Stream Info -->
+    <Style Selector="StackPanel.stream-info">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.3" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="StackPanel.stream-info.visible">
+        <Setter Property="Opacity" Value="0.7" />
+    </Style>
+
+    <!-- Loading Dots -->
+    <Style Selector="Ellipse.loading-dot">
+        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+        <Style.Animations>
+            <Animation Duration="0:0:0.8" IterationCount="Infinite">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+                <KeyFrame Cue="33%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="66%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Ellipse.loading-dot-2">
+        <Style.Animations>
+            <Animation Duration="0:0:0.8" IterationCount="Infinite" Delay="0:0:0.15">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+                <KeyFrame Cue="33%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="66%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Ellipse.loading-dot-3">
+        <Style.Animations>
+            <Animation Duration="0:0:0.8" IterationCount="Infinite" Delay="0:0:0.3">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+                <KeyFrame Cue="33%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="66%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.2" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- TextBox Search -->
     <Style Selector="TextBox.search-box">
         <Setter Property="Background" Value="{StaticResource BgElevatedBrush}" />
         <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />

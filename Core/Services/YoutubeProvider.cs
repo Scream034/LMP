@@ -1,5 +1,4 @@
-﻿
-// YoutubeProvider.cs
+﻿// YoutubeProvider.cs
 // Провайдер для работы с YouTube через YoutubeExplode
 // Поиск, получение информации о треках, плейлистах и аудио потоках
 
@@ -949,4 +948,3 @@ public class StreamOption
     /// <summary>Отображаемое имя для UI</summary>
     public string DisplayName => $"{Codec} {Bitrate:F0}kbps ({Container})";
 }
-
