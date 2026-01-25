@@ -111,7 +111,6 @@ internal class ChannelController(HttpClient http)
 
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        // Здесь вызывается парсер, который нужно обновить (см. шаг 2)
         return ChannelPlaylistsResponse.Parse(responseText);
     }
 }

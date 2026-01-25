@@ -24,4 +24,9 @@ public enum SearchFilter
     /// Only search for channels.
     /// </summary>
     Channel,
+
+    /// <summary>
+    /// Only search for music (Songs).
+    /// </summary>
+    Music
 }

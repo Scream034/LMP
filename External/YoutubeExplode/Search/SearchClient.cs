@@ -6,16 +6,13 @@ using YoutubeExplode.Utils.Extensions;
 
 namespace YoutubeExplode.Search;
 
-/// <summary>
-/// Operations related to YouTube search.
-/// </summary>
 public class SearchClient(HttpClient http)
 {
     private readonly SearchController _controller = new(http);
 
-    /// <summary>
-    /// Enumerates batches of search results returned by the specified query.
-    /// </summary>
+    // Реальный ID официального канала YouTube. Используется как fallback, если ID не найден.
+    private const string FallbackChannelId = "UCBR8-6071WBgIc8o-99y5Lg";
+
     public async IAsyncEnumerable<Batch<ISearchResult>> GetResultBatchesAsync(
         string searchQuery,
         SearchFilter searchFilter,
@@ -27,250 +24,78 @@ public class SearchClient(HttpClient http)
 
         do
         {
-            var results = new List<ISearchResult>();
+            var searchResults = await _controller.GetSearchResponseAsync(searchQuery, searchFilter, continuationToken, cancellationToken);
+            var batchItems = new List<ISearchResult>();
 
-            var searchResults = await _controller.GetSearchResponseAsync(
-                searchQuery,
-                searchFilter,
-                continuationToken,
-                cancellationToken
-            );
-
-            // Video results
-            foreach (var videoData in searchResults.Videos)
+            if (searchFilter is SearchFilter.None or SearchFilter.Video or SearchFilter.Music)
             {
-                if (searchFilter is not SearchFilter.None and not SearchFilter.Video)
+                foreach (var videoData in searchResults.Videos)
                 {
-                    Debug.Fail("Did not expect videos in search results.");
-                    break;
-                }
+                    var videoId = videoData.Id;
+                    if (string.IsNullOrWhiteSpace(videoId) || !encounteredIds.Add(videoId)) continue;
 
-                var videoId =
-                    videoData.Id
-                    ?? throw new YoutubeExplodeException("Failed to extract the video ID.");
-
-                // Don't yield the same result twice
-                if (!encounteredIds.Add(videoId))
-                    continue;
-
-                var videoTitle =
-                    videoData.Title
-                    ?? throw new YoutubeExplodeException("Failed to extract the video title.");
-
-                var videoChannelTitle =
-                    videoData.Author
-                    ?? throw new YoutubeExplodeException("Failed to extract the video author.");
-
-                var videoChannelId =
-                    videoData.ChannelId
-                    ?? throw new YoutubeExplodeException("Failed to extract the video channel ID.");
-
-                var videoThumbnails = videoData
-                    .Thumbnails.Select(t =>
+                    var channelId = videoData.ChannelId;
+                    if (string.IsNullOrWhiteSpace(channelId) || channelId.Length != 24 || !channelId.StartsWith("UC"))
                     {
-                        var thumbnailUrl =
-                            t.Url
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the video thumbnail URL."
-                            );
+                        channelId = FallbackChannelId;
+                    }
+                    
+                    var author = new Author(channelId, videoData.Author ?? "YouTube");
+                    var thumbnails = videoData.Thumbnails.Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
+                        .Concat(Thumbnail.GetDefaultSet(videoId)).ToArray();
 
-                        var thumbnailWidth =
-                            t.Width
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the video thumbnail width."
-                            );
-
-                        var thumbnailHeight =
-                            t.Height
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the video thumbnail height."
-                            );
-
-                        var thumbnailResolution = new Resolution(thumbnailWidth, thumbnailHeight);
-
-                        return new Thumbnail(thumbnailUrl, thumbnailResolution);
-                    })
-                    .Concat(Thumbnail.GetDefaultSet(videoId))
-                    .ToArray();
-
-                var video = new VideoSearchResult(
-                    videoId,
-                    videoTitle,
-                    new Author(videoChannelId, videoChannelTitle),
-                    videoData.Duration,
-                    videoThumbnails,
-                    videoData.IsOfficialArtist
-                );
-
-                results.Add(video);
+                    batchItems.Add(new VideoSearchResult(
+                        videoId, videoData.Title ?? "", author, videoData.Duration,
+                        thumbnails, videoData.IsOfficialArtist, videoData.IsShort
+                    ));
+                }
             }
 
-            // Playlist results
-            foreach (var playlistData in searchResults.Playlists)
+            if (searchFilter is SearchFilter.None or SearchFilter.Playlist or SearchFilter.Music)
             {
-                if (searchFilter is not SearchFilter.None and not SearchFilter.Playlist)
+                foreach (var playlistData in searchResults.Playlists)
                 {
-                    Debug.Fail("Did not expect playlists in search results.");
-                    break;
-                }
-
-                var playlistId =
-                    playlistData.Id
-                    ?? throw new YoutubeExplodeException("Failed to extract the playlist ID.");
-
-                // Don't yield the same result twice
-                if (!encounteredIds.Add(playlistId))
-                    continue;
-
-                var playlistTitle =
-                    playlistData.Title
-                    ?? throw new YoutubeExplodeException("Failed to extract the playlist title.");
-
-                // System playlists have no author
-                var playlistAuthor =
-                    !string.IsNullOrWhiteSpace(playlistData.ChannelId)
-                    && !string.IsNullOrWhiteSpace(playlistData.Author)
-                        ? new Author(playlistData.ChannelId, playlistData.Author)
-                        : null;
-
-                var playlistThumbnails = playlistData
-                    .Thumbnails.Select(t =>
+                    var playlistId = playlistData.Id;
+                    if (string.IsNullOrWhiteSpace(playlistId) || !encounteredIds.Add(playlistId)) continue;
+                    
+                    Author? author = null;
+                    var channelId = playlistData.ChannelId;
+                    if (!string.IsNullOrWhiteSpace(channelId) && channelId.Length == 24 && channelId.StartsWith("UC"))
                     {
-                        var thumbnailUrl =
-                            t.Url
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the playlist thumbnail URL."
-                            );
+                        author = new Author(channelId, playlistData.Author ?? "YouTube");
+                    }
 
-                        var thumbnailWidth =
-                            t.Width
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the playlist thumbnail width."
-                            );
-
-                        var thumbnailHeight =
-                            t.Height
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the playlist thumbnail height."
-                            );
-
-                        var thumbnailResolution = new Resolution(thumbnailWidth, thumbnailHeight);
-
-                        return new Thumbnail(thumbnailUrl, thumbnailResolution);
-                    })
-                    .ToArray();
-
-                var playlist = new PlaylistSearchResult(
-                    playlistId,
-                    playlistTitle,
-                    playlistAuthor,
-                    playlistThumbnails
-                );
-
-                results.Add(playlist);
+                    var thumbnails = playlistData.Thumbnails.Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0))).ToArray();
+                    batchItems.Add(new PlaylistSearchResult(playlistId, playlistData.Title ?? "", author, thumbnails));
+                }
+            }
+            
+            if (searchFilter is SearchFilter.None or SearchFilter.Channel)
+            {
+                foreach (var channelData in searchResults.Channels)
+                {
+                    var channelId = channelData.Id;
+                    if (string.IsNullOrWhiteSpace(channelId) || !encounteredIds.Add(channelId)) continue;
+                    
+                    var thumbnails = channelData.Thumbnails.Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0))).ToArray();
+                    batchItems.Add(new ChannelSearchResult(channelId, channelData.Title ?? "", thumbnails));
+                }
             }
 
-            // Channel results
-            foreach (var channelData in searchResults.Channels)
-            {
-                if (searchFilter is not SearchFilter.None and not SearchFilter.Channel)
-                {
-                    Log.Info("Skipping channel in search results");
-                    break;
-                }
-
-                var channelId =
-                    channelData.Id
-                    ?? throw new YoutubeExplodeException("Failed to extract the channel ID.");
-
-                var channelTitle =
-                    channelData.Title
-                    ?? throw new YoutubeExplodeException("Failed to extract the channel title.");
-
-                var channelThumbnails = channelData
-                    .Thumbnails.Select(t =>
-                    {
-                        var thumbnailUrl =
-                            t.Url
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the channel thumbnail URL."
-                            );
-
-                        var thumbnailWidth =
-                            t.Width
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the channel thumbnail width."
-                            );
-
-                        var thumbnailHeight =
-                            t.Height
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the channel thumbnail height."
-                            );
-
-                        var thumbnailResolution = new Resolution(thumbnailWidth, thumbnailHeight);
-
-                        return new Thumbnail(thumbnailUrl, thumbnailResolution);
-                    })
-                    .ToArray();
-
-                var channel = new ChannelSearchResult(channelId, channelTitle, channelThumbnails);
-
-                results.Add(channel);
-            }
-
-            yield return Batch.Create(results);
+            if (batchItems.Count > 0)
+                yield return Batch.Create(batchItems);
 
             continuationToken = searchResults.ContinuationToken;
+
         } while (!string.IsNullOrWhiteSpace(continuationToken));
     }
+    
+    public IAsyncEnumerable<ISearchResult> GetResultsAsync(string searchQuery, CancellationToken ct = default) => 
+        GetResultBatchesAsync(searchQuery, SearchFilter.None, ct).FlattenAsync();
 
-    /// <summary>
-    /// Enumerates batches of search results returned by the specified query.
-    /// </summary>
-    public IAsyncEnumerable<Batch<ISearchResult>> GetResultBatchesAsync(
-        string searchQuery,
-        CancellationToken cancellationToken = default
-    ) => GetResultBatchesAsync(searchQuery, SearchFilter.None, cancellationToken);
+    public IAsyncEnumerable<VideoSearchResult> GetVideosAsync(string searchQuery, CancellationToken ct = default) =>
+        GetResultBatchesAsync(searchQuery, SearchFilter.Video, ct).FlattenAsync().OfTypeAsync<VideoSearchResult>();
 
-    /// <summary>
-    /// Enumerates search results returned by the specified query.
-    /// </summary>
-    public IAsyncEnumerable<ISearchResult> GetResultsAsync(
-        string searchQuery,
-        CancellationToken cancellationToken = default
-    ) => GetResultBatchesAsync(searchQuery, cancellationToken).FlattenAsync();
-
-    /// <summary>
-    /// Enumerates video search results returned by the specified query.
-    /// </summary>
-    public IAsyncEnumerable<VideoSearchResult> GetVideosAsync(
-        string searchQuery,
-        CancellationToken cancellationToken = default
-    ) =>
-        GetResultBatchesAsync(searchQuery, SearchFilter.Video, cancellationToken)
-            .FlattenAsync()
-            .OfTypeAsync<VideoSearchResult>();
-
-    /// <summary>
-    /// Enumerates playlist search results returned by the specified query.
-    /// </summary>
-    public IAsyncEnumerable<PlaylistSearchResult> GetPlaylistsAsync(
-        string searchQuery,
-        CancellationToken cancellationToken = default
-    ) =>
-        GetResultBatchesAsync(searchQuery, SearchFilter.Playlist, cancellationToken)
-            .FlattenAsync()
-            .OfTypeAsync<PlaylistSearchResult>();
-
-    /// <summary>
-    /// Enumerates channel search results returned by the specified query.
-    /// </summary>
-    public IAsyncEnumerable<ChannelSearchResult> GetChannelsAsync(
-        string searchQuery,
-        CancellationToken cancellationToken = default
-    ) =>
-        GetResultBatchesAsync(searchQuery, SearchFilter.Channel, cancellationToken)
-            .FlattenAsync()
-            .OfTypeAsync<ChannelSearchResult>();
+    public IAsyncEnumerable<PlaylistSearchResult> GetPlaylistsAsync(string searchQuery, CancellationToken ct = default) =>
+        GetResultBatchesAsync(searchQuery, SearchFilter.Playlist, ct).FlattenAsync().OfTypeAsync<PlaylistSearchResult>();
 }

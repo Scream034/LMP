@@ -12,6 +12,17 @@ internal class SearchController(HttpClient http)
         CancellationToken cancellationToken = default
     )
     {
+        // Determine the params parameter based on the filter
+        var searchParams = searchFilter switch
+        {
+            SearchFilter.Video => "EgIQAQ%3D%3D",
+            SearchFilter.Playlist => "EgIQAw%3D%3D",
+            SearchFilter.Channel => "EgIQAg%3D%3D",
+            // This specific param forces the "Songs" category in search results
+            SearchFilter.Music => "Eg-KAQwIABAAGAAgACgAMABqChAAGAAgACgAMAA%3D", 
+            _ => null
+        };
+
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             "https://www.youtube.com/youtubei/v1/search"
@@ -22,18 +33,12 @@ internal class SearchController(HttpClient http)
             $$"""
             {
               "query": {{Json.Serialize(searchQuery)}},
-              "params": {{Json.Serialize(searchFilter switch
-              {
-                  SearchFilter.Video => "EgIQAQ%3D%3D",
-                  SearchFilter.Playlist => "EgIQAw%3D%3D",
-                  SearchFilter.Channel => "EgIQAg%3D%3D",
-                  _ => null
-              })}},
+              "params": {{Json.Serialize(searchParams)}},
               "continuation": {{Json.Serialize(continuationToken)}},
               "context": {
                 "client": {
                   "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
+                  "clientVersion": "2.20250331.09.00",
                   "hl": "en",
                   "gl": "US",
                   "utcOffsetMinutes": 0
@@ -46,6 +51,13 @@ internal class SearchController(HttpClient http)
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        return SearchResponse.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        // Отладка: Сохранить в файл
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        await File.WriteAllTextAsync($"search_response_{searchFilter}_{DateTime.Now:yyyyMMddHHmmss}.json", responseContent, cancellationToken);
+        return SearchResponse.Parse(responseContent);
+        
+
+        // var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        // return SearchResponse.Parse(responseContent);
     }
 }
