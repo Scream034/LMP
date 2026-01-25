@@ -192,32 +192,40 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             InternetProfile.Low => new StreamingConfig
             {
                 ChunkSize = 64 * 1024,
-                ReadAheadChunks = 1,
+                ReadAheadChunks = 2,
                 MaxConcurrentDownloads = 2,
-                VlcNetworkCachingMs = 4000
+                VlcNetworkCachingMs = 4000,
+                MaxRamChunks = 150 // ~9 MB
             },
             InternetProfile.Medium => new StreamingConfig
             {
                 ChunkSize = 128 * 1024,
-                ReadAheadChunks = 3,
+                ReadAheadChunks = 4,
                 MaxConcurrentDownloads = 3,
-                VlcNetworkCachingMs = 2000
+                VlcNetworkCachingMs = 2000,
+                MaxRamChunks = 100 // ~12 MB
             },
             InternetProfile.High => new StreamingConfig
             {
                 ChunkSize = 256 * 1024,
-                ReadAheadChunks = 5,
+                ReadAheadChunks = 6,
                 MaxConcurrentDownloads = 4,
-                VlcNetworkCachingMs = 1000
+                VlcNetworkCachingMs = 1000,
+                MaxRamChunks = 80 // ~20 MB
             },
             InternetProfile.Ultra => new StreamingConfig
             {
                 ChunkSize = 512 * 1024,
-                ReadAheadChunks = 8,
+                ReadAheadChunks = 10,
                 MaxConcurrentDownloads = 6,
-                VlcNetworkCachingMs = 500
+                VlcNetworkCachingMs = 500,
+                MaxRamChunks = 60 // ~30 MB
             },
-            _ => new StreamingConfig()
+            _ => new StreamingConfig 
+            { 
+                ChunkSize = 128 * 1024, 
+                MaxRamChunks = 100 
+            }
         };
     }
 
