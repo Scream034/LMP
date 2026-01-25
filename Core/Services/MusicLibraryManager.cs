@@ -6,68 +6,71 @@ namespace MyLiteMusicPlayer.Core.Services;
 public class MusicLibraryManager(
     LibraryService library,
     YoutubeUserDataService ytUser,
-    GoogleAuthService auth) : ReactiveObject
+    CookieAuthService auth) : ReactiveObject // Changed
 {
     private readonly LibraryService _library = library;
     private readonly YoutubeUserDataService _ytUser = ytUser;
-    private readonly GoogleAuthService _auth = auth;
-
-    // --- ЛАЙКИ И СИНХРОНИЗАЦИЯ ---
+    private readonly CookieAuthService _auth = auth; // Changed
 
     public async Task ToggleLikeAsync(TrackInfo track)
     {
-        bool newStatus = !track.IsLiked;
-
-        // 1. Оптимистичное обновление UI
-        _library.ToggleLike(track);
-
-        // 2. Если авторизованы - шлем запрос в API
+        // Сначала пытаемся отправить запрос, и только при успехе меняем локальный статус
         if (_auth.IsAuthenticated)
         {
             try
             {
+                bool newStatus = !track.IsLiked;
                 string rating = newStatus ? "like" : "none";
                 await _ytUser.RateVideoAsync(track.Id, rating);
+
+                // Только если не вылетело исключение:
+                _library.ToggleLike(track);
                 Log.Info($"[Sync] Track {track.Id} rated '{rating}' on YouTube.");
             }
             catch (Exception ex)
             {
                 Log.Error($"[Sync] Failed to sync like: {ex.Message}");
+                // Можно добавить уведомление пользователю через событие или DialogService
             }
+        }
+        else
+        {
+            // Если оффлайн, просто меняем локально
+            _library.ToggleLike(track);
         }
     }
 
-    /// <summary>
-    /// Синхронизирует плейлист "Liked Videos" с аккаунта в локальный "liked"
-    /// </summary>
+
     public async Task SyncLikedTracksAsync()
     {
-        if (!_auth.IsAuthenticated)
-        {
-            Log.Info("[Sync] Skipping Liked Sync: Not authenticated.");
-            return;
-        }
+        if (!_auth.IsAuthenticated) return;
 
         try
         {
             Log.Info("[Sync] Starting liked videos sync from YouTube...");
-
             var likedTracks = await _ytUser.GetLikedTracksAsync();
             var localLiked = _library.GetLikedPlaylist();
-
             int addedCount = 0;
-            // Инвертируем список, чтобы новые (в начале списка YT) добавлялись в начало локального
-            // Но т.к. Insert(0,...) переворачивает, проходим с конца или просто проверяем
-            // YT отдает последние лайкнутые первыми.
 
-            foreach (var track in likedTracks)
+            // Важный момент с порядком! 
+            // likedTracks[0] - это самый последний лайкнутый (Newest).
+            // Мы вставляем в начало списка (Insert 0).
+            // Чтобы сохранить порядок [Newest, Old1, Old2...], нужно вставлять с конца.
+            // Иначе получится [Old2, Old1, Newest].
+            
+            // Если likedTracks пуст или null, метод вернет управление без ошибок
+            if (likedTracks == null || likedTracks.Count == 0) return;
+
+            // Переворачиваем список для вставки
+            var tracksToProcess = ((IEnumerable<TrackInfo>)likedTracks).Reverse();
+
+            foreach (var track in tracksToProcess)
             {
                 track.IsLiked = true;
                 _library.AddOrUpdateTrack(track);
 
                 if (!localLiked.TrackIds.Contains(track.Id))
                 {
-                    // Добавляем в начало плейлиста
                     localLiked.TrackIds.Insert(0, track.Id);
                     track.InPlaylists.Add("liked");
                     addedCount++;
@@ -79,8 +82,7 @@ public class MusicLibraryManager(
                 localLiked.UpdatedAt = DateTime.Now;
                 _library.AddOrUpdatePlaylist(localLiked);
                 Log.Info($"[Sync] Successfully added {addedCount} new liked tracks.");
-            }
-            else
+            } else
             {
                 Log.Info("[Sync] No new liked tracks found.");
             }
@@ -90,8 +92,6 @@ public class MusicLibraryManager(
             Log.Error($"[Sync] Liked tracks sync failed: {ex.Message}");
         }
     }
-
-    // --- УПРАВЛЕНИЕ ПЛЕЙЛИСТАМИ ---
 
     public async Task CreatePlaylistAsync(string name, PlaylistSyncMode mode)
     {
@@ -104,16 +104,13 @@ public class MusicLibraryManager(
             {
                 var ytId = await _ytUser.CreatePlaylistAsync(name, "Created via LiteMusicPlayer");
                 newPlaylist.YoutubeId = ytId;
-                newPlaylist.SyncMode = PlaylistSyncMode.TwoWaySync;
-                Log.Info($"[Sync] Created remote playlist {ytId}");
             }
             catch (Exception ex)
             {
-                Log.Error($"[Sync] Failed to create remote playlist. Downgrading to LocalOnly. {ex.Message}");
+                Log.Error($"[Sync] Failed to create remote playlist. {ex.Message}");
                 newPlaylist.SyncMode = PlaylistSyncMode.LocalOnly;
             }
         }
-
         _library.AddOrUpdatePlaylist(newPlaylist);
     }
 
@@ -131,7 +128,6 @@ public class MusicLibraryManager(
             try
             {
                 await _ytUser.DeletePlaylistAsync(playlist.YoutubeId);
-                Log.Info($"[Sync] Deleted remote playlist {playlist.YoutubeId}");
             }
             catch (Exception ex)
             {
@@ -150,7 +146,6 @@ public class MusicLibraryManager(
         try
         {
             var ytId = await _ytUser.CreatePlaylistAsync(localPl.Name, "Uploaded from LiteMusicPlayer");
-
             localPl.YoutubeId = ytId;
             localPl.SyncMode = PlaylistSyncMode.TwoWaySync;
             _library.AddOrUpdatePlaylist(localPl);
@@ -165,7 +160,6 @@ public class MusicLibraryManager(
                         await Task.Delay(600);
                     }
                 }
-                Log.Info($"[Sync] Uploaded all tracks to {localPl.Name}");
             });
         }
         catch (Exception ex)
@@ -174,8 +168,6 @@ public class MusicLibraryManager(
         }
     }
 
-    // --- ДОБАВЛЕНИЕ/УДАЛЕНИЕ ТРЕКОВ ---
-
     public async Task AddTrackToPlaylistAsync(string playlistId, TrackInfo track)
     {
         var playlist = _library.GetPlaylist(playlistId);
@@ -183,7 +175,6 @@ public class MusicLibraryManager(
 
         _library.AddOrUpdateTrack(track);
 
-        // 1. Локальное обновление
         if (!playlist.TrackIds.Contains(track.Id))
         {
             playlist.TrackIds.Add(track.Id);
@@ -192,7 +183,6 @@ public class MusicLibraryManager(
             track.InPlaylists.Add(playlistId);
         }
 
-        // 2. Сетевое обновление
         if (playlist.SyncMode == PlaylistSyncMode.TwoWaySync &&
             !string.IsNullOrEmpty(playlist.YoutubeId) &&
             _auth.IsAuthenticated)
@@ -217,18 +207,11 @@ public class MusicLibraryManager(
         {
             playlist.UpdatedAt = DateTime.Now;
             _library.AddOrUpdatePlaylist(playlist);
-
             var t = _library.GetTrack(trackId);
             if (t != null) t.InPlaylists.Remove(playlistId);
         }
-
-        if (playlist.SyncMode == PlaylistSyncMode.TwoWaySync && _auth.IsAuthenticated)
-        {
-            Log.Warn("[Sync] Remove from remote playlist not fully implemented (requires PlaylistItemId mapping)");
-        }
+        // Removal from YouTube via InnerTube needs extra logic (setVideoId), skipped for now
     }
-
-    // --- ИМПОРТ / МИГРАЦИЯ ---
 
     public void ConvertToLocal(string playlistId)
     {
@@ -241,10 +224,8 @@ public class MusicLibraryManager(
             SyncMode = PlaylistSyncMode.LocalOnly,
             TrackIds = [.. pl.TrackIds],
             ThumbnailUrl = pl.ThumbnailUrl,
-            Author = _auth.State.UserName ?? "Me"
+            Author = "Me"
         };
-
         _library.AddOrUpdatePlaylist(copy);
     }
 }
-

@@ -181,6 +181,7 @@
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",
   "Dialog_Confirm_Title": "Подтверждение",
+  "Dialog_Input_Title": "Поле ввода",
   "Dialog_Warning_Title": "Внимание",
   "Dialog_Done_Title": "Готово",
   "Dialog_SelectDownloadFolder_Title": "Выберите папку для загрузок",
@@ -197,6 +198,8 @@
   "Dialog_Merge_Success_Msg": "Плейлисты успешно объединены.",
   "Dialog_Merge_Success": "Канал: {0}",
   "Dialog_Merge_Error": "Канал не найден",
+  "Input_Watermark": "Введите текст...",
+  "Input_PasteHere": "Вставьте сюда...",
 
   "Sync_Action": "Импорт",
   "Sync_ConfigureUrlFirst": "Сначала укажите ссылку на канал в настройках.",

@@ -14,15 +14,16 @@ public class VideoSearchResult(
     TimeSpan? duration,
     IReadOnlyList<Thumbnail> thumbnails,
     bool isOfficialArtist,
-    bool isShort // Added property
+    bool isShort,
+    bool isMusic // <-- Новый аргумент
 ) : ISearchResult, IVideo
 {
     /// <inheritdoc />
     public VideoId Id { get; } = id;
 
     /// <inheritdoc cref="IVideo.Url" />
-    public string Url => IsShort 
-        ? $"https://www.youtube.com/shorts/{Id}" 
+    public string Url => IsShort
+        ? $"https://www.youtube.com/shorts/{Id}"
         : $"https://www.youtube.com/watch?v={Id}";
 
     /// <inheritdoc cref="IVideo.Title" />
@@ -32,14 +33,14 @@ public class VideoSearchResult(
     public Author Author { get; } = author;
 
     public bool IsOfficialArtist { get; } = isOfficialArtist;
-    
+
     /// <summary>
     /// Indicates if this video is a YouTube Short.
     /// </summary>
     public bool IsShort { get; } = isShort;
 
     /// <inheritdoc />
-    public bool IsMusic => false; // Requires full video details to be certain
+    public bool IsMusic { get; } = isMusic;
 
     /// <inheritdoc />
     public TimeSpan? Duration { get; } = duration;

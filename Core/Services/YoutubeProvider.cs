@@ -32,11 +32,10 @@ public partial class YoutubeProvider
     private const int DefaultCacheLifetimeHours = 4;
     private const int MaxCacheSize = 200;
 
-    private readonly YoutubeClient _youtube;
+    private YoutubeClient _youtube = null!;
+    private readonly CookieAuthService _cookieAuth;
     private readonly string _downloadFolder;
     private readonly LibraryService? _libraryService;
-    private readonly HttpClient _httpClient = new();
-    private readonly GoogleAuthService? _authService;
 
     private readonly Dictionary<string, StreamCacheEntry> _streamCache = [];
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
@@ -64,17 +63,31 @@ public partial class YoutubeProvider
     {
     }
 
-    public YoutubeProvider(LibraryService? libraryService, GoogleAuthService? authService)
+    public YoutubeProvider(LibraryService? libraryService, CookieAuthService cookieAuth)
     {
-        _youtube = new YoutubeClient();
         _libraryService = libraryService;
-        _authService = authService;
+        _cookieAuth = cookieAuth;
 
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var appFolder = Path.Combine(appData, "LiteMusicPlayer");
         _downloadFolder = Path.Combine(appFolder, "Downloads");
-
         Directory.CreateDirectory(_downloadFolder);
+
+        ReloadClient();
+        _cookieAuth.OnAuthStateChanged += ReloadClient;
+    }
+
+    public void ReloadClient()
+    {
+        // Берем куки
+        var cookies = _cookieAuth.GetCookies();
+        // Берем UA из сервиса (он загрузил его из файла или взял дефолтный)
+        var ua = _cookieAuth.UserAgent;
+
+        // Передаем в конструктор YoutubeClient
+        _youtube = new YoutubeClient(new HttpClient(), cookies, ua);
+
+        Log.Info($"[YouTube] Client reloaded. Authenticated: {_cookieAuth.IsAuthenticated} (Cookies: {cookies.Count}). UA: {ua[..30]}...");
     }
 
     public Task InitializeAsync()
@@ -82,6 +95,110 @@ public partial class YoutubeProvider
         IsReady = true;
         NotifyStatus("[YouTube] Initialized");
         return Task.CompletedTask;
+    }
+
+    public YoutubeClient GetClient() => _youtube;
+
+    // --- ПЕРСОНАЛИЗАЦИЯ ---
+
+    /// <summary>
+    /// Получает полки с главной страницы (My Supermix, Listen Again...)
+    /// </summary>
+    public async Task<List<HomeSection>> GetPersonalizedHomeAsync(CancellationToken ct = default)
+    {
+        if (!_cookieAuth.IsAuthenticated) return [];
+
+        try
+        {
+            var shelves = await _youtube.Music.GetPersonalizedHomeAsync(ct);
+            var sections = new List<HomeSection>();
+
+            foreach (var shelf in shelves)
+            {
+                var section = new HomeSection { Title = shelf.Title };
+
+                foreach (var item in shelf.Items)
+                {
+                    // Конвертируем MusicItem в TrackInfo
+                    // Важно: MusicItem может быть песней, видео, альбомом или плейлистом
+                    var track = new TrackInfo
+                    {
+                        Id = "yt_" + item.Id,
+                        Title = item.Title,
+                        Author = item.Author ?? "Unknown",
+                        ThumbnailUrl = item.Thumbnails.LastOrDefault()?.Url ?? "",
+                        Duration = item.Duration ?? TimeSpan.Zero,
+                        IsMusic = true
+                    };
+
+                    // Если это плейлист (например, "My Supermix"), ID начинается с "RD..." или "PL..."
+                    // Мы можем пометить его как плейлист
+                    if (item.Type == "Playlist" || item.Type == "Album")
+                    {
+                        // Для плейлистов UI должен знать, что по клику нужно открывать плейлист, а не играть трек
+                        track.Id = "yt_pl_" + item.Id;
+                    }
+
+                    section.Tracks.Add(track);
+                }
+
+                if (section.Tracks.Count > 0)
+                    sections.Add(section);
+            }
+
+            return sections;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to get home: {ex.Message}");
+            return [];
+        }
+    }
+
+    // --- ЛАЙКИ И ПЛЕЙЛИСТЫ (WRITE) ---
+
+    public async Task LikeTrackAsync(string trackId, bool like)
+    {
+        if (!_cookieAuth.IsAuthenticated) return;
+        try
+        {
+            var vid = trackId.Replace("yt_", "");
+            await _youtube.Music.LikeTrackAsync(vid, like);
+            Log.Info($"[Music] Liked status set to {like} for {vid}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to like: {ex.Message}");
+            throw; // <-- ВАЖНО: Пробрасываем ошибку, чтобы Manager и UI знали о сбое
+        }
+    }
+
+    public async Task<string?> CreatePlaylistAsync(string title)
+    {
+        if (!_cookieAuth.IsAuthenticated) return null;
+        try
+        {
+            var id = await _youtube.Music.CreatePlaylistAsync(title);
+            return id;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to create playlist: {ex.Message}");
+            return null;
+        }
+    }
+
+    public async Task AddToPlaylistAsync(string playlistId, string trackId)
+    {
+        if (!_cookieAuth.IsAuthenticated) return;
+        try
+        {
+            await _youtube.Music.AddToPlaylistAsync(playlistId, trackId.Replace("yt_", ""));
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to add to playlist: {ex.Message}");
+        }
     }
 
     #region RefreshStreamUrlAsync
@@ -656,6 +773,7 @@ public partial class YoutubeProvider
         return (tracks, session);
     }
     #endregion
+
     public async Task<(string Name, List<TrackInfo> Tracks)?> GetPlaylistAsync(string url)
     {
         if (!IsReady) return null;
@@ -901,7 +1019,8 @@ public partial class YoutubeProvider
             Url = video.Url,
             Duration = video.Duration ?? TimeSpan.Zero,
             ThumbnailUrl = thumb?.Url ?? "",
-            IsOfficialArtist = video.IsOfficialArtist
+            IsOfficialArtist = video.IsOfficialArtist,
+            IsMusic = video.IsMusic
         };
     }
 
@@ -973,4 +1092,10 @@ public class StreamOption
 
     /// <summary>Отображаемое имя для UI</summary>
     public string DisplayName => $"{Codec} {Bitrate:F0}kbps ({Container})";
+}
+
+public class HomeSection
+{
+    public string Title { get; set; } = "";
+    public List<TrackInfo> Tracks { get; set; } = [];
 }

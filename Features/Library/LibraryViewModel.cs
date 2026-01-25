@@ -16,7 +16,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly YoutubeProvider _youtube;
-    private readonly GoogleAuthService _auth;
+    private readonly CookieAuthService _auth; // Changed
     private readonly IDialogService _dialog;
     private readonly MainWindowViewModel _mainWindow;
     private readonly MusicLibraryManager _manager;
@@ -45,7 +45,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     public LibraryViewModel(
         LibraryService library,
         YoutubeProvider youtube,
-        GoogleAuthService auth,
+        CookieAuthService auth, // Changed
         MainWindowViewModel mainWindow,
         IDialogService dialog,
         MusicLibraryManager manager,
@@ -69,7 +69,8 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         SavePlaylistCommand = ReactiveCommand.Create(() =>
         {
             var playlist = _library.CreatePlaylist(NewPlaylistName.Trim());
-            playlist.SyncMode = PlaylistSyncMode.TwoWaySync;
+            // Cookies support playlists, so TwoWaySync is possible
+            playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly; 
             _library.AddOrUpdatePlaylist(playlist);
             IsCreatingPlaylist = false;
             NewPlaylistName = string.Empty;
@@ -126,6 +127,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 try
                 {
+                    // Получаем плейлисты пользователя через InnerTube (пока заглушка в Provider, но вызов верный)
                     var ytPlaylists = await _youtube.GetUserPlaylistsByAuthAsync();
                     ct.ThrowIfCancellationRequested();
                     SyncProgress = 0.1;
@@ -136,11 +138,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             ? new YoutubeExplode.Playlists.PlaylistId(p.YoutubeId)
                             : new YoutubeExplode.Playlists.PlaylistId("PL0000000000000000");
 
-                        var author = new YoutubeExplode.Common.Author(
-                            new YoutubeExplode.Channels.ChannelId("UC0000000000000000000000"),
-                            p.Author ?? "Unknown");
-
-                        return new PlaylistSearchResult(pid, p.Name, author, []);
+                        return new PlaylistSearchResult(pid, p.Name, null, []);
                     })];
                 }
                 catch (OperationCanceledException) { return; }
@@ -244,9 +242,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
                 if (decision == MergeAction.Merge && existing != null)
                 {
-                    // Оптимизация: Алгоритмическая сложность
-                    // Преобразуем список существующих треков в HashSet для поиска O(1)
-                    // Вместо Contains на List (O(N)), что дает суммарную сложность O(M) вместо O(N*M)
                     var existingTrackSet = new HashSet<string>(existing.TrackIds);
                     bool changed = false;
 
@@ -258,7 +253,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             changed = true;
                         }
 
-                        // Обновляем метаданные трека
                         var t = _library.GetTrack(trackId);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
                         {
@@ -337,9 +331,8 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             Playlists.Add(new PlaylistCardViewModel(
                 playlist,
                 _mainWindow.NavigateToPlaylist,
-                (p) => // Action AddToQueue
+                (p) => 
                 {
-                    // Получаем треки плейлиста
                     var tracks = _library.GetPlaylistTracks(p.Id);
                     _audio.EnqueueRange(tracks);
                 },
@@ -393,5 +386,3 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         GC.SuppressFinalize(this);
     }
 }
-
-

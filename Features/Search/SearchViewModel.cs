@@ -17,7 +17,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private const int DebounceMs = 300;
     private const int MaxResults = 300;
     #endregion
-    
+
     #region Fields
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
@@ -29,14 +29,14 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private CancellationTokenSource? _searchCts;
     private YoutubeProvider.SearchSession? _searchSession;
     private DateTime _lastSearchTime = DateTime.MinValue;
-    
+
     private bool _isDisposed;
     #endregion
 
     #region Properties
     private int InitialBatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize * 2 : 50;
     private int ScrollBatchSize => LibService.Data.SearchBatchSize > 0 ? LibService.Data.SearchBatchSize : 30;
-    
+
     // Это строка для API запроса (Глобальный поиск)
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
     [Reactive] public bool HasResults { get; private set; }
@@ -112,7 +112,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(async _ => 
+            .Subscribe(async _ =>
             {
                 if (!string.IsNullOrWhiteSpace(SearchQuery))
                     await ExecuteSearchAsync(forceNetwork: false);
@@ -124,12 +124,12 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             _ = ExecuteSearchAsync(false);
         }
     }
-    
+
     private void LogError(string source, Exception ex)
     {
         if (ex is OperationCanceledException) return;
         Log.Error($"[{source}] Unhandled error: {ex.Message}");
-        ErrorMessage = SL["Search_NetworkError"]; 
+        ErrorMessage = SL["Search_NetworkError"];
         IsLoading = false;
     }
 
@@ -143,17 +143,18 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             ContentFilterType.Music => SearchFilter.Music,
             ContentFilterType.Video => SearchFilter.Video,
             // Для "All" используем None (YouTube сам решит, обычно смешанная выдача)
-            _ => SearchFilter.None 
+            _ => SearchFilter.None
         };
     }
 
     protected override bool FilterItem(TrackInfo item)
     {
-        // 1. Фильтр по типу (локальный, на всякий случай, хотя API уже отфильтровало)
+        // 1. Фильтр по типу.
+        // Если выбран "Video", мы не должны скрывать музыку, так как клип - это тоже видео.
+        // Но если выбран "Music", мы хотим видеть только музыку.
         if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
-        // Для видео не фильтруем музыку, так как музыка технически тоже видео
 
-        // 2. Локальный поиск по уже загруженным результатам
+        // 2. Текстовый поиск (локальный)
         if (!string.IsNullOrWhiteSpace(FilterQuery))
         {
             return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
@@ -178,7 +179,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     }
 
     protected override string GetItemId(TrackInfo item) => item.Id;
-    
+
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
         if (TotalCount >= MaxResults) return [];
@@ -217,7 +218,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             }
             catch (OperationCanceledException)
             {
-                return []; 
+                return [];
             }
             catch (HttpRequestException)
             {
@@ -254,7 +255,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             _searchCts = new CancellationTokenSource();
             currentCts = _searchCts;
             var ct = currentCts.Token;
-            
+
             try { _searchSession?.Dispose(); } catch { }
             _searchSession = null;
 
@@ -267,8 +268,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
             HasResults = false;
             _currentQuery = SearchQuery.Trim();
-            
-            try 
+
+            try
             {
                 LibService.Data.LastSearchQuery = _currentQuery;
                 AddToHistory(_currentQuery);
@@ -276,7 +277,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             }
             catch (Exception ex) { Log.Error($"History save error: {ex.Message}"); }
 
-            await Task.Delay(50, ct); 
+            await Task.Delay(50, ct);
 
             var queryType = YoutubeProvider.DetectQueryType(_currentQuery);
 
@@ -308,7 +309,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             }
         }
     }
-    
+
     private async Task HandleDirectUrlAsync(CancellationToken ct)
     {
         var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
@@ -355,7 +356,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                 IsFromCache = true;
                 await InitializeItemsAsync(cached, canFetchMore: cached.Count < MaxResults);
                 HasResults = true;
-                
+
                 var urls = cached.Take(20).Select(t => t.ThumbnailUrl);
                 _ = _imageCache.PrefetchAsync(urls!, ct);
                 return;
@@ -367,18 +368,27 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         if (forceNetwork) _searchCache.InvalidateQuery(_currentQuery);
 
-        // Передаем GetYoutubeSearchFilter() в метод поиска
+        // Важно: передаем правильный фильтр API
+        var apiFilter = GetYoutubeSearchFilter();
+
         var (tracks, session) = await _youtube.SearchWithSessionAsync(
-            _currentQuery, 
-            InitialBatchSize, 
-            MaxResults, 
-            GetYoutubeSearchFilter(), // <-- Исправлено
+            _currentQuery,
+            InitialBatchSize,
+            MaxResults,
+            apiFilter,
             ct);
 
         _searchSession = session;
 
+        // Если мы искали с фильтром Music, принудительно ставим IsMusic = true для надежности
+        // (хотя VideoSearchResult теперь должен возвращать правильно)
+        if (apiFilter == SearchFilter.Music)
+        {
+            foreach (var t in tracks) t.IsMusic = true;
+        }
+
         ct.ThrowIfCancellationRequested();
-        
+
         IsFetchingFromNetwork = false;
 
         // Кэшируем только смешанную выдачу
@@ -415,7 +425,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         _ = _audio.PlayTrackAsync(track);
         LibService.AddToRecentlyPlayed(track);
     }
-    
+
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;

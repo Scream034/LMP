@@ -1,4 +1,3 @@
-﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
@@ -7,50 +6,30 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyLiteMusicPlayer", "MyLite
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "External", "External", "{A288BEE0-695A-BEEA-455C-649571D89326}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YoutubeExplode", "External\YoutubeExplode\YoutubeExplode.csproj", "{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyLiteMusicPlayer.Logging", "External\MyLiteMusicPlayer.Logging\MyLiteMusicPlayer.Logging.csproj", "{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
-		Debug|x64 = Debug|x64
-		Debug|x86 = Debug|x86
 		Release|Any CPU = Release|Any CPU
-		Release|x64 = Release|x64
-		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|x64.Build.0 = Debug|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|x86.Build.0 = Debug|Any CPU
 		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|Any CPU.Build.0 = Release|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|x64.ActiveCfg = Release|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|x64.Build.0 = Release|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|x86.ActiveCfg = Release|Any CPU
-		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|x86.Build.0 = Release|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Debug|x64.Build.0 = Debug|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Debug|x86.Build.0 = Debug|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Release|Any CPU.Build.0 = Release|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Release|x64.ActiveCfg = Release|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Release|x64.Build.0 = Release|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Release|x86.ActiveCfg = Release|Any CPU
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D}.Release|x86.Build.0 = Release|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
-		{222BCF93-CF6E-4CAA-846E-C09A3DA93C1D} = {A288BEE0-695A-BEEA-455C-649571D89326}
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9} = {A288BEE0-695A-BEEA-455C-649571D89326}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {A6AE7CFC-16FF-4830-9296-E24330590957}
+		SolutionGuid = {0F16D1E9-1744-4402-84B9-2F71BB6B6EE4}
 	EndGlobalSection
 EndGlobal

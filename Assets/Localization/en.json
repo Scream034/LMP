@@ -182,6 +182,7 @@
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
   "Dialog_Confirm_Title": "Confirm",
+  "Dialog_Input_Title": "Input",
   "Dialog_Warning_Title": "Warning",
   "Dialog_Done_Title": "Done",
   "Dialog_SelectDownloadFolder_Title": "Select Folder",
@@ -198,6 +199,8 @@
   "Dialog_Merge_Success_Msg": "Playlists merged successfully.",
   "Dialog_Merge_Success": "Linked to {0}",
   "Dialog_Merge_Error": "Could not find channel",
+  "Input_Watermark": "Enter text...",
+  "Input_PasteHere": "Paste here...",
 
   "Sync_Action": "Import",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",

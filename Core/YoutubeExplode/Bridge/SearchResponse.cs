@@ -17,70 +17,57 @@ internal partial class SearchResponse
     {
         var items = EnumerateItems(content);
         
-        var videos = new List<VideoData>(items.Count);
-        var playlists = new List<PlaylistData>(items.Count / 4);
-        var channels = new List<ChannelData>(items.Count / 4);
+        var videos = new List<VideoData>();
+        var playlists = new List<PlaylistData>();
+        var channels = new List<ChannelData>();
 
         foreach (var item in items)
         {
-            // 1. Стандартный VideoRenderer (YouTube WEB)
+            // 1. YouTube Music Item (WEB_REMIX)
+            if (item.TryGetProperty("musicResponsiveListItemRenderer", out var musicItemJson))
+            {
+                // Проверяем, является ли это песней/видео
+                var isVideoOrSong = 
+                    musicItemJson.EnumerateDescendantProperties("watchEndpoint").Any() ||
+                    musicItemJson.EnumerateDescendantProperties("videoId").Any() ||
+                    musicItemJson.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId") != null;
+
+                if (isVideoOrSong)
+                {
+                    videos.Add(new VideoData(musicItemJson));
+                }
+                continue;
+            }
+
+            // 2. Standard Video (WEB)
             if (item.TryGetProperty("videoRenderer", out var videoJson))
             {
                 videos.Add(new VideoData(videoJson));
                 continue;
             }
             
-            // 2. Shorts (YouTube WEB)
+            // 3. Shorts
             if (item.TryGetProperty("shortsLockupViewModel", out var shortJson))
             {
                 videos.Add(new VideoData(shortJson));
                 continue;
             }
 
-            // 3. YouTube Music Item Renderer (WEB_REMIX)
-            // Это основной элемент выдачи YT Music. Может быть песней или видео.
-            if (item.TryGetProperty("musicResponsiveListItemRenderer", out var musicItemJson))
-            {
-                // Проверяем, является ли это песней/видео.
-                // Обычно определяем по navigationEndpoint -> watchEndpoint.
-                // Если это browseEndpoint (например, артист или альбом), то это не видео.
-                var isVideoOrSong = 
-                    musicItemJson.EnumerateDescendantProperties("watchEndpoint").Any() ||
-                    musicItemJson.EnumerateDescendantProperties("videoId").Any();
-
-                if (isVideoOrSong)
-                {
-                    videos.Add(new VideoData(musicItemJson));
-                }
-                else
-                {
-                    // Логика для альбомов/плейлистов YT Music, если нужно
-                    // playlists.Add(new PlaylistData(musicItemJson)); 
-                }
-                continue;
-            }
-
-            // 4. Стандартный PlaylistRenderer (YouTube WEB)
+            // 4. Playlists
             if (item.TryGetProperty("playlistRenderer", out var playlistJson))
             {
                 playlists.Add(new PlaylistData(playlistJson));
                 continue;
             }
-            
-            // 5. LockupViewModel (YouTube WEB новый дизайн)
             if (item.TryGetProperty("lockupViewModel", out var lockupJson))
             {
-                var contentId = lockupJson.GetPropertyOrNull("contentId")?.GetStringOrNull();
-                if (contentId != null)
-                {
-                    if (contentId.StartsWith("PL"))
+                 var contentId = lockupJson.GetPropertyOrNull("contentId")?.GetStringOrNull();
+                 if (contentId != null && contentId.StartsWith("PL"))
                         playlists.Add(new PlaylistData(lockupJson));
-                    // Можно добавить обработку видео для LockupViewModel, если понадобится
-                }
-                continue;
+                 continue;
             }
 
-            // 6. ChannelRenderer (YouTube WEB)
+            // 5. Channels
             if (item.TryGetProperty("channelRenderer", out var channelJson))
             {
                 channels.Add(new ChannelData(channelJson));
@@ -92,9 +79,8 @@ internal partial class SearchResponse
         Playlists = playlists;
         Channels = channels;
 
-        // Поиск токена продолжения (ContinuationToken)
+        // Поиск токена продолжения
         ContinuationToken = 
-            // Стандартный путь
             content.GetPropertyOrNull("onResponseReceivedCommands")?.EnumerateArrayOrNull()?.FirstOrDefault()
                 .GetPropertyOrNull("appendContinuationItemsAction")
                 ?.GetPropertyOrNull("continuationItems")?.EnumerateArrayOrNull()?.LastOrDefault()
@@ -104,7 +90,6 @@ internal partial class SearchResponse
                 ?.GetPropertyOrNull("token")
                 ?.GetStringOrNull()
             ??
-            // Путь для YouTube Music (иногда отличается в shelf)
             content.EnumerateDescendantProperties("continuationCommand")
                 .FirstOrDefault().GetPropertyOrNull("token")?.GetStringOrNull();
     }
@@ -113,7 +98,7 @@ internal partial class SearchResponse
     {
         var results = new List<JsonElement>();
 
-        // 1. Обработка sectionListRenderer (Классический YouTube)
+        // 1. Стандартный список
         var sectionListContents = content.GetPropertyOrNull("contents")
             ?.GetPropertyOrNull("twoColumnSearchResultsRenderer")
             ?.GetPropertyOrNull("primaryContents")
@@ -124,42 +109,24 @@ internal partial class SearchResponse
         {
             foreach (var section in sectionListContents.Value.EnumerateArrayOrEmpty())
             {
-                // YT Music часто возвращает musicShelfRenderer внутри sectionList
+                // Музыкальная полка
                 if (section.TryGetProperty("musicShelfRenderer", out var musicShelf))
                 {
                     foreach(var item in musicShelf.GetPropertyOrNull("contents")?.EnumerateArrayOrEmpty() ?? [])
-                    {
-                        results.Add(item);
-                    }
+                         results.Add(item);
                     continue;
                 }
-
+                // Обычная секция
                 var sectionItems = section.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
                 if (sectionItems.HasValue)
                 {
                     foreach (var item in sectionItems.Value.EnumerateArrayOrEmpty())
-                    {
-                        if (item.TryGetProperty("gridShelfViewModel", out var gridShelf))
-                        {
-                            foreach (var shelfItem in gridShelf.GetPropertyOrNull("contents")?.EnumerateArrayOrEmpty() ?? [])
-                                results.Add(shelfItem);
-                        }
-                        else if (item.TryGetProperty("shelfRenderer", out var shelf))
-                        {
-                             // Обработка обычных полок
-                             foreach (var shelfItem in shelf.GetPropertyOrNull("content")?.GetPropertyOrNull("verticalListRenderer")?.GetPropertyOrNull("items")?.EnumerateArrayOrEmpty() ?? [])
-                                results.Add(shelfItem);
-                        }
-                        else
-                        {
-                            results.Add(item);
-                        }
-                    }
+                        results.Add(item);
                 }
             }
         }
         
-        // 2. Обработка tabRenderer (YT Music иногда возвращает структуру табов)
+        // 2. YT Music Tabs (иногда поиск возвращает табы: Top result, Songs, Videos...)
         var tabs = content.GetPropertyOrNull("contents")
              ?.GetPropertyOrNull("tabbedSearchResultsRenderer")
              ?.GetPropertyOrNull("tabs");
@@ -168,9 +135,7 @@ internal partial class SearchResponse
         {
              foreach(var tab in tabs.Value.EnumerateArrayOrEmpty())
              {
-                 var tabContent = tab.GetPropertyOrNull("tabRenderer")?.GetPropertyOrNull("content");
-                 var sectionList = tabContent?.GetPropertyOrNull("sectionListRenderer")?.GetPropertyOrNull("contents");
-                 
+                 var sectionList = tab.GetPropertyOrNull("tabRenderer")?.GetPropertyOrNull("content")?.GetPropertyOrNull("sectionListRenderer")?.GetPropertyOrNull("contents");
                  if (sectionList.HasValue)
                  {
                       foreach (var section in sectionList.Value.EnumerateArrayOrEmpty())
@@ -185,7 +150,7 @@ internal partial class SearchResponse
              }
         }
 
-        // 3. Обработка команд продолжения (Continuation)
+        // 3. Continuation
         var continuationCommands = content.GetPropertyOrNull("onResponseReceivedCommands");
         if (continuationCommands.HasValue)
         {
@@ -199,18 +164,18 @@ internal partial class SearchResponse
                          if (item.TryGetProperty("musicResponsiveListItemRenderer", out _))
                          {
                              results.Add(item);
-                             continue;
-                         }
-
-                         var innerItems = item.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
-                         if(innerItems.HasValue)
-                         {
-                            foreach(var inner in innerItems.Value.EnumerateArrayOrEmpty())
-                                results.Add(inner);
                          }
                          else
                          {
-                            results.Add(item);
+                             var innerItems = item.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
+                             if(innerItems.HasValue)
+                             {
+                                foreach(var inner in innerItems.Value.EnumerateArrayOrEmpty()) results.Add(inner);
+                             }
+                             else
+                             {
+                                results.Add(item);
+                             }
                          }
                     }
                 }
@@ -228,24 +193,36 @@ internal partial class SearchResponse
     internal class VideoData
     {
         private readonly JsonElement _content;
-        private readonly bool _isMusicItem;
+        public bool IsMusicItem { get; }
 
         public VideoData(JsonElement content)
         {
             _content = content;
-            _isMusicItem = content.ValueKind == JsonValueKind.Object && content.TryGetProperty("flexColumns", out _);
+            // В YT Music основной элемент - это musicResponsiveListItemRenderer
+            IsMusicItem = content.ValueKind == JsonValueKind.Object && content.TryGetProperty("flexColumns", out _);
         }
 
         public string? Id
         {
             get
             {
-                if (_isMusicItem)
+                if (IsMusicItem)
                 {
-                    return _content.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull()
-                           ?? _content.EnumerateDescendantProperties("videoId").FirstOrDefault().GetStringOrNull();
+                    // 1. Ищем в navigationEndpoint (самый надежный)
+                    var navId = _content.GetPropertyOrNull("playNavigationEndpoint")?.GetPropertyOrNull("watchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull()
+                             ?? _content.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("watchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+                    
+                    if (!string.IsNullOrEmpty(navId)) return navId;
+
+                    // 2. Ищем в playlistItemData
+                    var plId = _content.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+                    if (!string.IsNullOrEmpty(plId)) return plId;
+
+                    // 3. Fallback
+                    return _content.EnumerateDescendantProperties("videoId").FirstOrDefault().GetStringOrNull();
                 }
 
+                // Standard YouTube
                 return _content.GetPropertyOrNull("videoId")?.GetStringOrNull() ?? 
                        _content.GetPropertyOrNull("onTap")?.GetPropertyOrNull("innertubeCommand")?.GetPropertyOrNull("reelWatchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
             }
@@ -255,9 +232,9 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_isMusicItem)
+                if (IsMusicItem)
                 {
-                    // В YT Music заголовок обычно в первой flexColumn
+                    // Первая колонка flexColumns
                     var titleRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)
                         ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
                     
@@ -270,6 +247,7 @@ internal partial class SearchResponse
                     }
                 }
 
+                // Standard
                 var runs = _content.GetPropertyOrNull("title")?.GetPropertyOrNull("runs");
                 if (runs != null)
                 {
@@ -283,54 +261,43 @@ internal partial class SearchResponse
             }
         }
 
-        // Вспомогательный метод для поиска блока runs, содержащего автора
-        private JsonElement? GetAuthorRun()
+        public string? Author
         {
-            if (_isMusicItem)
+            get 
             {
-                // В YT Music метаданные (Артист, Альбом, Время) во второй flexColumn
-                var metaRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(1)
-                    ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
-
-                // Ищем run, у которого есть navigationEndpoint с переходом на канал/артиста
-                if (metaRuns != null)
+                if (IsMusicItem)
                 {
-                    foreach (var run in metaRuns.Value.EnumerateArrayOrEmpty())
+                    // Вторая колонка (Artist • Album • Time)
+                    var metaRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(1)
+                        ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
+
+                    if (metaRuns != null)
                     {
-                        var pageType = run.GetPropertyOrNull("navigationEndpoint")
-                            ?.GetPropertyOrNull("browseEndpoint")
-                            ?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
-                            ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
-                            ?.GetPropertyOrNull("pageType")?.GetStringOrNull();
-
-                        // MUSIC_PAGE_TYPE_ARTIST или просто наличие browseId, если это не альбом
-                        if (pageType == "MUSIC_PAGE_TYPE_ARTIST" || 
-                            (run.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("browseEndpoint")?.GetPropertyOrNull("browseId")?.GetStringOrNull()?.StartsWith("UC") == true))
+                        foreach (var run in metaRuns.Value.EnumerateArrayOrEmpty())
                         {
-                            return run;
-                        }
-                    }
-                    // Если не нашли явно артиста, берем первый элемент (часто это артист)
-                    return metaRuns.Value.EnumerateArrayOrNull()?.FirstOrDefault();
-                }
-                return null;
-            }
+                            // Обычно у артиста есть navigationEndpoint с переходом на browse/artist
+                            var nav = run.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("browseEndpoint");
+                            var pageType = nav?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
+                                ?.GetPropertyOrNull("browseEndpointContextMusicConfig")?.GetPropertyOrNull("pageType")?.GetStringOrNull();
 
-            return _content.GetPropertyOrNull("longBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0) ??
-                   _content.GetPropertyOrNull("shortBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0) ??
-                   _content.GetPropertyOrNull("ownerText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0);
+                            if (pageType == "MUSIC_PAGE_TYPE_ARTIST") 
+                                return run.GetPropertyOrNull("text")?.GetStringOrNull();
+                        }
+                        // Если не нашли явно, берем первый элемент (часто это артист)
+                        return metaRuns.Value.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull();
+                    }
+                    return null;
+                }
+
+                return _content.GetPropertyOrNull("longBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)?.GetPropertyOrNull("text")?.GetStringOrNull() ??
+                       _content.GetPropertyOrNull("shortBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)?.GetPropertyOrNull("text")?.GetStringOrNull() ??
+                       _content.GetPropertyOrNull("ownerText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)?.GetPropertyOrNull("text")?.GetStringOrNull();
+            }
         }
 
-        public string? Author => GetAuthorRun()?.GetPropertyOrNull("text")?.GetStringOrNull();
+        public string? ChannelId => null; // Упрощено для музыки
 
-        public string? ChannelId =>
-            GetAuthorRun()?.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("browseEndpoint")?.GetPropertyOrNull("browseId")?.GetStringOrNull() ??
-            _content.GetPropertyOrNull("channelThumbnailSupportedRenderers")?.GetPropertyOrNull("channelThumbnailWithLinkRenderer")?.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("browseEndpoint")?.GetPropertyOrNull("browseId")?.GetStringOrNull();
-
-        public bool IsOfficialArtist =>
-            _content.GetPropertyOrNull("ownerBadges")?.EnumerateArrayOrNull()?.Any(b =>
-                b.GetPropertyOrNull("metadataBadgeRenderer")?.GetPropertyOrNull("style")?.GetStringOrNull() == "BADGE_STYLE_TYPE_VERIFIED_ARTIST"
-            ) ?? false;
+        public bool IsOfficialArtist => false; 
 
         public bool IsShort => 
             _content.TryGetProperty("shortsLockupViewModel", out _) ||
@@ -340,9 +307,9 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_isMusicItem)
+                if (IsMusicItem)
                 {
-                    // В YT Music длительность обычно находится в конце списка runs во второй колонке
+                     // Парсим время из текста во второй колонке
                      var metaRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(1)
                         ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
                     
@@ -351,9 +318,9 @@ internal partial class SearchResponse
                         foreach (var run in metaRuns.Value.EnumerateArrayOrEmpty())
                         {
                             var text = run.GetPropertyOrNull("text")?.GetStringOrNull();
-                            if (text != null && text.Contains(":")) // Примитивная эвристика времени
+                            if (text != null && text.Contains(":")) 
                             {
-                                if (TimeSpan.TryParseExact(text.AsSpan(), [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"], CultureInfo.InvariantCulture, out var r))
+                                if (TimeSpan.TryParseExact(text.AsSpan(), [@"m\:ss", @"mm\:ss", @"h\:mm\:ss"], CultureInfo.InvariantCulture, out var r))
                                     return r;
                             }
                         }
@@ -367,9 +334,7 @@ internal partial class SearchResponse
         }
 
         public IReadOnlyList<ThumbnailData> Thumbnails =>
-            // YT Music Thumbnail
             _content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("musicThumbnailRenderer")?.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(j => new ThumbnailData(j)).ToArray() ??
-            // Standard YouTube Thumbnail
             _content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(j => new ThumbnailData(j)).ToArray() ?? 
             _content.GetPropertyOrNull("thumbnailViewModel")?.GetPropertyOrNull("image")?.GetPropertyOrNull("sources")?.EnumerateArrayOrNull()?.Select(j => new ThumbnailData(j)).ToArray() ?? 
             [];
@@ -377,20 +342,10 @@ internal partial class SearchResponse
     
     public class PlaylistData(JsonElement content)
     {
-        public string? Id =>
-            content.GetPropertyOrNull("playlistId")?.GetStringOrNull() ??
-            content.GetPropertyOrNull("contentId")?.GetStringOrNull();
-
-        public string? Title =>
-            content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull() ??
-            content.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ??
-            content.GetPropertyOrNull("metadata")?.GetPropertyOrNull("lockupMetadataViewModel")?.GetPropertyOrNull("title")?.GetPropertyOrNull("content")?.GetStringOrNull();
-
-        private JsonElement? GetAuthorRun() =>
-            content.GetPropertyOrNull("longBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault();
-
-        public string? Author => GetAuthorRun()?.GetPropertyOrNull("text")?.GetStringOrNull();
-        public string? ChannelId => GetAuthorRun()?.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("browseEndpoint")?.GetPropertyOrNull("browseId")?.GetStringOrNull();
+        public string? Id => content.GetPropertyOrNull("playlistId")?.GetStringOrNull() ?? content.GetPropertyOrNull("contentId")?.GetStringOrNull();
+        public string? Title => content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull() ?? content.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ?? content.GetPropertyOrNull("metadata")?.GetPropertyOrNull("lockupMetadataViewModel")?.GetPropertyOrNull("title")?.GetPropertyOrNull("content")?.GetStringOrNull();
+        public string? Author => null;
+        public string? ChannelId => null;
         public IReadOnlyList<ThumbnailData> Thumbnails => content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(j => new ThumbnailData(j)).ToArray() ?? [];
     }
 

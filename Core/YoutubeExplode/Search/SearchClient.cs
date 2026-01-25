@@ -13,6 +13,7 @@ public class SearchClient(HttpClient http)
     // Реальный ID официального канала YouTube. Используется как fallback, если ID не найден.
     private const string FallbackChannelId = "UCBR8-6071WBgIc8o-99y5Lg";
 
+  
     public async IAsyncEnumerable<Batch<ISearchResult>> GetResultBatchesAsync(
         string searchQuery,
         SearchFilter searchFilter,
@@ -21,6 +22,9 @@ public class SearchClient(HttpClient http)
     {
         var encounteredIds = new HashSet<string>(StringComparer.Ordinal);
         var continuationToken = default(string?);
+
+        // Определяем, является ли контекст музыкальным
+        bool isMusicContext = searchFilter == SearchFilter.Music;
 
         do
         {
@@ -44,9 +48,13 @@ public class SearchClient(HttpClient http)
                     var thumbnails = videoData.Thumbnails.Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
                         .Concat(Thumbnail.GetDefaultSet(videoId)).ToArray();
 
+                    // Определяем IsMusic: либо это ответ от WEB_REMIX (IsMusicItem), либо мы явно искали Музыку
+                    bool isMusic = videoData.IsMusicItem || isMusicContext;
+
                     batchItems.Add(new VideoSearchResult(
                         videoId, videoData.Title ?? "", author, videoData.Duration,
-                        thumbnails, videoData.IsOfficialArtist, videoData.IsShort
+                        thumbnails, videoData.IsOfficialArtist, videoData.IsShort,
+                        isMusic // Передаем флаг
                     ));
                 }
             }

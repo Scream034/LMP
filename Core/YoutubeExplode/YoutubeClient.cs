@@ -1,5 +1,6 @@
 using System.Net;
 using YoutubeExplode.Channels;
+using YoutubeExplode.Music;
 using YoutubeExplode.Playlists;
 using YoutubeExplode.Search;
 using YoutubeExplode.Utils;
@@ -17,27 +18,29 @@ public class YoutubeClient : IDisposable
     /// <summary>
     /// Initializes an instance of <see cref="YoutubeClient" />.
     /// </summary>
-    public YoutubeClient(HttpClient http, IReadOnlyList<Cookie> initialCookies)
+    public YoutubeClient(HttpClient http, IReadOnlyList<Cookie> initialCookies, string userAgent)
     {
-        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, initialCookies), true);
+        // Передаем userAgent в Handler
+        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, initialCookies, userAgent), true);
 
         Videos = new VideoClient(_youtubeHttp);
         Playlists = new PlaylistClient(_youtubeHttp);
         Channels = new ChannelClient(_youtubeHttp);
         Search = new SearchClient(_youtubeHttp);
+        Music = new MusicClient(_youtubeHttp);
     }
 
     /// <summary>
     /// Initializes an instance of <see cref="YoutubeClient" />.
     /// </summary>
     public YoutubeClient(HttpClient http)
-        : this(http, []) { }
+        : this(http, [], "") { }
 
     /// <summary>
     /// Initializes an instance of <see cref="YoutubeClient" />.
     /// </summary>
     public YoutubeClient(IReadOnlyList<Cookie> initialCookies)
-        : this(Http.Client, initialCookies) { }
+        : this(Http.Client, initialCookies, "") { }
 
     /// <summary>
     /// Initializes an instance of <see cref="YoutubeClient" />.
@@ -64,6 +67,8 @@ public class YoutubeClient : IDisposable
     /// Operations related to YouTube search.
     /// </summary>
     public SearchClient Search { get; }
+
+    public MusicClient Music { get; } // Add property
 
     /// <inheritdoc />
     public void Dispose() => _youtubeHttp.Dispose();
