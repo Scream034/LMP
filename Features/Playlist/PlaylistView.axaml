@@ -12,14 +12,11 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <!-- 0: Header (Resizable) -->
-            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="200"
-                MaxHeight="340" />
-            <!-- 1: Splitter -->
-            <RowDefinition Height="6" />
-            <!-- 2: Filters -->
+            <!-- 0: Header -->
             <RowDefinition Height="Auto" />
-            <!-- 3: List -->
+            <!-- 1: Compact Filter -->
+            <RowDefinition Height="Auto" />
+            <!-- 2: List -->
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -35,7 +32,8 @@
 
                 <Grid RowDefinitions="*, Auto" Width="800">
                     <Grid Grid.Row="0" ColumnDefinitions="Auto, *" Margin="0,0,0,16">
-                        <Border Grid.Column="0" Width="190" Height="190" CornerRadius="8"
+                        <!-- Playlist Cover -->
+                        <Border Grid.Column="0" Width="180" Height="180" CornerRadius="8"
                             ClipToBounds="True" Background="{DynamicResource BgSkeletonBrush}"
                             BoxShadow="{StaticResource CardShadow}">
                             <Panel>
@@ -54,13 +52,16 @@
                             </Panel>
                         </Border>
 
+                        <!-- Playlist Info -->
                         <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
                             <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
                                 Foreground="{DynamicResource TextSecondaryBrush}" LetterSpacing="1" />
-                            <TextBlock Text="{Binding PlaylistName}" FontSize="48"
+
+                            <TextBlock Text="{Binding PlaylistName}" FontSize="42"
                                 FontWeight="Black"
                                 Margin="0,4,0,0" Padding="0,0,0,12" TextWrapping="Wrap" MaxLines="2"
                                 ClipToBounds="False" />
+
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <TextBlock Text="{Binding FormattedTrackCount}"
                                     FontWeight="SemiBold"
@@ -73,22 +74,24 @@
                         </StackPanel>
                     </Grid>
 
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="24"
+                    <!-- Actions Toolbar -->
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16"
                         VerticalAlignment="Center">
-                        <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="56"
-                            Height="56">
+                        <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="52"
+                            Height="52">
                             <Panel>
-                                <mi:MaterialIcon Kind="Play" Width="28" Height="28"
+                                <mi:MaterialIcon Kind="Play" Width="26" Height="26"
                                     Foreground="{DynamicResource TextDarkBrush}"
                                     IsVisible="{Binding !IsPlayingThisPlaylist}" />
-                                <mi:MaterialIcon Kind="Pause" Width="28" Height="28"
+                                <mi:MaterialIcon Kind="Pause" Width="26" Height="26"
                                     Foreground="{DynamicResource TextDarkBrush}"
                                     IsVisible="{Binding IsPlayingThisPlaylist}" />
                             </Panel>
                         </Button>
+
                         <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}"
                             ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
-                            <mi:MaterialIcon Kind="ShuffleVariant" Width="24" Height="24"
+                            <mi:MaterialIcon Kind="ShuffleVariant" Width="22" Height="22"
                                 Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}">
                                 <mi:MaterialIcon.Transitions>
                                     <Transitions>
@@ -97,43 +100,73 @@
                                 </mi:MaterialIcon.Transitions>
                             </mi:MaterialIcon>
                         </Button>
+
                         <Button Classes="icon-btn" Command="{Binding AddToQueueCommand}"
                             ToolTip.Tip="{Binding L[Queue_Add]}">
-                            <mi:MaterialIcon Kind="PlaylistPlus" Width="24" Height="24" />
+                            <mi:MaterialIcon Kind="PlaylistPlus" Width="22" Height="22" />
                         </Button>
+
                         <Button Classes="icon-btn" Command="{Binding DownloadAllCommand}"
                             ToolTip.Tip="Download All">
-                            <mi:MaterialIcon Kind="Download" Width="24" Height="24"
+                            <mi:MaterialIcon Kind="Download" Width="22" Height="22"
                                 Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                         </Button>
+
                         <Button Classes="icon-btn" Command="{Binding RefreshPlaylistCommand}"
                             IsVisible="{Binding IsCloud}" ToolTip.Tip="Sync with YouTube">
-                            <mi:MaterialIcon Kind="Sync" Width="24" Height="24" />
+                            <mi:MaterialIcon Kind="Sync" Width="22" Height="22" />
                         </Button>
                     </StackPanel>
                 </Grid>
             </Viewbox>
         </Border>
 
-        <!-- SPLITTER (Row 1) -->
-        <GridSplitter Grid.Row="1" ResizeDirection="Rows" Background="Transparent"
-            HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ShowsPreview="False">
-            <GridSplitter.Template>
-                <ControlTemplate>
-                    <Border Background="Transparent" Padding="0,2" Cursor="SizeNorthSouth">
-                        <Border Height="2" Width="40"
-                            Background="{DynamicResource BgHighlightBrush}"
-                            CornerRadius="1" />
-                    </Border>
-                </ControlTemplate>
-            </GridSplitter.Template>
-        </GridSplitter>
+        <!-- COMPACT FILTER (Row 1) -->
+        <Grid Grid.Row="1" Margin="24,12,24,12">
+            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36">
+                <Grid ColumnDefinitions="Auto, *, Auto">
+                    <!-- Icon -->
+                    <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        Margin="12,0,4,0" />
 
-        <!-- FILTER BAR (Row 2) -->
-        <controls:FilterBar Grid.Row="2" Margin="24,0,24,12" GroupName="PlaylistFilterGroup" />
+                    <!-- Search Input -->
+                    <TextBox Grid.Column="1" Classes="filter-ghost"
+                        Text="{Binding FilterQuery}"
+                        Watermark="{Binding L[Search_LocalFilterTitle]}" />
 
-        <!-- LIST AREA (Row 3) -->
-        <ScrollViewer Grid.Row="3" Margin="24,0">
+                    <!-- Filter Types (Icons Only) -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="4">
+                        <!-- All -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
+                            Classes="filter-type-btn"
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
+                            ToolTip.Tip="All">
+                            <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
+                        </Button>
+                        
+                        <!-- Music -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
+                            Classes="filter-type-btn"
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
+                            ToolTip.Tip="Music Only">
+                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
+                        </Button>
+                        
+                        <!-- Video -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
+                            Classes="filter-type-btn"
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
+                            ToolTip.Tip="Video Only">
+                            <mi:MaterialIcon Kind="Movie" Width="16" Height="16" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- LIST AREA (Row 2) -->
+        <ScrollViewer Grid.Row="2" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>

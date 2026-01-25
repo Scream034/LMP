@@ -86,10 +86,10 @@ public partial class YoutubeProvider
 
     #region RefreshStreamUrlAsync
 
-     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
-        TrackInfo track,
-        bool forceRefresh = false, 
-        CancellationToken ct = default)
+    public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
+       TrackInfo track,
+       bool forceRefresh = false,
+       CancellationToken ct = default)
     {
         string? videoId = ExtractVideoIdFromTrack(track);
         if (string.IsNullOrEmpty(videoId))

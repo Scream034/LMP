@@ -11,55 +11,54 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" /> <!-- 0: Header -->
-            <RowDefinition Height="Auto" /> <!-- 1: Filter Bar -->
-            <RowDefinition Height="*" />    <!-- 2: List -->
+            <RowDefinition Height="Auto" /> <!-- 0: Header & Filter -->
+            <RowDefinition Height="*" />    <!-- 1: List -->
         </Grid.RowDefinitions>
 
-        <!-- 1. HEADER (Greeting, Categories, Debug) -->
-        <StackPanel Grid.Row="0" Margin="24,16,24,0">
-            <!-- Greeting & Debug Button -->
-            <Grid ColumnDefinitions="*, Auto" Margin="0,0,0,16">
+        <!-- 1. HEADER AREA -->
+        <StackPanel Grid.Row="0" Margin="24,16,24,8">
+            <!-- Greeting & Debug -->
+            <Grid ColumnDefinitions="*, Auto" Margin="0,0,0,12">
                 <TextBlock Text="{Binding Greeting}"
-                    FontSize="32" FontWeight="Bold"
+                    FontSize="28" FontWeight="Bold"
                     Foreground="{DynamicResource TextPrimaryBrush}" />
 
                 <Button Grid.Column="1"
                     Command="{Binding ToggleDebugCommand}"
                     Background="Transparent" Padding="8"
                     Cursor="Hand">
-                    <mi:MaterialIcon Kind="Bug" Width="20" Height="20"
+                    <mi:MaterialIcon Kind="Bug" Width="18" Height="18"
                         Foreground="{Binding ShowDebugInfo, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextMutedBrush'}" />
                 </Button>
             </Grid>
 
-            <!-- Debug Panel -->
+            <!-- Debug Panel (Скрыта по умолчанию) -->
             <Border IsVisible="{Binding ShowDebugInfo}"
-                Background="{DynamicResource BgSecondaryBrush}" CornerRadius="8" Padding="16,12"
-                Margin="0,0,0,16">
-                <Grid ColumnDefinitions="*, *, *, *">
+                Background="{DynamicResource BgSecondaryBrush}" CornerRadius="8" Padding="12"
+                Margin="0,0,0,12">
+                <Grid ColumnDefinitions="*,*,*,*">
                     <StackPanel Grid.Column="0">
                         <TextBlock Text="{Binding L[Home_Debug_Total]}" FontSize="10"
                             Foreground="{DynamicResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="18"
+                        <TextBlock Text="{Binding Stats.TotalTracks}" FontSize="12"
                             FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="1">
                         <TextBlock Text="{Binding L[Home_Debug_Displayed]}" FontSize="10"
                             Foreground="{DynamicResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="18"
+                        <TextBlock Text="{Binding Stats.DisplayedTracks}" FontSize="12"
                             FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
                         <TextBlock Text="{Binding L[Home_Debug_Cached]}" FontSize="10"
                             Foreground="{DynamicResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="18"
+                        <TextBlock Text="{Binding Stats.CachedTracks}" FontSize="12"
                             FontWeight="Bold" Foreground="{DynamicResource SystemWarnOrangeBrush}" />
                     </StackPanel>
                     <StackPanel Grid.Column="3">
                         <TextBlock Text="{Binding L[Home_Debug_Memory]}" FontSize="10"
                             Foreground="{DynamicResource TextMutedBrush}" />
-                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="14"
+                        <TextBlock Text="{Binding Stats.MemoryUsage}" FontSize="12"
                             FontWeight="Bold" Foreground="{DynamicResource SystemInfoBlueBrush}" />
                     </StackPanel>
                 </Grid>
@@ -68,24 +67,24 @@
             <!-- Categories -->
             <ListBox ItemsSource="{Binding Categories}"
                 SelectedItem="{Binding SelectedCategory}"
-                Background="Transparent" Margin="0,0,0,16"
+                Background="Transparent" Margin="0,0,0,12"
                 ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                 ScrollViewer.VerticalScrollBarVisibility="Disabled">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="10" />
+                        <StackPanel Orientation="Horizontal" Spacing="8" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:CategoryItem">
-                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" />
                     </DataTemplate>
                 </ListBox.ItemTemplate>
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem">
                         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-                        <Setter Property="Padding" Value="16,8" />
-                        <Setter Property="CornerRadius" Value="20" />
+                        <Setter Property="Padding" Value="14,6" />
+                        <Setter Property="CornerRadius" Value="16" />
                         <Setter Property="Cursor" Value="Hand" />
                     </Style>
                     <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
@@ -94,18 +93,53 @@
                     </Style>
                 </ListBox.Styles>
             </ListBox>
+
+            <!-- COMPACT FILTER BAR -->
+            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36" Padding="8,0">
+                <Grid ColumnDefinitions="Auto, *, Auto">
+                    <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,0,0" />
+
+                    <TextBox Grid.Column="1" Classes="filter-ghost"
+                        Text="{Binding FilterQuery}"
+                        Watermark="{Binding L[Search_Placeholder]}" />
+
+                    <!-- Filter Types -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
+                        <!-- All -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
+                            Classes="filter-type-btn" 
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
+                            ToolTip.Tip="All">
+                            <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
+                        </Button>
+                        
+                        <!-- Music -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
+                            Classes="filter-type-btn" 
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
+                            ToolTip.Tip="Music Only">
+                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
+                        </Button>
+                        
+                        <!-- Video -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
+                            Classes="filter-type-btn" 
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
+                            ToolTip.Tip="Video Only">
+                            <mi:MaterialIcon Kind="Movie" Width="16" Height="16" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
         </StackPanel>
 
-        <!-- 2. FILTER BAR (Local filtering) -->
-        <controls:FilterBar Grid.Row="1" Margin="24,0,24,12" GroupName="HomeFilterGroup" />
-
-        <!-- 3. MAIN CONTENT AREA (External Scroll) -->
-        <ScrollViewer Grid.Row="2" Margin="24,0,24,0">
+        <!-- 2. MAIN CONTENT AREA -->
+        <ScrollViewer Grid.Row="1" Margin="24,0,24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
 
-            <!-- Централизованный список треков -->
             <controls:TrackListControl
                 Items="{Binding ActiveTracks}"
                 IsLoading="{Binding IsLoading}"

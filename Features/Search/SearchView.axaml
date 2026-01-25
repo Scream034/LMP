@@ -11,107 +11,92 @@
     x:Name="SearchRoot">
 
     <Grid RowDefinitions="Auto, *">
-        <!-- HEADER + FILTERS -->
-        <StackPanel Grid.Row="0" Margin="24,24,24,10">
-            <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold"
-                Margin="0,0,0,16" />
+        <!-- HEADER -->
+        <StackPanel Grid.Row="0" Margin="24,24,24,8">
+            <TextBlock Text="{Binding L[Search_Title]}" FontSize="28" FontWeight="Bold"
+                Margin="0,0,0,12" />
 
             <!-- Global Search Box -->
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <TextBox Classes="search-box"
-                    Watermark="{Binding L[Search_Placeholder]}"
-                    Text="{Binding SearchQuery}"
-                    Width="400" CornerRadius="20" Padding="15,10">
+            <Grid ColumnDefinitions="*, Auto" MaxWidth="600" HorizontalAlignment="Left">
+                <TextBox Classes="search-box" Watermark="{Binding L[Search_Placeholder]}"
+                    Text="{Binding SearchQuery}" CornerRadius="20" Padding="15,10">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
                     </TextBox.KeyBindings>
+                    <TextBox.InnerRightContent>
+                        <Button Command="{Binding SearchCommand}" Classes="icon-btn"
+                            Margin="0,0,4,0" Height="30" Width="30">
+                            <mi:MaterialIcon Kind="Magnify" Width="20" Height="20" />
+                        </Button>
+                    </TextBox.InnerRightContent>
                 </TextBox>
 
-                <Button Command="{Binding SearchCommand}" Classes="icon-btn"
-                    Width="44" Height="44" Background="{DynamicResource BgElevatedBrush}"
-                    ToolTip.Tip="{Binding L[Search_Button]}">
-                    <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
-                </Button>
-
-                <Button Command="{Binding ForceSearchCommand}"
-                    Classes="icon-btn"
-                    Width="44" Height="44"
-                    Background="{DynamicResource BgElevatedBrush}"
+                <Button Grid.Column="1" Command="{Binding ForceSearchCommand}" Classes="icon-btn"
+                    Margin="8,0,0,0"
                     IsVisible="{Binding ShowForceSearchButton}"
                     ToolTip.Tip="{Binding L[Search_ForceRefresh]}">
                     <mi:MaterialIcon Kind="Refresh" Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
                 </Button>
-            </StackPanel>
+            </Grid>
 
-            <!-- Info & History -->
-            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0"
-                IsVisible="{Binding IsFromCache}"
-                Opacity="0.6">
+            <!-- History / Error blocks -->
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="4,8,0,0"
+                IsVisible="{Binding IsFromCache}" Opacity="0.6">
                 <mi:MaterialIcon Kind="DatabaseOutline" Width="14" Height="14"
                     Foreground="{DynamicResource TextMutedBrush}" />
-                <TextBlock Text="{Binding L[Search_FromCache]}"
-                    FontSize="12"
+                <TextBlock Text="{Binding L[Search_FromCache]}" FontSize="12"
                     Foreground="{DynamicResource TextMutedBrush}" />
             </StackPanel>
 
-            <ScrollViewer HorizontalScrollBarVisibility="Hidden"
-                VerticalScrollBarVisibility="Disabled"
-                Margin="0,12,0,0" IsVisible="{Binding RecentSearches.Count}">
-                <ItemsControl ItemsSource="{Binding RecentSearches}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="8" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="16"
-                                Padding="4,0,0,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <Button
-                                        Command="{Binding #SearchRoot.DataContext.HistoryClickCommand}"
-                                        CommandParameter="{Binding}"
-                                        Background="Transparent" BorderThickness="0"
-                                        Content="{Binding}"
-                                        Padding="12,6"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-
-                                    <Button
-                                        Command="{Binding #SearchRoot.DataContext.RemoveHistoryCommand}"
-                                        CommandParameter="{Binding}"
-                                        Classes="icon-btn" Width="24" Height="24"
-                                        Margin="0,0,4,0" Background="Transparent">
-                                        <mi:MaterialIcon Kind="Close" Width="14" Height="14"
-                                            Foreground="{DynamicResource TextMutedBrush}" />
-                                    </Button>
-                                </StackPanel>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
-
-            <!-- Error Message -->
             <Border
                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
-                Margin="0,16,0,0">
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                    <mi:MaterialIcon Kind="AlertCircle" Width="20" Height="20"
+                Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8" Padding="12"
+                Margin="0,12,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <mi:MaterialIcon Kind="AlertCircle" Width="18" Height="18"
                         Foreground="{DynamicResource SystemErrorBrush}" />
                     <TextBlock Text="{Binding ErrorMessage}"
-                        Foreground="{DynamicResource SystemErrorBrush}" VerticalAlignment="Center" />
+                        Foreground="{DynamicResource SystemErrorBrush}" VerticalAlignment="Center"
+                        FontSize="13" />
                 </StackPanel>
             </Border>
-            
-           <!-- LOCAL FILTER BAR (Replaced) -->
-            <StackPanel Margin="0,24,0,0" Spacing="12" IsVisible="{Binding HasResults}">
-                <TextBlock Text="{Binding L[Search_LocalFilterTitle]}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                
-                <controls:FilterBar GroupName="SearchFilterGroup" />
-            </StackPanel>
 
+            <!-- COMPACT LOCAL FILTER (Only when results exist) -->
+            <Border Margin="0,16,0,0" IsVisible="{Binding HasResults}"
+                Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36"
+                MaxWidth="600" HorizontalAlignment="Left">
+                <Grid ColumnDefinitions="Auto, *, Auto" Width="500">
+                    <mi:MaterialIcon Kind="FilterVariant" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,4,0" />
+
+                    <TextBox Grid.Column="1" Classes="filter-ghost" Text="{Binding FilterQuery}"
+                        Watermark="{Binding L[Search_LocalFilterTitle]}" />
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="4">
+                        <!-- All -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
+                            Classes="filter-type-btn"
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}">
+                            <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
+                        </Button>
+                        
+                        <!-- Music -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
+                            Classes="filter-type-btn"
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}">
+                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
+                        </Button>
+                        
+                        <!-- Video -->
+                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
+                            Classes="filter-type-btn"
+                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}">
+                            <mi:MaterialIcon Kind="Movie" Width="16" Height="16" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
         </StackPanel>
 
         <!-- LIST AREA -->
@@ -119,7 +104,6 @@
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
-
             <controls:TrackListControl
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"
