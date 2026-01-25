@@ -12,13 +12,18 @@
 
     <Grid>
         <Grid.RowDefinitions>
+            <!-- 0: Header (Resizable) -->
             <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="200"
                 MaxHeight="340" />
+            <!-- 1: Splitter -->
             <RowDefinition Height="6" />
+            <!-- 2: Filters -->
+            <RowDefinition Height="Auto" />
+            <!-- 3: List -->
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- HEADER (Оставлен без изменений) -->
+        <!-- HEADER (Row 0) -->
         <Border Grid.Row="0"
             BorderBrush="{DynamicResource BgHighlightBrush}"
             BorderThickness="0,0,0,1"
@@ -52,13 +57,16 @@
                         <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
                             <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
                                 Foreground="{DynamicResource TextSecondaryBrush}" LetterSpacing="1" />
-                            <TextBlock Text="{Binding PlaylistName}" FontSize="48" FontWeight="Black"
+                            <TextBlock Text="{Binding PlaylistName}" FontSize="48"
+                                FontWeight="Black"
                                 Margin="0,4,0,0" Padding="0,0,0,12" TextWrapping="Wrap" MaxLines="2"
                                 ClipToBounds="False" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <TextBlock Text="{Binding FormattedTrackCount}" FontWeight="SemiBold"
+                                <TextBlock Text="{Binding FormattedTrackCount}"
+                                    FontWeight="SemiBold"
                                     Foreground="{DynamicResource TextPrimaryBrush}" />
-                                <TextBlock Text="•" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="•"
+                                    Foreground="{DynamicResource TextSecondaryBrush}" />
                                 <TextBlock Text="{Binding FormattedDuration}"
                                     Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
@@ -107,23 +115,25 @@
             </Viewbox>
         </Border>
 
+        <!-- SPLITTER (Row 1) -->
         <GridSplitter Grid.Row="1" ResizeDirection="Rows" Background="Transparent"
             HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ShowsPreview="False">
             <GridSplitter.Template>
                 <ControlTemplate>
                     <Border Background="Transparent" Padding="0,2" Cursor="SizeNorthSouth">
-                        <Border Height="2" Width="40" Background="{DynamicResource BgHighlightBrush}"
+                        <Border Height="2" Width="40"
+                            Background="{DynamicResource BgHighlightBrush}"
                             CornerRadius="1" />
                     </Border>
                 </ControlTemplate>
             </GridSplitter.Template>
         </GridSplitter>
 
-        <!-- Задача 2: LIST AREA
-             Оборачиваем TrackListControl в ScrollViewer и ставим UseInternalScroll="False".
-             Это позволяет футеру (loading/end of list) быть частью прокручиваемого контента,
-             а не прилипать к низу Grid.Row. -->
-        <ScrollViewer Grid.Row="2" Margin="24,0">
+        <!-- FILTER BAR (Row 2) -->
+        <controls:FilterBar Grid.Row="2" Margin="24,0,24,12" GroupName="PlaylistFilterGroup" />
+
+        <!-- LIST AREA (Row 3) -->
+        <ScrollViewer Grid.Row="3" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
@@ -135,7 +145,7 @@
                 IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
                 ReachedEnd="{Binding ReachedEnd}"
                 LoadMoreCommand="{Binding LoadMoreCommand}"
-                UseInternalScroll="False" 
+                UseInternalScroll="False"
                 EnableSmoothLoading="{Binding EnableSmoothLoading}" />
         </ScrollViewer>
     </Grid>

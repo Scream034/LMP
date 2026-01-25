@@ -82,7 +82,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         CancelSyncCommand = ReactiveCommand.Create(() =>
         {
             _syncCts?.Cancel();
-            SyncStatus = L["Sync_Cancelling"];
+            SyncStatus = SL["Sync_Cancelling"];
         });
 
         RefreshCommand = ReactiveCommand.Create(LoadPlaylists);
@@ -114,9 +114,9 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
         IsSyncing = true;
         SyncProgress = 0;
-        SyncStatus = L["Sync_FetchingPlaylists"];
+        SyncStatus = SL["Sync_FetchingPlaylists"];
 
-        _mainWindow.LockNavigation(L["Sync_InProgress"]);
+        _mainWindow.LockNavigation(SL["Sync_InProgress"]);
 
         try
         {
@@ -147,7 +147,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 catch (Exception ex)
                 {
                     if (!_isDisposed)
-                        await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Sync_Error_API"] + ": " + ex.Message);
+                        await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], SL["Sync_Error_API"] + ": " + ex.Message);
                     return;
                 }
             }
@@ -161,20 +161,20 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             else
             {
                 if (!_isDisposed)
-                    await _dialog.ShowInfoAsync(L["Library_SyncYoutube"], L["Sync_ConfigureUrlFirst"]);
+                    await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_ConfigureUrlFirst"]);
                 return;
             }
 
             if (playlistsToImport.Count == 0)
             {
                 if (!_isDisposed)
-                    await _dialog.ShowInfoAsync(L["Library_SyncYoutube"], L["Sync_NoPlaylists"]);
+                    await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_NoPlaylists"]);
                 return;
             }
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.15;
-            SyncStatus = L["Sync_SelectPlaylists"];
+            SyncStatus = SL["Sync_SelectPlaylists"];
 
             var selected = await _dialog.ShowSyncSelectionAsync(playlistsToImport);
             if (selected.Count == 0 || _isDisposed) return;
@@ -194,7 +194,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             List<MergeDecision> decisions = [];
             if (conflicts.Count > 0)
             {
-                SyncStatus = L["Sync_ResolvingConflicts"];
+                SyncStatus = SL["Sync_ResolvingConflicts"];
                 decisions = await _dialog.ShowMergeConflictResolutionDialogAsync(conflicts);
                 if (_isDisposed) return;
             }
@@ -203,7 +203,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.25;
-            SyncStatus = L["Sync_ImportingPlaylists"];
+            SyncStatus = SL["Sync_ImportingPlaylists"];
 
             int importedCount = 0;
             int mergedCount = 0;
@@ -231,7 +231,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     continue;
                 }
 
-                SyncStatus = string.Format(L["Sync_ImportingPlaylist"], candidate.Title);
+                SyncStatus = string.Format(SL["Sync_ImportingPlaylist"], candidate.Title);
 
                 var fullPlaylist = await _youtube.ImportPlaylistAsync(candidate.Id.Value, _auth.IsAuthenticated, ct);
                 if (fullPlaylist == null)
@@ -293,21 +293,21 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             }
 
             SyncProgress = 1.0;
-            SyncStatus = L["Sync_Complete"];
+            SyncStatus = SL["Sync_Complete"];
 
             if (!_isDisposed)
-                await _dialog.ShowInfoAsync(L["Dialog_Done_Title"], string.Format(L["Sync_Success_Msg"], importedCount, mergedCount));
+                await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], string.Format(SL["Sync_Success_Msg"], importedCount, mergedCount));
         }
         catch (OperationCanceledException)
         {
             Log.Info("[Library] Sync cancelled");
-            SyncStatus = L["Sync_Cancelled"];
+            SyncStatus = SL["Sync_Cancelled"];
         }
         catch (Exception ex)
         {
             Log.Error($"[Library] Sync error: {ex.Message}");
             if (!_isDisposed)
-                await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], ex.Message);
+                await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], ex.Message);
         }
         finally
         {
@@ -356,19 +356,19 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
         if (playlistId == "liked")
         {
-            await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Playlist_CannotDeleteLiked"]);
+            await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], SL["Playlist_CannotDeleteLiked"]);
             return;
         }
 
         var confirmed = await _dialog.ConfirmAsync(
-            L["Dialog_Confirm_Title"],
-            string.Format(L["Playlist_DeleteConfirm"], playlist.Name),
-            L["Button_Delete"],
-            L["Button_Cancel"]);
+            SL["Dialog_Confirm_Title"],
+            string.Format(SL["Playlist_DeleteConfirm"], playlist.Name),
+            SL["Button_Delete"],
+            SL["Button_Cancel"]);
 
         if (!confirmed) return;
 
-        _mainWindow.LockNavigation(L["Playlist_Deleting"]);
+        _mainWindow.LockNavigation(SL["Playlist_Deleting"]);
 
         try
         {

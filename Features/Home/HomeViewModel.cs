@@ -12,37 +12,28 @@ namespace MyLiteMusicPlayer.Features.Home;
 
 public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
-    // ... (Остальной код без изменений: поля, конструктор, FetchMore) ...
-
     #region Constants
-
     private const int DefaultBatchSize = 30;
-    private const int DefaultLoadDelay = 150;
     private const int DefaultPrefetch = 20;
-
     #endregion
 
     #region Fields
-
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly TrackViewModelFactory _vmFactory;
-
     private readonly EventHandler<string> _languageChangedHandler;
-    
+
     private string _currentQuery = "";
     private int _fetchOffset = 0;
     private CancellationTokenSource? _categoryCts;
     private bool _isDisposed;
-
     #endregion
 
     #region Properties
-
+    // LoadDelayMs удален, так как DynamicData обрабатывает это иначе
     protected override int BatchSize => DefaultBatchSize;
-    protected override int LoadDelayMs => DefaultLoadDelay;
     protected override int PrefetchThreshold => DefaultPrefetch;
 
     [Reactive] public string Greeting { get; private set; } = string.Empty;
@@ -51,18 +42,17 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     public ObservableCollection<CategoryItem> Categories { get; } = [];
     public DebugStats Stats { get; } = new();
-    public Avalonia.Collections.AvaloniaList<TrackItemViewModel> ActiveTracks => Items;
 
+    // Alias для совместимости с View, если там используется ActiveTracks
+    public ReadOnlyObservableCollection<TrackItemViewModel> ActiveTracks => Items;
     #endregion
 
     #region Commands
-
     public ReactiveCommand<Unit, bool> ToggleDebugCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
-
     #endregion
 
-    #region Constructors
+    #region Constructor
 
     public HomeViewModel(
         YoutubeProvider youtube,
@@ -81,7 +71,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         _languageChangedHandler = (_, _) => InitializeCategories();
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
-        
+
         InitializeCategories();
 
         ToggleDebugCommand = ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo);
@@ -98,7 +88,25 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #endregion
 
-    #region Overrides
+
+    #region Overrides & Filter Implementation
+
+    // FIX: Реализация фильтрации для HomeViewModel
+    protected override bool FilterItem(TrackInfo item)
+    {
+        // 1. Фильтр по типу
+        if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
+        if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
+
+        // 2. Локальный поиск по уже загруженным рекомендациям
+        if (!string.IsNullOrWhiteSpace(FilterQuery))
+        {
+            return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
+                   item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return true;
+    }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
@@ -126,25 +134,25 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         if (ct.IsCancellationRequested) return [];
 
+        // TotalCount берется из базы
         var result = newTracks.Skip(TotalCount).ToList();
 
         if (result.Count > 0)
         {
-            var allTracks = GetItemsSnapshot().Concat(result).ToList();
-            _ = _searchCache.SetAsync(_currentQuery, allTracks);
+            // Здесь используем снапшот для кэша, но аккуратно, чтобы не блокировать UI
+            // Можно просто сохранить result, так как он новый
+            _ = _searchCache.SetAsync(_currentQuery, GetItemsSnapshot().Concat(result).ToList());
+
             var imageUrls = result.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
             _ = _imageCache.PrefetchAsync(imageUrls!, ct);
         }
         UpdateStats();
         return result;
     }
-
     #endregion
-
     #region Private Methods
 
-    // ... (Методы LoadTracksAsync, InitializeCategories, etc без изменений) ...
-    private async Task LoadTracksAsync(bool force = false)
+     private async Task LoadTracksAsync(bool force = false)
     {
         var category = SelectedCategory;
         if (category == null) return;
@@ -154,8 +162,9 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         _categoryCts = new CancellationTokenSource();
         var ct = _categoryCts.Token;
 
-        IsLoading = true;
-        ClearItems();
+        // IsLoading теперь управляется базовым классом через Clear/Initialize, но можно ставить флаг для UI
+        // ClearItems() в базе сбрасывает состояние
+        ClearItems(); 
         _fetchOffset = 0;
 
         try
@@ -182,9 +191,11 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
                 }
                 else
                 {
-                    IsFetchingFromNetwork = true;
+                    // Вручную ставим флаг, так как InitializeItemsAsync сбросит его, 
+                    // но нам нужно показать лоадер ДО получения первых данных
+                    // (Хотя базовый класс сам умеет, если вызывать Initialize с пустым списком,
+                    // но здесь логика гибридная)
                     tracks = await _youtube.SearchAsync(_currentQuery, 100);
-                    IsFetchingFromNetwork = false;
 
                     if (ct.IsCancellationRequested) return;
 
@@ -200,18 +211,9 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             }
             UpdateStats();
         }
-        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Info($"Load error: {ex.Message}");
-        }
-        finally
-        {
-            if (!ct.IsCancellationRequested)
-            {
-                IsLoading = false;
-                IsFetchingFromNetwork = false;
-            }
         }
     }
 
@@ -226,17 +228,17 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         }
         catch { }
     }
-    
+
     private void PlayWithContext(TrackInfo track)
     {
         // Задача 1: Не добавляем весь список Home в очередь.
         // Используем PlayTrackAsync, который очищает очередь и играет только один трек.
         _ = _audio.PlayTrackAsync(track);
-        
+
         // Сохраняем в историю (Recently Played)
         LibService.AddToRecentlyPlayed(track);
     }
-    
+
     private void UpdateGreeting()
     {
         var hour = DateTime.Now.Hour;
@@ -246,7 +248,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             < 18 => "Home_Greeting_Afternoon",
             _ => "Home_Greeting_Evening"
         };
-        Greeting = L[key];
+        Greeting = SL[key];
     }
 
     private void InitializeCategories()
@@ -272,7 +274,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     private void AddCat(string key, string fallback, string query = "", bool special = false)
     {
-        var name = L[key];
+        var name = SL[key];
         if (string.IsNullOrEmpty(name) || name == key) name = fallback;
 
         Categories.Add(new CategoryItem

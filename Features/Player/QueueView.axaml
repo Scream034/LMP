@@ -24,10 +24,11 @@
         </StackPanel>
 
         <!-- Content -->
-        <Grid RowDefinitions="Auto, *" IsVisible="{Binding !IsEmpty}">
+        <!-- Добавили строку Auto для фильтра -->
+        <Grid RowDefinitions="Auto, Auto, *" IsVisible="{Binding !IsEmpty}">
+            
             <!-- Header -->
             <Grid Grid.Row="0" Margin="24,24,24,16" ColumnDefinitions="*, Auto">
-
                 <!-- Titles -->
                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                     <TextBlock Text="{Binding L[Queue_Title]}" FontSize="32" FontWeight="Bold"
@@ -40,23 +41,13 @@
                 <!-- Actions Toolbar -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
                     VerticalAlignment="Center">
-
-                    <Button Command="{Binding ShuffleQueueCommand}" Classes="icon-btn"
-                        ToolTip.Tip="{Binding L[Queue_Shuffle]}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <mi:MaterialIcon Kind="Shuffle" Width="20" Height="20" />
-                        </StackPanel>
+                    <Button Command="{Binding ShuffleQueueCommand}" Classes="icon-btn" ToolTip.Tip="{Binding L[Queue_Shuffle]}">
+                        <mi:MaterialIcon Kind="Shuffle" Width="20" Height="20" />
                     </Button>
-
-                    <Button Command="{Binding DownloadAllCommand}" Classes="icon-btn"
-                        ToolTip.Tip="{Binding L[Queue_DownloadAll]}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <mi:MaterialIcon Kind="DownloadOutline" Width="20" Height="20" />
-                        </StackPanel>
+                    <Button Command="{Binding DownloadAllCommand}" Classes="icon-btn" ToolTip.Tip="{Binding L[Queue_DownloadAll]}">
+                        <mi:MaterialIcon Kind="DownloadOutline" Width="20" Height="20" />
                     </Button>
-
-                    <Button Command="{Binding ClearQueueCommand}" Classes="icon-btn"
-                        ToolTip.Tip="{Binding L[Queue_Clear]}">
+                    <Button Command="{Binding ClearQueueCommand}" Classes="icon-btn" ToolTip.Tip="{Binding L[Queue_Clear]}">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <mi:MaterialIcon Kind="Broom" Width="20" Height="20" />
                             <TextBlock Text="{Binding L[Queue_Clear]}" VerticalAlignment="Center"
@@ -65,14 +56,17 @@
                     </Button>
                 </StackPanel>
             </Grid>
+            
+            <!-- Filter Bar (NEW) -->
+            <controls:FilterBar Grid.Row="1" Margin="24,0,24,12" GroupName="QueueFilterGroup" />
 
-            <!-- Custom Queue ListBox with Drag&Drop and Delete support -->
-            <ListBox Grid.Row="1" Margin="24,0"
+            <!-- Queue List -->
+            <ListBox Grid.Row="2" Margin="24,0"
                 x:Name="QueueListBox"
                 ItemsSource="{Binding QueueItems}"
                 Background="Transparent"
                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-
+                <!-- Styles and ItemTemplate remain same as before -->
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem">
                         <Setter Property="Padding" Value="0" />
@@ -82,9 +76,7 @@
                         <Setter Property="Template">
                             <ControlTemplate>
                                 <ContentPresenter Name="PART_ContentPresenter"
-                                    Background="Transparent"
-                                    BorderBrush="Transparent"
-                                    BorderThickness="0"
+                                    Background="Transparent" BorderBrush="Transparent" BorderThickness="0"
                                     CornerRadius="{TemplateBinding CornerRadius}"
                                     ContentTemplate="{TemplateBinding ContentTemplate}"
                                     Content="{TemplateBinding Content}"
@@ -99,37 +91,24 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="svm:TrackItemViewModel">
                         <Grid ColumnDefinitions="*, Auto" Background="Transparent">
-
-                            <!-- Track Content (Reuse existing ContentTemplate logic or
-                            ContentControl) -->
-                            <!-- We wrap it in a border for Hover effect -->
                             <Border Grid.Column="0" Classes="track-row"
                                 Classes.isActive="{Binding IsActive}"
                                 Background="Transparent" CornerRadius="6" Padding="4,2">
                                 <ContentControl Content="{Binding}" />
-
                                 <Border.Styles>
                                     <Style Selector="Border.track-row:pointerover">
                                         <Setter Property="Background" Value="#1AFFFFFF" />
                                     </Style>
                                     <Style Selector="Border.track-row.isActive">
-                                        <Setter Property="Background"
-                                            Value="{DynamicResource BgElevatedBrush}" />
+                                        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
                                     </Style>
                                 </Border.Styles>
                             </Border>
-
-                            <!-- Delete Button (Only visible on hover over the row) -->
-                            <Button Grid.Column="1"
-                                Classes="icon-btn"
-                                Width="32" Height="32"
-                                Margin="8,0,0,0"
+                            <Button Grid.Column="1" Classes="icon-btn" Width="32" Height="32" Margin="8,0,0,0"
                                 Command="{Binding $parent[UserControl].((vm:QueueViewModel)DataContext).RemoveTrackCommand}"
                                 CommandParameter="{Binding}"
-                                ToolTip.Tip="{Binding L[Queue_Remove]}"> <!-- Tooltip: Remove -->
-                                <!-- Иконка КРЕСТИК (Close) или КОРЗИНА (Delete), а не Плюс -->
-                                <mi:MaterialIcon Kind="Close" Width="16" Height="16"
-                                    Foreground="{DynamicResource TextMutedBrush}" />
+                                ToolTip.Tip="{Binding L[Queue_Remove]}">
+                                <mi:MaterialIcon Kind="Close" Width="16" Height="16" Foreground="{DynamicResource TextMutedBrush}" />
                             </Button>
                         </Grid>
                     </DataTemplate>

@@ -5,6 +5,9 @@ namespace MyLiteMusicPlayer.Core.ViewModels;
 
 public abstract class ViewModelBase : ReactiveObject
 {
-    public static LocalizationService L => LocalizationService.Instance;
+    // Статическое для кода
+    public static LocalizationService SL => LocalizationService.Instance;
+    
+    // Нестатическое для XAML биндинга (через DataContext)
+    public LocalizationService L => LocalizationService.Instance;
 }
-

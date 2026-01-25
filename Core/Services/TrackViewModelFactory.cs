@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.ViewModels;
 using MyLiteMusicPlayer.Features.Shared;
 
 namespace MyLiteMusicPlayer.Core.Services;

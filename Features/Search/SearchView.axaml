@@ -8,14 +8,15 @@
     x:Class="MyLiteMusicPlayer.Features.Search.SearchView"
     x:DataType="vm:SearchViewModel"
     x:CompileBindings="True"
-    x:Name="SearchRoot"> <!-- 1. Даем имя корневому контролу -->
+    x:Name="SearchRoot">
 
     <Grid RowDefinitions="Auto, *">
+        <!-- HEADER + FILTERS -->
         <StackPanel Grid.Row="0" Margin="24,24,24,10">
             <TextBlock Text="{Binding L[Search_Title]}" FontSize="32" FontWeight="Bold"
                 Margin="0,0,0,16" />
 
-            <!-- После TextBox поиска -->
+            <!-- Global Search Box -->
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <TextBox Classes="search-box"
                     Watermark="{Binding L[Search_Placeholder]}"
@@ -32,7 +33,6 @@
                     <mi:MaterialIcon Kind="Magnify" Width="24" Height="24" />
                 </Button>
 
-                <!-- Кнопка принудительного поиска (только если результаты из кэша) -->
                 <Button Command="{Binding ForceSearchCommand}"
                     Classes="icon-btn"
                     Width="44" Height="44"
@@ -44,7 +44,7 @@
                 </Button>
             </StackPanel>
 
-            <!-- Индикатор "Из кэша" -->
+            <!-- Info & History -->
             <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0"
                 IsVisible="{Binding IsFromCache}"
                 Opacity="0.6">
@@ -55,7 +55,6 @@
                     Foreground="{DynamicResource TextMutedBrush}" />
             </StackPanel>
 
-            <!-- History Chips -->
             <ScrollViewer HorizontalScrollBarVisibility="Hidden"
                 VerticalScrollBarVisibility="Disabled"
                 Margin="0,12,0,0" IsVisible="{Binding RecentSearches.Count}">
@@ -93,6 +92,7 @@
                 </ItemsControl>
             </ScrollViewer>
 
+            <!-- Error Message -->
             <Border
                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                 Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8" Padding="16"
@@ -104,14 +104,22 @@
                         Foreground="{DynamicResource SystemErrorBrush}" VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
+            
+           <!-- LOCAL FILTER BAR (Replaced) -->
+            <StackPanel Margin="0,24,0,0" Spacing="12" IsVisible="{Binding HasResults}">
+                <TextBlock Text="{Binding L[Search_LocalFilterTitle]}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                
+                <controls:FilterBar GroupName="SearchFilterGroup" />
+            </StackPanel>
+
         </StackPanel>
 
+        <!-- LIST AREA -->
         <ScrollViewer Grid.Row="1" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
 
-            <!-- Не забываем пробрасывать EnableSmoothLoading, о котором говорили ранее -->
             <controls:TrackListControl
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"

@@ -9,7 +9,12 @@
     x:DataType="vm:HomeViewModel"
     x:CompileBindings="True">
 
-    <Grid RowDefinitions="Auto, *">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- 0: Header -->
+            <RowDefinition Height="Auto" /> <!-- 1: Filter Bar -->
+            <RowDefinition Height="*" />    <!-- 2: List -->
+        </Grid.RowDefinitions>
 
         <!-- 1. HEADER (Greeting, Categories, Debug) -->
         <StackPanel Grid.Row="0" Margin="24,16,24,0">
@@ -91,8 +96,11 @@
             </ListBox>
         </StackPanel>
 
-        <!-- 2. MAIN CONTENT AREA (External Scroll) -->
-        <ScrollViewer Grid.Row="1" Margin="24,0,24,0">
+        <!-- 2. FILTER BAR (Local filtering) -->
+        <controls:FilterBar Grid.Row="1" Margin="24,0,24,12" GroupName="HomeFilterGroup" />
+
+        <!-- 3. MAIN CONTENT AREA (External Scroll) -->
+        <ScrollViewer Grid.Row="2" Margin="24,0,24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>

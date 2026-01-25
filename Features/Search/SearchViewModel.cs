@@ -12,9 +12,7 @@ namespace MyLiteMusicPlayer.Features.Search;
 
 public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 {
-    // ... (Остальной код SearchViewModel без изменений) ...
-
-    #region Constants
+   #region Constants
     private const int DebounceMs = 300;
     private const int MaxResults = 300;
     #endregion
@@ -38,6 +36,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private int InitialBatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize * 2 : 50;
     private int ScrollBatchSize => LibService.Data.SearchBatchSize > 0 ? LibService.Data.SearchBatchSize : 30;
     
+    // Это строка для API запроса (Глобальный поиск)
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
     [Reactive] public bool HasResults { get; private set; }
     [Reactive] public string? ErrorMessage { get; private set; }
@@ -117,8 +116,25 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     {
         if (ex is OperationCanceledException) return;
         Log.Error($"[{source}] Unhandled error: {ex.Message}");
-        ErrorMessage = L["Search_NetworkError"]; 
+        ErrorMessage = SL["Search_NetworkError"]; 
         IsLoading = false;
+    }
+
+    protected override bool FilterItem(TrackInfo item)
+    {
+        // 1. Фильтр по типу
+        if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
+        if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
+
+        // 2. Локальный поиск по уже загруженным результатам
+        // (Базовое свойство FilterQuery, не путать с SearchQuery)
+        if (!string.IsNullOrWhiteSpace(FilterQuery))
+        {
+            return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
+                   item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return true;
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -178,7 +194,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             }
             catch (HttpRequestException)
             {
-                ErrorMessage = L["Search_NetworkError"];
+                ErrorMessage = SL["Search_NetworkError"];
                 return [];
             }
             catch (Exception ex)
@@ -266,8 +282,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         }
     }
     
-    // ... (Методы HandleDirectUrlAsync, HandlePlaylistAsync, HandleSearchAsync и др. без изменений) ...
-
     private async Task HandleDirectUrlAsync(CancellationToken ct)
     {
         var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
@@ -282,7 +296,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         }
 
         HasResults = tracks.Count > 0;
-        if (!HasResults) ErrorMessage = L["Search_NoResults"];
+        if (!HasResults) ErrorMessage = SL["Search_NoResults"];
     }
 
     private async Task HandlePlaylistAsync(CancellationToken ct)
@@ -296,7 +310,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         await InitializeItemsAsync(tracks, canFetchMore: false);
 
         HasResults = tracks.Count > 0;
-        if (!HasResults) ErrorMessage = L["Search_NoResults"];
+        if (!HasResults) ErrorMessage = SL["Search_NoResults"];
     }
 
     private async Task HandleSearchAsync(CancellationToken ct, bool forceNetwork)
@@ -341,7 +355,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         await InitializeItemsAsync(tracks, canFetchMore: hasMore);
 
         HasResults = tracks.Count > 0;
-        if (!HasResults) ErrorMessage = L["Search_NoResults"];
+        if (!HasResults) ErrorMessage = SL["Search_NoResults"];
     }
 
     private void AddToHistory(string query)

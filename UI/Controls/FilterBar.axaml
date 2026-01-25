@@ -1,0 +1,43 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MyLiteMusicPlayer.Core.ViewModels"
+             x:Class="MyLiteMusicPlayer.UI.Controls.FilterBar"
+             x:Name="Root"
+             x:DataType="vm:IFilterable" 
+             x:CompileBindings="True">
+
+    <Grid ColumnDefinitions="Auto, 12, Auto">
+        
+        <!-- Text Search -->
+        <TextBox Grid.Column="0"
+                 Classes="search-box"
+                 Text="{Binding FilterQuery, Mode=TwoWay}"
+                 Watermark="{Binding L[Filter_Placeholder], FallbackValue='Filter...'}"
+                 Height="36" Width="250" />
+
+        <!-- Chips -->
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+            
+            <RadioButton Content="{Binding L[Filter_All], FallbackValue='All'}"
+                         Classes="chip"
+                         GroupName="{Binding GroupName, ElementName=Root}"
+                         IsChecked="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
+                         Command="{Binding SetFilterTypeCommand}" 
+                         CommandParameter="All" />
+
+            <RadioButton Content="{Binding L[Filter_Music], FallbackValue='Music'}"
+                         Classes="chip"
+                         GroupName="{Binding GroupName, ElementName=Root}"
+                         IsChecked="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
+                         Command="{Binding SetFilterTypeCommand}" 
+                         CommandParameter="Music" />
+
+            <RadioButton Content="{Binding L[Filter_Video], FallbackValue='Video'}"
+                         Classes="chip"
+                         GroupName="{Binding GroupName, ElementName=Root}"
+                         IsChecked="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
+                         Command="{Binding SetFilterTypeCommand}" 
+                         CommandParameter="Video" />
+        </StackPanel>
+    </Grid>
+</UserControl>

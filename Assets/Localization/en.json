@@ -22,6 +22,11 @@
   "Nav_Settings": "Settings",
   "Nav_PleaseWait": "Please wait...",
 
+  "Filter_Placeholder": "Filter tracks...",
+  "Filter_All": "All",
+  "Filter_Music": "Music",
+  "Filter_Video": "Video",
+  
   "Home_Greeting_Morning": "Good morning",
   "Home_Greeting_Afternoon": "Good afternoon",
   "Home_Greeting_Evening": "Good evening",
@@ -29,12 +34,12 @@
   "Home_LoadMore": "Load more",
   "Home_LoadingSkeleton": "Loading tracks...",
   "Home_EndOfList": "No more tracks",
-
+  
   "Home_Debug_Total": "TOTAL",
   "Home_Debug_Displayed": "SHOWN",
   "Home_Debug_Cached": "CACHED",
   "Home_Debug_Memory": "RAM",
-
+  
   "Category_RecentlyPlayed": "Recently Played",
   "Category_Trending": "Trending",
   "Category_Pop": "Pop Hits",
@@ -42,7 +47,7 @@
   "Category_Electronic": "Electronic",
   "Category_LoFi": "Lo-Fi Beats",
   "Category_Rock": "Rock Classics",
-
+  
   "Search_Title": "Search",
   "Search_Placeholder": "Songs, artists, or links...",
   "Search_History": "Recent Searches",
@@ -53,6 +58,7 @@
   "Search_FromCache": "Results from cache",
   "Search_ForceRefresh": "Refresh from network",
   "Search_NetworkError": "Network error. Please try again.",
+  "Search_LocalFilterTitle": "Refine results",
 
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",

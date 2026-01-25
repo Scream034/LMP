@@ -148,31 +148,31 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #region Properties - Tooltips
 
-    public string ShuffleTooltip => L["Player_Shuffle"] ?? "Shuffle";
-    public string PreviousTooltip => L["Player_Previous"] ?? "Previous";
-    public string NextTooltip => L["Player_Next"] ?? "Next";
+    public string ShuffleTooltip => SL["Player_Shuffle"] ?? "Shuffle";
+    public string PreviousTooltip => SL["Player_Previous"] ?? "Previous";
+    public string NextTooltip => SL["Player_Next"] ?? "Next";
     
     public string PlayPauseTooltip => IsPlaying 
-        ? (L["Player_Pause"] ?? "Pause") 
-        : (L["Player_Play"] ?? "Play");
+        ? (SL["Player_Pause"] ?? "Pause") 
+        : (SL["Player_Play"] ?? "Play");
 
     public string RepeatTooltip => RepeatMode switch
     {
-        RepeatMode.None => L["Player_Repeat_Off"] ?? "Repeat Off",
-        RepeatMode.RepeatAll => L["Player_Repeat_All"] ?? "Repeat Queue",
-        RepeatMode.RepeatOne => L["Player_Repeat_One"] ?? "Repeat Track",
+        RepeatMode.None => SL["Player_Repeat_Off"] ?? "Repeat Off",
+        RepeatMode.RepeatAll => SL["Player_Repeat_All"] ?? "Repeat Queue",
+        RepeatMode.RepeatOne => SL["Player_Repeat_One"] ?? "Repeat Track",
         _ => ""
     };
 
     public string LikeTooltip => IsLiked 
-        ? (L["Track_Unlike"] ?? "Remove from Liked") 
-        : (L["Track_Like"] ?? "Add to Liked");
+        ? (SL["Track_Unlike"] ?? "Remove from Liked") 
+        : (SL["Track_Like"] ?? "Add to Liked");
 
-    public string CopyTooltip => L["Track_CopyLink"] ?? "Copy Link";
+    public string CopyTooltip => SL["Track_CopyLink"] ?? "Copy Link";
 
     public string VolumeTooltip => IsMuted 
-        ? (L["Player_Unmute"] ?? "Unmute") 
-        : $"{L["Player_Volume"] ?? "Volume"}: {Volume}%";
+        ? (SL["Player_Unmute"] ?? "Unmute") 
+        : $"{SL["Player_Volume"] ?? "Volume"}: {Volume}%";
 
     #endregion
 
@@ -422,9 +422,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     {
         RepeatHintText = RepeatMode switch
         {
-            RepeatMode.None => L["Player_Repeat_Off"] ?? "Repeat Off",
-            RepeatMode.RepeatAll => L["Player_Repeat_All"] ?? "Repeat Queue",
-            RepeatMode.RepeatOne => L["Player_Repeat_One"] ?? "Repeat Track",
+            RepeatMode.None => SL["Player_Repeat_Off"] ?? "Repeat Off",
+            RepeatMode.RepeatAll => SL["Player_Repeat_All"] ?? "Repeat Queue",
+            RepeatMode.RepeatOne => SL["Player_Repeat_One"] ?? "Repeat Track",
             _ => ""
         };
         
@@ -436,8 +436,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private async void ShowLikeHint()
     {
         LikeHintText = IsLiked 
-            ? (L["Track_Added"] ?? "Added to Liked") 
-            : (L["Track_Removed"] ?? "Removed from Liked");
+            ? (SL["Track_Added"] ?? "Added to Liked") 
+            : (SL["Track_Removed"] ?? "Removed from Liked");
         
         IsLikeHintVisible = true;
         await Task.Delay(HintDisplayDurationMs);
@@ -494,7 +494,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             PositionSeconds = 0;
             BufferedSeconds = track.IsDownloaded ? DurationSeconds : 0;
             ShowStreamInfo = true;
-            StreamInfo = L["Stream_Loading"] ?? "Loading...";
+            StreamInfo = SL["Stream_Loading"] ?? "Loading...";
         }
         else
         {
@@ -569,13 +569,13 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         if (!isReady || string.IsNullOrEmpty(format))
         {
-            StreamInfo = L["Stream_Loading"] ?? "Loading...";
+            StreamInfo = SL["Stream_Loading"] ?? "Loading...";
             ShowStreamInfo = true;
             return;
         }
 
         if (CurrentTrack.IsDownloaded)
-            StreamInfo = $"{format} • {L["Stream_LocalFile"] ?? "Local File"}";
+            StreamInfo = $"{format} • {SL["Stream_LocalFile"] ?? "Local File"}";
         else
             StreamInfo = bitrate > 0 ? $"{format} • {bitrate}kbps" : format;
         

@@ -19,5 +19,6 @@
     <conv:RepeatModeIconConverter x:Key="RepeatModeIcon" />
     <conv:RepeatModeActiveConverter x:Key="RepeatModeActive" />
     <conv:RepeatModeEqualsConverter x:Key="RepeatModeEquals" />
+    <conv:EnumToBoolConverter x:Key="EnumToBool" />
 
 </ResourceDictionary>

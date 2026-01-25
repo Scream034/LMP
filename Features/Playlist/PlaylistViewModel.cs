@@ -114,8 +114,8 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
         DeletePlaylistCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            var confirmTitle = L["Dialog_Confirm_Title"];
-            var confirmMsg = string.Format(L["Playlist_DeleteConfirm"], PlaylistName);
+            var confirmTitle = SL["Dialog_Confirm_Title"];
+            var confirmMsg = string.Format(SL["Playlist_DeleteConfirm"], PlaylistName);
 
             if (await _dialog.ConfirmAsync(confirmTitle, confirmMsg))
             {
@@ -313,8 +313,8 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         if (otherPlaylists.Count == 0)
         {
             await _dialog.ShowInfoAsync(
-                L["Dialog_Merge_NoTarget_Title"],
-                L["Dialog_Merge_NoTarget_Msg"]);
+                SL["Dialog_Merge_NoTarget_Title"],
+                SL["Dialog_Merge_NoTarget_Msg"]);
             return;
         }
 
@@ -322,10 +322,27 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         if (!string.IsNullOrEmpty(targetId))
         {
             if (LibService.MergePlaylists(_currentPlaylistId, targetId))
-                await _dialog.ShowInfoAsync(L["Dialog_Success"], L["Merge_Success_Msg"]);
+                await _dialog.ShowInfoAsync(SL["Dialog_Success"], SL["Merge_Success_Msg"]);
             else
-                await _dialog.ShowInfoAsync(L["Dialog_Error"], L["Merge_Error_Msg"]);
+                await _dialog.ShowInfoAsync(SL["Dialog_Error"], SL["Merge_Error_Msg"]);
         }
+    }
+
+    #endregion
+
+    #region Filter Implementation
+
+    protected override bool FilterItem(TrackInfo item)
+    {
+        // 1. Фильтр по типу (Music / Video)
+        if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
+        if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
+
+        // 2. Текстовый поиск
+        if (string.IsNullOrWhiteSpace(FilterQuery)) return true;
+
+        return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
+               item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
     }
 
     #endregion

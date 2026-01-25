@@ -34,6 +34,11 @@
   "Home_Debug_Cached": "В КЭШЕ",
   "Home_Debug_Memory": "ОЗУ",
 
+  "Filter_Placeholder": "Фильтр треков...",
+  "Filter_All": "Все",
+  "Filter_Music": "Музыка",
+  "Filter_Video": "Видео",
+  
   "Category_RecentlyPlayed": "Недавно",
   "Category_Trending": "В тренде",
   "Category_Pop": "Поп-хиты",
@@ -41,7 +46,7 @@
   "Category_Electronic": "Электроника",
   "Category_LoFi": "Лоу-фай",
   "Category_Rock": "Рок",
-
+  
   "Search_Title": "Поиск",
   "Search_Placeholder": "Трек, исполнитель или ссылка...",
   "Search_History": "История поиска",
@@ -52,6 +57,7 @@
   "Search_FromCache": "Результаты из кэша",
   "Search_ForceRefresh": "Обновить из сети",
   "Search_NetworkError": "Ошибка сети. Попробуйте ещё раз.",
+  "Search_LocalFilterTitle": "Уточнить результаты",
   
   "Settings_Title": "Настройки",
   "Settings_Account_Language": "Аккаунт и язык",

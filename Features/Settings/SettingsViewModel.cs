@@ -41,16 +41,16 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
 
     public string AccountName => IsAuthenticated
-        ? _auth.State.YouTubeChannelName ?? _auth.State.UserName ?? L["Auth_NotSignedIn"]
-        : _library.FakeAccountName ?? L["Auth_NotSignedIn"];
+        ? _auth.State.YouTubeChannelName ?? _auth.State.UserName ?? SL["Auth_NotSignedIn"]
+        : _library.FakeAccountName ?? SL["Auth_NotSignedIn"];
 
     public string? AccountAvatarUrl => IsAuthenticated
         ? _auth.State.YouTubeAvatarUrl
         : _library.FakeAccountAvatarUrl;
 
     public string AccountSubtitle => IsAuthenticated
-        ? _auth.State.UserEmail ?? L["Auth_LoggedIn"]
-        : IsFakeAccount ? L["Account_LimitedAccess"] : L["Auth_Guest"];
+        ? _auth.State.UserEmail ?? SL["Auth_LoggedIn"]
+        : IsFakeAccount ? SL["Account_LimitedAccess"] : SL["Auth_Guest"];
 
     // NETWORK PROPERTIES
 
@@ -365,7 +365,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         var theme = new ThemeSettings
         {
-            Name = SelectedPreset?.Name ?? L["Theme_Custom"],
+            Name = SelectedPreset?.Name ?? SL["Theme_Custom"],
             AccentColor = AccentColor.ToString(),
             AccentHover = LightenColor(AccentColor, 0.15).ToString(),
             BgPrimary = BgPrimaryColor.ToString(),
@@ -460,8 +460,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         var (imgCount, imgSize) = _imageCache.GetStats();
         var audioStats = _streamCache.GetStats();
 
-        ImageCacheStats = $"{imgSize} MB / {ImageCacheLimitMb} MB ({imgCount} {L["Common_Files"]})";
-        AudioCacheStats = $"{audioStats.SizeMb} MB / {AudioCacheLimitMb} MB ({audioStats.FileCount} {L["Common_Files"]})";
+        ImageCacheStats = $"{imgSize} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]})";
+        AudioCacheStats = $"{audioStats.SizeMb} MB / {AudioCacheLimitMb} MB ({audioStats.FileCount} {SL["Common_Files"]})";
 
         ImageCacheUsagePercent = ImageCacheLimitMb > 0
             ? Math.Clamp((double)imgSize / ImageCacheLimitMb, 0, 1) : 0;
@@ -482,17 +482,17 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             {
                 _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
                 RaiseAccountProperties();
-                await _dialog.ShowInfoAsync(L["Dialog_Success"],
-                    string.Format(L["Dialog_Merge_Success"], info.Value.Name));
+                await _dialog.ShowInfoAsync(SL["Dialog_Success"],
+                    string.Format(SL["Dialog_Merge_Success"], info.Value.Name));
             }
             else
             {
-                await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], L["Dialog_Merge_Error"]);
+                await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], SL["Dialog_Merge_Error"]);
             }
         }
         catch (Exception ex)
         {
-            await _dialog.ShowInfoAsync(L["Dialog_Error_Title"], ex.Message);
+            await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], ex.Message);
         }
         finally
         {
@@ -516,7 +516,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private async Task LogoutAsync()
     {
-        if (!await _dialog.ConfirmAsync(L["Auth_Logout"], L["Dialog_LogoutMessage"]))
+        if (!await _dialog.ConfirmAsync(SL["Auth_Logout"], SL["Dialog_LogoutMessage"]))
             return;
         _auth.Logout();
         IsAuthenticated = _auth.IsAuthenticated;
@@ -545,19 +545,19 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private async Task ClearHistoryAsync()
     {
-        if (!await _dialog.ConfirmAsync(L["Dialog_Confirm_Title"], L["Dialog_ClearHistoryMessage"]))
+        if (!await _dialog.ConfirmAsync(SL["Dialog_Confirm_Title"], SL["Dialog_ClearHistoryMessage"]))
             return;
         _library.ClearHistory();
-        await _dialog.ShowInfoAsync(L["Dialog_Done_Title"], L["Dialog_HistoryCleared"]);
+        await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Dialog_HistoryCleared"]);
     }
 
     private async Task ResetLibraryAsync()
     {
-        if (!await _dialog.ConfirmAsync(L["Dialog_Warning_Title"], L["Dialog_ResetMessage"]))
+        if (!await _dialog.ConfirmAsync(SL["Dialog_Warning_Title"], SL["Dialog_ResetMessage"]))
             return;
         _library.Reset();
         LoadAllSettings();
-        await _dialog.ShowInfoAsync(L["Dialog_Done_Title"], L["Dialog_ResetComplete"]);
+        await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Dialog_ResetComplete"]);
     }
 
     // IDISPOSABLE
