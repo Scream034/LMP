@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Используем TargetFramework (в единственном числе) -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Отключаем конкретные ворнинги -->
+    <!-- CS0436: Конфликты имен (наш главный враг) -->
+    <!-- CS1591: Отсутствие XML-комментариев (библиотеки часто этим грешат) -->
+    <!-- CS8618, CS8603, CS8601...: Проверки на null (Nullable), если их слишком много -->
+    <NoWarn>$(NoWarn);CS0436;CS1591;CS8618;CS8603;CS8601;CS8602;CS8604;CS8625</NoWarn>
+
+    <!-- Отключаем проверки .NET Analyzer для этого проекта (стиль кода и т.д.) -->
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+    <RunAnalyzersDuringLiveAnalysis>false</RunAnalyzersDuringLiveAnalysis>
+    <AnalysisLevel>none</AnalysisLevel>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MyLiteMusicPlayer.Logging\MyLiteMusicPlayer.Logging.csproj" />
+  </ItemGroup>
+</Project>

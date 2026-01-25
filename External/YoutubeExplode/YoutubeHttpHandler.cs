@@ -9,7 +9,6 @@ namespace YoutubeExplode;
 internal class YoutubeHttpHandler : ClientDelegatingHandler
 {
     private readonly string _manualCookieHeader;
-
     private readonly string? _sapisid;
     private readonly bool _hasUserCookies;
     private readonly string _userAgent; // Поле для хранения UA
