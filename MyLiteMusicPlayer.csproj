@@ -42,7 +42,6 @@
     <PackageReference Include="LibVLCSharp" Version="3.9.5" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23" />
 
-    <ProjectReference Include="External\YoutubeExplode\YoutubeExplode.csproj" />
     <ProjectReference Include="External\MyLiteMusicPlayer.Logging\MyLiteMusicPlayer.Logging.csproj" />
   </ItemGroup>
 </Project>

@@ -1,1 +1,0 @@
-global using Log = MyLiteMusicPlayer.Logging.Log;
