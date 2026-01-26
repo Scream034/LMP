@@ -121,7 +121,7 @@
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                             <TextBox Width="300" Text="{Binding FakeChannelInput}"
                                 Watermark="youtube.com/@..." />
-                            <Button Content="OK" Command="{Binding SetFakeAccountCommand}" />
+                            <Button Content="{Binding L[Common_OK]}" Command="{Binding SetFakeAccountCommand}" />
                             <Button Content="✕" Command="{Binding ClearFakeAccountCommand}" />
                         </StackPanel>
                     </Grid>
@@ -138,13 +138,13 @@
                     <Expander Header="Advanced Auth (User-Agent)">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="desc"
-                                Text="Paste User-Agent from your browser to prevent cookie expiration." />
+                                Text="" />
                             <TextBox Text="{Binding UserAgentString}"
                                 AcceptsReturn="True"
                                 TextWrapping="Wrap"
                                 Height="80"
                                 Watermark="Mozilla/5.0..." />
-                            <Button Content="Save User-Agent"
+                            <Button Content="{Binding L[Settings_UserAgentSave]}"
                                 Command="{Binding SaveUserAgentCommand}" />
                         </StackPanel>
                     </Expander>

@@ -1,20 +1,15 @@
 using System.Runtime.CompilerServices;
-using LMP.Core.Youtube.Common;
+using LMP.Core.Models;
+
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Videos;
 
 namespace LMP.Core.Youtube.Playlists;
 
-/// <summary>
-/// Operations related to YouTube playlists.
-/// </summary>
 public class PlaylistClient(HttpClient http)
 {
     private readonly PlaylistController _controller = new(http);
 
-    /// <summary>
-    /// Gets the metadata associated with the specified playlist.
-    /// </summary>
     public async ValueTask<Playlist> GetAsync(
         PlaylistId playlistId,
         CancellationToken cancellationToken = default
@@ -22,51 +17,28 @@ public class PlaylistClient(HttpClient http)
     {
         var response = await _controller.GetPlaylistResponseAsync(playlistId, cancellationToken);
 
-        var title =
-            response.Title
-            ?? throw new YoutubeExplodeException("Failed to extract the playlist title.");
-
-        // System playlists have no author
-        var channelId = response.ChannelId;
+        var title = response.Title ?? throw new YoutubeExplodeException("Failed to extract playlist title.");
         var channelTitle = response.Author;
-        var author =
-            channelId is not null && channelTitle is not null
-                ? new Author(channelId, channelTitle)
-                : null;
+        
+        var bestThumb = response.Thumbnails
+            .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
+            .TryGetWithHighestResolution()?.Url;
 
-        // System playlists have no description
-        var description = response.Description ?? "";
-
-        var count = response.Count;
-
-        var thumbnails = response
-            .Thumbnails.Select(t =>
-            {
-                var thumbnailUrl =
-                    t.Url
-                    ?? throw new YoutubeExplodeException("Failed to extract the thumbnail URL.");
-
-                var thumbnailWidth =
-                    t.Width
-                    ?? throw new YoutubeExplodeException("Failed to extract the thumbnail width.");
-
-                var thumbnailHeight =
-                    t.Height
-                    ?? throw new YoutubeExplodeException("Failed to extract the thumbnail height.");
-
-                var thumbnailResolution = new Resolution(thumbnailWidth, thumbnailHeight);
-
-                return new Thumbnail(thumbnailUrl, thumbnailResolution);
-            })
-            .ToArray();
-
-        return new Playlist(playlistId, title, author, description, count, thumbnails);
+        return new Playlist
+        {
+            Id = $"yt_{playlistId.Value}", // Локальный ID с префиксом
+            YoutubeId = playlistId.Value,
+            StoredName = title,
+            Author = channelTitle,
+            Description = response.Description,
+            RemoteCount = response.Count,
+            ThumbnailUrl = bestThumb,
+            SyncMode = PlaylistSyncMode.CloudPublic // По умолчанию считаем публичным
+        };
     }
 
-    /// <summary>
-    /// Enumerates batches of videos included in the specified playlist.
-    /// </summary>
-    public async IAsyncEnumerable<Batch<PlaylistVideo>> GetVideoBatchesAsync(
+    // Возвращает TrackInfo вместо PlaylistVideo
+    public async IAsyncEnumerable<Batch<TrackInfo>> GetVideoBatchesAsync(
         PlaylistId playlistId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
@@ -86,92 +58,54 @@ public class PlaylistClient(HttpClient http)
                 cancellationToken
             );
 
-            var videos = new List<PlaylistVideo>();
+            var batch = new List<TrackInfo>();
 
             foreach (var videoData in response.Videos)
             {
-                var videoId =
-                    videoData.Id
-                    ?? throw new YoutubeExplodeException("Failed to extract the video ID.");
+                var videoId = videoData.Id;
+                if (videoId == null) continue;
 
-                lastVideoId = videoId;
+                // Для PlaylistNextResponse videoId это строка, преобразуем в структуру для проверки уникальности
+                var vIdStruct = new VideoId(videoId);
+                
+                lastVideoId = vIdStruct;
+                lastVideoIndex = videoData.Index ?? 0;
 
-                lastVideoIndex =
-                    videoData.Index
-                    ?? throw new YoutubeExplodeException("Failed to extract the video index.");
+                if (!encounteredIds.Add(vIdStruct)) continue;
 
-                // Don't yield the same video twice
-                if (!encounteredIds.Add(videoId))
-                    continue;
+                var title = videoData.Title ?? "";
+                var author = videoData.Author ?? "Unknown";
+                
+                var bestThumb = videoData.Thumbnails
+                    .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
+                    .TryGetWithHighestResolution()?.Url 
+                    ?? $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
 
-                var videoTitle =
-                    videoData.Title
-                    // Videos without title are legal
-                    // https://github.com/Tyrrrz/YoutubeExplode/issues/700
-                    ?? "";
+                var track = new TrackInfo
+                {
+                    Id = $"yt_{videoId}",
+                    Title = title,
+                    Author = author,
+                    ChannelId = videoData.ChannelId,
+                    Duration = videoData.Duration ?? TimeSpan.Zero,
+                    ThumbnailUrl = bestThumb,
+                    Url = $"https://www.youtube.com/watch?v={videoId}",
+                    // Контекст плейлиста можно сохранить, если нужно
+                };
 
-                var videoChannelTitle =
-                    videoData.Author
-                    ?? throw new YoutubeExplodeException("Failed to extract the video author.");
-
-                var videoChannelId =
-                    videoData.ChannelId
-                    ?? throw new YoutubeExplodeException("Failed to extract the video channel ID.");
-
-                var videoThumbnails = videoData
-                    .Thumbnails.Select(t =>
-                    {
-                        var thumbnailUrl =
-                            t.Url
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the thumbnail URL."
-                            );
-
-                        var thumbnailWidth =
-                            t.Width
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the thumbnail width."
-                            );
-
-                        var thumbnailHeight =
-                            t.Height
-                            ?? throw new YoutubeExplodeException(
-                                "Failed to extract the thumbnail height."
-                            );
-
-                        var thumbnailResolution = new Resolution(thumbnailWidth, thumbnailHeight);
-
-                        return new Thumbnail(thumbnailUrl, thumbnailResolution);
-                    })
-                    .Concat(Thumbnail.GetDefaultSet(videoId))
-                    .ToArray();
-
-                var video = new PlaylistVideo(
-                    playlistId,
-                    videoId,
-                    videoTitle,
-                    new Author(videoChannelId, videoChannelTitle),
-                    videoData.Duration,
-                    videoThumbnails
-                );
-
-                videos.Add(video);
+                batch.Add(track);
             }
 
-            // Stop extracting if there are no new videos
-            if (!videos.Any())
-                break;
+            if (batch.Count == 0) break;
 
-            yield return Batch.Create(videos);
+            yield return Batch.Create(batch);
 
             visitorData ??= response.VisitorData;
+
         } while (true);
     }
 
-    /// <summary>
-    /// Enumerates videos included in the specified playlist.
-    /// </summary>
-    public IAsyncEnumerable<PlaylistVideo> GetVideosAsync(
+    public IAsyncEnumerable<TrackInfo> GetVideosAsync(
         PlaylistId playlistId,
         CancellationToken cancellationToken = default
     ) => GetVideoBatchesAsync(playlistId, cancellationToken).FlattenAsync();

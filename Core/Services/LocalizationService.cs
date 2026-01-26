@@ -87,7 +87,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
     {
         try
         {
-            var uri = new Uri($"avares://MyLiteMusicPlayer/Assets/Localization/{langCode}.json");
+            var uri = new Uri($"avares://LMP/Assets/Localization/{langCode}.json");
             if (AssetLoader.Exists(uri))
             {
                 using var stream = AssetLoader.Open(uri);

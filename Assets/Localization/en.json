@@ -85,6 +85,8 @@
   "Settings_RememberFormat": "Remember format per track",
   "Settings_SearchBatchSize": "Search batch size",
   "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
+  "Settings_UserAgentDesc": "Insert the User-Agent from your browser to prevent cookie expiration.",
+  "Settings_UserAgentSave": "Save",
 
   "Settings_General": "General",
 
@@ -178,6 +180,8 @@
   "Track_Removed": "Removed from Liked",
   "Track_CopyLink": "Copy Link",
   "Track_Copied": "Copied!",
+  "Track_Download": "Download",
+  "Track_Downloaded": "Downloaded",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",

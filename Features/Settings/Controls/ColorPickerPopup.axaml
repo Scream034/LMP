@@ -111,9 +111,9 @@
 
             <!-- Action Buttons -->
             <Grid ColumnDefinitions="*, 8, *" Margin="0,16,0,0">
-                <Button Grid.Column="0" Content="Cancel" Click="OnCancelClick"
+                <Button Grid.Column="0" Content="✕" Click="OnCancelClick"
                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                <Button Grid.Column="2" Classes="primary-btn" Content="OK" Click="OnConfirmClick"
+                <Button Grid.Column="2" Classes="primary-btn" Content="✓" Click="OnConfirmClick"
                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
             </Grid>
             

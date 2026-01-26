@@ -1,6 +1,6 @@
 ﻿using LMP.Core.Youtube.Utils.Extensions;
 
-namespace LMP.Core.Youtube.Common;
+namespace LMP.Core.Models;
 
 /// <summary>
 /// Generic collection of items returned by a single request.

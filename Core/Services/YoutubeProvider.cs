@@ -1,9 +1,5 @@
-﻿// YoutubeProvider.cs
-// Провайдер для работы с YouTube через YoutubeExplode
-// Поиск, получение информации о треках, плейлистах и аудио потоках
+﻿using LMP.Core.Youtube;
 
-using LMP.Core.Youtube;
-using LMP.Core.Youtube.Common;
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Search;
 using LMP.Core.Youtube.Videos;
@@ -19,15 +15,6 @@ using System.Net;
 
 namespace LMP.Core.Services;
 
-/// <summary>
-/// Провайдер для работы с YouTube.
-/// Предоставляет функции:
-/// - Поиск видео/музыки
-/// - Получение информации о треках
-/// - Извлечение аудио потоков с разным качеством
-/// - Работа с плейлистами
-/// - Скачивание треков
-/// </summary>
 public partial class YoutubeProvider
 {
     private const int DefaultCacheLifetimeHours = 4;
@@ -60,7 +47,7 @@ public partial class YoutubeProvider
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
-    public YoutubeProvider() : this(null, null)
+    public YoutubeProvider() : this(null!, null!)
     {
     }
 
@@ -74,44 +61,32 @@ public partial class YoutubeProvider
         _downloadFolder = Path.Combine(appFolder, "Downloads");
         Directory.CreateDirectory(_downloadFolder);
 
-        ReloadClient();
-        _cookieAuth.OnAuthStateChanged += ReloadClient;
+        if (_cookieAuth != null)
+        {
+            ReloadClient();
+            _cookieAuth.OnAuthStateChanged += ReloadClient;
+        }
     }
 
     public void ReloadClient()
     {
-        // 1. Получаем контейнер куки (а не просто список)
         var cookieContainer = _cookieAuth.GetCookieContainer();
-
-        // 2. Создаем Handler с поддержкой куки
+        
         var handler = new HttpClientHandler
         {
             CookieContainer = cookieContainer,
-            UseCookies = true, // Включаем автоматическую обработку кук
+            UseCookies = true,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            AllowAutoRedirect = false // Иногда лучше контролировать редиректы вручную, но для API это не критично
+            AllowAutoRedirect = false 
         };
 
-        // 3. Создаем базовый HttpClient
         var baseHttpClient = new HttpClient(handler);
-
-        // 4. Берем UA
-        var ua = CookieAuthService.UserAgent;
-
-        // 5. Оборачиваем в наш YoutubeHttpHandler, передавая туда контейнер для генерации хешей
-        // Важно: disposeClient = true, чтобы при диспоузе YoutubeClient убивался и внутренний Handler
         var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, cookieContainer, disposeClient: true);
-
-        // 6. Создаем финальный HttpClient, который принимает наш декоратор
-        // Обратите внимание: YoutubeClient ожидает HttpClient, но YoutubeHttpHandler это HttpMessageHandler.
-        // Нам нужно создать еще один HttpClient, который использует наш Handler.
         var finalHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
 
-        // 7. Инициализируем YoutubeClient
         _youtube = new YoutubeClient(finalHttpClient);
 
-        var cookieCount = cookieContainer.Count;
-        Log.Info($"[YouTube] Client reloaded. Cookies in container: {cookieCount}");
+        Log.Info($"[YouTube] Client reloaded.");
     }
 
     public Task InitializeAsync()
@@ -125,15 +100,13 @@ public partial class YoutubeProvider
 
     // --- ПЕРСОНАЛИЗАЦИЯ ---
 
-    /// <summary>
-    /// Получает полки с главной страницы (My Supermix, Listen Again...)
-    /// </summary>
     public async Task<List<HomeSection>> GetPersonalizedHomeAsync(CancellationToken ct = default)
     {
         if (!_cookieAuth.IsAuthenticated) return [];
 
         try
         {
+            // MusicClient теперь возвращает MusicShelf, который нужно сконвертировать в HomeSection
             var shelves = await _youtube.Music.GetPersonalizedHomeAsync(ct);
             var sections = new List<HomeSection>();
 
@@ -143,23 +116,24 @@ public partial class YoutubeProvider
 
                 foreach (var item in shelf.Items)
                 {
-                    // Конвертируем MusicItem в TrackInfo
-                    // Важно: MusicItem может быть песней, видео, альбомом или плейлистом
+                    // MusicItem -> TrackInfo
+                    // Выбираем лучшее превью
+                    var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url 
+                                   ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
+
                     var track = new TrackInfo
                     {
                         Id = "yt_" + item.Id,
                         Title = item.Title,
                         Author = item.Author ?? "Unknown",
-                        ThumbnailUrl = item.Thumbnails.LastOrDefault()?.Url ?? "",
+                        ThumbnailUrl = thumbUrl,
                         Duration = item.Duration ?? TimeSpan.Zero,
-                        IsMusic = true
+                        IsMusic = true,
+                        Url = $"https://music.youtube.com/watch?v={item.Id}"
                     };
 
-                    // Если это плейлист (например, "My Supermix"), ID начинается с "RD..." или "PL..."
-                    // Мы можем пометить его как плейлист
                     if (item.Type == "Playlist" || item.Type == "Album")
                     {
-                        // Для плейлистов UI должен знать, что по клику нужно открывать плейлист, а не играть трек
                         track.Id = "yt_pl_" + item.Id;
                     }
 
@@ -193,7 +167,7 @@ public partial class YoutubeProvider
         catch (Exception ex)
         {
             Log.Error($"[Music] Failed to like: {ex.Message}");
-            throw; // <-- ВАЖНО: Пробрасываем ошибку, чтобы Manager и UI знали о сбое
+            throw; 
         }
     }
 
@@ -240,7 +214,7 @@ public partial class YoutubeProvider
         }
 
         var sw = Stopwatch.StartNew();
-        // Меняем сообщение лога, чтобы видеть, что происходит обновление
+        
         if (forceRefresh)
             NotifyStatus($"[YouTube] [{videoId}] 403 detected. Forcing stream URL refresh...");
         else
@@ -260,7 +234,6 @@ public partial class YoutubeProvider
 
         string cacheKey = GenerateCacheKey(videoId, targetContainer, targetBitrate);
 
-        // ИЗМЕНЕНИЕ: Если forceRefresh == true, мы пропускаем блок с кэшем
         if (!forceRefresh && TryGetFromCache(cacheKey, out var cached))
         {
             track.StreamUrl = cached.Url;
@@ -270,7 +243,9 @@ public partial class YoutubeProvider
 
         try
         {
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, ct);
+            // VideoId.Parse нужен, так как GetManifestAsync принимает структуру VideoId
+            var vId = VideoId.Parse(videoId);
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
             var audioStreams = manifest.GetAudioOnlyStreams()
                 .OrderByDescending(s => s.Bitrate)
                 .ToList();
@@ -333,7 +308,6 @@ public partial class YoutubeProvider
                 {
                     return containerStreams.MinBy(s => Math.Abs(s.Bitrate.KiloBitsPerSecond - preferredBitrate));
                 }
-                Log.Info($"[YouTube] Using preferred container: {preferredContainer}");
                 return containerStreams.First();
             }
         }
@@ -376,7 +350,8 @@ public partial class YoutubeProvider
 
         try
         {
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId);
+            var vId = VideoId.Parse(videoId);
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId);
 
             return [.. manifest.GetAudioOnlyStreams()
                 .OrderByDescending(s => s.Bitrate)
@@ -500,9 +475,8 @@ public partial class YoutubeProvider
         try
         {
             var videoId = VideoId.TryParse(url) ?? VideoId.Parse(ExtractVideoId(url) ?? "");
-            var video = await _youtube.Videos.GetAsync(videoId);
-            var track = ConvertToTrackInfo(video);
-            if (video.IsMusic) track.IsMusic = true;
+            // VideoClient теперь возвращает TrackInfo
+            var track = await _youtube.Videos.GetAsync(videoId);
             return track;
         }
         catch (Exception ex)
@@ -514,13 +488,10 @@ public partial class YoutubeProvider
 
     #region Search
 
-    /// <summary>
-    /// Потоковый поиск - возвращает результаты по мере их получения
-    /// </summary>
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
         string query,
         int maxResults = 300,
-        SearchFilter filter = SearchFilter.Video, // Добавлен аргумент фильтра
+        SearchFilter filter = SearchFilter.Video,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query)) yield break;
@@ -530,7 +501,7 @@ public partial class YoutubeProvider
 
         NotifyStatus($"[YouTube] Starting streaming search for '{query}' (Filter: {filter})...");
 
-        // Передаем filter в YoutubeExplode
+        // SearchClient возвращает Batch<ISearchResult>
         await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
         {
             if (ct.IsCancellationRequested) yield break;
@@ -541,18 +512,14 @@ public partial class YoutubeProvider
             {
                 if (count >= maxResults) break;
 
-                // Обработка видео (и музыки)
-                if (result is VideoSearchResult video)
+                // TrackInfo реализует ISearchResult, поэтому просто кастим
+                if (result is TrackInfo track)
                 {
-                    tracks.Add(ConvertSearchResultToTrackInfo(video));
+                    tracks.Add(track);
                     count++;
                 }
-                // Обработка плейлистов (если выбран фильтр Playlist)
-                else if (result is PlaylistSearchResult playlist)
-                {
-                    tracks.Add(ConvertPlaylistSearchResultToTrackInfo(playlist));
-                    count++;
-                }
+                // Плейлисты (Playlist) тоже реализуют ISearchResult, но для списка треков они не подходят
+                // Если нужны и плейлисты, их можно обрабатывать отдельно, но здесь возвращаем List<TrackInfo>
             }
 
             if (tracks.Count > 0)
@@ -568,13 +535,10 @@ public partial class YoutubeProvider
         NotifyStatus($"[YouTube] Search complete: {count} results in {sw.ElapsedMilliseconds}ms");
     }
 
-    /// <summary>
-    /// Быстрый поиск - возвращает первые результаты как можно быстрее
-    /// </summary>
     public async Task<List<TrackInfo>> SearchFastAsync(
         string query,
         int maxResults = 100,
-        SearchFilter filter = SearchFilter.Video, // Добавлен аргумент фильтра
+        SearchFilter filter = SearchFilter.Video,
         CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query)) return [];
@@ -584,23 +548,13 @@ public partial class YoutubeProvider
 
         try
         {
-            await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
+            // Используем специализированный метод для получения треков
+            var enumerable = _youtube.Search.GetVideosAsync(query, ct);
+            
+            await foreach (var track in enumerable)
             {
-                foreach (var result in batch.Items)
-                {
-                    if (results.Count >= maxResults) break;
-
-                    if (result is VideoSearchResult video)
-                    {
-                        results.Add(ConvertSearchResultToTrackInfo(video));
-                    }
-                    else if (result is PlaylistSearchResult playlist)
-                    {
-                        results.Add(ConvertPlaylistSearchResultToTrackInfo(playlist));
-                    }
-                }
-
                 if (results.Count >= maxResults) break;
+                results.Add(track);
             }
 
             sw.Stop();
@@ -618,15 +572,12 @@ public partial class YoutubeProvider
         return results;
     }
 
-    /// <summary>
-    /// Старый метод для совместимости - теперь использует быстрый поиск по видео
-    /// </summary>
     public async Task<List<TrackInfo>> SearchAsync(string query, int maxResults = 100)
     {
         return await SearchFastAsync(query, maxResults, SearchFilter.Video);
     }
 
-    /// <summary>
+ /// <summary>
     /// Поиск с поддержкой продолжения (continuation) для ленивой загрузки
     /// </summary>
     public class SearchSession : IDisposable
@@ -805,11 +756,13 @@ public partial class YoutubeProvider
         {
             var playlistId = PlaylistId.TryParse(url);
             if (playlistId == null) return null;
+            
             var playlist = await _youtube.Playlists.GetAsync(playlistId.Value);
-            var videos = await _youtube.Playlists.GetVideosAsync(playlistId.Value).CollectAsync();
-            var tracks = videos.Select(ConvertPlaylistVideoToTrackInfo).ToList();
-            NotifyStatus($"[YouTube] Playlist '{playlist.Title}': {tracks.Count} tracks");
-            return (playlist.Title, tracks);
+            // GetVideosAsync возвращает IAsyncEnumerable<TrackInfo>
+            var tracks = await _youtube.Playlists.GetVideosAsync(playlistId.Value).CollectAsync();
+            
+            NotifyStatus($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
+            return (playlist.Name, tracks.ToList());
         }
         catch (Exception ex)
         {
@@ -818,7 +771,6 @@ public partial class YoutubeProvider
         }
     }
 
-    // Исправление 6: Robust метод для получения плейлистов с фейкового аккаунта (публичного канала)
     public async Task<(string ChannelName, List<PlaylistSearchResult> Playlists)?> GetChannelPlaylistsForSyncAsync(string channelUrl, CancellationToken ct = default)
     {
         var channel = await GetChannelFromUrlAsync(channelUrl, ct);
@@ -830,17 +782,24 @@ public partial class YoutubeProvider
         {
             var results = new List<PlaylistSearchResult>();
 
-            // Используем Channels.GetPlaylistsAsync, он надежнее для списка плейлистов канала
+            // GetPlaylistsAsync возвращает IAsyncEnumerable<Playlist>
             await foreach (var pl in _youtube.Channels.GetPlaylistsAsync(channel.Id, ct))
             {
-                // Фильтрация системных плейлистов, если нужно
-                if (pl.Title.Equals("Uploads", StringComparison.OrdinalIgnoreCase)) continue;
+                if (pl.Name.Equals("Uploads", StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Маппим наш LMP.Core.Models.Playlist в PlaylistSearchResult (если он еще нужен)
+                // Или меняем сигнатуру метода на возврат List<Playlist>
+                // Для совместимости создадим PlaylistSearchResult вручную
+                var thumbs = new List<Thumbnail>();
+                if (!string.IsNullOrEmpty(pl.ThumbnailUrl)) thumbs.Add(new Thumbnail(pl.ThumbnailUrl, new Resolution(0,0)));
+
+                var auth = pl.Author != null ? new Author(new ChannelId(channel.Id.Value), pl.Author) : null;
 
                 results.Add(new PlaylistSearchResult(
-                   pl.Id,
-                   pl.Title,
-                   pl.Author,
-                   pl.Thumbnails
+                   new PlaylistId(pl.YoutubeId ?? ""),
+                   pl.Name,
+                   auth,
+                   thumbs
                ));
             }
 
@@ -864,26 +823,22 @@ public partial class YoutubeProvider
     {
         try
         {
-            var ytPlaylist = await _youtube.Playlists.GetAsync(playlistId, ct);
-            var videos = await _youtube.Playlists.GetVideosAsync(playlistId, ct).CollectAsync();
+            // PlaylistClient.GetAsync возвращает Playlist
+            var plId = new PlaylistId(playlistId);
+            var playlist = await _youtube.Playlists.GetAsync(plId, ct);
 
-            var newPlaylist = new Playlist
-            {
-                Id = $"yt_{ytPlaylist.Id}",
-                YoutubeId = ytPlaylist.Id,
-                Name = ytPlaylist.Title,
-                Author = ytPlaylist.Author?.ChannelTitle,
-                ThumbnailUrl = ytPlaylist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault()?.Url,
-                SyncMode = isAccountSync ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.CloudPublic,
-            };
+            // Настраиваем режим
+            playlist.SyncMode = isAccountSync ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.CloudPublic;
+            
+            // Загружаем треки
+            var tracks = await _youtube.Playlists.GetVideosAsync(plId, ct).CollectAsync();
 
-            foreach (var video in videos)
+            foreach (var track in tracks)
             {
-                var trackInfo = ConvertPlaylistVideoToTrackInfo(video);
-                _libraryService?.AddOrUpdateTrack(trackInfo);
-                newPlaylist.TrackIds.Add(trackInfo.Id);
+                _libraryService?.AddOrUpdateTrack(track);
+                playlist.TrackIds.Add(track.Id);
             }
-            return newPlaylist;
+            return playlist;
         }
         catch (Exception ex)
         {
@@ -903,26 +858,25 @@ public partial class YoutubeProvider
     {
         try
         {
-            // Улучшенный Regex парсинг для разных форматов
             if (url.Contains("/channel/"))
             {
                 var id = url.Split("/channel/")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetAsync(id, ct);
+                return await _youtube.Channels.GetAsync(new ChannelId(id), ct);
             }
             if (url.Contains("/@"))
             {
                 var handle = url.Split("/@")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetByHandleAsync(handle, ct);
+                return await _youtube.Channels.GetByHandleAsync(new ChannelHandle(handle), ct);
             }
             if (url.Contains("/c/"))
             {
                 var slug = url.Split("/c/")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetBySlugAsync(slug, ct);
+                return await _youtube.Channels.GetBySlugAsync(new ChannelSlug(slug), ct);
             }
             if (url.Contains("/user/"))
             {
                 var user = url.Split("/user/")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetByUserAsync(user, ct);
+                return await _youtube.Channels.GetByUserAsync(new UserName(user), ct);
             }
 
             NotifyError("[YouTube] Could not recognize channel URL format.");
@@ -943,8 +897,12 @@ public partial class YoutubeProvider
             var videoId = ExtractVideoId(sourceTrack.Url);
             if (string.IsNullOrEmpty(videoId)) return [];
             var mixUrl = $"https://www.youtube.com/watch?v={videoId}&list=RD{videoId}";
+            
+            // GetPlaylistAsync возвращает (Name, List<TrackInfo>)
             var result = await GetPlaylistAsync(mixUrl);
-            var tracks = result?.Tracks.Take(count).ToList() ?? [];
+            if (result == null) return [];
+
+            var tracks = result.Value.Tracks.Take(count).ToList();
             foreach (var t in tracks) t.RadioSeedId = sourceTrack.Id;
             return tracks;
         }
@@ -976,7 +934,8 @@ public partial class YoutubeProvider
             var videoId = ExtractVideoId(track.Url);
             if (string.IsNullOrEmpty(videoId)) return null;
 
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(videoId, ct);
+            var vId = VideoId.Parse(videoId);
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
             var stream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
 
             if (stream == null) return null;
@@ -1001,7 +960,7 @@ public partial class YoutubeProvider
 
     #region Helpers
 
-    private static TrackInfo ConvertPlaylistSearchResultToTrackInfo(PlaylistSearchResult playlist)
+        private static TrackInfo ConvertPlaylistSearchResultToTrackInfo(PlaylistSearchResult playlist)
     {
         var thumb = playlist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault();
         return new TrackInfo

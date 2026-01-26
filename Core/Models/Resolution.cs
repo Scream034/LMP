@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace LMP.Core.Youtube.Common;
+namespace LMP.Core.Models;
 
 /// <summary>
 /// Resolution of an image or a video.

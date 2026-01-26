@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
-using LMP.Core.Youtube.Common;
+using LMP.Core.Models;
+
 using LMP.Core.Youtube.Utils.Extensions;
 
 namespace LMP.Core.Youtube.Search;
@@ -8,7 +9,8 @@ public class SearchClient(HttpClient http)
 {
     private readonly SearchController _controller = new(http);
     private const string FallbackChannelId = "UCBR8-6071WBgIc8o-99y5Lg";
-  
+
+    // Возвращаем Batch<ISearchResult>, где элементы - это TrackInfo или Playlist
     public async IAsyncEnumerable<Batch<ISearchResult>> GetResultBatchesAsync(
         string searchQuery,
         SearchFilter searchFilter,
@@ -17,7 +19,6 @@ public class SearchClient(HttpClient http)
     {
         var encounteredIds = new HashSet<string>(StringComparer.Ordinal);
         var continuationToken = default(string?);
-
         bool isMusicContext = searchFilter == SearchFilter.Music;
 
         do
@@ -25,7 +26,7 @@ public class SearchClient(HttpClient http)
             var searchResults = await _controller.GetSearchResponseAsync(searchQuery, searchFilter, continuationToken, cancellationToken);
             var batchItems = new List<ISearchResult>();
 
-            // Videos
+            // 1. VIDEOS -> TrackInfo
             if (searchFilter is SearchFilter.None or SearchFilter.Video or SearchFilter.Music)
             {
                 foreach (var videoData in searchResults.Videos)
@@ -34,81 +35,58 @@ public class SearchClient(HttpClient http)
                     if (string.IsNullOrWhiteSpace(videoId) || !encounteredIds.Add(videoId)) continue;
 
                     var channelId = videoData.ChannelId;
-                    if (string.IsNullOrWhiteSpace(channelId) || channelId.Length != 24 || !channelId.StartsWith("UC"))
-                    {
+                    if (string.IsNullOrWhiteSpace(channelId) || !channelId.StartsWith("UC"))
                         channelId = FallbackChannelId;
-                    }
-                    
-                    var author = new Author(channelId, videoData.Author ?? "YouTube");
-                    var thumbnails = videoData.Thumbnails
-                        .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-                        .Concat(Thumbnail.GetDefaultSet(videoId))
-                        .ToArray();
+
+                    var bestThumb = videoData.Thumbnails
+                         .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
+                         .TryGetWithHighestResolution()?.Url
+                         ?? $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
 
                     bool isMusic = videoData.IsMusicItem || isMusicContext;
 
-                    // Создаем VideoSearchResult (который теперь TrackInfo)
-                    batchItems.Add(new VideoSearchResult(
-                        videoId, 
-                        videoData.Title ?? "", 
-                        author, 
-                        videoData.Duration,
-                        thumbnails, 
-                        videoData.IsOfficialArtist, 
-                        videoData.IsShort,
-                        isMusic
-                    ));
+                    batchItems.Add(new TrackInfo
+                    {
+                        Id = $"yt_{videoId}",
+                        Title = videoData.Title ?? "",
+                        Author = videoData.Author ?? "YouTube",
+                        ChannelId = channelId,
+                        Duration = videoData.Duration ?? TimeSpan.Zero,
+                        ThumbnailUrl = bestThumb,
+                        IsOfficialArtist = videoData.IsOfficialArtist,
+                        IsMusic = isMusic,
+                        Url = $"https://www.youtube.com/watch?v={videoId}"
+                    });
                 }
             }
 
-            // Playlists
+            // 2. PLAYLISTS -> Playlist
             if (searchFilter is SearchFilter.None or SearchFilter.Playlist or SearchFilter.Music)
             {
                 foreach (var playlistData in searchResults.Playlists)
                 {
                     var playlistId = playlistData.Id;
                     if (string.IsNullOrWhiteSpace(playlistId) || !encounteredIds.Add(playlistId)) continue;
-                    
-                    Author? author = null;
-                    var channelId = playlistData.ChannelId;
-                    if (!string.IsNullOrWhiteSpace(channelId) && channelId.Length == 24 && channelId.StartsWith("UC"))
-                    {
-                        author = new Author(channelId, playlistData.Author ?? "YouTube");
-                    }
 
-                    var thumbnails = playlistData.Thumbnails
+                    var bestThumb = playlistData.Thumbnails
                         .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-                        .ToArray();
+                        .TryGetWithHighestResolution()?.Url;
 
-                    // Создаем PlaylistSearchResult (который теперь Playlist)
-                    batchItems.Add(new PlaylistSearchResult(
-                        playlistId, 
-                        playlistData.Title ?? "", 
-                        author, 
-                        thumbnails
-                    ));
+                    batchItems.Add(new Playlist
+                    {
+                        Id = $"yt_{playlistId}", // Префикс для UI
+                        YoutubeId = playlistId,
+                        StoredName = playlistData.Title ?? "Unknown Playlist",
+                        Author = playlistData.Author,
+                        ThumbnailUrl = bestThumb,
+                        SyncMode = PlaylistSyncMode.CloudPublic
+                    });
                 }
             }
             
-            // Channels
-            if (searchFilter is SearchFilter.None or SearchFilter.Channel)
-            {
-                foreach (var channelData in searchResults.Channels)
-                {
-                    var channelId = channelData.Id;
-                    if (string.IsNullOrWhiteSpace(channelId) || !encounteredIds.Add(channelId)) continue;
-                    
-                    var thumbnails = channelData.Thumbnails
-                        .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-                        .ToArray();
-                        
-                    batchItems.Add(new ChannelSearchResult(
-                        channelId, 
-                        channelData.Title ?? "", 
-                        thumbnails
-                    ));
-                }
-            }
+            // Каналы (ChannelSearchResult) пока оставим за скобками или реализуем отдельно, 
+            // так как LMP.Core.Models не имеет модели Channel. 
+            // Если нужно, можно добавить класс ChannelInfo : ISearchResult
 
             if (batchItems.Count > 0)
                 yield return Batch.Create(batchItems);
@@ -117,15 +95,15 @@ public class SearchClient(HttpClient http)
 
         } while (!string.IsNullOrWhiteSpace(continuationToken));
     }
-    
-    public IAsyncEnumerable<ISearchResult> GetResultsAsync(string searchQuery, CancellationToken ct = default) => 
+
+    public IAsyncEnumerable<ISearchResult> GetResultsAsync(string searchQuery, CancellationToken ct = default) =>
         GetResultBatchesAsync(searchQuery, SearchFilter.None, ct).FlattenAsync();
 
-    // Возвращает поток VideoSearchResult (совместим с TrackInfo)
-    public IAsyncEnumerable<VideoSearchResult> GetVideosAsync(string searchQuery, CancellationToken ct = default) =>
-        GetResultBatchesAsync(searchQuery, SearchFilter.Video, ct).FlattenAsync().OfTypeAsync<VideoSearchResult>();
+    // Специализированный метод для получения только треков
+    public IAsyncEnumerable<TrackInfo> GetVideosAsync(string searchQuery, CancellationToken ct = default) =>
+        GetResultBatchesAsync(searchQuery, SearchFilter.Video, ct).FlattenAsync().OfTypeAsync<TrackInfo>();
 
-    // Возвращает поток PlaylistSearchResult (совместим с Playlist)
-    public IAsyncEnumerable<PlaylistSearchResult> GetPlaylistsAsync(string searchQuery, CancellationToken ct = default) =>
-        GetResultBatchesAsync(searchQuery, SearchFilter.Playlist, ct).FlattenAsync().OfTypeAsync<PlaylistSearchResult>();
+    // Специализированный метод для плейлистов
+    public IAsyncEnumerable<Playlist> GetPlaylistsAsync(string searchQuery, CancellationToken ct = default) =>
+        GetResultBatchesAsync(searchQuery, SearchFilter.Playlist, ct).FlattenAsync().OfTypeAsync<Playlist>();
 }

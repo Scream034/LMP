@@ -1,5 +1,6 @@
 using System.Text.Json;
-using LMP.Core.Youtube.Common;
+using LMP.Core.Models;
+
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
@@ -8,12 +9,9 @@ namespace LMP.Core.Youtube.Bridge;
 
 internal class ChannelPlaylistsResponse(JsonElement content)
 {
-    // Lazy evaluation to avoid traversing/allocating everything if only one batch is needed
     public IEnumerable<Playlist> Playlists => ParsePlaylists(content);
 
     public string? ContinuationToken =>
-        // Fast path: Try standard traversal first before falling back or searching
-        // Usually: onResponseReceivedActions -> appendContinuationItemsAction -> continuationItems -> continuationItemRenderer -> continuationEndpoint -> continuationCommand -> token
         content.GetPropertyOrNull("onResponseReceivedActions")?.EnumerateArrayOrNull()?.FirstOrNull()
             ?.GetPropertyOrNull("appendContinuationItemsAction")
             ?.GetPropertyOrNull("continuationItems")?.EnumerateArrayOrNull()?.LastOrDefault()
@@ -23,7 +21,6 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             ?.GetPropertyOrNull("token")
             ?.GetStringOrNull()
         ??
-        // Fallback for initial load
         content.EnumerateDescendantProperties("continuationCommand")
             .FirstOrNull()
             ?.GetPropertyOrNull("token")
@@ -31,7 +28,6 @@ internal class ChannelPlaylistsResponse(JsonElement content)
 
     private IEnumerable<Playlist> ParsePlaylists(JsonElement root)
     {
-        // 1. Initial Load (Tabs -> Playlists Tab -> Content)
         var tabs = root.GetPropertyOrNull("contents")
             ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
             ?.GetPropertyOrNull("tabs");
@@ -40,18 +36,15 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         {
             foreach (var tab in tabs.Value.EnumerateArrayOrEmpty())
             {
-                // Find "Playlists" tab (logic usually relies on verifying the content structure)
                 var tabContent = tab.GetPropertyOrNull("tabRenderer")?.GetPropertyOrNull("content");
                 if (tabContent == null) continue;
 
-                // Old Design: SectionList -> ItemSection -> GridPlaylist
                 var sectionList = tabContent.Value.GetPropertyOrNull("sectionListRenderer");
                 if (sectionList != null)
                 {
                     foreach (var pl in ParseSectionList(sectionList.Value)) yield return pl;
                 }
 
-                // New Design: RichGrid -> RichItem -> LockupViewModel
                 var richGrid = tabContent.Value.GetPropertyOrNull("richGridRenderer");
                 if (richGrid != null)
                 {
@@ -60,7 +53,6 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             }
         }
 
-        // 2. Continuation (onResponseReceivedActions)
         var actions = root.GetPropertyOrNull("onResponseReceivedActions");
         if (actions != null)
         {
@@ -95,7 +87,6 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             {
                 foreach (var item in items.Value.EnumerateArrayOrEmpty())
                 {
-                    // Grid Renderer
                     var gridItems = item.GetPropertyOrNull("gridRenderer")?.GetPropertyOrNull("items");
                     if (gridItems != null)
                     {
@@ -137,7 +128,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             return ParseGridPlaylist(grid);
 
         if (item.TryGetProperty("playlistRenderer", out var list))
-            return ParseGridPlaylist(list); // Structure is compatible
+            return ParseGridPlaylist(list); 
 
         if (item.TryGetProperty("lockupViewModel", out var lockup))
             return ParseLockupViewModel(lockup);
@@ -161,12 +152,19 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         if (countText != null && int.TryParse(countText.Replace(",", "").Replace(" ", ""), out var c))
             count = c;
 
-        var thumbnails = json.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?
-            .EnumerateArrayOrNull()?.Select(static x => new ThumbnailData(x))
-            .Select(static t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-            .ToArray() ?? [];
+        var thumb = json.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?
+            .EnumerateArrayOrNull()?.LastOrDefault().GetPropertyOrNull("url")?.GetStringOrNull();
 
-        return new Playlist(id, title ?? "", null, "", count, thumbnails);
+        // Используем инициализатор объекта для LMP.Core.Models.Playlist
+        return new Playlist
+        {
+            Id = id,
+            YoutubeId = id,
+            StoredName = title ?? "Unknown",
+            RemoteCount = count,
+            ThumbnailUrl = thumb,
+            SyncMode = PlaylistSyncMode.CloudPublic
+        };
     }
 
     private Playlist? ParseLockupViewModel(JsonElement json)
@@ -180,12 +178,17 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         var image = json.GetPropertyOrNull("contentImage")?.GetPropertyOrNull("collectionThumbnailViewModel")?
             .GetPropertyOrNull("primaryThumbnail")?.GetPropertyOrNull("thumbnailViewModel")?.GetPropertyOrNull("image");
 
-        var thumbnails = image?.GetPropertyOrNull("sources")?
-             .EnumerateArrayOrNull()?.Select(static x => new ThumbnailData(x))
-             .Select(static t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-             .ToArray() ?? [];
+        var thumb = image?.GetPropertyOrNull("sources")?
+             .EnumerateArrayOrNull()?.LastOrDefault().GetPropertyOrNull("url")?.GetStringOrNull();
 
-        return new Playlist(id, title, null, "", null, thumbnails);
+        return new Playlist
+        {
+            Id = id,
+            YoutubeId = id,
+            StoredName = title,
+            ThumbnailUrl = thumb,
+            SyncMode = PlaylistSyncMode.CloudPublic
+        };
     }
 
     public static ChannelPlaylistsResponse Parse(string raw) => new(Json.Parse(raw));

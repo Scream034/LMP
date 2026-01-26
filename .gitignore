@@ -28,7 +28,7 @@ publish/
 # Папка packages если используется старый формат (packages.config)
 packages/
 
-## --- [ Специфичное для твоего проекта (MyLiteMusicPlayer) ] ---
+## --- [ Специфичное для твоего проекта (LMP) ] ---
 # Игнорируем скачанные треки (у тебя в YoutubeProvider.cs указано "Downloads")
 Downloads/
 

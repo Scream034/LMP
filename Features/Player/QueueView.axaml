@@ -70,17 +70,19 @@
                                 ToolTip.Tip="All">
                                 <mi:MaterialIcon Kind="AllInclusive" Width="14" Height="14" />
                             </Button>
-                            
+
                             <!-- Music -->
-                            <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
+                            <Button Command="{Binding SetFilterTypeCommand}"
+                                CommandParameter="Music"
                                 Classes="filter-type-btn"
                                 Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
                                 ToolTip.Tip="Music">
                                 <mi:MaterialIcon Kind="MusicNote" Width="14" Height="14" />
                             </Button>
-                            
+
                             <!-- Video -->
-                            <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
+                            <Button Command="{Binding SetFilterTypeCommand}"
+                                CommandParameter="Video"
                                 Classes="filter-type-btn"
                                 Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
                                 ToolTip.Tip="Video">
@@ -112,9 +114,11 @@
                         </Setter>
                     </Style>
                 </ListBox.Styles>
+
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="svm:TrackItemViewModel">
                         <Grid ColumnDefinitions="*, Auto" Background="Transparent">
+
                             <Border Grid.Column="0" Classes="track-row"
                                 Classes.isActive="{Binding IsActive}"
                                 Background="Transparent" CornerRadius="6" Padding="4,2">
@@ -129,11 +133,14 @@
                                     </Style>
                                 </Border.Styles>
                             </Border>
+
+                            <!-- Close Button (Right) -->
                             <Button Grid.Column="1" Classes="icon-btn" Width="28" Height="28"
                                 Margin="4,0,0,0"
                                 Command="{Binding $parent[UserControl].((vm:QueueViewModel)DataContext).RemoveTrackCommand}"
-                                CommandParameter="{Binding}">
-                                <mi:MaterialIcon Kind="Close" Width="14" Height="14"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="{Binding L[Queue_Remove]}">
+                                <mi:MaterialIcon Kind="Close" Width="16" Height="16"
                                     Foreground="{DynamicResource TextMutedBrush}" />
                             </Button>
                         </Grid>

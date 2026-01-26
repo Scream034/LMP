@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using LMP.Core.Youtube.Channels;
 
-namespace LMP.Core.Youtube.Common;
+namespace LMP.Core.Models;
 
 /// <summary>
 /// Reference to a channel that owns a specific YouTube video or playlist.

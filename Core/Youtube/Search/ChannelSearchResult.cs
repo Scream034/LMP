@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
+using LMP.Core.Models;
 using LMP.Core.Youtube.Channels;
-using LMP.Core.Youtube.Common;
+
 
 namespace LMP.Core.Youtube.Search;
 

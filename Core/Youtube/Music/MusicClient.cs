@@ -1,5 +1,5 @@
-using LMP.Core.Youtube.Common;
-using LMP.Core.Youtube.Playlists;
+using LMP.Core.Models;
+
 
 namespace LMP.Core.Youtube.Music;
 
@@ -7,52 +7,37 @@ public class MusicClient(HttpClient http)
 {
     private readonly MusicController _controller = new(http);
 
-    /// <summary>
-    /// Получает треки из плейлиста "Понравившееся" (Liked Music).
-    /// Использует browseId="VLLM" и пагинацию.
-    /// </summary>
-    public async Task<List<MusicItem>> GetLikedTracksAsync(CancellationToken cancellationToken = default)
+    public async Task<List<TrackInfo>> GetLikedTracksAsync(CancellationToken cancellationToken = default)
     {
-        var allItems = new List<MusicItem>();
-        
-        // 1. Первый запрос (VLLM)
-        // ВНИМАНИЕ: Используем VLLM для доступа к виртуальному плейлисту лайков
+        var allTracks = new List<TrackInfo>();
         var response = await _controller.GetBrowseAsync(browseId: "VLLM", cancellationToken: cancellationToken);
-        
-        allItems.AddRange(response.Shelves.SelectMany(static s => s.Items));
-        
+
+        ProcessShelves(response.Shelves, allTracks);
+
         var continuation = response.ContinuationToken;
         int page = 1;
 
-        // 2. Загрузка следующих страниц
         while (!string.IsNullOrEmpty(continuation))
         {
             if (cancellationToken.IsCancellationRequested) break;
-            
-            // Запрос следующей страницы с токеном
+
             response = await _controller.GetBrowseAsync(continuation: continuation, cancellationToken: cancellationToken);
-            
-            var newItems = response.Shelves.SelectMany(static s => s.Items).ToList();
-            if (newItems.Count == 0) break;
-            
-            allItems.AddRange(newItems);
+            var prevCount = allTracks.Count;
+            ProcessShelves(response.Shelves, allTracks);
+
+            if (allTracks.Count == prevCount) break; 
+
             continuation = response.ContinuationToken;
             page++;
-            
-            // Защита от бесконечного цикла (опционально)
-            // if (page > 50) break; 
+            if (page > 50) break;
         }
 
-        return allItems;
+        return allTracks;
     }
 
-    /// <summary>
-    /// Получает библиотеку плейлистов пользователя.
-    /// </summary>
     public async Task<List<Playlist>> GetLibraryPlaylistsAsync(CancellationToken cancellationToken = default)
     {
         var response = await _controller.GetBrowseAsync(browseId: "FEmusic_liked_playlists", cancellationToken: cancellationToken);
-
         var result = new List<Playlist>();
 
         foreach (var shelf in response.Shelves)
@@ -61,36 +46,59 @@ public class MusicClient(HttpClient http)
             {
                 if (item.Type == "Playlist" && !string.IsNullOrEmpty(item.Id))
                 {
-                    var id = new PlaylistId(item.Id);
-                    var thumbs = item.Thumbnails.Select(static t => new Thumbnail(t.Url, t.Resolution)).ToArray();
+                    var bestThumb = item.Thumbnails
+                        .OrderByDescending(t => t.Resolution.Area)
+                        .FirstOrDefault()?.Url;
 
-                    var pl = new Playlist(
-                        id,
-                        item.Title,
-                        new Author(new Channels.ChannelId("UC00000000000000000000000"), item.Author ?? "Unknown"),
-                        "",
-                        null,
-                        thumbs
-                    );
-
-                    result.Add(pl);
+                    result.Add(new Playlist
+                    {
+                        Id = $"yt_{item.Id}",
+                        YoutubeId = item.Id,
+                        StoredName = item.Title,
+                        Author = item.Author ?? "Unknown",
+                        ThumbnailUrl = bestThumb,
+                        SyncMode = PlaylistSyncMode.TwoWaySync
+                    });
                 }
             }
         }
-
         return result;
     }
 
+    // Возвращаем List<MusicShelf>, которые потом обрабатывает провайдер
     public async Task<List<MusicShelf>> GetPersonalizedHomeAsync(CancellationToken cancellationToken = default)
     {
         var response = await _controller.GetBrowseAsync(browseId: "FEmusic_home", cancellationToken: cancellationToken);
-        return response.Shelves.ToList();
+        return response.Shelves;
     }
 
-    public async Task<List<MusicShelf>> GetArtistAsync(string channelId, CancellationToken cancellationToken = default)
+    private void ProcessShelves(List<MusicShelf> shelves, List<TrackInfo> targetList)
     {
-        var response = await _controller.GetBrowseAsync(browseId: channelId, cancellationToken: cancellationToken);
-        return response.Shelves.ToList();
+        foreach (var shelf in shelves)
+        {
+            foreach (var item in shelf.Items)
+            {
+                if (item.Type == "Song" && !string.IsNullOrEmpty(item.Id))
+                {
+                    var bestThumb = item.Thumbnails
+                       .OrderByDescending(t => t.Resolution.Area)
+                       .FirstOrDefault()?.Url
+                       ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
+
+                    targetList.Add(new TrackInfo
+                    {
+                        Id = $"yt_{item.Id}",
+                        Title = item.Title,
+                        Author = item.Author ?? item.Album ?? "Unknown",
+                        Duration = item.Duration ?? TimeSpan.Zero,
+                        ThumbnailUrl = bestThumb,
+                        IsMusic = true,
+                        IsLiked = true,
+                        Url = $"https://www.youtube.com/watch?v={item.Id}"
+                    });
+                }
+            }
+        }
     }
 
     public async Task LikeTrackAsync(string videoId, bool like, CancellationToken cancellationToken = default)
@@ -107,11 +115,5 @@ public class MusicClient(HttpClient http)
     public async Task AddToPlaylistAsync(string playlistId, string videoId, CancellationToken cancellationToken = default)
     {
         await _controller.EditPlaylistAsync(playlistId, videoId, "ACTION_ADD_VIDEO", cancellationToken);
-    }
-
-    public async Task RemoveFromPlaylistAsync(string playlistId, string videoId, CancellationToken cancellationToken = default)
-    {
-        await Task.CompletedTask;
-        throw new NotImplementedException("Removing via InnerTube requires setVideoId which is not yet parsed.");
     }
 }

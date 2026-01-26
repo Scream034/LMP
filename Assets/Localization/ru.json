@@ -84,6 +84,8 @@
   "Settings_RememberFormat": "Помнить формат для трека",
   "Settings_SearchBatchSize": "Размер загрузки поиска",
   "Settings_SearchBatchSizeDesc": "Количество треков для загрузки при прокрутке результатов поиска",
+  "Settings_UserAgentDesc": "Вставьте User-Agent из вашего браузера, чтобы предотвратить истечение срока действия файлов cookie.",
+  "Settings_UserAgentSave": "Сохранить",
 
   "Settings_General": "Общее",
 
@@ -177,6 +179,8 @@
   "Track_Removed": "Убрано из любимого",
   "Track_CopyLink": "Копировать ссылку",
   "Track_Copied": "Скопировано!",
+  "Track_Download": "Скачать",
+  "Track_Downloaded": "Скачано",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",

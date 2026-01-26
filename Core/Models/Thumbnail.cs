@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using LMP.Core.Youtube.Videos;
 
-namespace LMP.Core.Youtube.Common;
+namespace LMP.Core.Models;
 
 /// <summary>
 /// Thumbnail image.

@@ -1,5 +1,5 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using LMP.Core.Youtube.Common;
+using LMP.Core.Models;
 using LMP.Core.Youtube.Videos;
 
 namespace LMP.Core.Youtube.Playlists;

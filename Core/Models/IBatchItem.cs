@@ -1,7 +1,7 @@
 ﻿using System.Runtime.CompilerServices;
 using LMP.Core.Youtube.Utils.Extensions;
 
-namespace LMP.Core.Youtube.Common;
+namespace LMP.Core.Models;
 
 /// <summary>
 /// Represents an item that can be included in <see cref="Batch{T}" />.

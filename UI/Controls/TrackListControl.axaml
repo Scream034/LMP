@@ -5,6 +5,7 @@
     xmlns:b="using:LMP.Core.Behaviors"
     xmlns:vm="using:LMP.Features.Home"
     xmlns:svm="using:LMP.Features.Shared"
+    xmlns:asyncImage="using:AsyncImageLoader"
     x:Class="LMP.UI.Controls.TrackListControl"
     x:Name="Root"
     x:CompileBindings="True">
@@ -14,7 +15,7 @@
         <Style Selector="Border.track-row">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="4,2" />
+            <Setter Property="Padding" Value="8,4" />
             <Setter Property="Margin" Value="0,1" />
             <Setter Property="Transitions">
                 <Transitions>
@@ -28,35 +29,68 @@
         <Style Selector="Border.track-row.isActive">
             <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         </Style>
-        <Style Selector="Border.track-row.isActive:pointerover">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+
+        <!-- Анимация появления кнопки "Три точки" -->
+        <Style Selector="Button.more-btn">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.2" />
+                </Transitions>
+            </Setter>
         </Style>
-        
+        <!-- При наведении на строку показываем кнопку -->
+        <Style Selector="Border.track-row:pointerover Button.more-btn">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <!-- Если меню открыто, кнопку тоже держим видимой -->
+        <Style Selector="Button.more-btn:focus-within">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
         <!-- Анимация точек -->
         <Style Selector="TextBlock.dot1">
             <Style.Animations>
                 <Animation Duration="0:0:1.2" IterationCount="Infinite">
-                    <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                    <KeyFrame Cue="25%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
-                    <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                    <KeyFrame Cue="25%">
+                        <Setter Property="Opacity" Value="1.0" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
                 </Animation>
             </Style.Animations>
         </Style>
         <Style Selector="TextBlock.dot2">
             <Style.Animations>
                 <Animation Duration="0:0:1.2" IterationCount="Infinite" Delay="0:0:0.2">
-                    <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                    <KeyFrame Cue="25%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
-                    <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                    <KeyFrame Cue="25%">
+                        <Setter Property="Opacity" Value="1.0" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
                 </Animation>
             </Style.Animations>
         </Style>
         <Style Selector="TextBlock.dot3">
             <Style.Animations>
                 <Animation Duration="0:0:1.2" IterationCount="Infinite" Delay="0:0:0.4">
-                    <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                    <KeyFrame Cue="25%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
-                    <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
+                    <KeyFrame Cue="25%">
+                        <Setter Property="Opacity" Value="1.0" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.2" />
+                    </KeyFrame>
                 </Animation>
             </Style.Animations>
         </Style>
@@ -68,11 +102,11 @@
             <Panel IsVisible="{Binding EnableSmoothLoading, ElementName=Root}">
                 <ContentControl Classes="loading-initial"
                     IsVisible="{Binding !UseSearchLoader, ElementName=Root}" />
-                
+
                 <!-- Поиск: скелетоны + лупа -->
                 <Grid HorizontalAlignment="Stretch" Margin="0,20"
-                      IsVisible="{Binding UseSearchLoader, ElementName=Root}">
-                    
+                    IsVisible="{Binding UseSearchLoader, ElementName=Root}">
+
                     <StackPanel Classes="breathing skeleton-list-container">
                         <ContentControl Classes="track-skeleton-row" />
                         <ContentControl Classes="track-skeleton-row" />
@@ -81,18 +115,18 @@
                         <ContentControl Classes="track-skeleton-row" />
                     </StackPanel>
 
-                    <Canvas IsHitTestVisible="False" HorizontalAlignment="Center" 
-                            Width="300" Height="200">
+                    <Canvas IsHitTestVisible="False" HorizontalAlignment="Center"
+                        Width="300" Height="200">
                         <mi:MaterialIcon Kind="Magnify" Width="32" Height="32"
                             Classes="scanner-smooth" />
                     </Canvas>
 
                     <!-- Локализованный текст через свойство контрола -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                VerticalAlignment="Bottom" Margin="0,280,0,0">
-                        <TextBlock Text="{Binding SearchingText, ElementName=Root}" 
-                                   FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource AccentBrush}" Opacity="0.8" />
+                        VerticalAlignment="Bottom" Margin="0,280,0,0">
+                        <TextBlock Text="{Binding SearchingText, ElementName=Root}"
+                            FontSize="13" FontWeight="SemiBold"
+                            Foreground="{DynamicResource AccentBrush}" Opacity="0.8" />
                     </StackPanel>
                 </Grid>
             </Panel>
@@ -131,15 +165,8 @@
                         <Setter Property="Template">
                             <ControlTemplate>
                                 <ContentPresenter Name="PART_ContentPresenter"
-                                    Background="Transparent"
-                                    BorderBrush="Transparent"
-                                    BorderThickness="0"
-                                    CornerRadius="{TemplateBinding CornerRadius}"
-                                    ContentTemplate="{TemplateBinding ContentTemplate}"
-                                    Content="{TemplateBinding Content}"
-                                    Padding="{TemplateBinding Padding}"
-                                    VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                    HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                                    Background="Transparent" BorderThickness="0"
+                                    Content="{TemplateBinding Content}" />
                             </ControlTemplate>
                         </Setter>
                     </Style>
@@ -148,7 +175,116 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="svm:TrackItemViewModel">
                         <Border Classes="track-row" Classes.isActive="{Binding IsActive}">
-                            <ContentControl Content="{Binding}" />
+                            <Grid ColumnDefinitions="Auto, *, Auto, Auto">
+
+                                <!-- 1. Изображение / Индикатор воспроизведения -->
+                                <Border Grid.Column="0" Width="42" Height="42" CornerRadius="4"
+                                    ClipToBounds="True"
+                                    Background="{DynamicResource BgSkeletonBrush}" Margin="0,0,12,0">
+                                    <Panel>
+                                        <!-- Обложка -->
+                                        <Image
+                                            asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
+                                            Stretch="UniformToFill" IsVisible="{Binding !IsPlaying}" />
+
+                                        <!-- Оверлей при наведении -->
+                                        <Panel Background="#80000000" IsVisible="{Binding IsActive}" />
+
+                                        <!-- Иконка Play/Pause/EQ -->
+                                        <mi:MaterialIcon Kind="Poll" Width="20" Height="20"
+                                            Foreground="{DynamicResource AccentBrush}"
+                                            IsVisible="{Binding IsPlaying}" />
+
+                                        <!-- Кнопка Play при наведении (можно добавить по желанию) -->
+                                    </Panel>
+                                </Border>
+
+                                <!-- 2. Информация (Название / Автор) -->
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                    <TextBlock Text="{Binding Title}"
+                                        FontWeight="{Binding IsActive, Converter={StaticResource BoolToFontWeightConverter}}"
+                                        Foreground="{Binding IsActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextPrimaryBrush'}"
+                                        TextTrimming="CharacterEllipsis" MaxLines="1" FontSize="14" />
+
+                                    <TextBlock Text="{Binding Author}"
+                                        Foreground="{DynamicResource TextMutedBrush}"
+                                        TextTrimming="CharacterEllipsis" MaxLines="1" FontSize="12" />
+                                </StackPanel>
+
+                                <!-- 3. Кнопка "Лайк" (видна всегда или при наведении - тут сделаем
+                                всегда для удобства) -->
+                                <Button Grid.Column="2" Classes="icon-btn"
+                                    Command="{Binding ToggleLikeCommand}"
+                                    Width="32" Height="32" Margin="8,0">
+                                    <mi:MaterialIcon
+                                        Kind="{Binding IsLiked, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Heart|HeartOutline'}"
+                                        Width="16" Height="16"
+                                        Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                                </Button>
+
+                                <!-- 4. Длительность и Кнопка "Три точки" (в одной ячейке,
+                                накладываются) -->
+                                <Panel Grid.Column="3" Width="60">
+                                    <!-- Длительность (скрываем при наведении, если хотим, или
+                                    оставляем) -->
+                                    <!-- Тут сделаем так: Длительность видна, а кнопка поверх неё
+                                    при наведении -->
+
+                                    <TextBlock Text="{Binding FormattedDuration}"
+                                        VerticalAlignment="Center" HorizontalAlignment="Right"
+                                        Foreground="{DynamicResource TextMutedBrush}" FontSize="12"
+                                        Margin="0,0,8,0"
+                                        IsVisible="{Binding !IsPointerOver, RelativeSource={RelativeSource AncestorType=Border}}" />
+
+                                    <!-- Кнопка "More" с меню -->
+                                    <Button Classes="icon-btn more-btn"
+                                        HorizontalAlignment="Right"
+                                        Background="Transparent"
+                                        Width="32" Height="32"
+                                        ToolTip.Tip="More options">
+                                        <mi:MaterialIcon Kind="DotsHorizontal" Width="20"
+                                            Height="20" />
+
+                                        <Button.Flyout>
+                                            <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                                <!-- 1. Радио -->
+                                                <MenuItem
+                                                    Header="{Binding L[Context_StartRadio], FallbackValue='Start Radio'}"
+                                                    Command="{Binding StartRadioCommand}">
+                                                    <MenuItem.Icon>
+                                                        <mi:MaterialIcon Kind="RadioTower" />
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+
+                                                <!-- 2. Скачать -->
+                                                <MenuItem Header="{Binding DownloadStatusText}"
+                                                    Command="{Binding DownloadTrackCommand}"
+                                                    IsEnabled="{Binding !IsDownloaded}">
+                                                    <MenuItem.Icon>
+                                                        <mi:MaterialIcon
+                                                            Kind="{Binding IsDownloaded, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Check|Download'}" />
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+
+                                                <Separator IsVisible="{Binding IsPlaylistContext}" />
+
+                                                <!-- 3. Удалить из плейлиста -->
+                                                <MenuItem
+                                                    Header="{Binding L[Context_RemoveFromPlaylist], FallbackValue='Remove from Playlist'}"
+                                                    Command="{Binding RemoveFromPlaylistCommand}"
+                                                    IsVisible="{Binding IsPlaylistContext}"
+                                                    Foreground="{DynamicResource SystemErrorBrush}">
+                                                    <MenuItem.Icon>
+                                                        <mi:MaterialIcon Kind="PlaylistRemove"
+                                                            Foreground="{DynamicResource SystemErrorBrush}" />
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                            </MenuFlyout>
+                                        </Button.Flyout>
+                                    </Button>
+                                </Panel>
+
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -156,24 +292,24 @@
 
             <!-- 3. ФУТЕР -->
             <StackPanel Grid.Row="1" Margin="0,8,0,16">
-                
+
                 <!-- Загрузка из сети -->
-                <StackPanel Orientation="Horizontal" 
-                            HorizontalAlignment="Center"
-                            Margin="0,16,0,24"
-                            Opacity="0.6"
-                            IsVisible="{Binding IsFetchingFromNetwork, ElementName=Root}">
-                    
+                <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Margin="0,16,0,24"
+                    Opacity="0.6"
+                    IsVisible="{Binding IsFetchingFromNetwork, ElementName=Root}">
+
                     <TextBlock Text="{Binding LoadingMoreText, ElementName=Root}"
-                               FontSize="13"
-                               Foreground="{DynamicResource TextMutedBrush}" />
-                    
-                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
-                               Classes="dot1" Margin="2,0,0,0" />
-                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
-                               Classes="dot2" />
-                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
-                               Classes="dot3" />
+                        FontSize="13"
+                        Foreground="{DynamicResource TextMutedBrush}" />
+
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="dot1" Margin="2,0,0,0" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="dot2" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="dot3" />
                 </StackPanel>
 
                 <!-- Локальная подгрузка -->
@@ -188,15 +324,15 @@
 
                 <!-- Конец списка -->
                 <Border IsVisible="{Binding ReachedEnd, ElementName=Root}"
-                        Margin="0,16,0,32"
-                        HorizontalAlignment="Center"
-                        Opacity="0.5">
+                    Margin="0,16,0,32"
+                    HorizontalAlignment="Center"
+                    Opacity="0.5">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
-                                         Foreground="{DynamicResource TextMutedBrush}" />
+                            Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding EndOfListText, ElementName=Root}"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   FontSize="13" />
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            FontSize="13" />
                     </StackPanel>
                 </Border>
             </StackPanel>

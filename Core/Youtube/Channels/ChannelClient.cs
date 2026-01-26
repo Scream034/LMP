@@ -1,17 +1,15 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
-using LMP.Core.Youtube.Common;
+
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Utils.Extensions;
 
 namespace LMP.Core.Youtube.Channels;
 
-/// <summary>
-/// Operations related to YouTube channels.
-/// </summary>
 public partial class ChannelClient(HttpClient http)
 {
     private readonly ChannelController _controller = new(http);
@@ -45,22 +43,18 @@ public partial class ChannelClient(HttpClient http)
 
         var thumbnails = new[] { new Thumbnail(logoUrl, new Resolution(logoSize, logoSize)) };
 
-        return new Channel(channelId, title, thumbnails);
+        return new Channel(new ChannelId(channelId), title, thumbnails);
     }
 
-    /// <summary>
-    /// Gets the metadata associated with the specified channel.
-    /// </summary>
     public async ValueTask<Channel> GetAsync(
         ChannelId channelId,
         CancellationToken cancellationToken = default
     )
     {
-        // Special case for the "Movies & TV" channel, which has a custom page
-        if (channelId == "UCuVPpxrm2VAgpH3Ktln4HXg")
+        if (channelId.Value == "UCuVPpxrm2VAgpH3Ktln4HXg")
         {
             return new Channel(
-                "UCuVPpxrm2VAgpH3Ktln4HXg",
+                new ChannelId("UCuVPpxrm2VAgpH3Ktln4HXg"),
                 "Movies & TV",
                 [
                     new Thumbnail(
@@ -74,66 +68,45 @@ public partial class ChannelClient(HttpClient http)
         return Get(await _controller.GetChannelPageAsync(channelId, cancellationToken));
     }
 
-    /// <summary>
-    /// Gets the metadata associated with the channel of the specified user.
-    /// </summary>
     public async ValueTask<Channel> GetByUserAsync(
         UserName userName,
         CancellationToken cancellationToken = default
     ) => Get(await _controller.GetChannelPageAsync(userName, cancellationToken));
 
-    /// <summary>
-    /// Gets the metadata associated with the channel identified by the specified slug or legacy custom URL.
-    /// </summary>
     public async ValueTask<Channel> GetBySlugAsync(
         ChannelSlug channelSlug,
         CancellationToken cancellationToken = default
     ) => Get(await _controller.GetChannelPageAsync(channelSlug, cancellationToken));
 
-    /// <summary>
-    /// Gets the metadata associated with the channel identified by the specified handle or custom URL.
-    /// </summary>
     public async ValueTask<Channel> GetByHandleAsync(
         ChannelHandle channelHandle,
         CancellationToken cancellationToken = default
     ) => Get(await _controller.GetChannelPageAsync(channelHandle, cancellationToken));
 
-    /// <summary>
-    /// Enumerates videos uploaded by the specified channel.
-    /// </summary>
-    // TODO: should return <IVideo> sequence instead (breaking change)
-    public IAsyncEnumerable<PlaylistVideo> GetUploadsAsync(
+    // Исправлено: Возвращаем IAsyncEnumerable<TrackInfo>
+    public IAsyncEnumerable<TrackInfo> GetUploadsAsync(
         ChannelId channelId,
         CancellationToken cancellationToken = default
     )
     {
-        // Replace 'UC' in the channel ID with 'UU'
         var playlistId = "UU" + channelId.Value[2..];
-        return new PlaylistClient(http).GetVideosAsync(playlistId, cancellationToken);
+        return new PlaylistClient(http).GetVideosAsync(new PlaylistId(playlistId), cancellationToken);
     }
 
-    /// <summary>
-    /// Enumerates playlists found on the channel's "Playlists" tab.
-    /// </summary>
     public IAsyncEnumerable<Playlist> GetPlaylistsAsync(
         ChannelId channelId,
         CancellationToken cancellationToken = default
     ) => GetPlaylistBatchesAsync(channelId, cancellationToken).FlattenAsync();
 
-    /// <summary>
-    /// Enumerates batches of playlists found on the channel's "Playlists" tab.
-    /// </summary>
     public async IAsyncEnumerable<Batch<Playlist>> GetPlaylistBatchesAsync(
         ChannelId channelId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        // Получаем информацию о канале один раз, чтобы заполнить поле Author у плейлистов
-        // (так как в списке плейлистов часто нет инфы об авторе, т.к. мы и так на его странице)
         var channelPage = await _controller.GetChannelPageAsync(channelId, cancellationToken);
-        // Небольшой хак: вытаскиваем имя канала из страницы
         var channelTitle = channelPage.Title ?? "Unknown Channel";
-        var author = new Author(channelId, channelTitle);
+        // Author больше не объект в модели Playlist, а строка
+        var authorName = channelTitle;
 
         var encounteredIds = new HashSet<string>(StringComparer.Ordinal);
         var continuationToken = default(string?);
@@ -150,23 +123,15 @@ public partial class ChannelClient(HttpClient http)
 
             foreach (var item in response.Playlists)
             {
-                if (!encounteredIds.Add(item.Id.Value))
+                // item.Id уже строка в модели Playlist
+                if (!encounteredIds.Add(item.Id))
                     continue;
 
-                // Создаем новый объект Playlist, обогащенный правильным Автором
-                var enrichedPlaylist = new Playlist(
-                    item.Id,
-                    item.Title,
-                    author, // Вставляем автора явно
-                    item.Description,
-                    item.Count,
-                    item.Thumbnails
-                );
-
-                batch.Add(enrichedPlaylist);
+                // Обогащаем плейлист автором, так как в ответе списка плейлистов автора может не быть
+                item.Author ??= authorName;
+                batch.Add(item);
             }
 
-            // Если ничего не нашли в первом запросе, но токена нет - выходим
             if (batch.Count == 0 && continuationToken == null && response.ContinuationToken == null)
                 yield break;
 

@@ -256,7 +256,31 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        return _vmFactory.GetOrCreate(track, PlayFromPlaylist);
+        var vm = _vmFactory.GetOrCreate(track, PlayFromPlaylist);
+        
+        // Устанавливаем контекст плейлиста для отображения пункта "Remove from playlist"
+        vm.IsPlaylistContext = CanEdit; // Можно удалять только если плейлист редактируемый
+        
+        // Логика удаления
+        vm.RemoveFromPlaylistAction = async (t) =>
+        {
+            if (CanEdit)
+            {
+                // Удаляем из менеджера
+                await _manager.RemoveTrackFromPlaylistAsync(_currentPlaylistId, t.Id);
+                // Обновляем список локально, чтобы не дергать полную перезагрузку
+                // (Или полагаемся на событие LibraryService.OnDataChanged, которое вызовет LoadPlaylist)
+            }
+        };
+
+        // Логика радио (пока заглушка, или вызов движка если есть метод)
+        vm.StartRadioAction = (t) => 
+        {
+            // Пример: _audio.StartRadio(t);
+            Log.Info($"Start radio requested for {t.Title}");
+        };
+
+        return vm;
     }
 
     public async void LoadPlaylist(string playlistId)

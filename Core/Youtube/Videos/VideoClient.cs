@@ -1,97 +1,48 @@
-using LMP.Core.Youtube.Common;
+using LMP.Core.Models;
+
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Youtube.Videos;
 
-/// <summary>
-/// Operations related to YouTube videos.
-/// </summary>
 public class VideoClient(HttpClient http)
 {
     private readonly VideoController _controller = new(http);
-
-    /// <summary>
-    /// Operations related to media streams of YouTube videos.
-    /// </summary>
     public StreamClient Streams { get; } = new(http);
 
-    /// <summary>
-    /// Gets the metadata associated with the specified video.
-    /// </summary>
-    public async ValueTask<Video> GetAsync(
+    public async ValueTask<TrackInfo> GetAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default
     )
     {
         var watchPage = await _controller.GetVideoWatchPageAsync(videoId, cancellationToken);
+        var playerResponse = watchPage.PlayerResponse 
+                             ?? await _controller.GetPlayerResponseAsync(videoId, cancellationToken);
 
-        var playerResponse =
-            watchPage.PlayerResponse
-            ?? await _controller.GetPlayerResponseAsync(videoId, cancellationToken);
+        var title = playerResponse.Title ?? "";
+        var channelTitle = playerResponse.Author 
+                           ?? throw new YoutubeExplodeException("Failed to extract video author.");
+        var channelId = playerResponse.ChannelId 
+                        ?? throw new YoutubeExplodeException("Failed to extract video channel ID.");
 
-        var title =
-            playerResponse.Title
-            // Videos without title are legal
-            // https://github.com/Tyrrrz/YoutubeExplode/issues/700
-            ?? "";
-
-        var channelTitle =
-            playerResponse.Author
-            ?? throw new YoutubeExplodeException("Failed to extract the video author.");
-
-        var channelId =
-            playerResponse.ChannelId
-            ?? throw new YoutubeExplodeException("Failed to extract the video channel ID.");
-
-        var uploadDate =
-            playerResponse.UploadDate
-            ?? watchPage.UploadDate
-            ?? throw new YoutubeExplodeException("Failed to extract the video upload date.");
-
-        var thumbnails = playerResponse
-            .Thumbnails.Select(t =>
-            {
-                var thumbnailUrl =
-                    t.Url
-                    ?? throw new YoutubeExplodeException("Failed to extract the thumbnail URL.");
-
-                var thumbnailWidth =
-                    t.Width
-                    ?? throw new YoutubeExplodeException("Failed to extract the thumbnail width.");
-
-                var thumbnailHeight =
-                    t.Height
-                    ?? throw new YoutubeExplodeException("Failed to extract the thumbnail height.");
-
-                var thumbnailResolution = new Resolution(thumbnailWidth, thumbnailHeight);
-
-                return new Thumbnail(thumbnailUrl, thumbnailResolution);
-            })
+        // Получаем лучшее превью
+        var thumb = playerResponse.Thumbnails
+            .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
             .Concat(Thumbnail.GetDefaultSet(videoId))
-            .ToArray();
+            .TryGetWithHighestResolution()?.Url;
 
-        // Извлекаем ViewCount из JSON
-        long viewCount = playerResponse.ViewCount ?? 0;
-
-        // Извлекаем LikeCount. 
-        // ВНИМАНИЕ: YouTube часто скрывает точное число лайков в PlayerResponse.
-        // Иногда оно есть в VideoDetails, иногда только в UI.
-        // Пока возьмем из watchPage (если мы восстановим парсинг там) или поставим 0.
-        long likeCount = watchPage.LikeCount ?? 0;
-
-        // Достаем признак музыки
-        bool isMusic = playerResponse.IsMusic;
-
-        return new Video(
-            videoId,
-            title,
-            new Author(channelId, channelTitle),
-            playerResponse.Duration,
-            thumbnails,
-            viewCount,
-            likeCount,
-            isMusic
-        );
+        // Создаем TrackInfo
+        return new TrackInfo
+        {
+            Id = $"yt_{videoId.Value}",
+            Title = title,
+            Author = channelTitle,
+            ChannelId = channelId,
+            Duration = playerResponse.Duration ?? TimeSpan.Zero,
+            ThumbnailUrl = thumb ?? "",
+            Url = $"https://www.youtube.com/watch?v={videoId}",
+            IsMusic = playerResponse.IsMusic,
+            // Дополнительные метаданные можно расширить при необходимости
+        };
     }
 }
