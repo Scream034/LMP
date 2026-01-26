@@ -1,0 +1,35 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyLiteMusicPlayer", "MyLiteMusicPlayer.csproj", "{EB988622-ED9F-DFF3-7003-7660153A8993}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "External", "External", "{A288BEE0-695A-BEEA-455C-649571D89326}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MyLiteMusicPlayer.Logging", "External\MyLiteMusicPlayer.Logging\MyLiteMusicPlayer.Logging.csproj", "{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB988622-ED9F-DFF3-7003-7660153A8993}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB988622-ED9F-DFF3-7003-7660153A8993}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{0B5C69DF-D3EA-9909-D9A6-661EBBB6E2A9} = {A288BEE0-695A-BEEA-455C-649571D89326}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8AC3B427-E3CA-4164-A6EE-3689A035A4D1}
+	EndGlobalSection
+EndGlobal
