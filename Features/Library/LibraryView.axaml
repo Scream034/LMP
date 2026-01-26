@@ -1,9 +1,9 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Library"
+    xmlns:vm="using:LMP.Features.Library"
     xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:local="using:MyLiteMusicPlayer.Core.Converters"
-    x:Class="MyLiteMusicPlayer.Features.Library.LibraryView"
+    xmlns:local="using:LMP.Core.Converters"
+    x:Class="LMP.Features.Library.LibraryView"
     x:DataType="vm:LibraryViewModel"
     x:CompileBindings="True">
 

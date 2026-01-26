@@ -1,16 +1,16 @@
 ﻿using Avalonia.Data.Converters;
 using Avalonia.Media;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 using System.Globalization;
 using Material.Icons;
 using Avalonia.Input;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 using Avalonia.Platform;
 using Avalonia.Media.Imaging;
 using Avalonia.Controls;
 using Avalonia.Data;
 
-namespace MyLiteMusicPlayer.Core.Converters;
+namespace LMP.Core.Converters;
 
 public class TimeSpanToStringConverter : IValueConverter
 {

@@ -1,1 +1,1 @@
-global using Log = MyLiteMusicPlayer.Logging.Log;
+global using Log = LMP.Logging.Log;

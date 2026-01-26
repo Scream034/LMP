@@ -2,10 +2,10 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 using ReactiveUI;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class LibraryService : IDisposable
 {
@@ -297,7 +297,7 @@ public class LibraryService : IDisposable
         return [.. Data.RecentlyPlayedIds
             .Take(count)
             .Select(GetTrack)
-            .Where(t => t != null)
+            .Where(static t => t != null)
             .Cast<TrackInfo>()];
     }
 
@@ -434,7 +434,7 @@ public class LibraryService : IDisposable
     public List<TrackInfo> GetPlaylistTracks(string playlistId)
     {
         if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
-        return [.. playlist.TrackIds.Select(GetTrack).Where(t => t != null).Cast<TrackInfo>()];
+        return [.. playlist.TrackIds.Select(GetTrack).Where(static t => t != null).Cast<TrackInfo>()];
     }
 
     public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
@@ -455,7 +455,7 @@ public class LibraryService : IDisposable
         {
             try
             {
-                var videoId = YoutubeExplode.Videos.VideoId.TryParse(track.Url);
+                var videoId = Youtube.Videos.VideoId.TryParse(track.Url);
                 if (videoId.HasValue)
                 {
                     return $"yt_{videoId.Value.Value}";

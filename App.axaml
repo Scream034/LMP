@@ -1,11 +1,11 @@
 <Application xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:MyLiteMusicPlayer"
-    xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
+    xmlns:local="using:LMP"
+    xmlns:svm="using:LMP.Features.Shared"
     xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
     xmlns:asyncImage="using:AsyncImageLoader"
     xmlns:mi="using:Material.Icons.Avalonia"
-    x:Class="MyLiteMusicPlayer.App"
+    x:Class="LMP.App"
     RequestedThemeVariant="Dark">
 
     <Application.Resources>
@@ -113,8 +113,8 @@
         <materialIcons:MaterialIconStyles />
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
         <StyleInclude Source="/UI/Theme/SpotifyTheme.axaml" />
-        <StyleInclude Source="avares://MyLiteMusicPlayer/UI/Theme/LoadingSkeletons.axaml" />
-        <StyleInclude Source="avares://MyLiteMusicPlayer/UI/Theme/PlaylistCardTemplate.axaml" />
+        <StyleInclude Source="avares://LMP/UI/Theme/LoadingSkeletons.axaml" />
+        <StyleInclude Source="avares://LMP/UI/Theme/PlaylistCardTemplate.axaml" />
 
         <Style Selector="Panel.track-row Border.track-bg">
             <Setter Property="Background" Value="Transparent" />

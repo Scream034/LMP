@@ -2,10 +2,10 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Home"
-    xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
-    x:Class="MyLiteMusicPlayer.UI.Controls.TrackListControl"
+    xmlns:b="using:LMP.Core.Behaviors"
+    xmlns:vm="using:LMP.Features.Home"
+    xmlns:svm="using:LMP.Features.Shared"
+    x:Class="LMP.UI.Controls.TrackListControl"
     x:Name="Root"
     x:CompileBindings="True">
 

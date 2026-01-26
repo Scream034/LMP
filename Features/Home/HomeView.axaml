@@ -1,11 +1,11 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Home"
+    xmlns:vm="using:LMP.Features.Home"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
-    xmlns:controls="using:MyLiteMusicPlayer.UI.Controls"
-    x:Class="MyLiteMusicPlayer.Features.Home.HomeView"
+    xmlns:b="using:LMP.Core.Behaviors"
+    xmlns:controls="using:LMP.UI.Controls"
+    x:Class="LMP.Features.Home.HomeView"
     x:DataType="vm:HomeViewModel"
     x:CompileBindings="True">
 

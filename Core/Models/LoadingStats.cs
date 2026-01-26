@@ -1,5 +1,5 @@
 ﻿// ViewModels/LoadingStats.cs
-namespace MyLiteMusicPlayer.Core.Models;
+namespace LMP.Core.Models;
 
 // Используем record для поддержки with-expressions
 public record LoadingStats

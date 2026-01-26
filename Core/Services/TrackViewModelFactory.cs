@@ -1,8 +1,8 @@
 ﻿using System.Collections.Concurrent;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Features.Shared;
+using LMP.Core.Models;
+using LMP.Features.Shared;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 /// <summary>
 /// Фабрика для создания <see cref="TrackItemViewModel"/>.
@@ -83,8 +83,8 @@ public class TrackViewModelFactory(
     public void CleanupCache()
     {
         var deadKeys = _cache
-            .Where(kvp => !kvp.Value.TryGetTarget(out var target) || target.IsDisposed) // Удаляем и Dispose-нутые
-            .Select(kvp => kvp.Key)
+            .Where(static kvp => !kvp.Value.TryGetTarget(out var target) || target.IsDisposed) // Удаляем и Dispose-нутые
+            .Select(static kvp => kvp.Key)
             .ToList();
 
         foreach (var key in deadKeys)

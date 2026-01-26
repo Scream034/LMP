@@ -1,10 +1,10 @@
 ﻿<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Settings"
-    xmlns:controls="using:MyLiteMusicPlayer.Features.Settings.Controls"
+    xmlns:vm="using:LMP.Features.Settings"
+    xmlns:controls="using:LMP.Features.Settings.Controls"
     xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
     xmlns:mi="using:Material.Icons.Avalonia"
-    x:Class="MyLiteMusicPlayer.Features.Settings.SettingsView"
+    x:Class="LMP.Features.Settings.SettingsView"
     x:DataType="vm:SettingsViewModel"
     x:CompileBindings="True">
 

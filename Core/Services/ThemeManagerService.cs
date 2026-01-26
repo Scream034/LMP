@@ -4,7 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 /// <summary>
 /// Настройки темы приложения.

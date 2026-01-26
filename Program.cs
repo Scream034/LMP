@@ -1,20 +1,17 @@
 ﻿
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Features.Home;
-using MyLiteMusicPlayer.Features.Library;
-using MyLiteMusicPlayer.Features.Player;
-using MyLiteMusicPlayer.Features.Playlist;
-using MyLiteMusicPlayer.Features.Search;
-using MyLiteMusicPlayer.Features.Settings;
-using MyLiteMusicPlayer.Features.Shell;
+using LMP.Core.Services;
+using LMP.Features.Home;
+using LMP.Features.Library;
+using LMP.Features.Player;
+using LMP.Features.Playlist;
+using LMP.Features.Search;
+using LMP.Features.Settings;
+using LMP.Features.Shell;
 using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using Avalonia;
-using YoutubeExplode;
-using YoutubeExplode.Search;
-using System.Diagnostics;
 
-namespace MyLiteMusicPlayer;
+namespace LMP;
 
 class Program
 {

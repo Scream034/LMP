@@ -2,9 +2,9 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class CachedSearchResult
 {
@@ -209,8 +209,8 @@ public class SearchCacheService
         {
             var ttl = CacheTtl;
             var files = Directory.GetFiles(_cacheFolder, "*.json")
-                .Select(f => new FileInfo(f))
-                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Select(static f => new FileInfo(f))
+                .OrderByDescending(static f => f.LastWriteTimeUtc)
                 .ToList();
 
             int deletedCount = 0;
@@ -342,7 +342,7 @@ public class SearchCacheService
     {
         int memCount = _memoryCache.Count;
         var files = Directory.GetFiles(_cacheFolder, "*.json");
-        long size = files.Sum(f => new FileInfo(f).Length);
+        long size = files.Sum(static f => new FileInfo(f).Length);
         int ttl = (int)CacheTtl.TotalMinutes;
         return (memCount, files.Length, size, ttl);
     }

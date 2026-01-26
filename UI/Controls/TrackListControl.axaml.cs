@@ -5,9 +5,9 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 
-namespace MyLiteMusicPlayer.UI.Controls;
+namespace LMP.UI.Controls;
 
 /// <summary>
 /// Пользовательский элемент управления для отображения списка музыкальных треков.
@@ -29,7 +29,7 @@ public partial class TrackListControl : UserControl
     /// </summary>
     public static readonly DirectProperty<TrackListControl, string> SearchingTextProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, string>(
-            nameof(SearchingText), o => o.SearchingText, (o, v) => o.SearchingText = v);
+            nameof(SearchingText), static o => o.SearchingText, static (o, v) => o.SearchingText = v);
 
     private string _searchingText = "Searching...";
 
@@ -44,7 +44,7 @@ public partial class TrackListControl : UserControl
     /// </summary>
     public static readonly DirectProperty<TrackListControl, string> LoadingMoreTextProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, string>(
-            nameof(LoadingMoreText), o => o.LoadingMoreText, (o, v) => o.LoadingMoreText = v);
+            nameof(LoadingMoreText), static o => o.LoadingMoreText, static (o, v) => o.LoadingMoreText = v);
 
     private string _loadingMoreText = "Searching for more";
 
@@ -59,7 +59,7 @@ public partial class TrackListControl : UserControl
     /// </summary>
     public static readonly DirectProperty<TrackListControl, string> EndOfListTextProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, string>(
-            nameof(EndOfListText), o => o.EndOfListText, (o, v) => o.EndOfListText = v);
+            nameof(EndOfListText), static o => o.EndOfListText, static (o, v) => o.EndOfListText = v);
 
     private string _endOfListText = "End of list";
 
@@ -182,7 +182,7 @@ public partial class TrackListControl : UserControl
     /// </summary>
     public static readonly DirectProperty<TrackListControl, ScrollBarVisibility> ScrollVisibilityProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, ScrollBarVisibility>(
-            nameof(ScrollVisibility), o => o.ScrollVisibility);
+            nameof(ScrollVisibility), static o => o.ScrollVisibility);
 
     private ScrollBarVisibility _scrollVisibility = ScrollBarVisibility.Disabled;
 

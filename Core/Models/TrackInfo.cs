@@ -1,6 +1,6 @@
 ﻿using System.Text.Json.Serialization;
 
-namespace MyLiteMusicPlayer.Core.Models;
+namespace LMP.Core.Models;
 
 public class TrackInfo
 {

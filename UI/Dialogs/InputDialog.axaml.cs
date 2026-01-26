@@ -1,10 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Avalonia.Markup.Xaml;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 
-namespace MyLiteMusicPlayer.UI.Dialogs;
+namespace LMP.UI.Dialogs;
 
 public partial class InputDialog : Window
 {

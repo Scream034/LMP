@@ -1,7 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:controls="using:MyLiteMusicPlayer.Features.Settings.Controls"
-             x:Class="MyLiteMusicPlayer.Features.Settings.Controls.ColorPickerButton"
+             xmlns:controls="using:LMP.Features.Settings.Controls"
+             x:Class="LMP.Features.Settings.Controls.ColorPickerButton"
              x:Name="Root">
     
     <UserControl.Styles>

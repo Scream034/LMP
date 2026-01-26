@@ -1,6 +1,6 @@
 ﻿using Avalonia.Controls;
 
-namespace MyLiteMusicPlayer.Features.Search;
+namespace LMP.Features.Search;
 
 public partial class SearchView : UserControl
 {

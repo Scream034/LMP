@@ -3,9 +3,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class StreamCacheMetadata
 {
@@ -156,7 +156,7 @@ public class StreamCacheManager : IDisposable
         try
         {
             var files = Directory.GetFiles(_cacheFolder, "*.cache");
-            long size = files.Sum(f => new FileInfo(f).Length);
+            long size = files.Sum(static f => new FileInfo(f).Length);
             return (files.Length, size / 1024 / 1024);
         }
         catch { return (0, 0); }
@@ -169,10 +169,10 @@ public class StreamCacheManager : IDisposable
         try
         {
             var files = Directory.GetFiles(_cacheFolder, "*.cache")
-                .Select(f => new FileInfo(f))
+                .Select(static f => new FileInfo(f))
                 .ToList();
 
-            long totalSize = files.Sum(f => f.Length);
+            long totalSize = files.Sum(static f => f.Length);
             long maxCacheBytes = (long)_library.Data.Storage.AudioCacheLimitMb * 1024 * 1024;
 
             if (totalSize <= maxCacheBytes) return;
@@ -180,13 +180,13 @@ public class StreamCacheManager : IDisposable
             Log.Info($"Stream cache size {totalSize / 1024 / 1024}MB exceeds limit {maxCacheBytes / 1024 / 1024}MB, cleaning...");
 
             var metaFiles = files
-                .Select(f => new
+                .Select(static f => new
                 {
                     CacheFile = f,
                     MetaFile = new FileInfo(Path.ChangeExtension(f.FullName, ".meta")),
                     LastAccess = GetLastAccessTime(Path.ChangeExtension(f.FullName, ".meta"))
                 })
-                .OrderBy(x => x.LastAccess)
+                .OrderBy(static x => x.LastAccess)
                 .ToList();
 
             long targetSize = maxCacheBytes * 70 / 100;

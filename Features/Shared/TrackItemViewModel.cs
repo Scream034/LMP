@@ -1,11 +1,11 @@
 ﻿using System.Reactive;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Features.Shared;
+namespace LMP.Features.Shared;
 
 /// <summary>
 /// ViewModel, представляющая один музыкальный трек в списке.

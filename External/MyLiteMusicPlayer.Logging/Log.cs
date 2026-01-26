@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace MyLiteMusicPlayer.Logging;
+namespace LMP.Logging;
 
 /// <summary>
 /// Глобальная статическая точка доступа к логгеру.

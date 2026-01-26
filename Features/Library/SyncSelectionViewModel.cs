@@ -1,11 +1,11 @@
-﻿using MyLiteMusicPlayer.Core.ViewModels;
+﻿using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
-using YoutubeExplode.Search;
+using LMP.Core.Youtube.Search;
 
-namespace MyLiteMusicPlayer.Features.Library;
+namespace LMP.Features.Library;
 
 public class SyncSelectionViewModel : ViewModelBase
 {

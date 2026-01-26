@@ -4,7 +4,7 @@ using Avalonia.VisualTree;
 using Avalonia.Xaml.Interactivity;
 using System.Windows.Input;
 
-namespace MyLiteMusicPlayer.Core.Behaviors;
+namespace LMP.Core.Behaviors;
 
 /// <summary>
 /// Behavior для автоматической подгрузки.

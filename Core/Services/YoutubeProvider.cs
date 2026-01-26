@@ -2,22 +2,22 @@
 // Провайдер для работы с YouTube через YoutubeExplode
 // Поиск, получение информации о треках, плейлистах и аудио потоках
 
-using YoutubeExplode;
-using YoutubeExplode.Common;
-using YoutubeExplode.Playlists;
-using YoutubeExplode.Search;
-using YoutubeExplode.Videos;
-using YoutubeExplode.Videos.Streams;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Youtube;
+using LMP.Core.Youtube.Common;
+using LMP.Core.Youtube.Playlists;
+using LMP.Core.Youtube.Search;
+using LMP.Core.Youtube.Videos;
+using LMP.Core.Youtube.Videos.Streams;
+using LMP.Core.Models;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-using Playlist = MyLiteMusicPlayer.Core.Models.Playlist;
-using YoutubeExplode.Channels;
+using Playlist = LMP.Core.Models.Playlist;
+using LMP.Core.Youtube.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.CompilerServices;
 using System.Net;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 /// <summary>
 /// Провайдер для работы с YouTube.

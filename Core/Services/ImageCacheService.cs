@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media.Imaging;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 /// <summary>
 /// Управляет загрузкой и кэшированием изображений.
@@ -112,7 +112,7 @@ public sealed class ImageCacheService : IDisposable
         try
         {
             var files = Directory.GetFiles(_cacheFolder);
-            long totalSize = files.Sum(f => new FileInfo(f).Length);
+            long totalSize = files.Sum(static f => new FileInfo(f).Length);
             Interlocked.Exchange(ref _currentDiskCacheBytes, totalSize);
             return (files.Length, totalSize / 1024 / 1024);
         }
@@ -122,7 +122,7 @@ public sealed class ImageCacheService : IDisposable
         }
     }
 
-    private SemaphoreSlim GetFileLock(string key) => _fileLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+    private SemaphoreSlim GetFileLock(string key) => _fileLocks.GetOrAdd(key, static _ => new SemaphoreSlim(1, 1));
 
     private async Task<Bitmap?> LoadFromDiskOrNetwork(string url, string key, CancellationToken ct)
     {
@@ -247,8 +247,8 @@ public sealed class ImageCacheService : IDisposable
         try
         {
             var files = Directory.GetFiles(_cacheFolder)
-                .Select(f => new FileInfo(f))
-                .OrderBy(f => f.LastAccessTime)
+                .Select(static f => new FileInfo(f))
+                .OrderBy(static f => f.LastAccessTime)
                 .ToList();
 
             long limitBytes = (long)_library.Data.Storage.ImageCacheLimitMb * 1024 * 1024;

@@ -1,11 +1,11 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 using ReactiveUI;
 using System.Reactive;
 
-namespace MyLiteMusicPlayer.UI.Dialogs;
+namespace LMP.UI.Dialogs;
 
 public partial class InfoDialog : Window
 {

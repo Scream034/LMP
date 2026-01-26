@@ -1,8 +1,8 @@
 <!-- Views/Dialogs/InfoDialog.axaml -->
 <Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:dialogs="using:MyLiteMusicPlayer.UI.Dialogs"
-    x:Class="MyLiteMusicPlayer.UI.Dialogs.InfoDialog"
+    xmlns:dialogs="using:LMP.UI.Dialogs"
+    x:Class="LMP.UI.Dialogs.InfoDialog"
     x:DataType="dialogs:InfoDialog"
     Title="Info"
     Width="400"

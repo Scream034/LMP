@@ -1,7 +1,7 @@
 using ReactiveUI;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 
-namespace MyLiteMusicPlayer.Features.Settings;
+namespace LMP.Features.Settings;
 
 public class LoginViewModel : ReactiveObject
 {

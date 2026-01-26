@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text.Json;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public sealed class LocalizationService : INotifyPropertyChanged
 {

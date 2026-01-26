@@ -1,7 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace MyLiteMusicPlayer.Features.Playlist;
+namespace LMP.Features.Playlist;
 
 public partial class DeletePlaylistDialog : Window
 {

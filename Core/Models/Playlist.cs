@@ -1,7 +1,7 @@
 ﻿using System.Text.Json.Serialization;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 
-namespace MyLiteMusicPlayer.Core.Models;
+namespace LMP.Core.Models;
 
 public enum PlaylistSyncMode
 {

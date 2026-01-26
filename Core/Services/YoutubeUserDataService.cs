@@ -1,6 +1,6 @@
-﻿using MyLiteMusicPlayer.Core.Models;
+﻿using LMP.Core.Models;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public partial class YoutubeUserDataService
 {
@@ -28,7 +28,7 @@ public partial class YoutubeUserDataService
             var likedItems = await _provider.GetClient().Music.GetLikedTracksAsync();
 
             // Конвертируем MusicItem в TrackInfo
-            return likedItems.Select(item => new TrackInfo
+            return likedItems.Select(static item => new TrackInfo
             {
                 Id = "yt_" + item.Id, // Добавляем префикс
                 Title = item.Title,
@@ -97,14 +97,14 @@ public partial class YoutubeUserDataService
             // и потом Select -> PlaylistSearchResult.
 
             // Чтобы не ломать типы, сконвертируем здесь
-            var result = new List<MyLiteMusicPlayer.Core.Models.Playlist>();
+            var result = new List<LMP.Core.Models.Playlist>();
 
             foreach (var p in ytPlaylists)
             {
                 // Ищем самое большое изображение
-                var thumb = p.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault()?.Url;
+                var thumb = p.Thumbnails.OrderByDescending(static t => t.Resolution.Width).FirstOrDefault()?.Url;
 
-                result.Add(new MyLiteMusicPlayer.Core.Models.Playlist
+                result.Add(new LMP.Core.Models.Playlist
                 {
                     Id = p.Id.Value,
                     YoutubeId = p.Id.Value,

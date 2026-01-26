@@ -3,7 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 
-namespace MyLiteMusicPlayer.Features.Player;
+namespace LMP.Features.Player;
 
 public partial class PlayerBarView : UserControl
 {

@@ -5,9 +5,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Threading.Channels;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public sealed class MemoryFirstCachingStream : Stream
 {

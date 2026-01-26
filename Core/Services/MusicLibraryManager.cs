@@ -1,7 +1,7 @@
-﻿using MyLiteMusicPlayer.Core.Models;
+﻿using LMP.Core.Models;
 using ReactiveUI;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class MusicLibraryManager(
     LibraryService library,

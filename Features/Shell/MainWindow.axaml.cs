@@ -1,7 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace MyLiteMusicPlayer.Features.Shell;
+namespace LMP.Features.Shell;
 
 public partial class MainWindow : Window
 {

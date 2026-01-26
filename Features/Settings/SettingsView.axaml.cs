@@ -1,6 +1,6 @@
 ﻿using Avalonia.Controls;
 
-namespace MyLiteMusicPlayer.Features.Settings;
+namespace LMP.Features.Settings;
 
 public partial class SettingsView : UserControl
 {

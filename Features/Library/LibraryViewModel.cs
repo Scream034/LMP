@@ -1,15 +1,15 @@
-﻿using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
-using MyLiteMusicPlayer.Features.Shell;
+﻿using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
+using LMP.Features.Shell;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
-using YoutubeExplode.Search;
+using LMP.Core.Youtube.Search;
 
-namespace MyLiteMusicPlayer.Features.Library;
+namespace LMP.Features.Library;
 
 public class LibraryViewModel : ViewModelBase, IDisposable
 {
@@ -135,8 +135,8 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     playlistsToImport = [.. ytPlaylists.Select(p =>
                     {
                         var pid = !string.IsNullOrEmpty(p.YoutubeId)
-                            ? new YoutubeExplode.Playlists.PlaylistId(p.YoutubeId)
-                            : new YoutubeExplode.Playlists.PlaylistId("PL0000000000000000");
+                            ? new Core.Youtube.Playlists.PlaylistId(p.YoutubeId)
+                            : new Core.Youtube.Playlists.PlaylistId("PL0000000000000000");
 
                         return new PlaylistSearchResult(pid, p.Name, null, []);
                     })];

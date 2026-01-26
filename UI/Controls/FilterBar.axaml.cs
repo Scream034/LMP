@@ -2,7 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace MyLiteMusicPlayer.UI.Controls;
+namespace LMP.UI.Controls;
 
 public partial class FilterBar : UserControl
 {

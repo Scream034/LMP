@@ -1,6 +1,6 @@
 ﻿using System.Text.Json;
 
-namespace MyLiteMusicPlayer.Core.Models;
+namespace LMP.Core.Models;
 
 /// <summary>
 /// Serializable item for JSON storage
@@ -23,7 +23,7 @@ public class RangeMap
         {
             lock (_lock)
             {
-                return _ranges.Sum(r => r.End - r.Start);
+                return _ranges.Sum(static r => r.End - r.Start);
             }
         }
     }
@@ -54,7 +54,7 @@ public class RangeMap
     {
         if (_ranges.Count < 2) return;
 
-        var sorted = _ranges.OrderBy(r => r.Start).ToList();
+        var sorted = _ranges.OrderBy(static r => r.Start).ToList();
         var merged = new List<RangeItem>();
 
         var current = sorted[0];

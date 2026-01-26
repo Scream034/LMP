@@ -1,6 +1,6 @@
-﻿using MyLiteMusicPlayer.Core.Models;
+﻿using LMP.Core.Models;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class DownloadService
 {

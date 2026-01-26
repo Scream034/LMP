@@ -1,7 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 
-namespace MyLiteMusicPlayer.Logging;
+namespace LMP.Logging;
 
 public class AsyncLogProcessor : IDisposable, IAsyncDisposable
 {

@@ -1,15 +1,15 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
-using MyLiteMusicPlayer.Features.Shared;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
+using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using YoutubeExplode.Search; // Важно: для SearchFilter
+using LMP.Core.Youtube.Search; // Важно: для SearchFilter
 
-namespace MyLiteMusicPlayer.Features.Search;
+namespace LMP.Features.Search;
 
 public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 {
@@ -205,7 +205,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                     var allTracks = currentItems.Concat(newTracks).ToList();
                     _ = _searchCache.SetAsync(_currentQuery, allTracks);
 
-                    var imageUrls = newTracks.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                    var imageUrls = newTracks.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
                     _ = _imageCache.PrefetchAsync(imageUrls!, ct);
                 }
 
@@ -357,7 +357,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                 await InitializeItemsAsync(cached, canFetchMore: cached.Count < MaxResults);
                 HasResults = true;
 
-                var urls = cached.Take(20).Select(t => t.ThumbnailUrl);
+                var urls = cached.Take(20).Select(static t => t.ThumbnailUrl);
                 _ = _imageCache.PrefetchAsync(urls!, ct);
                 return;
             }
@@ -395,7 +395,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         if (tracks.Count > 0 && LibService.Data.EnableSearchCache && FilterType == ContentFilterType.All)
         {
             _ = _searchCache.SetAsync(_currentQuery, tracks);
-            var urls = tracks.Take(20).Select(t => t.ThumbnailUrl);
+            var urls = tracks.Take(20).Select(static t => t.ThumbnailUrl);
             _ = _imageCache.PrefetchAsync(urls!, ct);
         }
 

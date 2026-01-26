@@ -1,8 +1,8 @@
 <!-- Views/Dialogs/ConfirmDialog.axaml -->
 <Window xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:dialogs="using:MyLiteMusicPlayer.UI.Dialogs"
-    x:Class="MyLiteMusicPlayer.UI.Dialogs.ConfirmDialog"
+    xmlns:dialogs="using:LMP.UI.Dialogs"
+    x:Class="LMP.UI.Dialogs.ConfirmDialog"
     x:DataType="dialogs:ConfirmDialog"
     Title="Confirm"
     Width="400" Height="180"

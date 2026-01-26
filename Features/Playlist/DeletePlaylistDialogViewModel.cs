@@ -1,10 +1,10 @@
-﻿using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.ViewModels;
+﻿using LMP.Core.Models;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
 
-namespace MyLiteMusicPlayer.Features.Playlist;
+namespace LMP.Features.Playlist;
 
 /// <summary>
 /// Результат диалога удаления

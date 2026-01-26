@@ -2,13 +2,13 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Media;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Features.Settings;
+namespace LMP.Features.Settings;
 
 public sealed class SettingsViewModel : ViewModelBase, IDisposable
 {

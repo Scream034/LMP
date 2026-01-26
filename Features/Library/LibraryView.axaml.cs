@@ -1,6 +1,6 @@
 ﻿using Avalonia.Controls;
 
-namespace MyLiteMusicPlayer.Features.Library;
+namespace LMP.Features.Library;
 
 public partial class LibraryView : UserControl
 {

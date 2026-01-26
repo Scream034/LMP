@@ -3,13 +3,13 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Features.Library;
-using MyLiteMusicPlayer.Features.Playlist;
-using MyLiteMusicPlayer.UI.Dialogs;
-using YoutubeExplode.Search;
+using LMP.Core.Models;
+using LMP.Features.Library;
+using LMP.Features.Playlist;
+using LMP.UI.Dialogs;
+using LMP.Core.Youtube.Search;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public interface IDialogService
 {
