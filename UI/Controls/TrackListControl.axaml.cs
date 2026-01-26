@@ -3,87 +3,29 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using LMP.Core.Services;
+using LMP.Features.Shared;
 
 namespace LMP.UI.Controls;
 
 /// <summary>
-/// Пользовательский элемент управления для отображения списка музыкальных треков.
-/// Поддерживает бесконечную прокрутку, скелетоны загрузки и автоматическую локализацию.
+/// Универсальный элемент управления для отображения списка музыкальных треков.
+/// Поддерживает различные контексты: поиск, плейлист, очередь.
 /// </summary>
 public partial class TrackListControl : UserControl
 {
     #region Fields
 
-    // Храним ссылку на обработчик события для корректной отписки
     private readonly EventHandler<string> _languageChangedHandler;
 
     #endregion
 
-    #region Avalonia Properties
+    #region Styled Properties
 
-    /// <summary>
-    /// Текст, отображаемый при поиске.
-    /// </summary>
-    public static readonly DirectProperty<TrackListControl, string> SearchingTextProperty =
-        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
-            nameof(SearchingText), static o => o.SearchingText, static (o, v) => o.SearchingText = v);
-
-    private string _searchingText = "Searching...";
-
-    public string SearchingText
-    {
-        get => _searchingText;
-        private set => SetAndRaise(SearchingTextProperty, ref _searchingText, value);
-    }
-
-    /// <summary>
-    /// Текст, отображаемый при подгрузке дополнительных элементов.
-    /// </summary>
-    public static readonly DirectProperty<TrackListControl, string> LoadingMoreTextProperty =
-        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
-            nameof(LoadingMoreText), static o => o.LoadingMoreText, static (o, v) => o.LoadingMoreText = v);
-
-    private string _loadingMoreText = "Searching for more";
-
-    public string LoadingMoreText
-    {
-        get => _loadingMoreText;
-        private set => SetAndRaise(LoadingMoreTextProperty, ref _loadingMoreText, value);
-    }
-
-    /// <summary>
-    /// Текст, отображаемый при достижении конца списка.
-    /// </summary>
-    public static readonly DirectProperty<TrackListControl, string> EndOfListTextProperty =
-        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
-            nameof(EndOfListText), static o => o.EndOfListText, static (o, v) => o.EndOfListText = v);
-
-    private string _endOfListText = "End of list";
-
-    public string EndOfListText
-    {
-        get => _endOfListText;
-        private set => SetAndRaise(EndOfListTextProperty, ref _endOfListText, value);
-    }
-
-    /// <summary>
-    /// Включает анимацию плавной загрузки (скелетоны).
-    /// </summary>
-    public static readonly StyledProperty<bool> EnableSmoothLoadingProperty =
-        AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableSmoothLoading), true);
-
-    public bool EnableSmoothLoading
-    {
-        get => GetValue(EnableSmoothLoadingProperty);
-        set => SetValue(EnableSmoothLoadingProperty, value);
-    }
-
-    /// <summary>
-    /// Коллекция элементов для отображения.
-    /// </summary>
     public static readonly StyledProperty<IEnumerable?> ItemsProperty =
         AvaloniaProperty.Register<TrackListControl, IEnumerable?>(nameof(Items));
 
@@ -93,9 +35,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(ItemsProperty, value);
     }
 
-    /// <summary>
-    /// Команда для загрузки следующей порции данных.
-    /// </summary>
     public static readonly StyledProperty<ICommand?> LoadMoreCommandProperty =
         AvaloniaProperty.Register<TrackListControl, ICommand?>(nameof(LoadMoreCommand));
 
@@ -105,9 +44,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(LoadMoreCommandProperty, value);
     }
 
-    /// <summary>
-    /// Флаг первичной загрузки.
-    /// </summary>
     public static readonly StyledProperty<bool> IsLoadingProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsLoading));
 
@@ -117,9 +53,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(IsLoadingProperty, value);
     }
 
-    /// <summary>
-    /// Флаг подгрузки дополнительных данных.
-    /// </summary>
     public static readonly StyledProperty<bool> IsLoadingMoreProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsLoadingMore));
 
@@ -129,9 +62,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(IsLoadingMoreProperty, value);
     }
 
-    /// <summary>
-    /// Флаг активного сетевого запроса.
-    /// </summary>
     public static readonly StyledProperty<bool> IsFetchingFromNetworkProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsFetchingFromNetwork));
 
@@ -141,9 +71,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(IsFetchingFromNetworkProperty, value);
     }
 
-    /// <summary>
-    /// Флаг достижения конца списка.
-    /// </summary>
     public static readonly StyledProperty<bool> ReachedEndProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(ReachedEnd));
 
@@ -153,9 +80,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(ReachedEndProperty, value);
     }
 
-    /// <summary>
-    /// Использовать специальный лоадер для поиска (с лупой).
-    /// </summary>
     public static readonly StyledProperty<bool> UseSearchLoaderProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(UseSearchLoader), false);
 
@@ -165,9 +89,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(UseSearchLoaderProperty, value);
     }
 
-    /// <summary>
-    /// Использовать внутренний ScrollViewer.
-    /// </summary>
     public static readonly StyledProperty<bool> UseInternalScrollProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(UseInternalScroll), false);
 
@@ -177,12 +98,83 @@ public partial class TrackListControl : UserControl
         set => SetValue(UseInternalScrollProperty, value);
     }
 
-    /// <summary>
-    /// Видимость внутреннего скроллбара.
-    /// </summary>
+    public static readonly StyledProperty<bool> EnableSmoothLoadingProperty =
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableSmoothLoading), true);
+
+    public bool EnableSmoothLoading
+    {
+        get => GetValue(EnableSmoothLoadingProperty);
+        set => SetValue(EnableSmoothLoadingProperty, value);
+    }
+
+    public static readonly StyledProperty<bool> IsPlaylistContextProperty =
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsPlaylistContext), false);
+
+    public bool IsPlaylistContext
+    {
+        get => GetValue(IsPlaylistContextProperty);
+        set => SetValue(IsPlaylistContextProperty, value);
+    }
+
+    public static readonly StyledProperty<bool> IsQueueContextProperty =
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsQueueContext), false);
+
+    public bool IsQueueContext
+    {
+        get => GetValue(IsQueueContextProperty);
+        set => SetValue(IsQueueContextProperty, value);
+    }
+
+    #endregion
+
+    #region Direct Properties
+
+    public static readonly DirectProperty<TrackListControl, string> SearchingTextProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
+            nameof(SearchingText),
+            static o => o.SearchingText,
+            static (o, v) => o.SearchingText = v);
+
+    private string _searchingText = "Searching...";
+
+    public string SearchingText
+    {
+        get => _searchingText;
+        private set => SetAndRaise(SearchingTextProperty, ref _searchingText, value);
+    }
+
+    public static readonly DirectProperty<TrackListControl, string> LoadingMoreTextProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
+            nameof(LoadingMoreText),
+            static o => o.LoadingMoreText,
+            static (o, v) => o.LoadingMoreText = v);
+
+    private string _loadingMoreText = "Searching for more";
+
+    public string LoadingMoreText
+    {
+        get => _loadingMoreText;
+        private set => SetAndRaise(LoadingMoreTextProperty, ref _loadingMoreText, value);
+    }
+
+    public static readonly DirectProperty<TrackListControl, string> EndOfListTextProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, string>(
+            nameof(EndOfListText),
+            static o => o.EndOfListText,
+            static (o, v) => o.EndOfListText = v);
+
+    private string _endOfListText = "End of list";
+
+    public string EndOfListText
+    {
+        get => _endOfListText;
+        private set => SetAndRaise(EndOfListTextProperty, ref _endOfListText, value);
+    }
+
     public static readonly DirectProperty<TrackListControl, ScrollBarVisibility> ScrollVisibilityProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, ScrollBarVisibility>(
-            nameof(ScrollVisibility), static o => o.ScrollVisibility);
+            nameof(ScrollVisibility),
+            static o => o.ScrollVisibility);
 
     private ScrollBarVisibility _scrollVisibility = ScrollBarVisibility.Disabled;
 
@@ -194,27 +186,18 @@ public partial class TrackListControl : UserControl
 
     #endregion
 
-    #region Constructors
+    #region Constructor
 
-    /// <summary>
-    /// Инициализирует новый экземпляр <see cref="TrackListControl"/>.
-    /// </summary>
     public TrackListControl()
     {
         InitializeComponent();
 
-        // Инициализируем обработчик, но НЕ подписываемся здесь.
-        // Подписка происходит только когда контрол присоединен к дереву.
         _languageChangedHandler = (_, _) =>
         {
             if (Dispatcher.UIThread.CheckAccess())
-            {
                 UpdateLocalizedTexts();
-            }
             else
-            {
                 Dispatcher.UIThread.Post(UpdateLocalizedTexts);
-            }
         };
 
         UpdateLocalizedTexts();
@@ -222,9 +205,8 @@ public partial class TrackListControl : UserControl
 
     #endregion
 
-    #region Lifecycle Methods
+    #region Lifecycle
 
-    // Подписываемся на события только когда контрол активен
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
@@ -232,11 +214,83 @@ public partial class TrackListControl : UserControl
         UpdateLocalizedTexts();
     }
 
-    // Обязательно отписываемся при удалении из дерева, чтобы избежать утечек памяти
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
         base.OnDetachedFromVisualTree(e);
+    }
+
+    #endregion
+
+    #region Property Changed
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property == UseInternalScrollProperty)
+        {
+            ScrollVisibility = UseInternalScroll
+                ? ScrollBarVisibility.Auto
+                : ScrollBarVisibility.Disabled;
+        }
+        else if (change.Property == IsPlaylistContextProperty ||
+                 change.Property == IsQueueContextProperty ||
+                 change.Property == ItemsProperty)
+        {
+            UpdateItemsContext();
+        }
+    }
+
+    #endregion
+
+    #region Event Handlers
+
+    /// <summary>
+    /// ПКМ на строке трека открывает контекстное меню.
+    /// </summary>
+    private void OnTrackRowPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (e.InitialPressMouseButton != MouseButton.Right)
+            return;
+
+        if (IsQueueContext)
+            return;
+
+        if (sender is not Border border)
+            return;
+
+        var moreButton = FindDescendantOfType<Button>(border, b => b.Classes.Contains("more-btn"));
+
+        if (moreButton?.Flyout is { } flyout)
+        {
+            flyout.ShowAt(moreButton);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Меню открылось — устанавливаем IsMenuOpen = true.
+    /// </summary>
+    private void OnMenuFlyoutOpened(object? sender, EventArgs e)
+    {
+        if (sender is MenuFlyout { Target: Button button } &&
+            button.DataContext is TrackItemViewModel vm)
+        {
+            vm.IsMenuOpen = true;
+        }
+    }
+
+    /// <summary>
+    /// Меню закрылось — устанавливаем IsMenuOpen = false.
+    /// </summary>
+    private void OnMenuFlyoutClosed(object? sender, EventArgs e)
+    {
+        if (sender is MenuFlyout { Target: Button button } &&
+            button.DataContext is TrackItemViewModel vm)
+        {
+            vm.IsMenuOpen = false;
+        }
     }
 
     #endregion
@@ -250,21 +304,43 @@ public partial class TrackListControl : UserControl
 
     private void UpdateLocalizedTexts()
     {
-        SearchingText = LocalizationService.Instance["Search_Searching"] ?? "Searching...";
-        LoadingMoreText = LocalizationService.Instance["Search_LoadingMore"] ?? "Searching for more";
-        EndOfListText = LocalizationService.Instance["Search_EndOfList"] ?? "End of list";
+        var l = LocalizationService.Instance;
+        SearchingText = l["Search_Searching"] ?? "Searching...";
+        LoadingMoreText = l["Search_LoadingMore"] ?? "Searching for more";
+        EndOfListText = l["Search_EndOfList"] ?? "End of list";
     }
 
-    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    private void UpdateItemsContext()
     {
-        base.OnPropertyChanged(change);
+        if (Items == null) return;
 
-        if (change.Property == UseInternalScrollProperty)
+        foreach (var item in Items)
         {
-            ScrollVisibility = UseInternalScroll
-                ? ScrollBarVisibility.Auto
-                : ScrollBarVisibility.Disabled;
+            if (item is TrackItemViewModel track)
+            {
+                track.IsPlaylistContext = IsPlaylistContext;
+                track.IsQueueContext = IsQueueContext;
+            }
         }
+    }
+
+    /// <summary>
+    /// Находит первый дочерний элемент указанного типа, удовлетворяющий условию.
+    /// </summary>
+    private static T? FindDescendantOfType<T>(Visual visual, Func<T, bool>? predicate = null)
+        where T : Visual
+    {
+        foreach (var child in visual.GetVisualChildren())
+        {
+            if (child is T typedChild && (predicate == null || predicate(typedChild)))
+                return typedChild;
+
+            var result = FindDescendantOfType<T>(child, predicate);
+            if (result != null)
+                return result;
+        }
+
+        return null;
     }
 
     #endregion

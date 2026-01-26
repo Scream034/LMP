@@ -55,6 +55,10 @@ public partial class App : Application
                     Log.Error($"Background initialization failed: {ex.Message}");
                 }
             });
+
+#if DEBUG
+            desktop.MainWindow.AttachDevTools();
+#endif
         }
 
         base.OnFrameworkInitializationCompleted();

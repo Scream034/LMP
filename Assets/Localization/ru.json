@@ -160,6 +160,7 @@
   "Playlist_CannotDeleteLiked": "Нельзя удалить плейлист «Любимое».",
   "Playlist_DeleteConfirm": "Удалить плейлист «{0}»?",
   "Playlist_Deleting": "Удаление...",
+  "Playlist_RemoveFrom": "Удалить из плейлиста",
 
   "Player_Shuffle": "Перемешать",
   "Player_Previous": "Назад",
@@ -181,6 +182,7 @@
   "Track_Copied": "Скопировано!",
   "Track_Download": "Скачать",
   "Track_Downloaded": "Скачано",
+  "Track_StartRadio": "Запустить радио",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",

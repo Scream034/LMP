@@ -8,32 +8,36 @@
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                    <Border Background="{DynamicResource BgElevatedBrush}"
+                    <Border x:Name="CardBorder"
+                        Background="{DynamicResource BgElevatedBrush}"
                         CornerRadius="8"
                         Width="160" Height="220"
                         Margin="0,0,16,16"
                         ClipToBounds="True">
 
-                        <Panel>
-                            <!-- Main Click -->
-                            <Button Command="{Binding OpenCommand}"
+                        <Grid RowDefinitions="*, Auto">
+                            <!-- MAIN CONTENT -->
+                            <Button Grid.Row="0"
+                                Command="{Binding OpenCommand}"
                                 Background="Transparent"
-                                Padding="12"
+                                Padding="12,12,12,8"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch"
                                 HorizontalContentAlignment="Stretch"
-                                VerticalContentAlignment="Stretch">
+                                VerticalContentAlignment="Top">
                                 <StackPanel>
+                                    <!-- Cover -->
                                     <Border Width="136" Height="136" CornerRadius="4"
                                         ClipToBounds="True"
                                         Margin="0,0,0,12">
-                                        <Panel Background="{DynamicResource BgElevatedBrush}">
-                                            <!-- Icons / Images (как было) -->
+                                        <Panel Background="{DynamicResource BgBaseBrush}">
+                                            <!-- Liked Icon -->
                                             <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
                                                 Foreground="{DynamicResource AccentBrush}"
                                                 HorizontalAlignment="Center" VerticalAlignment="Center"
                                                 IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
 
+                                            <!-- Music Note Placeholder -->
                                             <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
                                                 Foreground="{DynamicResource TextMutedBrush}"
                                                 HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -45,54 +49,90 @@
                                                 </mi:MaterialIcon.IsVisible>
                                             </mi:MaterialIcon>
 
+                                            <!-- Web Image -->
                                             <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
                                                 Stretch="UniformToFill"
                                                 IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
-                                                
+
+                                            <!-- Asset Image -->
                                             <Image Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
                                                 Stretch="UniformToFill"
                                                 IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
                                         </Panel>
                                     </Border>
 
-                                    <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="14"
+                                    <!-- Title & Track Count -->
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"
                                         TextTrimming="CharacterEllipsis" MaxLines="1"
                                         Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="{Binding FormattedTrackCount}" FontSize="12"
-                                        Margin="0,4,0,0"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding FormattedTrackCount}" FontSize="11"
+                                        Margin="0,2,0,0"
+                                        Foreground="{DynamicResource TextMutedBrush}" />
                                 </StackPanel>
                             </Button>
-                            
-                            <!-- ACTIONS OVERLAY (Visible on Hover) -->
-                            <!-- StackPanel для кнопок справа сверху -->
-                            <StackPanel Orientation="Horizontal" 
-                                        HorizontalAlignment="Right" 
-                                        VerticalAlignment="Top" 
-                                        Margin="0,8,8,0" 
-                                        Spacing="4">
+
+                            <!-- BOTTOM ACTION BAR -->
+                            <Panel Grid.Row="1"
+                                Margin="8,0,8,8"
+                                Height="36"
+                                IsVisible="{Binding IsPointerOver, ElementName=CardBorder}">
                                 
-                                <!-- Add to Queue Button -->
-                                <Button Command="{Binding AddToQueueCommand}"
-                                    Classes="icon-btn delete-btn"
-                                    Width="28" Height="28"
-                                    ToolTip.Tip="{Binding L[Queue_Add]}">
-                                    <mi:MaterialIcon Kind="PlaylistPlus" Width="16" Height="16" />
-                                </Button>
-                                
-                                <!-- Delete Button -->
-                                <Button Command="{Binding DeleteCommand}"
-                                    Classes="icon-btn delete-btn"
-                                    IsVisible="{Binding CanDelete}"
-                                    Width="28" Height="28"
-                                    ToolTip.Tip="{Binding L[Button_Delete]}">
-                                    <mi:MaterialIcon Kind="Delete" Width="14" Height="14" />
-                                </Button>
-                            </StackPanel>
-                        </Panel>
+                                <UniformGrid Rows="1" HorizontalAlignment="Stretch">
+                                    
+                                    <!-- Add to Queue -->
+                                    <Button Command="{Binding AddToQueueCommand}"
+                                        Classes="card-action-btn"
+                                        ToolTip.Tip="{Binding L[Queue_Add]}">
+                                        <mi:MaterialIcon Kind="PlaylistPlus" Width="20" Height="20" />
+                                    </Button>
+
+                                    <!-- Delete -->
+                                    <Button Command="{Binding DeleteCommand}"
+                                        Classes="card-action-btn"
+                                        IsVisible="{Binding CanDelete}"
+                                        ToolTip.Tip="{Binding L[Button_Delete]}">
+                                        <mi:MaterialIcon Kind="DeleteOutline" Width="20" Height="20" />
+                                    </Button>
+                                    
+                                </UniformGrid>
+                            </Panel>
+                        </Grid>
                     </Border>
                 </DataTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- Card Action Button Style - Ghost / Transparent -->
+    <Style Selector="Button.card-action-btn">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Height" Value="36" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    
+    <Style Selector="Button.card-action-btn mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.12" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    
+    <Style Selector="Button.card-action-btn:pointerover mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.15)" />
+    </Style>
+    
+    <Style Selector="Button.card-action-btn:pressed mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
     </Style>
 </Styles>

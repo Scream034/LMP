@@ -1,10 +1,7 @@
 <Application xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:LMP"
-    xmlns:svm="using:LMP.Features.Shared"
     xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
-    xmlns:asyncImage="using:AsyncImageLoader"
-    xmlns:mi="using:Material.Icons.Avalonia"
     x:Class="LMP.App"
     RequestedThemeVariant="Dark">
 
@@ -16,203 +13,14 @@
         </ResourceDictionary>
     </Application.Resources>
 
-    <Application.DataTemplates>
-        <DataTemplate DataType="{x:Type svm:TrackItemViewModel}" x:CompileBindings="True">
-            <Panel Classes="track-row"
-                Classes.is-active="{Binding IsActive}"
-                Classes.is-playing="{Binding IsPlaying}"
-                Background="Transparent"
-                Margin="0,2">
-
-                <Border Classes="track-bg" CornerRadius="6" />
-
-                <!-- Grid columns: Img, Text, Status, Like, QueueBtn, Time -->
-                <Grid ColumnDefinitions="48, *, Auto, 40, 30, 60" Margin="4">
-
-                    <!-- 0. IMAGE + PLAY BTN -->
-                    <Panel Grid.Column="0" Width="48" Height="48" HorizontalAlignment="Left">
-                        <Border CornerRadius="4" ClipToBounds="True">
-                            <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
-                                Stretch="UniformToFill" />
-                        </Border>
-                        <Border CornerRadius="4" Classes="hover-overlay" />
-                        <mi:MaterialIcon Kind="Play" Width="28" Height="28" Classes="icon-play"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        <mi:MaterialIcon Kind="Pause" Width="28" Height="28" Classes="icon-pause"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        <Button Command="{Binding PlayCommand}" Background="Transparent"
-                            HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Cursor="Hand" />
-                    </Panel>
-
-                    <!-- 1. TEXT -->
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4" Margin="12,0">
-                        <TextBlock Text="{Binding Title}" Classes="track-title" FontWeight="Medium"
-                            FontSize="14" TextTrimming="CharacterEllipsis" MaxLines="1" />
-                        <TextBlock Text="{Binding Author}" FontSize="12"
-                            Foreground="{DynamicResource TextSecondaryBrush}"
-                            TextTrimming="CharacterEllipsis" MaxLines="1" />
-                    </StackPanel>
-
-                    <!-- 2. STATUS -->
-                    <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
-                        <!-- ZIndex повышен, цвет AccentBrush -->
-                        <mi:MaterialIcon Kind="CheckCircle" Width="18" Height="18"
-                            Foreground="{DynamicResource AccentBrush}"
-                            IsVisible="{Binding IsDownloaded}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                            ZIndex="5" />
-
-                        <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
-                            Width="36" Height="4"
-                            IsVisible="{Binding IsDownloading}"
-                            Foreground="{DynamicResource AccentBrush}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Panel>
-
-                    <!-- 3. LIKE -->
-                    <Button Grid.Column="3" Classes="icon-btn like-btn"
-                        Command="{Binding ToggleLikeCommand}"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center">
-                        <mi:MaterialIcon
-                            Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
-                            Width="18" Height="18"
-                            Foreground="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
-                    </Button>
-
-                    <!-- 4. QUEUE ADD BTN - скрыта в контексте очереди -->
-                    <Button Grid.Column="4" Classes="icon-btn queue-btn"
-                        Command="{Binding AddToQueueCommand}"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        ToolTip.Tip="{Binding L[Queue_Add]}"
-                        IsVisible="{Binding ShowAddToQueue}">
-                        <mi:MaterialIcon Kind="PlaylistPlus" Width="18" Height="18"
-                            Foreground="{DynamicResource TextSecondaryBrush}" />
-                    </Button>
-
-                    <!-- 5. DURATION -->
-                    <TextBlock Grid.Column="5"
-                        Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
-                        VerticalAlignment="Center"
-                        Foreground="{DynamicResource TextSecondaryBrush}"
-                        FontSize="13"
-                        HorizontalAlignment="Right"
-                        Margin="0,0,12,0"
-                        TextAlignment="Right" />
-                </Grid>
-
-                <Rectangle Classes="track-outline" RadiusX="6" RadiusY="6" Fill="Transparent"
-                    StrokeThickness="1" IsHitTestVisible="False" />
-            </Panel>
-        </DataTemplate>
-    </Application.DataTemplates>
-
     <Application.Styles>
         <FluentTheme />
         <materialIcons:MaterialIconStyles />
+        
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
-        <StyleInclude Source="/UI/Theme/SpotifyTheme.axaml" />
-        <StyleInclude Source="avares://LMP/UI/Theme/LoadingSkeletons.axaml" />
-        <StyleInclude Source="avares://LMP/UI/Theme/PlaylistCardTemplate.axaml" />
-
-        <Style Selector="Panel.track-row Border.track-bg">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.15" />
-                </Transitions>
-            </Setter>
-        </Style>
-
-        <Style Selector="Panel.track-row Border.hover-overlay">
-            <Setter Property="Background" Value="#80000000" />
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
-                </Transitions>
-            </Setter>
-        </Style>
-
-        <!-- Queue Button Hover Logic -->
-        <Style Selector="Button.queue-btn">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Panel.track-row:pointerover Button.queue-btn">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <Style Selector="Panel.track-row mi|MaterialIcon.icon-play">
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
-                </Transitions>
-            </Setter>
-        </Style>
-
-        <Style Selector="Panel.track-row mi|MaterialIcon.icon-pause">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
-                </Transitions>
-            </Setter>
-        </Style>
-
-        <Style Selector="Panel.track-row Rectangle.track-outline">
-            <Setter Property="Stroke" Value="Transparent" />
-        </Style>
-
-        <Style Selector="Panel.track-row TextBlock.track-title">
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        </Style>
-
-        <!-- HOVER -->
-        <Style Selector="Panel.track-row:pointerover Border.track-bg">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-        </Style>
-
-        <Style Selector="Panel.track-row:pointerover Border.hover-overlay">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <Style Selector="Panel.track-row:pointerover:not(.is-playing) mi|MaterialIcon.icon-play">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <!-- ACTIVE TRACK -->
-        <Style Selector="Panel.track-row.is-active Border.track-bg">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-        </Style>
-
-        <Style Selector="Panel.track-row.is-active TextBlock.track-title">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-        </Style>
-
-        <Style Selector="Panel.track-row.is-active Border.hover-overlay">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <Style Selector="Panel.track-row.is-active:not(.is-playing) mi|MaterialIcon.icon-play">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <!-- PLAYING TRACK -->
-        <Style Selector="Panel.track-row.is-playing mi|MaterialIcon.icon-pause">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-
-        <Style Selector="Panel.track-row.is-playing mi|MaterialIcon.icon-play">
-            <Setter Property="Opacity" Value="0" />
-        </Style>
+        <StyleInclude Source="/UI/Theme/Theme.axaml" />
+        <StyleInclude Source="/UI/Theme/LoadingSkeletons.axaml" />
+        <StyleInclude Source="/UI/Theme/PlaylistCardTemplate.axaml" />
+        <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />
     </Application.Styles>
 </Application>

@@ -161,6 +161,7 @@
   "Playlist_CannotDeleteLiked": "You cannot delete the 'Liked' playlist.",
   "Playlist_DeleteConfirm": "Delete playlist \"{0}\"?",
   "Playlist_Deleting": "Deleting...",
+  "Playlist_RemoveFrom": "Remove from Playlist",
 
   "Player_Previous": "Previous",
   "Player_Play": "Play",
@@ -182,6 +183,7 @@
   "Track_Copied": "Copied!",
   "Track_Download": "Download",
   "Track_Downloaded": "Downloaded",
+  "Track_StartRadio": "Start Radio",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",

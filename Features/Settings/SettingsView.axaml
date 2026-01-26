@@ -133,21 +133,6 @@
                             SelectedItem="{Binding SelectedLanguage}"
                             DisplayMemberBinding="{Binding Name}" MinWidth="200" />
                     </Grid>
-
-                    <!-- Внутри StackPanel секции Network или Account -->
-                    <Expander Header="Advanced Auth (User-Agent)">
-                        <StackPanel Spacing="10">
-                            <TextBlock Classes="desc"
-                                Text="" />
-                            <TextBox Text="{Binding UserAgentString}"
-                                AcceptsReturn="True"
-                                TextWrapping="Wrap"
-                                Height="80"
-                                Watermark="Mozilla/5.0..." />
-                            <Button Content="{Binding L[Settings_UserAgentSave]}"
-                                Command="{Binding SaveUserAgentCommand}" />
-                        </StackPanel>
-                    </Expander>
                 </StackPanel>
             </Border>
 

@@ -28,7 +28,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public bool IsAuthenticated { get; private set; }
     [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
     [Reactive] public bool IsLoadingFakeAccount { get; set; }
-    [Reactive] public string UserAgentString { get; set; } = "";
 
     public bool HasAccount => IsAuthenticated || _library.HasFakeAccount;
     public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
@@ -100,7 +99,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
-    public ReactiveCommand<Unit, Unit> SaveUserAgentCommand { get; }
 
     public SettingsViewModel(
         LibraryService library,
@@ -123,8 +121,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _audio = audio;
         _youtube = youtube;
 
-        UserAgentString = CookieAuthService.UserAgent;
-
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);
 
@@ -139,11 +135,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ClearAudioCacheCommand = ReactiveCommand.CreateFromTask(ClearAudioCacheAsync);
         ApplyThemeCommand = ReactiveCommand.Create(ApplyTheme);
         ResetThemeCommand = ReactiveCommand.Create(ResetTheme);
-        // Команда сохранения
-        SaveUserAgentCommand = ReactiveCommand.Create(() =>
-        {
-            _auth.SaveUserAgent(UserAgentString);
-        });
 
         LoadAllSettings();
         UpdateCacheStats();

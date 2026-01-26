@@ -1,4 +1,5 @@
 ﻿using System.Reactive;
+using CommunityToolkit.Mvvm.ComponentModel;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -21,7 +22,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     private readonly MusicLibraryManager _manager;
 
     private Action<TrackInfo>? _onPlay;
-    
+
     private bool _isDisposed;
 
     private readonly Action<TrackInfo?> _onTrackChangedHandler;
@@ -34,16 +35,23 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #region Properties
 
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => this.RaiseAndSetIfChanged(ref _isSelected, value);
+    }
+    private bool _isSelected;
+
     public bool IsDisposed => _isDisposed;
     public TrackInfo Track { get; }
     public string Id => Track.Id;
     public string Title { get; }
     public string Author { get; }
     public TimeSpan Duration { get; }
-    
+
     // Форматированная строка времени (mm:ss) для UI
-    public string FormattedDuration => Duration.TotalHours >= 1 
-        ? Duration.ToString(@"h\:mm\:ss") 
+    public string FormattedDuration => Duration.TotalHours >= 1
+        ? Duration.ToString(@"h\:mm\:ss")
         : Duration.ToString(@"m\:ss");
 
     public string ThumbnailUrl { get; }
@@ -55,19 +63,20 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     [Reactive] public bool IsDownloading { get; set; }
     [Reactive] public float DownloadProgress { get; set; }
     [Reactive] public bool IsQueueContext { get; set; }
-    
-    // Контекст плейлиста (для отображения кнопки удаления)
+    [Reactive] public bool IsMenuOpen { get; set; }
+
+    // Контекст плейлиста (для отображения кнопки удаления в меню)
     [Reactive] public bool IsPlaylistContext { get; set; }
 
     public bool ShowAddToQueue => !IsQueueContext;
-    
-    // Текст для кнопки скачивания
+
+    // Текст для кнопки скачивания в меню
     public string DownloadStatusText => IsDownloaded ? L["Track_Downloaded"] : L["Track_Download"];
 
     #endregion
 
     #region Actions Injection
-    
+
     // Внешние действия, назначаемые родительской VM
     public Action<TrackInfo>? StartRadioAction { get; set; }
     public Action<TrackInfo>? RemoveFromPlaylistAction { get; set; }
@@ -79,11 +88,16 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
-    
+
     // Context Menu Commands
     public ReactiveCommand<Unit, Unit> StartRadioCommand { get; }
     public ReactiveCommand<Unit, Unit> DownloadTrackCommand { get; }
     public ReactiveCommand<Unit, Unit> RemoveFromPlaylistCommand { get; }
+    public ReactiveCommand<Unit, Unit> RemoveFromQueueCommand { get; }
+
+    // Menu State Commands
+    public ReactiveCommand<Unit, Unit> MenuOpenedCommand { get; }
+    public ReactiveCommand<Unit, Unit> MenuClosedCommand { get; }
 
     #endregion
 
@@ -122,7 +136,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _downloads.OnCompleted += _onDownloadCompletedHandler;
 
         IsDownloading = _downloads.IsDownloading(track.Id);
-        if (IsDownloading) 
+        if (IsDownloading)
             DownloadProgress = _downloads.GetProgress(track.Id);
 
         IsDownloaded = track.IsDownloaded;
@@ -136,10 +150,17 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         ToggleLikeCommand = ReactiveCommand.CreateFromTask(ExecuteToggleLikeAsync);
         AddToQueueCommand = ReactiveCommand.Create(ExecuteAddToQueue);
 
+        // Menu State Commands
+        MenuOpenedCommand = ReactiveCommand.Create(() => { IsMenuOpen = true; });
+        MenuClosedCommand = ReactiveCommand.Create(() => { IsMenuOpen = false; });
+
         // 1. Start Radio
         StartRadioCommand = ReactiveCommand.Create(() =>
         {
-            StartRadioAction?.Invoke(Track);
+            if (StartRadioAction != null)
+                StartRadioAction(Track);
+            else
+                Log.Info($"[TrackItem] Start radio for {Title} (Action not bound)");
         });
 
         // 2. Download
@@ -151,15 +172,21 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             }
         });
 
-        // 3. Remove From Playlist (Active only if context is set)
+        // 3. Remove From Playlist
         RemoveFromPlaylistCommand = ReactiveCommand.Create(() =>
         {
             RemoveFromPlaylistAction?.Invoke(Track);
         }, this.WhenAnyValue(x => x.IsPlaylistContext));
 
+        // 4. Remove From Queue
+        RemoveFromQueueCommand = ReactiveCommand.Create(() =>
+        {
+            _audio.RemoveFromQueue(Track);
+        }, this.WhenAnyValue(x => x.IsQueueContext));
+
         this.WhenAnyValue(x => x.IsQueueContext)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowAddToQueue)));
-            
+
         this.WhenAnyValue(x => x.IsDownloaded)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(DownloadStatusText)));
     }
@@ -185,6 +212,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             IsLiked = updatedTrack.IsLiked;
             IsDownloaded = updatedTrack.IsDownloaded;
             this.RaisePropertyChanged(nameof(IsDownloaded));
+            this.RaisePropertyChanged(nameof(DownloadStatusText));
         }
     }
 
@@ -207,6 +235,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             {
                 IsDownloaded = true;
                 this.RaisePropertyChanged(nameof(IsDownloaded));
+                this.RaisePropertyChanged(nameof(DownloadStatusText));
             }
         }
     }
@@ -277,7 +306,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _library.OnTrackUpdated -= _onTrackUpdatedHandler;
         _downloads.OnProgress -= _onDownloadProgressHandler;
         _downloads.OnCompleted -= _onDownloadCompletedHandler;
-        
+
         GC.SuppressFinalize(this);
     }
 

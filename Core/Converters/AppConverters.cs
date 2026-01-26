@@ -366,3 +366,44 @@ public class EnumToBoolConverter : IValueConverter
         return value is bool b && b ? parameter : BindingOperations.DoNothing;
     }
 }
+
+/// <summary>
+/// Конвертирует bool в FontWeight (true = Bold, false = Normal)
+/// </summary>
+public class BoolToFontWeightConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is bool b && b)
+            return FontWeight.Bold;
+        return FontWeight.Normal;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) 
+        => throw new NotImplementedException();
+}
+
+/// <summary>
+/// Конвертирует bool в MaterialIconKind.
+/// Параметр: "TrueIcon|FalseIcon", например "Heart|HeartOutline"
+/// </summary>
+public class BoolToIconConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is bool b && parameter is string options)
+        {
+            var parts = options.Split('|');
+            if (parts.Length == 2)
+            {
+                var iconName = b ? parts[0] : parts[1];
+                if (Enum.TryParse<MaterialIconKind>(iconName, true, out var iconKind))
+                    return iconKind;
+            }
+        }
+        return MaterialIconKind.Help; // fallback
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) 
+        => throw new NotImplementedException();
+}

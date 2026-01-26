@@ -10,6 +10,7 @@ using LMP.Features.Shell;
 using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using Avalonia;
+using Avalonia.Diagnostics;
 
 namespace LMP;
 
@@ -43,11 +44,11 @@ class Program
     }
 
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
-            .UsePlatformDetect()
-            .WithInterFont()
-            .LogToTrace()
-            .UseReactiveUI();
+            => AppBuilder.Configure<App>()
+                .UsePlatformDetect()
+                .WithInterFont()
+                .LogToTrace()
+                .UseReactiveUI();
 
     private static void ConfigureServices(IServiceCollection services)
     {

@@ -9,7 +9,7 @@ namespace LMP.Core.Youtube;
 public class YoutubeHttpHandler : ClientDelegatingHandler
 {
     private readonly CookieContainer _cookieContainer;
-    
+
     // КОНСТАНТЫ ИЗ MUZZA
     private const string MuzzaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
     public const string MusicClientVersion = "1.20251227.01.00";
@@ -37,7 +37,7 @@ public class YoutubeHttpHandler : ClientDelegatingHandler
         if (string.IsNullOrWhiteSpace(sapisid)) return null;
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        
+
         // Формула: timestamp + пробел + sapisid + пробел + origin
         var payload = $"{timestamp} {sapisid} {MusicOrigin}";
 
@@ -89,7 +89,7 @@ public class YoutubeHttpHandler : ClientDelegatingHandler
             // Visitor Data через Options
             if (request.Options.TryGetValue(VisitorDataKey, out var visitorData) && !string.IsNullOrEmpty(visitorData))
             {
-                 if (!request.Headers.Contains("X-Goog-Visitor-Id"))
+                if (!request.Headers.Contains("X-Goog-Visitor-Id"))
                     request.Headers.Add("X-Goog-Visitor-Id", visitorData);
             }
 
@@ -115,10 +115,10 @@ public class YoutubeHttpHandler : ClientDelegatingHandler
             try
             {
                 var response = await base.SendAsync(HandleRequest(request), cancellationToken);
-                
+
                 if ((int)response.StatusCode == 429)
                     throw new RequestLimitExceededException("YouTube returned 429.");
-                
+
                 return response;
             }
             catch (HttpRequestException) when (i < 2)

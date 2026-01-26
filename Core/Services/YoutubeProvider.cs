@@ -15,13 +15,15 @@ using System.Net;
 
 namespace LMP.Core.Services;
 
-public partial class YoutubeProvider
+public partial class YoutubeProvider : IDisposable
 {
     private const int DefaultCacheLifetimeHours = 4;
     private const int MaxCacheSize = 200;
 
     private YoutubeClient _youtube = null!;
     private readonly CookieAuthService _cookieAuth;
+    private readonly Timer? _cookieSyncTimer;
+    private CookieContainer? _activeContainer; // Ссылка на текущий контейнер
     private readonly string _downloadFolder;
     private readonly LibraryService? _libraryService;
 
@@ -65,28 +67,41 @@ public partial class YoutubeProvider
         {
             ReloadClient();
             _cookieAuth.OnAuthStateChanged += ReloadClient;
+
+            // Запускаем таймер: старт через 1 мин, повтор каждые 3 мин
+            _cookieSyncTimer = new Timer(SyncCookiesCallback, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(3));
+        }
+    }
+
+    private void SyncCookiesCallback(object? state)
+    {
+        if (_activeContainer != null)
+        {
+            _cookieAuth.SyncCookiesFromContainer(_activeContainer);
         }
     }
 
     public void ReloadClient()
     {
-        var cookieContainer = _cookieAuth.GetCookieContainer();
-        
+        // Получаем контейнер и сохраняем ссылку на него в классе
+        _activeContainer = _cookieAuth.GetCookieContainer();
+
         var handler = new HttpClientHandler
         {
-            CookieContainer = cookieContainer,
+            CookieContainer = _activeContainer, // Используем этот инстанс
             UseCookies = true,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            AllowAutoRedirect = false 
+            AllowAutoRedirect = false
         };
 
         var baseHttpClient = new HttpClient(handler);
-        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, cookieContainer, disposeClient: true);
+        // Важно: передаем тот же _activeContainer в наш Handler для генерации хешей
+        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, _activeContainer, disposeClient: true);
         var finalHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
 
         _youtube = new YoutubeClient(finalHttpClient);
 
-        Log.Info($"[YouTube] Client reloaded.");
+        Log.Info($"[YouTube] Client reloaded. Cookies: {_activeContainer.Count}");
     }
 
     public Task InitializeAsync()
@@ -118,7 +133,7 @@ public partial class YoutubeProvider
                 {
                     // MusicItem -> TrackInfo
                     // Выбираем лучшее превью
-                    var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url 
+                    var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
                                    ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
 
                     var track = new TrackInfo
@@ -167,7 +182,7 @@ public partial class YoutubeProvider
         catch (Exception ex)
         {
             Log.Error($"[Music] Failed to like: {ex.Message}");
-            throw; 
+            throw;
         }
     }
 
@@ -214,7 +229,7 @@ public partial class YoutubeProvider
         }
 
         var sw = Stopwatch.StartNew();
-        
+
         if (forceRefresh)
             NotifyStatus($"[YouTube] [{videoId}] 403 detected. Forcing stream URL refresh...");
         else
@@ -550,7 +565,7 @@ public partial class YoutubeProvider
         {
             // Используем специализированный метод для получения треков
             var enumerable = _youtube.Search.GetVideosAsync(query, ct);
-            
+
             await foreach (var track in enumerable)
             {
                 if (results.Count >= maxResults) break;
@@ -577,7 +592,7 @@ public partial class YoutubeProvider
         return await SearchFastAsync(query, maxResults, SearchFilter.Video);
     }
 
- /// <summary>
+    /// <summary>
     /// Поиск с поддержкой продолжения (continuation) для ленивой загрузки
     /// </summary>
     public class SearchSession : IDisposable
@@ -756,11 +771,11 @@ public partial class YoutubeProvider
         {
             var playlistId = PlaylistId.TryParse(url);
             if (playlistId == null) return null;
-            
+
             var playlist = await _youtube.Playlists.GetAsync(playlistId.Value);
             // GetVideosAsync возвращает IAsyncEnumerable<TrackInfo>
             var tracks = await _youtube.Playlists.GetVideosAsync(playlistId.Value).CollectAsync();
-            
+
             NotifyStatus($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
             return (playlist.Name, tracks.ToList());
         }
@@ -791,7 +806,7 @@ public partial class YoutubeProvider
                 // Или меняем сигнатуру метода на возврат List<Playlist>
                 // Для совместимости создадим PlaylistSearchResult вручную
                 var thumbs = new List<Thumbnail>();
-                if (!string.IsNullOrEmpty(pl.ThumbnailUrl)) thumbs.Add(new Thumbnail(pl.ThumbnailUrl, new Resolution(0,0)));
+                if (!string.IsNullOrEmpty(pl.ThumbnailUrl)) thumbs.Add(new Thumbnail(pl.ThumbnailUrl, new Resolution(0, 0)));
 
                 var auth = pl.Author != null ? new Author(new ChannelId(channel.Id.Value), pl.Author) : null;
 
@@ -829,7 +844,7 @@ public partial class YoutubeProvider
 
             // Настраиваем режим
             playlist.SyncMode = isAccountSync ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.CloudPublic;
-            
+
             // Загружаем треки
             var tracks = await _youtube.Playlists.GetVideosAsync(plId, ct).CollectAsync();
 
@@ -897,7 +912,7 @@ public partial class YoutubeProvider
             var videoId = ExtractVideoId(sourceTrack.Url);
             if (string.IsNullOrEmpty(videoId)) return [];
             var mixUrl = $"https://www.youtube.com/watch?v={videoId}&list=RD{videoId}";
-            
+
             // GetPlaylistAsync возвращает (Name, List<TrackInfo>)
             var result = await GetPlaylistAsync(mixUrl);
             if (result == null) return [];
@@ -960,7 +975,7 @@ public partial class YoutubeProvider
 
     #region Helpers
 
-        private static TrackInfo ConvertPlaylistSearchResultToTrackInfo(PlaylistSearchResult playlist)
+    private static TrackInfo ConvertPlaylistSearchResultToTrackInfo(PlaylistSearchResult playlist)
     {
         var thumb = playlist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault();
         return new TrackInfo
@@ -1038,6 +1053,20 @@ public partial class YoutubeProvider
     {
         Log.Error(message);
         OnError?.Invoke(message);
+    }
+
+    public void Dispose()
+    {
+        _cookieSyncTimer?.Dispose();
+
+        // Финальное сохранение перед выходом
+        if (_activeContainer != null)
+        {
+            _cookieAuth.SyncCookiesFromContainer(_activeContainer);
+        }
+
+        _cookieAuth.OnAuthStateChanged -= ReloadClient;
+        GC.SuppressFinalize(this);
     }
 
     [GeneratedRegex(

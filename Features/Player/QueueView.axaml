@@ -1,7 +1,7 @@
+<!-- QueueView.axaml - УПРОЩЁННАЯ ВЕРСИЯ -->
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Player"
-    xmlns:svm="using:LMP.Features.Shared"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Player.QueueView"
@@ -63,26 +63,19 @@
 
                         <!-- Toggle Buttons -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,4,0">
-                            <!-- All -->
                             <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
                                 Classes="filter-type-btn"
                                 Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
                                 ToolTip.Tip="All">
                                 <mi:MaterialIcon Kind="AllInclusive" Width="14" Height="14" />
                             </Button>
-
-                            <!-- Music -->
-                            <Button Command="{Binding SetFilterTypeCommand}"
-                                CommandParameter="Music"
+                            <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
                                 Classes="filter-type-btn"
                                 Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
                                 ToolTip.Tip="Music">
                                 <mi:MaterialIcon Kind="MusicNote" Width="14" Height="14" />
                             </Button>
-
-                            <!-- Video -->
-                            <Button Command="{Binding SetFilterTypeCommand}"
-                                CommandParameter="Video"
+                            <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
                                 Classes="filter-type-btn"
                                 Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
                                 ToolTip.Tip="Video">
@@ -93,60 +86,18 @@
                 </Border>
             </StackPanel>
 
-            <!-- List -->
-            <ListBox Grid.Row="1" Margin="24,0"
-                x:Name="QueueListBox"
-                ItemsSource="{Binding QueueItems}"
-                Background="Transparent"
-                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                <ListBox.Styles>
-                    <Style Selector="ListBoxItem">
-                        <Setter Property="Padding" Value="0" />
-                        <Setter Property="Margin" Value="0,0,0,2" />
-                        <Setter Property="Background" Value="Transparent" />
-                        <Setter Property="Template">
-                            <ControlTemplate>
-                                <ContentPresenter Name="PART_ContentPresenter"
-                                    Background="Transparent" BorderThickness="0"
-                                    CornerRadius="6"
-                                    Content="{TemplateBinding Content}" />
-                            </ControlTemplate>
-                        </Setter>
-                    </Style>
-                </ListBox.Styles>
-
-                <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="svm:TrackItemViewModel">
-                        <Grid ColumnDefinitions="*, Auto" Background="Transparent">
-
-                            <Border Grid.Column="0" Classes="track-row"
-                                Classes.isActive="{Binding IsActive}"
-                                Background="Transparent" CornerRadius="6" Padding="4,2">
-                                <ContentControl Content="{Binding}" />
-                                <Border.Styles>
-                                    <Style Selector="Border.track-row:pointerover">
-                                        <Setter Property="Background" Value="#1AFFFFFF" />
-                                    </Style>
-                                    <Style Selector="Border.track-row.isActive">
-                                        <Setter Property="Background"
-                                            Value="{DynamicResource BgElevatedBrush}" />
-                                    </Style>
-                                </Border.Styles>
-                            </Border>
-
-                            <!-- Close Button (Right) -->
-                            <Button Grid.Column="1" Classes="icon-btn" Width="28" Height="28"
-                                Margin="4,0,0,0"
-                                Command="{Binding $parent[UserControl].((vm:QueueViewModel)DataContext).RemoveTrackCommand}"
-                                CommandParameter="{Binding}"
-                                ToolTip.Tip="{Binding L[Queue_Remove]}">
-                                <mi:MaterialIcon Kind="Close" Width="16" Height="16"
-                                    Foreground="{DynamicResource TextMutedBrush}" />
-                            </Button>
-                        </Grid>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <!-- ★ ИСПОЛЬЗУЕМ TrackListControl ВМЕСТО СВОЕГО ListBox -->
+            <controls:TrackListControl
+                Grid.Row="1"
+                Margin="24,0"
+                Items="{Binding QueueItems}"
+                IsLoading="False"
+                IsLoadingMore="False"
+                ReachedEnd="True"
+                UseInternalScroll="True"
+                EnableSmoothLoading="False"
+                IsQueueContext="True" />
+                
         </Grid>
     </Grid>
 </UserControl>
