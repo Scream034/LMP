@@ -123,7 +123,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _audio = audio;
         _youtube = youtube;
 
-        UserAgentString = _auth.UserAgent;
+        UserAgentString = CookieAuthService.UserAgent;
 
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);

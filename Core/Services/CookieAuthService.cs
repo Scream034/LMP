@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
 
@@ -8,11 +9,11 @@ public class CookieAuthService
     private readonly string _storagePath;
     private string _rawCookies = "";
     
-    // Используем тот же UA, что и в YoutubeHttpHandler (Firefox) для консистентности с Muzza
+    // Используем Firefox UA, так как он более стабилен для эмуляции в связке с клиентом WEB_REMIX
     private const string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
 
     public bool IsAuthenticated => !string.IsNullOrWhiteSpace(_rawCookies);
-    public string UserAgent => DefaultUserAgent;
+    public static string UserAgent => DefaultUserAgent;
 
     public event Action? OnAuthStateChanged;
 
@@ -47,10 +48,9 @@ public class CookieAuthService
         OnAuthStateChanged?.Invoke();
     }
     
-    // Метод сохранения UA убрали/заглушили, так как мы форсируем правильный UA для клиента WEB_REMIX
     public void SaveUserAgent(string userAgent) 
     {
-        // No-op or save for debug, but getter always returns fixed one
+        // Заглушка, используем константу
     }
 
     public void Logout()
@@ -66,7 +66,6 @@ public class CookieAuthService
         if (string.IsNullOrWhiteSpace(_rawCookies)) return container;
 
         var pairs = _rawCookies.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries);
-        // Важные домены
         var domains = new[] { 
             new Uri("https://youtube.com"), 
             new Uri("https://music.youtube.com"),
@@ -91,5 +90,21 @@ public class CookieAuthService
             }
         }
         return container;
+    }
+
+    // --- Локализация ---
+
+    public string GetLanguage()
+    {
+        // Возвращает код языка (например, "ru", "en")
+        try { return CultureInfo.CurrentUICulture.TwoLetterISOLanguageName; }
+        catch { return "en"; }
+    }
+
+    public string GetRegion()
+    {
+        // Возвращает код региона (например, "RU", "US")
+        try { return RegionInfo.CurrentRegion.TwoLetterISORegionName; }
+        catch { return "US"; }
     }
 }

@@ -96,7 +96,7 @@ public partial class YoutubeProvider
         var baseHttpClient = new HttpClient(handler);
 
         // 4. Берем UA
-        var ua = _cookieAuth.UserAgent;
+        var ua = CookieAuthService.UserAgent;
 
         // 5. Оборачиваем в наш YoutubeHttpHandler, передавая туда контейнер для генерации хешей
         // Важно: disposeClient = true, чтобы при диспоузе YoutubeClient убивался и внутренний Handler
