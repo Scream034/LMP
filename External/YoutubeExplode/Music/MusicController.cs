@@ -10,19 +10,24 @@ internal class MusicController(HttpClient http)
 {
     private const string ApiUrl = "https://music.youtube.com/youtubei/v1";
 
+    // Сохраняем VisitorData, как это делает браузер/приложение
+    private string _lastVisitorData = "CgtZZXhhaXZaNTBFUSjlyd3LBjIKCgJSVRIEGgAgHWLfAgrcAjE1LllUPU1Qb2lOR21KdXBvNlVKMkVKTUZ1TE9mZU9jZzIzQTJ1SXdicGN4Q0FzNXpNQjRoaFJTNENqU3pLTHlITHB5Tkk0bEJNRGpSWEFiRW1TNW13QWZvRlJoS01zNjBDOXU4RmtnYUNHdWZrSEhHUEJ6RHFjcU00cGctQThkeF8ySk5pT3JxRU1vYk5FOUVpQ1VOZ2VIak55QmVoYURmVGkyQVZkQjZIbDZNeDEweGlmWm80OGphMmxCdl9VdnAtRFJJV29ybGFJNm0zcTFEWno1RjZSaWJZeUNhQUpKSXowdFdvUkpaakJTSlZmU2U1XzBCZ25lcjdQYTJtWjB0X1FOdmNfOW8xSVVGNUp2Qk1LVzBobWZjLXBFQ2dRT01LcVlIWHB2VzRrbmMyZDEtMkczUGU4Y2kxY1ZScVBoTnBzZUk3NnBXSDNlUC1vRUQtcUtFZGQ2MHBOUQ%3D%3D";
+
     private JsonElement GetContext()
     {
-        // Используем актуальную версию клиента из логов
-        var json = """
+        var visitorDataJson = JsonSerializer.Serialize(_lastVisitorData);
+        // Версия СТРОГО совпадает с YoutubeHttpHandler
+        var json = $$"""
         {
             "context": {
                 "client": {
                     "clientName": "WEB_REMIX",
-                    "clientVersion": "1.20260121.03.00",
-                    "hl": "ru",
-                    "gl": "RU",
+                    "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
+                    "hl": "en",
+                    "gl": "US",
                     "platform": "DESKTOP",
-                    "userInterfaceTheme": "USER_INTERFACE_THEME_DARK"
+                    "userInterfaceTheme": "USER_INTERFACE_THEME_DARK",
+                    "visitorData": {{visitorDataJson}}
                 },
                 "user": {},
                 "request": {
@@ -34,35 +39,42 @@ internal class MusicController(HttpClient http)
         return Json.Parse(json);
     }
 
+    private void UpdateVisitorData(JsonElement root)
+    {
+        var newVisitorData = root.GetPropertyOrNull("responseContext")
+            ?.GetPropertyOrNull("visitorData")
+            ?.GetStringOrNull();
+
+        if (!string.IsNullOrWhiteSpace(newVisitorData) && newVisitorData != _lastVisitorData)
+        {
+            _lastVisitorData = newVisitorData;
+        }
+    }
+
+    private void AttachVisitorDataToRequest(HttpRequestMessage request)
+    {
+        if (!string.IsNullOrEmpty(_lastVisitorData))
+            request.Properties["VisitorData"] = _lastVisitorData;
+    }
+
     public async ValueTask<MusicBrowseResponse> GetBrowseAsync(string? browseId = null, string? continuation = null, CancellationToken cancellationToken = default)
     {
-        // ВАЖНО: Для плейлистов (тип BROWSE) продолжение также идет на /browse
-        // /next используется только для очереди воспроизведения (WatchNext)
         var url = $"{ApiUrl}/browse";
-        
+
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        AttachVisitorDataToRequest(request);
 
         using var ms = new MemoryStream();
         using (var writer = new Utf8JsonWriter(ms))
         {
             writer.WriteStartObject();
+            // Сначала контекст
+            foreach (var prop in GetContext().EnumerateObject()) prop.WriteTo(writer);
 
-            // Вставляем полный контекст
-            var context = GetContext();
-            foreach (var prop in context.EnumerateObject())
-            {
-                prop.WriteTo(writer);
-            }
-
-            // Логика выбора параметра
             if (!string.IsNullOrEmpty(continuation))
-            {
                 writer.WriteString("continuation", continuation);
-            }
             else if (!string.IsNullOrEmpty(browseId))
-            {
                 writer.WriteString("browseId", browseId);
-            }
 
             writer.WriteEndObject();
         }
@@ -71,25 +83,26 @@ internal class MusicController(HttpClient http)
         request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
 
         using var response = await http.SendAsync(request, cancellationToken);
+        // Читаем контент даже при ошибке, чтобы понять причину, если нужно
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        // отладка
-        _ = File.WriteAllTextAsync($"music_browse_response{browseId ?? continuation}.json", await response.Content.ReadAsStringAsync(cancellationToken));
+        var jsonDoc = Json.Parse(content);
+        UpdateVisitorData(jsonDoc);
 
-        return new MusicBrowseResponse(Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken)));
+        return new MusicBrowseResponse(jsonDoc);
     }
 
     public async Task SendLikeActionAsync(string endpoint, string videoId, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}");
+        AttachVisitorDataToRequest(request);
 
         using var ms = new MemoryStream();
         using (var writer = new Utf8JsonWriter(ms))
         {
             writer.WriteStartObject();
-
-            var context = GetContext();
-            foreach (var prop in context.EnumerateObject()) prop.WriteTo(writer);
+            foreach (var prop in GetContext().EnumerateObject()) prop.WriteTo(writer);
 
             writer.WriteStartObject("target");
             writer.WriteString("videoId", videoId);
@@ -103,25 +116,24 @@ internal class MusicController(HttpClient http)
 
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
+
+        try { UpdateVisitorData(Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken))); } catch { }
     }
 
     public async Task<string> CreatePlaylistAsync(string title, string description, List<string>? videoIds, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/playlist/create");
+        AttachVisitorDataToRequest(request);
 
-        // Ручная сериализация для простоты, так как структура простая
         var videoIdsJson = videoIds != null && videoIds.Count > 0
             ? $", \"videoIds\": {JsonSerializer.Serialize(videoIds)}"
             : "";
-            
-        // Внимание: JsonSerializer.Serialize(title) добавит кавычки, это ок
+
         var jsonTitle = JsonSerializer.Serialize(title);
         var jsonDesc = JsonSerializer.Serialize(description);
-        
-        // Получаем контекст как строку (убираем внешние скобки для вставки)
+
         var contextStr = GetContext().ToString();
-        // Убираем первую { и последнюю }
-        contextStr = contextStr.Substring(1, contextStr.Length - 2);
+        contextStr = contextStr[1..^1];
 
         var payload = $$"""
         {
@@ -137,19 +149,20 @@ internal class MusicController(HttpClient http)
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var doc = Json.Parse(json);
+        var jsonDoc = Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        UpdateVisitorData(jsonDoc);
 
-        return doc.GetPropertyOrNull("playlistId")?.GetStringOrNull()
+        return jsonDoc.GetPropertyOrNull("playlistId")?.GetStringOrNull()
             ?? throw new YoutubeExplodeException("Failed to create playlist.");
     }
 
     public async Task EditPlaylistAsync(string playlistId, string videoId, string action, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/browse/edit_playlist");
+        AttachVisitorDataToRequest(request);
 
         var contextStr = GetContext().ToString();
-        contextStr = contextStr.Substring(1, contextStr.Length - 2);
+        contextStr = contextStr[1..^1];
 
         var payload = $$"""
         {
@@ -168,5 +181,7 @@ internal class MusicController(HttpClient http)
 
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
+
+        try { UpdateVisitorData(Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken))); } catch { }
     }
 }

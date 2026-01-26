@@ -34,7 +34,7 @@ internal static class UrlEx
                 var eqIndex = url.IndexOf('=', currentIndex, segmentLength);
                 if (eqIndex >= 0)
                 {
-                    var key = WebUtility.UrlDecode(url.Substring(currentIndex, eqIndex - currentIndex));
+                    var key = WebUtility.UrlDecode(url[currentIndex..eqIndex]);
                     var value = WebUtility.UrlDecode(url.Substring(eqIndex + 1, segmentEnd - eqIndex - 1));
 
                     if (!string.IsNullOrWhiteSpace(key))
@@ -78,7 +78,7 @@ internal static class UrlEx
     public static string SetQueryParameter(string url, string key, string value)
     {
         var queryIndex = url.IndexOf('?');
-        var baseUrl = queryIndex < 0 ? url : url.Substring(0, queryIndex);
+        var baseUrl = queryIndex < 0 ? url : url[..queryIndex];
 
         var sb = new StringBuilder(baseUrl);
         sb.Append('?');

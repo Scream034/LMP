@@ -6,13 +6,13 @@ namespace MyLiteMusicPlayer.Core.Services;
 public class CookieAuthService
 {
     private readonly string _storagePath;
-    private readonly string _uaPath; // Путь к файлу User-Agent
     private string _rawCookies = "";
-    // Дефолтный UA (Chrome 122), на случай если пользователь ничего не настроил
-    private string _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    
+    // Используем тот же UA, что и в YoutubeHttpHandler (Firefox) для консистентности с Muzza
+    private const string DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
 
     public bool IsAuthenticated => !string.IsNullOrWhiteSpace(_rawCookies);
-    public string UserAgent => _userAgent; // Публичное свойство
+    public string UserAgent => DefaultUserAgent;
 
     public event Action? OnAuthStateChanged;
 
@@ -22,7 +22,6 @@ public class CookieAuthService
         var folder = Path.Combine(appData, "LiteMusicPlayer");
         Directory.CreateDirectory(folder);
         _storagePath = Path.Combine(folder, "auth_cookies.txt");
-        _uaPath = Path.Combine(folder, "auth_ua.txt"); // Файл для UA
 
         Load();
     }
@@ -32,15 +31,6 @@ public class CookieAuthService
         if (File.Exists(_storagePath))
         {
             _rawCookies = File.ReadAllText(_storagePath);
-        }
-        
-        if (File.Exists(_uaPath))
-        {
-            var storedUa = File.ReadAllText(_uaPath).Trim();
-            if (!string.IsNullOrWhiteSpace(storedUa))
-            {
-                _userAgent = storedUa;
-            }
         }
     }
 
@@ -56,16 +46,11 @@ public class CookieAuthService
         File.WriteAllText(_storagePath, _rawCookies);
         OnAuthStateChanged?.Invoke();
     }
-
-    // Новый метод для сохранения UA
-    public void SaveUserAgent(string userAgent)
+    
+    // Метод сохранения UA убрали/заглушили, так как мы форсируем правильный UA для клиента WEB_REMIX
+    public void SaveUserAgent(string userAgent) 
     {
-        if (string.IsNullOrWhiteSpace(userAgent)) return;
-        
-        _userAgent = userAgent.Trim();
-        File.WriteAllText(_uaPath, _userAgent);
-        // Вызываем событие, чтобы клиент перезагрузился с новым UA
-        OnAuthStateChanged?.Invoke();
+        // No-op or save for debug, but getter always returns fixed one
     }
 
     public void Logout()
@@ -75,25 +60,36 @@ public class CookieAuthService
         OnAuthStateChanged?.Invoke();
     }
 
-    public List<Cookie> GetCookies()
+    public CookieContainer GetCookieContainer()
     {
-        var list = new List<Cookie>();
-        if (string.IsNullOrWhiteSpace(_rawCookies)) return list;
+        var container = new CookieContainer();
+        if (string.IsNullOrWhiteSpace(_rawCookies)) return container;
 
-        var pairs = _rawCookies.Split(';');
+        var pairs = _rawCookies.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries);
+        // Важные домены
+        var domains = new[] { 
+            new Uri("https://youtube.com"), 
+            new Uri("https://music.youtube.com"),
+            new Uri("https://www.youtube.com") 
+        };
+
         foreach (var pair in pairs)
         {
             var p = pair.Trim();
             if (string.IsNullOrEmpty(p)) continue;
+            
             var eqIndex = p.IndexOf('=');
             if (eqIndex > 0)
             {
                 var name = p[..eqIndex].Trim();
                 var value = p[(eqIndex + 1)..].Trim();
-                var cookie = new Cookie(name, value, "/", ".youtube.com");
-                list.Add(cookie);
+                
+                foreach (var d in domains)
+                {
+                    try { container.Add(d, new Cookie(name, value)); } catch { }
+                }
             }
         }
-        return list;
+        return container;
     }
 }

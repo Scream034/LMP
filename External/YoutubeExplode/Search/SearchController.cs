@@ -9,12 +9,12 @@ internal class SearchController(HttpClient http)
 {
   private JsonElement GetMusicContext()
   {
-    var json = """
+    var json = $$"""
         {
             "context": {
                 "client": {
                     "clientName": "WEB_REMIX",
-                    "clientVersion": "1.20260121.03.00",
+                    "clientVersion": {{YoutubeHttpHandler.MusicClientVersion}},
                     "hl": "ru",
                     "gl": "RU"
                 },

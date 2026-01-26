@@ -6,61 +6,39 @@ using YoutubeExplode.Utils;
 
 namespace YoutubeExplode;
 
-internal class YoutubeHttpHandler : ClientDelegatingHandler
+public class YoutubeHttpHandler : ClientDelegatingHandler
 {
-    private readonly string _manualCookieHeader;
-    private readonly string? _sapisid;
-    private readonly bool _hasUserCookies;
-    private readonly string _userAgent; // Поле для хранения UA
-
-    private const string MusicClientVersion = "1.20260121.03.00";
+    private readonly CookieContainer _cookieContainer;
+    
+    // КОНСТАНТЫ ИЗ MUZZA
+    private const string MuzzaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
+    public const string MusicClientVersion = "1.20251227.01.00";
+    public const string MusicClientName = "67";
+    private const string MusicOrigin = "https://music.youtube.com";
 
     public YoutubeHttpHandler(
        HttpClient http,
-       IReadOnlyList<Cookie> initialCookies,
-       string userAgent,
+       CookieContainer cookieContainer,
        bool disposeClient = false
    )
        : base(http, disposeClient)
     {
-        _userAgent = userAgent; // Сохраняем переданный UA
-
-        var sb = new StringBuilder();
-        var baseCookies = new Dictionary<string, string>
-        {
-            { "SOCS", "CAISEwgDEgk4MTM4MzYzNTIaAmVuIAEaBgiApPzGBg" },
-            { "CONSENT", "YES+" }
-        };
-
-        foreach (var cookie in initialCookies)
-        {
-            baseCookies[cookie.Name] = cookie.Value;
-            if (cookie.Name.Equals("__Secure-3PAPISID", StringComparison.OrdinalIgnoreCase))
-                _sapisid = cookie.Value;
-            else if (_sapisid == null && cookie.Name.Equals("SAPISID", StringComparison.OrdinalIgnoreCase))
-                _sapisid = cookie.Value;
-        }
-
-        foreach (var kvp in baseCookies)
-        {
-            if (sb.Length > 0) sb.Append("; ");
-            sb.Append($"{kvp.Key}={kvp.Value}");
-        }
-
-        _manualCookieHeader = sb.ToString();
-        _hasUserCookies = initialCookies.Count > 0;
+        _cookieContainer = cookieContainer;
     }
 
-    private string? GenerateAuthHeader(Uri uri)
+    private string? GetAuthHeader()
     {
-        if (string.IsNullOrWhiteSpace(_sapisid)) return null;
+        // 1. Пытаемся найти SAPISID во всех доменах, где он может быть
+        // YouTube может обновить куку на домене .youtube.com, а мы шлем запрос на music.youtube.com
+        var sapisid = GetCookieValue("SAPISID");
+
+        if (string.IsNullOrWhiteSpace(sapisid)) return null;
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        // Убедитесь, что системное время на компьютере верное! 
-        // SAPISIDHASH очень чувствителен к времени.
-
-        var origin = $"{uri.Scheme}://{uri.Host}";
-        var payload = $"{timestamp} {_sapisid} {origin}";
+        
+        // Формула: timestamp + пробел + sapisid + пробел + origin
+        // Важно: Origin строго https://music.youtube.com (без слеша в конце)
+        var payload = $"{timestamp} {sapisid} {MusicOrigin}";
 
         using var sha1 = SHA1.Create();
         var hashBytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(payload));
@@ -69,51 +47,61 @@ internal class YoutubeHttpHandler : ClientDelegatingHandler
         return $"SAPISIDHASH {timestamp}_{hashHex}";
     }
 
+    // Хелпер для поиска куки по разным доменам
+    private string? GetCookieValue(string name)
+    {
+        // Сначала ищем на music.youtube.com
+        var c = _cookieContainer.GetCookies(new Uri(MusicOrigin))[name]?.Value;
+        if (!string.IsNullOrWhiteSpace(c)) return c;
+
+        // Если нет, ищем на .youtube.com (глобальный домен)
+        c = _cookieContainer.GetCookies(new Uri("https://youtube.com"))[name]?.Value;
+        if (!string.IsNullOrWhiteSpace(c)) return c;
+
+        return null;
+    }
+
     private HttpRequestMessage HandleRequest(HttpRequestMessage request)
     {
         if (request.RequestUri is null) return request;
 
-        // 1. Cookies
-        if (request.Headers.Contains("Cookie")) request.Headers.Remove("Cookie");
-        request.Headers.TryAddWithoutValidation("Cookie", _manualCookieHeader);
-
-        // 2. API Key
-        if (request.RequestUri.AbsolutePath.StartsWith("/youtubei/", StringComparison.Ordinal)
-            && !UrlEx.ContainsQueryParameter(request.RequestUri.Query, "key"))
-        {
-            var uriBuilder = new UriBuilder(request.RequestUri);
-            var query = System.Web.HttpUtility.ParseQueryString(uriBuilder.Query);
-            query["key"] = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w";
-            uriBuilder.Query = query.ToString();
-            request.RequestUri = uriBuilder.Uri;
-        }
-
-        // 3. Origin
-        if (!request.Headers.Contains("Origin"))
-            request.Headers.Add("Origin", $"{request.RequestUri.Scheme}://{request.RequestUri.Host}");
-
-        // 4. User-Agent (Динамический)
+        // 1. Принудительно ставим User-Agent как в Muzza (Firefox)
+        // Это важно, так как Client Version 1.2025... соответствует именно десктопному браузеру
         if (request.Headers.Contains("User-Agent")) request.Headers.Remove("User-Agent");
-        request.Headers.Add("User-Agent", _userAgent); // Используем поле класса
+        request.Headers.Add("User-Agent", MuzzaUserAgent);
 
-        // 5. Music API Logic
+        // 2. Origin
+        if (!request.Headers.Contains("Origin"))
+            request.Headers.Add("Origin", MusicOrigin);
+
+        // 3. Логика Music
         bool isMusic = request.RequestUri.Host.Contains("music.youtube.com");
         if (isMusic)
         {
+            // Чистим заголовки
             request.Headers.Remove("x-youtube-client-name");
             request.Headers.Remove("x-youtube-client-version");
             request.Headers.Remove("Referer");
+            request.Headers.Remove("X-Goog-Api-Format-Version");
+            request.Headers.Remove("X-Goog-AuthUser");
 
+            // Ставим правильные заголовки
             request.Headers.Add("Referer", "https://music.youtube.com/");
-            request.Headers.Add("x-youtube-client-name", "67");
+            request.Headers.Add("x-youtube-client-name", MusicClientName);
             request.Headers.Add("x-youtube-client-version", MusicClientVersion);
+            request.Headers.Add("X-Goog-Api-Format-Version", "1");
 
-            if (_hasUserCookies && request.Method == HttpMethod.Post)
+            // Visitor Data
+            if (request.Properties.TryGetValue("VisitorData", out var visitorDataObj) && visitorDataObj is string visitorData)
             {
-                if (!request.Headers.Contains("X-Goog-AuthUser"))
-                    request.Headers.Add("X-Goog-AuthUser", "0");
+                 if (!request.Headers.Contains("X-Goog-Visitor-Id"))
+                    request.Headers.Add("X-Goog-Visitor-Id", visitorData);
+            }
 
-                var authHeader = GenerateAuthHeader(request.RequestUri);
+            // Авторизация
+            if (request.Method == HttpMethod.Post)
+            {
+                var authHeader = GetAuthHeader();
                 if (!string.IsNullOrWhiteSpace(authHeader))
                 {
                     if (request.Headers.Contains("Authorization")) request.Headers.Remove("Authorization");
@@ -125,26 +113,24 @@ internal class YoutubeHttpHandler : ClientDelegatingHandler
         return request;
     }
 
-    private HttpResponseMessage HandleResponse(HttpResponseMessage response)
-    {
-        if ((int)response.StatusCode == 429)
-            throw new RequestLimitExceededException("YouTube returned 429 (Too Many Requests).");
-        return response;
-    }
-
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         for (var i = 0; i < 3; i++)
         {
             try
             {
-                return HandleResponse(await base.SendAsync(HandleRequest(request), cancellationToken));
+                var response = await base.SendAsync(HandleRequest(request), cancellationToken);
+                
+                if ((int)response.StatusCode == 429)
+                    throw new RequestLimitExceededException("YouTube returned 429.");
+                
+                return response;
             }
             catch (HttpRequestException) when (i < 2)
             {
                 await Task.Delay(1000, cancellationToken);
             }
         }
-        throw new YoutubeExplodeException("Failed to send request after retries.");
+        throw new YoutubeExplodeException("Failed to send request.");
     }
 }

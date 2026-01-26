@@ -15,6 +15,7 @@ using Playlist = MyLiteMusicPlayer.Core.Models.Playlist;
 using YoutubeExplode.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.CompilerServices;
+using System.Net;
 
 namespace MyLiteMusicPlayer.Core.Services;
 
@@ -79,15 +80,38 @@ public partial class YoutubeProvider
 
     public void ReloadClient()
     {
-        // Берем куки
-        var cookies = _cookieAuth.GetCookies();
-        // Берем UA из сервиса (он загрузил его из файла или взял дефолтный)
+        // 1. Получаем контейнер куки (а не просто список)
+        var cookieContainer = _cookieAuth.GetCookieContainer();
+
+        // 2. Создаем Handler с поддержкой куки
+        var handler = new HttpClientHandler
+        {
+            CookieContainer = cookieContainer,
+            UseCookies = true, // Включаем автоматическую обработку кук
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            AllowAutoRedirect = false // Иногда лучше контролировать редиректы вручную, но для API это не критично
+        };
+
+        // 3. Создаем базовый HttpClient
+        var baseHttpClient = new HttpClient(handler);
+
+        // 4. Берем UA
         var ua = _cookieAuth.UserAgent;
 
-        // Передаем в конструктор YoutubeClient
-        _youtube = new YoutubeClient(new HttpClient(), cookies, ua);
+        // 5. Оборачиваем в наш YoutubeHttpHandler, передавая туда контейнер для генерации хешей
+        // Важно: disposeClient = true, чтобы при диспоузе YoutubeClient убивался и внутренний Handler
+        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, cookieContainer, disposeClient: true);
 
-        Log.Info($"[YouTube] Client reloaded. Authenticated: {_cookieAuth.IsAuthenticated} (Cookies: {cookies.Count}). UA: {ua[..30]}...");
+        // 6. Создаем финальный HttpClient, который принимает наш декоратор
+        // Обратите внимание: YoutubeClient ожидает HttpClient, но YoutubeHttpHandler это HttpMessageHandler.
+        // Нам нужно создать еще один HttpClient, который использует наш Handler.
+        var finalHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
+
+        // 7. Инициализируем YoutubeClient
+        _youtube = new YoutubeClient(finalHttpClient);
+
+        var cookieCount = cookieContainer.Count;
+        Log.Info($"[YouTube] Client reloaded. Cookies in container: {cookieCount}");
     }
 
     public Task InitializeAsync()

@@ -4,7 +4,7 @@ namespace YoutubeExplode.Utils;
 
 // Like DelegatingHandler, but wraps an HttpClient instead of an HttpMessageHandler.
 // Used to extend an externally provided HttpClient with additional behavior.
-internal abstract class ClientDelegatingHandler(HttpClient http, bool disposeClient = false)
+public abstract class ClientDelegatingHandler(HttpClient http, bool disposeClient = false)
     : HttpMessageHandler
 {
     protected override async Task<HttpResponseMessage> SendAsync(
