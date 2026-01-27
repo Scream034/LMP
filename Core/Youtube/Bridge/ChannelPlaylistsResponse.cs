@@ -1,7 +1,5 @@
 using System.Text.Json;
 using LMP.Core.Models;
-
-using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
 

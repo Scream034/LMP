@@ -10,7 +10,6 @@ using LMP.Features.Shell;
 using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using Avalonia;
-using Avalonia.Diagnostics;
 
 namespace LMP;
 
