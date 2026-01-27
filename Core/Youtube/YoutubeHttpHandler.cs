@@ -11,10 +11,8 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
 {
     private readonly CookieAuthService? _authService;
     
-    // Используем константы Muzza, но структуру заголовков Браузера
+    // Константы Muzza
     public const string MuzzaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
-    // Версия клиента чуть новее (из твоего лога браузера), но можно оставить и Muzza.
-    // Лучше использовать Muzza версию, так как мы эмулируем ее поведение.
     public const string MusicClientVersion = "1.20251227.01.00"; 
     public const string MusicClientName = "67"; 
     
@@ -24,59 +22,31 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
 
     public static readonly HttpRequestOptionsKey<string> VisitorDataKey = new("VisitorData");
 
+    [GeneratedRegex("ytcfg\\.set\\s*\\(\\{.*\"VISITOR_DATA\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase)]
+    private static partial Regex VisitorDataRegex();
+
+    [GeneratedRegex("\"VISITOR_DATA\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase)]
+    private static partial Regex VisitorDataSimpleRegex();
+
     public YoutubeHttpHandler(HttpClient http, CookieAuthService? authService, bool disposeClient = false) 
         : base(http, disposeClient)
     {
         _authService = authService;
     }
 
-    /// <summary>
-    /// Генерирует полный заголовок Authorization как в браузере:
-    /// SAPISIDHASH ... SAPISID1PHASH ... SAPISID3PHASH ...
-    /// </summary>
-    private string? GetFullAuthHeader(string origin)
+    // ВОЗВРАЩАЕМ КАК В MUZZA (Один хеш)
+    private static string? GetAuthHeader(string? sapisid, string origin)
     {
-        if (_authService == null || !_authService.IsAuthenticated) return null;
+        if (string.IsNullOrWhiteSpace(sapisid)) return null;
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var sb = new StringBuilder();
+        var payload = $"{timestamp} {sapisid} {origin}";
+        
+        using var sha1 = SHA1.Create();
+        var hashBytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(payload));
+        var hashHex = Convert.ToHexStringLower(hashBytes);
 
-        // Helper для хеширования
-        string Hash(string cookieName, string prefix)
-        {
-            var value = _authService.GetCookieValue(cookieName);
-            if (string.IsNullOrEmpty(value)) return "";
-
-            // Payload: TIMESTAMP + " " + VALUE + " " + ORIGIN
-            var payload = $"{timestamp} {value} {origin}";
-            using var sha1 = SHA1.Create();
-            var hashBytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(payload));
-            var hashHex = Convert.ToHexStringLower(hashBytes);
-            
-            return $"{prefix} {timestamp}_{hashHex}";
-        }
-
-        // 1. SAPISID (Standard)
-        var sapisidHash = Hash("SAPISID", "SAPISIDHASH");
-        if (!string.IsNullOrEmpty(sapisidHash)) sb.Append(sapisidHash);
-
-        // 2. 1PAPISID (Secure 1P)
-        var onePHash = Hash("__Secure-1PAPISID", "SAPISID1PHASH");
-        if (!string.IsNullOrEmpty(onePHash)) 
-        {
-            if (sb.Length > 0) sb.Append(' ');
-            sb.Append(onePHash);
-        }
-
-        // 3. 3PAPISID (Secure 3P)
-        var threePHash = Hash("__Secure-3PAPISID", "SAPISID3PHASH");
-        if (!string.IsNullOrEmpty(threePHash))
-        {
-            if (sb.Length > 0) sb.Append(' ');
-            sb.Append(threePHash);
-        }
-
-        return sb.ToString();
+        return $"SAPISIDHASH {timestamp}_{hashHex}";
     }
 
     private HttpRequestMessage HandleRequest(HttpRequestMessage request)
@@ -87,17 +57,19 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
         bool isMusic = host.Contains("music.youtube.com");
         bool isYoutubeApi = host.Contains("youtube.com") && request.RequestUri.AbsolutePath.Contains("/youtubei/v1/");
 
-        // --- 1. Basic Headers ---
         if (request.Headers.Contains("User-Agent")) request.Headers.Remove("User-Agent");
         request.Headers.Add("User-Agent", MuzzaUserAgent);
         
         if (!request.Headers.Contains("Accept-Language"))
-             request.Headers.Add("Accept-Language", "ru,en;q=0.9"); // Как в браузере
+             request.Headers.Add("Accept-Language", "ru,en;q=0.9");
 
-        // --- 2. Cookies ---
+        // Cookies
+        string? currentSapisid = null;
         if (_authService != null && _authService.IsAuthenticated)
         {
             var cookieHeader = _authService.GetCookieHeader();
+            currentSapisid = _authService.GetCookieValue("SAPISID");
+
             if (!string.IsNullOrEmpty(cookieHeader))
             {
                 if (request.Headers.Contains("Cookie")) request.Headers.Remove("Cookie");
@@ -105,10 +77,9 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
             }
         }
 
-        // --- 3. Music API Headers ---
+        // Music Headers
         if (isMusic)
         {
-            // Clean
             request.Headers.Remove("X-YouTube-Client-Name");
             request.Headers.Remove("X-YouTube-Client-Version");
             request.Headers.Remove("Referer");
@@ -116,7 +87,6 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
             request.Headers.Remove("X-Origin");
             request.Headers.Remove("X-Goog-AuthUser");
 
-            // Set
             request.Headers.Add("Referer", MusicReferer);
             request.Headers.Add("X-YouTube-Client-Name", MusicClientName);
             request.Headers.Add("X-YouTube-Client-Version", MusicClientVersion);
@@ -124,13 +94,11 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
             request.Headers.Add("Origin", MusicOrigin);
             request.Headers.Add("X-Origin", MusicOrigin);
             
-            // Critical for auth stability
             if (_authService?.IsAuthenticated == true)
             {
                 request.Headers.Add("X-Goog-AuthUser", "0");
             }
 
-            // Visitor Data
             if (request.Options.TryGetValue(VisitorDataKey, out var visitorData) && !string.IsNullOrEmpty(visitorData))
             {
                 if (request.Headers.Contains("X-Goog-Visitor-Id")) request.Headers.Remove("X-Goog-Visitor-Id");
@@ -138,11 +106,11 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
             }
         }
 
-        // --- 4. Authorization Hash ---
-        if (request.Method == HttpMethod.Post && isYoutubeApi)
+        // Authorization (Только один хеш, как в Muzza)
+        if (request.Method == HttpMethod.Post && isYoutubeApi && !string.IsNullOrEmpty(currentSapisid))
         {
             var origin = isMusic ? MusicOrigin : YoutubeOrigin;
-            var authHeader = GetFullAuthHeader(origin); // Генерируем полный хедер
+            var authHeader = GetAuthHeader(currentSapisid, origin);
             
             if (!string.IsNullOrWhiteSpace(authHeader))
             {
@@ -152,6 +120,57 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
         }
 
         return request;
+    }
+
+    private async Task<string?> TryRefreshSessionAsync(CancellationToken ct)
+    {
+        if (_authService == null || !_authService.IsAuthenticated) return null;
+
+        Log.Info("[YouTube] Attempting session resurrection (GET music.youtube.com)...");
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://music.youtube.com/");
+            
+            request.Headers.Add("User-Agent", MuzzaUserAgent);
+            request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+            request.Headers.Add("Accept-Language", "ru,en;q=0.9");
+            request.Headers.Add("Upgrade-Insecure-Requests", "1");
+            
+            // ВАЖНО: Используем новый метод, который включает LOGIN_INFO
+            var baseCookies = _authService.GetBaseCookieHeader();
+            if (!string.IsNullOrEmpty(baseCookies))
+            {
+                request.Headers.Add("Cookie", baseCookies);
+            }
+
+            var response = await base.SendAsync(request, ct);
+            var html = await response.Content.ReadAsStringAsync(ct);
+            
+            bool cookiesFound = false;
+            if (response.Headers.TryGetValues("Set-Cookie", out var newCookies))
+            {
+                cookiesFound = _authService.UpdateCookies(newCookies);
+            }
+
+            if (cookiesFound) Log.Info("[YouTube] Session resurrected! New tokens received.");
+            else Log.Warn($"[YouTube] Resurrection request finished, but NO cookies found.");
+
+            var match = VisitorDataRegex().Match(html);
+            if (!match.Success) match = VisitorDataSimpleRegex().Match(html);
+
+            if (match.Success)
+            {
+                return match.Groups[1].Value;
+            }
+            
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[YouTube] Session resurrection failed: {ex.Message}");
+            return null;
+        }
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -165,35 +184,35 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
             {
                 var response = await base.SendAsync(processedRequest, cancellationToken);
 
-                // Проверяем обновление кук
                 bool cookiesUpdated = false;
                 if (_authService != null && response.Headers.TryGetValues("Set-Cookie", out var newCookies))
                 {
                     cookiesUpdated = _authService.UpdateCookies(newCookies);
                 }
 
-                // === 401 HANDLING ===
                 if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
                     Log.Warn($"[YouTube] 401 Unauthorized (Attempt {i+1}/3).");
 
                     if (cookiesUpdated)
                     {
-                        Log.Info("[YouTube] New cookies received. Retrying immediately...");
+                        Log.Info("[YouTube] New cookies received automatically. Retrying...");
                         await Task.Delay(200, cancellationToken);
                         continue; 
                     }
                     else if (_authService != null)
                     {
-                        // !!! КЛЮЧЕВОЙ МОМЕНТ !!!
-                        // Если 401 и нет новых кук, значит наши TS-токены протухли,
-                        // и сервер отказался их обновлять автоматически.
-                        // Мы удаляем их вручную и пробуем снова. Сервер увидит SID/SSID и выдаст новые.
-                        Log.Warn("[YouTube] No new cookies. Stripping session tokens (__Secure-1PSIDTS) to force refresh...");
+                        Log.Warn("[YouTube] No new cookies. Initiating recovery protocol...");
                         
                         _authService.RemoveSessionTokens();
+                        var newVisitorData = await TryRefreshSessionAsync(cancellationToken);
                         
-                        // Даем чуть больше времени перед повтором
+                        if (!string.IsNullOrEmpty(newVisitorData))
+                        {
+                            // Обновляем VisitorData для следующей попытки
+                            request.Options.Set(VisitorDataKey, newVisitorData);
+                        }
+
                         await Task.Delay(500, cancellationToken);
                         continue;
                     }
@@ -215,7 +234,7 @@ public partial class YoutubeHttpHandler : ClientDelegatingHandler
             }
         }
         
-        throw new YoutubeExplodeException("Failed to complete request after retries (Auth failed).");
+        throw new YoutubeExplodeException("Failed to complete request after retries.");
     }
 
     private async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request)

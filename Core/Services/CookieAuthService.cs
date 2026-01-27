@@ -9,17 +9,16 @@ public partial class CookieAuthService
     private readonly Dictionary<string, string> _cookieMap = [];
     private string _cachedHeaderString = "";
 
-    // Проверяем именно наличие SAPISID, а не просто Count > 0
-    public bool IsAuthenticated
+    public bool IsAuthenticated 
     {
-        get
+        get 
         {
             lock (_lock) return _cookieMap.ContainsKey("SAPISID");
         }
     }
 
     public event Action? OnAuthStateChanged;
-
+    
     public CookieAuthService() => Load();
 
     private void Load()
@@ -41,6 +40,39 @@ public partial class CookieAuthService
         lock (_lock) return _cookieMap.TryGetValue(key, out var val) ? val : null;
     }
 
+    /// <summary>
+    /// Возвращает куки для "реанимации".
+    /// Логика Muzza: используем все куки, но исключаем протухшие сессионные.
+    /// ВАЖНО: LOGIN_INFO и PAPISID должны остаться!
+    /// </summary>
+    public string GetBaseCookieHeader()
+    {
+        lock (_lock)
+        {
+            var sb = new StringBuilder();
+            
+            // Черный список токенов, которые вызывают 401, если они протухли
+            var blackList = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "__Secure-1PSIDTS", 
+                "__Secure-3PSIDTS",
+                "SIDCC", 
+                "__Secure-1PSIDCC", 
+                "__Secure-3PSIDCC"
+            };
+
+            foreach (var kvp in _cookieMap)
+            {
+                // Пропускаем "плохие" токены
+                if (blackList.Contains(kvp.Key)) continue;
+
+                if (sb.Length > 0) sb.Append("; ");
+                sb.Append($"{kvp.Key}={kvp.Value}");
+            }
+            return sb.ToString();
+        }
+    }
+
     public void SaveCookies(string cookies)
     {
         if (string.IsNullOrWhiteSpace(cookies)) return;
@@ -56,30 +88,35 @@ public partial class CookieAuthService
 
         ParseAndSetCookies(clean);
         SaveToFile();
-
+        
         Log.Info($"[Auth] Cookies saved manually. Total keys: {_cookieMap.Count}");
         OnAuthStateChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Принудительное удаление сессионных токенов.
-    /// Вызывается при 401 ошибке, чтобы заставить сервер выдать новые токены.
-    /// </summary>
     public void RemoveSessionTokens()
     {
         lock (_lock)
         {
-            if (_cookieMap.Remove("__Secure-1PSIDTS") | _cookieMap.Remove("__Secure-3PSIDTS"))
+            var keysToRemove = new[] 
+            { 
+                "__Secure-1PSIDTS", "__Secure-3PSIDTS",
+                "SIDCC", "__Secure-1PSIDCC", "__Secure-3PSIDCC" 
+            };
+
+            bool removedAny = false;
+            foreach (var key in keysToRemove)
+            {
+                if (_cookieMap.Remove(key)) removedAny = true;
+            }
+
+            if (removedAny)
             {
                 RebuildHeaderString();
-                Log.Warn("[Auth] Session tokens (__Secure-1PSIDTS/3PSIDTS) cleared due to auth failure.");
+                Log.Warn("[Auth] Session tokens (TS/CC) cleared due to auth failure.");
             }
         }
     }
 
-    /// <summary>
-    /// Возвращает true, если куки реально обновились
-    /// </summary>
     public bool UpdateCookies(IEnumerable<string> setCookieHeaders)
     {
         bool changed = false;
@@ -87,20 +124,17 @@ public partial class CookieAuthService
         {
             foreach (var header in setCookieHeaders)
             {
-                // Set-Cookie: key=value; expires=...
-                // Берем все до первой точки с запятой
                 var parts = header.Split(';');
                 if (parts.Length == 0) continue;
 
                 var firstPart = parts[0];
                 var equalIndex = firstPart.IndexOf('=');
-
+                
                 if (equalIndex > 0)
                 {
                     var key = firstPart[..equalIndex].Trim();
                     var value = firstPart[(equalIndex + 1)..].Trim();
 
-                    // Игнорируем удаление (value=deleted или пусто), если это критичные ключи
                     if (string.IsNullOrEmpty(value) || value.Equals("deleted", StringComparison.OrdinalIgnoreCase))
                         continue;
 
@@ -108,30 +142,19 @@ public partial class CookieAuthService
                     {
                         _cookieMap[key] = value;
                         changed = true;
-
-                        // === ФИКС ДЛЯ 401 ===
-                        // Если обновился 1PSIDTS, принудительно обновляем 3PSIDTS тем же значением.
-                        // YouTube часто шлет обновление только для одного, а второй протухает.
+                        
                         if (key == "__Secure-1PSIDTS")
                         {
-                            _cookieMap["__Secure-3PSIDTS"] = value;
-                            Log.Info("[Auth] Token rotated (__Secure-1PSIDTS). Synced 3PSIDTS.");
+                             _cookieMap["__Secure-3PSIDTS"] = value;
                         }
                     }
                 }
             }
 
-            if (changed)
-            {
-                RebuildHeaderString();
-            }
+            if (changed) RebuildHeaderString();
         }
 
-        if (changed)
-        {
-            SaveToFile();
-        }
-
+        if (changed) SaveToFile();
         return changed;
     }
 
