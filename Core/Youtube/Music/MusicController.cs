@@ -10,28 +10,25 @@ internal class MusicController(HttpClient http)
 {
     private const string ApiUrl = "https://music.youtube.com/youtubei/v1";
 
-    // Сохраняем VisitorData
-    private string _lastVisitorData = "CgtZZXhhaXZaNTBFUSjlyd3LBjIKCgJSVRIEGgAgHWLfAgrcAjE1LllUPU1Qb2lOR21KdXBvNlVKMkVKTUZ1TE9mZU9jZzIzQTJ1SXdicGN4Q0FzNXpNQjRoaFJTNENqU3pLTHlITHB5Tkk0bEJNRGpSWEFiRW1TNW13QWZvRlJoS01zNjBDOXU4RmtnYUNHdWZrSEhHUEJ6RHFjcU00cGctQThkeF8ySk5pT3JxRU1vYk5FOUVpQ1VOZ2VIak55QmVoYURmVGkyQVZkQjZIbDZNeDEweGlmWm80OGphMmxCdl9VdnAtRFJJV29ybGFJNm0zcTFEWno1RjZSaWJZeUNhQUpKSXowdFdvUkpaakJTSlZmU2U1XzBCZ25lcjdQYTJtWjB0X1FOdmNfOW8xSVVGNUp2Qk1LVzBobWZjLXBFQ2dRT01LcVlIWHB2VzRrbmMyZDEtMkczUGU4Y2kxY1ZScVBoTnBzZUk3NnBXSDNlUC1vRUQtcUtFZGQ2MHBOUQ%3D%3D";
+    // VisitorData - это сессионный ID, который YouTube использует для трекинга контекста.
+    // Если он меняется в ответе, его нужно обновить для следующих запросов.
+    public string VisitorData { get; set; } = "";
 
     private JsonElement GetContext()
     {
-        var visitorDataJson = JsonSerializer.Serialize(_lastVisitorData);
+        var visitorDataJson = !string.IsNullOrEmpty(VisitorData) ? JsonSerializer.Serialize(VisitorData) : "null";
+
         var json = $$"""
         {
             "context": {
                 "client": {
                     "clientName": "WEB_REMIX",
                     "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
-                    "hl": "en",
-                    "gl": "US",
-                    "platform": "DESKTOP",
-                    "userInterfaceTheme": "USER_INTERFACE_THEME_DARK",
+                    "hl": "ru",
+                    "gl": "RU",
                     "visitorData": {{visitorDataJson}}
                 },
-                "user": {},
-                "request": {
-                    "useSsl": true
-                }
+                "user": {}
             }
         }
         """;
@@ -40,29 +37,33 @@ internal class MusicController(HttpClient http)
 
     private void UpdateVisitorData(JsonElement root)
     {
+        // Пытаемся найти новый visitorData в ответе (responseContext)
         var newVisitorData = root.GetPropertyOrNull("responseContext")
             ?.GetPropertyOrNull("visitorData")
             ?.GetStringOrNull();
 
-        if (!string.IsNullOrWhiteSpace(newVisitorData) && newVisitorData != _lastVisitorData)
+        if (!string.IsNullOrWhiteSpace(newVisitorData) && newVisitorData != VisitorData)
         {
-            _lastVisitorData = newVisitorData;
+            VisitorData = newVisitorData;
+            // Можно залогировать смену контекста для отладки
         }
     }
 
     private void AttachVisitorDataToRequest(HttpRequestMessage request)
     {
-        if (!string.IsNullOrEmpty(_lastVisitorData))
+        if (!string.IsNullOrEmpty(VisitorData))
         {
-            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, _lastVisitorData);
+            // Передаем в Handler, чтобы он добавил заголовок X-Goog-Visitor-Id
+            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, VisitorData);
         }
     }
 
+    // Пример метода Browse (остальные аналогично обновляют VisitorData)
     public async ValueTask<MusicBrowseResponse> GetBrowseAsync(string? browseId = null, string? continuation = null, CancellationToken cancellationToken = default)
     {
         var url = $"{ApiUrl}/browse";
-
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
+
         AttachVisitorDataToRequest(request);
 
         using var ms = new MemoryStream();
@@ -87,6 +88,8 @@ internal class MusicController(HttpClient http)
         response.EnsureSuccessStatusCode();
 
         var jsonDoc = Json.Parse(content);
+
+        // ВАЖНО: Обновляем контекст из ответа
         UpdateVisitorData(jsonDoc);
 
         return new MusicBrowseResponse(jsonDoc);

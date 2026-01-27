@@ -25,7 +25,7 @@ public class MusicClient(HttpClient http)
             var prevCount = allTracks.Count;
             ProcessShelves(response.Shelves, allTracks);
 
-            if (allTracks.Count == prevCount) break; 
+            if (allTracks.Count == prevCount) break;
 
             continuation = response.ContinuationToken;
             page++;
@@ -99,6 +99,11 @@ public class MusicClient(HttpClient http)
                 }
             }
         }
+    }
+
+    public void SetVisitorData(string visitorData)
+    {
+        _controller.VisitorData = visitorData;
     }
 
     public async Task LikeTrackAsync(string videoId, bool like, CancellationToken cancellationToken = default)

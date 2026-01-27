@@ -33,48 +33,6 @@ public class YoutubeClient : IDisposable
     }
 
     /// <summary>
-    /// Конструктор для создания клиента с настройкой CookieContainer.
-    /// Адаптирует контейнер в строку для YoutubeHttpHandler.
-    /// </summary>
-    public YoutubeClient(HttpClient http, CookieContainer cookieContainer)
-    {
-        // Конвертируем Container в строку для нашего "Hardcore Mode"
-        string rawCookies = ConvertContainerToString(cookieContainer);
-
-        // Создаем HttpClient, обернутый в наш YoutubeHttpHandler
-        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, rawCookies), true);
-
-        Videos = new VideoClient(_youtubeHttp);
-        Playlists = new PlaylistClient(_youtubeHttp);
-        Channels = new ChannelClient(_youtubeHttp);
-        Search = new SearchClient(_youtubeHttp);
-        Music = new MusicClient(_youtubeHttp);
-    }
-
-    /// <summary>
-    /// Легаси-конструктор для совместимости (List -> String).
-    /// </summary>
-    public YoutubeClient(HttpClient http, IReadOnlyList<Cookie> initialCookies)
-    {
-        // Конвертируем список в строку
-        var sb = new StringBuilder();
-        foreach (var cookie in initialCookies)
-        {
-            if (sb.Length > 0) sb.Append("; ");
-            sb.Append($"{cookie.Name}={cookie.Value}");
-        }
-        string rawCookies = sb.ToString();
-
-        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, rawCookies), true);
-
-        Videos = new VideoClient(_youtubeHttp);
-        Playlists = new PlaylistClient(_youtubeHttp);
-        Channels = new ChannelClient(_youtubeHttp);
-        Search = new SearchClient(_youtubeHttp);
-        Music = new MusicClient(_youtubeHttp);
-    }
-
-    /// <summary>
     /// Initializes an instance of <see cref="YoutubeClient" />.
     /// </summary>
     public YoutubeClient()

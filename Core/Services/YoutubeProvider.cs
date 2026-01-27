@@ -10,6 +10,8 @@ using System.Net;
 using LMP.Core.Youtube.Channels;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
+using LMP.Core.Youtube.Utils;
+using LMP.Core.Youtube.Utils.Extensions;
 
 namespace LMP.Core.Services;
 
@@ -20,7 +22,7 @@ public partial class YoutubeProvider : IDisposable
 
     private YoutubeClient _youtube = null!;
 
-    // Исправление warning CS8618: делаем поле nullable, так как есть конструктор без параметров
+    // CookieAuthService теперь обязателен для корректной работы, но может быть null при первом старте
     private readonly CookieAuthService? _cookieAuth;
 
     private readonly LibraryService? _libraryService;
@@ -42,6 +44,10 @@ public partial class YoutubeProvider : IDisposable
     public event Action<string>? OnStatusChanged;
     public event Action<string>? OnError;
 
+    // Regex для поиска VisitorData в HTML
+    [GeneratedRegex("\"VISITOR_DATA\":\"([^\"]+)\"")]
+    private static partial Regex VisitorDataRegex();
+
     private static readonly Regex YoutubeVideoRegex = _YoutubeVideoRegex();
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
@@ -59,43 +65,89 @@ public partial class YoutubeProvider : IDisposable
         {
             ReloadClient();
             _cookieAuth.OnAuthStateChanged += ReloadClient;
-
-            // Таймер удален для защиты куки от стирания
         }
     }
-
     public void ReloadClient()
     {
-        if (_cookieAuth == null) return;
-
-        // 1. Получаем сырую строку куки из сервиса авторизации
-        string rawCookies = _cookieAuth.GetRawCookies();
-
+        // 1. Создаем HttpClientHandler с отключенными куками (мы управляем ими сами)
         var handler = new HttpClientHandler
         {
-            // ВАЖНО: Отключаем автоматическую работу с куки.
-            // Теперь HttpClient не будет парсить Set-Cookie и очищать наши данные.
             UseCookies = false,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            AllowAutoRedirect = false
+            AllowAutoRedirect = false // Важно, чтобы не потерять заголовки при редиректе
         };
 
         var baseHttpClient = new HttpClient(handler);
 
-        // 2. Передаем сырую строку в наш обработчик
-        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, rawCookies, disposeClient: true);
+        // 2. Оборачиваем в наш YoutubeHttpHandler, передавая СЕРВИС (объект), а не строку
+        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, _cookieAuth, disposeClient: true);
         var finalHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
 
+        // 3. Создаем клиента
         _youtube = new YoutubeClient(finalHttpClient);
 
-        Log.Info($"[YouTube] Client reloaded. Auth provided: {!string.IsNullOrEmpty(rawCookies)}");
+        Log.Info($"[YouTube] Client reloaded. Auth provided: {_cookieAuth?.IsAuthenticated ?? false}");
     }
 
-    public Task InitializeAsync()
+    public async Task InitializeAsync()
     {
+        if (_cookieAuth?.IsAuthenticated == true)
+        {
+            Log.Info("[YouTube] Fetching fresh Visitor Data for auth session...");
+
+            // Muzza делает запрос к sw.js_data, чтобы получить свежий visitorData
+            // Это важно делать ПЕРЕД основными запросами API
+            var visitorData = await FetchVisitorDataAsync();
+
+            if (!string.IsNullOrEmpty(visitorData))
+            {
+                // Устанавливаем в контроллер
+                _youtube.Music.SetVisitorData(visitorData);
+                Log.Info($"[YouTube] Visitor Data synchronized: {visitorData}");
+            }
+            else
+            {
+                // Fallback, если не смогли получить (используем дефолт или то, что было в куках)
+                // Muzza использует константу CgtsZG1ySnZiQWtSbyiMjuGSBg%3D%3D как дефолт
+                _youtube.Music.SetVisitorData("CgtsZG1ySnZiQWtSbyiMjuGSBg%3D%3D");
+            }
+        }
+
         IsReady = true;
         NotifyStatus("[YouTube] Initialized");
-        return Task.CompletedTask;
+    }
+
+    private async Task<string?> FetchVisitorDataAsync()
+    {
+        try
+        {
+            // Делаем легкий GET запрос к endpoint'у, который отдает visitorData
+            // Это аналог innerTube.getSwJsData() в Muzza
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeHttpHandler.MuzzaUserAgent);
+
+            // Важно: передаем куки, если есть
+            if (_cookieAuth != null)
+            {
+                client.DefaultRequestHeaders.Add("Cookie", _cookieAuth.GetCookieHeader());
+            }
+
+            var jsonStr = await client.GetStringAsync("https://music.youtube.com/sw.js_data");
+
+            // Ответ приходит с префиксом )]}' - убираем его
+            if (jsonStr.StartsWith(")]}'")) jsonStr = jsonStr[4..];
+
+            var json = Json.Parse(jsonStr);
+            // Путь в JSON: [0, 2, 0, 0, 13] (магия InnerTube)
+            var visitorData = json[0][2][0][0][13].GetStringOrNull();
+
+            return visitorData;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[YouTube] Failed to fetch sw.js_data: {ex.Message}");
+            return null;
+        }
     }
 
     public YoutubeClient GetClient() => _youtube;
