@@ -1,14 +1,14 @@
 ﻿using Avalonia.Controls;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
-using MyLiteMusicPlayer.Features.Shared;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
+using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
 using System.Reactive.Linq;
 
-namespace MyLiteMusicPlayer.Features.Playlist;
+namespace LMP.Features.Playlist;
 
 /// <summary>
 /// ViewModel для отображения содержимого плейлиста и управления им.
@@ -256,7 +256,31 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        return _vmFactory.GetOrCreate(track, PlayFromPlaylist);
+        var vm = _vmFactory.GetOrCreate(track, PlayFromPlaylist);
+        
+        // Устанавливаем контекст плейлиста для отображения пункта "Remove from playlist"
+        vm.IsPlaylistContext = CanEdit; // Можно удалять только если плейлист редактируемый
+        
+        // Логика удаления
+        vm.RemoveFromPlaylistAction = async (t) =>
+        {
+            if (CanEdit)
+            {
+                // Удаляем из менеджера
+                await _manager.RemoveTrackFromPlaylistAsync(_currentPlaylistId, t.Id);
+                // Обновляем список локально, чтобы не дергать полную перезагрузку
+                // (Или полагаемся на событие LibraryService.OnDataChanged, которое вызовет LoadPlaylist)
+            }
+        };
+
+        // Логика радио (пока заглушка, или вызов движка если есть метод)
+        vm.StartRadioAction = (t) => 
+        {
+            // Пример: _audio.StartRadio(t);
+            Log.Info($"Start radio requested for {t.Title}");
+        };
+
+        return vm;
     }
 
     public async void LoadPlaylist(string playlistId)
@@ -283,7 +307,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     private void CalculateTotalDuration(List<TrackInfo> tracks)
     {
-        var totalSec = tracks.Sum(t => t.Duration.TotalSeconds);
+        var totalSec = tracks.Sum(static t => t.Duration.TotalSeconds);
         TotalDuration = TimeSpan.FromSeconds(totalSec);
 
         int totalHours = (int)TotalDuration.TotalHours;
@@ -299,7 +323,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     {
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
-        var tracks = Items.Select(vm => vm.Track).ToList();
+        var tracks = Items.Select(static vm => vm.Track).ToList();
         _ = _audio.StartQueueAsync(tracks, track);
         LibService.AddToRecentlyPlayed(track);
     }

@@ -4,13 +4,13 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
 using DynamicData.Binding;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Features.Player;
+namespace LMP.Features.Player;
 
 public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 {

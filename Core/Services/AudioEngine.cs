@@ -1,11 +1,11 @@
 ﻿// === ФАЙЛ: Core/Services/AudioEngine.cs ===
 using System.Diagnostics;
 using LibVLCSharp.Shared;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Models;
+using LMP.Core.ViewModels;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {

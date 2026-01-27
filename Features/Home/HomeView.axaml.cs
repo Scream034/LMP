@@ -1,6 +1,6 @@
 ﻿using Avalonia.Controls;
 
-namespace MyLiteMusicPlayer.Features.Home;
+namespace LMP.Features.Home;
 
 public partial class HomeView : UserControl
 {

@@ -4,12 +4,12 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using DynamicData;
 using Microsoft.Extensions.DependencyInjection;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Models;
+using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Core.ViewModels;
+namespace LMP.Core.ViewModels;
 
 public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IDisposable, IFilterable
     where TViewModel : class

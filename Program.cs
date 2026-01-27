@@ -1,20 +1,17 @@
 ﻿
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Features.Home;
-using MyLiteMusicPlayer.Features.Library;
-using MyLiteMusicPlayer.Features.Player;
-using MyLiteMusicPlayer.Features.Playlist;
-using MyLiteMusicPlayer.Features.Search;
-using MyLiteMusicPlayer.Features.Settings;
-using MyLiteMusicPlayer.Features.Shell;
+using LMP.Core.Services;
+using LMP.Features.Home;
+using LMP.Features.Library;
+using LMP.Features.Player;
+using LMP.Features.Playlist;
+using LMP.Features.Search;
+using LMP.Features.Settings;
+using LMP.Features.Shell;
 using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using Avalonia;
-using YoutubeExplode;
-using YoutubeExplode.Search;
-using System.Diagnostics;
 
-namespace MyLiteMusicPlayer;
+namespace LMP;
 
 class Program
 {
@@ -31,13 +28,14 @@ class Program
             Console.WriteLine("Logger initializing...");
             Log.Initialize();
 
-            Log.Info("LiteMusicPlayer starting...!");
+            Log.Info($"{G.AppId} starting...!");
+
+            G.Folder.Create();
 
             var services = new ServiceCollection();
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
-            _ = TestSearch();
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
@@ -47,11 +45,11 @@ class Program
     }
 
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
-            .UsePlatformDetect()
-            .WithInterFont()
-            .LogToTrace()
-            .UseReactiveUI();
+            => AppBuilder.Configure<App>()
+                .UsePlatformDetect()
+                .WithInterFont()
+                .LogToTrace()
+                .UseReactiveUI();
 
     private static void ConfigureServices(IServiceCollection services)
     {
@@ -60,7 +58,7 @@ class Program
         // --- Core Services ---
         services.AddSingleton<LibraryService>();
         services.AddSingleton<ThemeManagerService>();
-        services.AddSingleton<GoogleAuthService>();
+        services.AddSingleton<CookieAuthService>();
         services.AddSingleton<YoutubeProvider>();
         services.AddSingleton<YoutubeUserDataService>();
         services.AddSingleton<MusicLibraryManager>();
@@ -92,53 +90,6 @@ class Program
         services.AddSingleton<PlayerBarViewModel>();
 
         Log.Info("Services registered successfully.");
-    }
-
-   static async Task TestSearch()
-    {
-        var youtube = new YoutubeClient();
-        string query = "Линия Фронта - Советская высадка в Нормандии! ★ В тылу врага: Штурм 2 ★ #447";
-
-        Console.WriteLine($"--- ТЕСТ ПОИСКА: {query} ---\n");
-        var stopwatch = Stopwatch.StartNew();
-
-        try
-        {
-            Console.WriteLine("[ФИЛЬТР: MUSIC (Песни)]");
-            // Берем первый батч результатов
-            var musicBatch = await youtube.Search.GetResultBatchesAsync(query, SearchFilter.Music).FirstOrDefaultAsync();
-            if (musicBatch != null && musicBatch.Items.Any())
-            {
-                foreach (var item in musicBatch.Items.Take(5))
-                {
-                    if (item is VideoSearchResult video)
-                        Console.WriteLine($"> ПЕСНЯ: {video.Title} | Автор: {video.Author.ChannelTitle} | Short: {video.IsShort}");
-                }
-            }
-            else
-            {
-                Console.WriteLine("> Результатов по фильтру 'Музыка' не найдено.");
-            }
-
-            // 2. Поиск видео
-            Console.WriteLine("\n[ФИЛЬТР: VIDEO (Обычные видео)]");
-            var videoResults = await youtube.Search.GetVideosAsync(query).Take(5).ToListAsync();
-            foreach (var v in videoResults)
-                Console.WriteLine($"> ВИДЕО: {v.Title} | Длительность: {v.Duration} | URL: {v.Url}");
-        }
-        catch (Exception ex)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"\nОШИБКА: {ex.Message}");
-            Console.ResetColor();
-            Console.WriteLine(ex.StackTrace);
-        }
-        finally
-        {
-            stopwatch.Stop();
-            Console.WriteLine($"\nТест завершен за: {stopwatch.ElapsedMilliseconds} мс.");
-            Console.ReadKey();
-        }
     }
 }
 

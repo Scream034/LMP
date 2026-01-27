@@ -1,0 +1,68 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:dialogs="using:LMP.UI.Dialogs"
+        x:Class="LMP.UI.Dialogs.InputDialog"
+        x:DataType="dialogs:InputDialog"
+        Title="Input"
+        Width="480" 
+        SizeToContent="Height"
+        MinHeight="200"
+        MaxHeight="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False"
+        SystemDecorations="BorderOnly"
+        Background="{DynamicResource BgBaseBrush}">
+
+    <Border BorderBrush="{DynamicResource BgHighlightBrush}" 
+            BorderThickness="1" 
+            CornerRadius="8" 
+            Padding="24"
+            Background="{DynamicResource BgElevatedBrush}">
+        
+        <StackPanel Spacing="16">
+            <!-- Title -->
+            <TextBlock Text="{Binding DialogTitle}" 
+                       FontSize="18" 
+                       FontWeight="Bold" 
+                       Foreground="{DynamicResource TextPrimaryBrush}"/>
+
+            <!-- Prompt -->
+            <TextBlock Text="{Binding PromptMessage}" 
+                       Foreground="{DynamicResource TextSecondaryBrush}" 
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding PromptMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+            
+            <!-- Input -->
+            <TextBox Text="{Binding InputValue}" 
+                     MinHeight="80"
+                     MaxHeight="150"
+                     AcceptsReturn="True" 
+                     TextWrapping="Wrap"
+                     Watermark="{Binding Watermark}"
+                     VerticalContentAlignment="Top"
+                     Padding="12"
+                     Classes="input-box"/>
+
+            <!-- Buttons -->
+            <StackPanel Orientation="Horizontal" 
+                        HorizontalAlignment="Right" 
+                        Spacing="12"
+                        Margin="0,8,0,0">
+                <Button Content="{Binding CancelText}" 
+                        Click="OnCancelClick"
+                        MinWidth="90"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource BgHighlightBrush}"
+                        BorderThickness="1"/>
+                
+                <Button Content="{Binding ConfirmText}" 
+                        Click="OnConfirmClick"
+                        MinWidth="90" 
+                        Classes="accent"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

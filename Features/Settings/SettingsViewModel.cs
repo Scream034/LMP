@@ -2,36 +2,28 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Media;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Features.Settings;
+namespace LMP.Features.Settings;
 
-/// <summary>
-/// ViewModel страницы настроек.
-/// Управляет всеми настройками приложения: аккаунт, сеть, кэш, тема, аудио.
-/// </summary>
 public sealed class SettingsViewModel : ViewModelBase, IDisposable
 {
-    // DEPENDENCIES
-
     private readonly LibraryService _library;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
     private readonly StreamCacheManager _streamCache;
     private readonly ThemeManagerService _themeManager;
-    private readonly GoogleAuthService _auth;
+    private readonly CookieAuthService _auth; // Changed
     private readonly IDialogService _dialog;
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
 
     private bool _isDisposed;
     private bool _isLoadingTheme;
-
-    // ACCOUNT PROPERTIES
 
     [Reactive] public bool IsAuthenticated { get; private set; }
     [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
@@ -41,18 +33,16 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
 
     public string AccountName => IsAuthenticated
-        ? _auth.State.YouTubeChannelName ?? _auth.State.UserName ?? SL["Auth_NotSignedIn"]
+        ? "YouTube Music User" // Cookie Auth не отдает имя сразу, можно вытащить позже
         : _library.FakeAccountName ?? SL["Auth_NotSignedIn"];
 
     public string? AccountAvatarUrl => IsAuthenticated
-        ? _auth.State.YouTubeAvatarUrl
+        ? null
         : _library.FakeAccountAvatarUrl;
 
     public string AccountSubtitle => IsAuthenticated
-        ? _auth.State.UserEmail ?? SL["Auth_LoggedIn"]
+        ? "Authorized via Cookies"
         : IsFakeAccount ? SL["Account_LimitedAccess"] : SL["Auth_Guest"];
-
-    // NETWORK PROPERTIES
 
     public List<InternetProfile> InternetProfileOptions { get; } = [.. Enum.GetValues<InternetProfile>()];
     [Reactive] public InternetProfile SelectedInternetProfile { get; set; }
@@ -64,8 +54,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public string ProxyPass { get; set; } = "";
     [Reactive] public bool NetworkRestartRequired { get; set; }
 
-    // STORAGE & CACHE PROPERTIES
-
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
     [Reactive] public int ImageCacheLimitMb { get; set; }
     [Reactive] public int AudioCacheLimitMb { get; set; }
@@ -74,34 +62,21 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public double ImageCacheUsagePercent { get; private set; }
     [Reactive] public double AudioCacheUsagePercent { get; private set; }
 
-    // THEME / APPEARANCE PROPERTIES
-
-    /// <summary>Список встроенных пресетов тем</summary>
     public ObservableCollection<ThemeSettings> ThemePresets { get; } = [];
-
-    /// <summary>Выбранный пресет (null если кастомная тема)</summary>
     [Reactive] public ThemeSettings? SelectedPreset { get; set; }
-
-    // Основные цвета для редактирования
     [Reactive] public Color AccentColor { get; set; }
     [Reactive] public Color BgPrimaryColor { get; set; }
     [Reactive] public Color BgSecondaryColor { get; set; }
     [Reactive] public Color BgElevatedColor { get; set; }
     [Reactive] public Color TextPrimaryColor { get; set; }
     [Reactive] public Color TextSecondaryColor { get; set; }
-
-    /// <summary>Есть ли несохраненные изменения темы</summary>
     [Reactive] public bool HasUnsavedThemeChanges { get; set; }
-
-    // AUDIO PROPERTIES
 
     public List<AudioQualityPreference> QualityOptions { get; } = [.. Enum.GetValues<AudioQualityPreference>()];
     [Reactive] public int MaxVolumeLimit { get; set; }
     [Reactive] public float TargetGainDb { get; set; }
     [Reactive] public AudioQualityPreference QualityPreference { get; set; }
     [Reactive] public bool RememberTrackFormat { get; set; }
-
-    // GENERAL PROPERTIES
 
     [Reactive] public bool DiscordRpcEnabled { get; set; }
     [Reactive] public bool AutoPlayOnPaste { get; set; }
@@ -112,8 +87,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
-
-    // COMMANDS
 
     public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearHistoryCommand { get; }
@@ -127,15 +100,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
 
-    // CONSTRUCTOR
-
     public SettingsViewModel(
         LibraryService library,
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         StreamCacheManager streamCache,
         ThemeManagerService themeManager,
-        GoogleAuthService auth,
+        CookieAuthService auth, // Changed
         IDialogService dialog,
         AudioEngine audio,
         YoutubeProvider youtube)
@@ -150,11 +121,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _audio = audio;
         _youtube = youtube;
 
-        // Загружаем пресеты
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);
 
-        // Инициализируем команды
         LoginCommand = ReactiveCommand.CreateFromTask(LoginAsync);
         LogoutCommand = ReactiveCommand.CreateFromTask(LogoutAsync);
         SetFakeAccountCommand = ReactiveCommand.CreateFromTask(SetFakeAccountAsync);
@@ -172,11 +141,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         SetupSubscriptions();
     }
 
-    // INITIALIZATION
-
     private void SetupSubscriptions()
     {
-        // Language change
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1).WhereNotNull()
             .Subscribe(lang =>
@@ -186,25 +152,22 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 _library.Save();
             });
 
-        // Network settings -> Mark restart required
         this.WhenAnyValue(
                 x => x.SelectedInternetProfile, x => x.ProxyEnabled,
                 x => x.ProxyHost, x => x.ProxyPort,
                 x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
             .Skip(1)
-            .Subscribe(_ =>
+            .Subscribe(x =>
             {
-                NetworkRestartRequired = true;
+                NetworkRestartRequired = x.Item2;
                 SaveNetworkSettings();
             });
 
-        // Storage limits -> Save with throttle
         this.WhenAnyValue(x => x.ImageCacheLimitMb, x => x.AudioCacheLimitMb)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(500))
             .Subscribe(_ => SaveStorageSettings());
 
-        // Theme color changes -> Mark unsaved
         this.WhenAnyValue(
                 x => x.AccentColor, x => x.BgPrimaryColor, x => x.BgSecondaryColor,
                 x => x.BgElevatedColor, x => x.TextPrimaryColor, x => x.TextSecondaryColor)
@@ -215,12 +178,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                     HasUnsavedThemeChanges = true;
             });
 
-        // Preset selection -> Apply to color pickers
         this.WhenAnyValue(x => x.SelectedPreset)
             .Skip(1).WhereNotNull()
             .Subscribe(ApplyPresetToColorPickers);
 
-        // Audio settings -> Immediate save
         this.WhenAnyValue(x => x.MaxVolumeLimit).Skip(1).Subscribe(v =>
         {
             _library.Data.MaxVolumeLimit = v;
@@ -242,7 +203,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             _youtube.ClearCache();
         });
 
-        // General settings -> Immediate save
         this.WhenAnyValue(x => x.DiscordRpcEnabled).Skip(1).Subscribe(v =>
         {
             _library.Data.DiscordRpcEnabled = v;
@@ -289,7 +249,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void LoadAllSettings()
     {
-        // General & Audio
         DownloadPath = _library.DownloadPath;
         DiscordRpcEnabled = _library.Data.DiscordRpcEnabled;
         AutoPlayOnPaste = _library.Data.AutoPlayOnUrlPaste;
@@ -303,12 +262,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         SearchCacheTtlMinutes = _library.Data.SearchCacheTtlMinutes;
         SelectedLanguage = Languages.FirstOrDefault(x => x.Code == _library.Data.LanguageCode) ?? Languages[0];
 
-        // Account
         FakeChannelInput = _library.FakeAccountUrl ?? "";
         IsAuthenticated = _auth.IsAuthenticated;
         RaiseAccountProperties();
 
-        // Network
         SelectedInternetProfile = _library.Data.InternetProfile;
         ProxyEnabled = _library.Data.Proxy.Enabled;
         ProxyHost = _library.Data.Proxy.Host;
@@ -317,15 +274,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ProxyUser = _library.Data.Proxy.Username;
         ProxyPass = _library.Data.Proxy.Password;
 
-        // Storage
         ImageCacheLimitMb = _library.Data.Storage.ImageCacheLimitMb;
         AudioCacheLimitMb = _library.Data.Storage.AudioCacheLimitMb;
 
-        // Theme
         LoadThemeColors();
     }
-
-    // THEME LOGIC
 
     private void LoadThemeColors()
     {
@@ -360,7 +313,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void ApplyTheme()
     {
-        // Правильное извлечение RGB из Color (без альфа-канала)
         static string GetRgbHex(Color c) => $"{c.R:X2}{c.G:X2}{c.B:X2}";
 
         var theme = new ThemeSettings
@@ -375,7 +327,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             BgHover = LightenColor(BgSecondaryColor, 0.2).ToString(),
             BgSkeleton = LightenColor(BgSecondaryColor, 0.05).ToString(),
             BgSkeletonDeep = DarkenColor(BgSecondaryColor, 0.2).ToString(),
-            // ИСПРАВЛЕНО: правильная генерация overlay с альфа-каналом
             BgOverlay = $"#CC{GetRgbHex(BgPrimaryColor)}",
             TextPrimary = TextPrimaryColor.ToString(),
             TextSecondary = TextSecondaryColor.ToString(),
@@ -394,8 +345,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         LoadThemeColors();
         SelectedPreset = ThemePresets.FirstOrDefault();
     }
-
-    // COLOR HELPERS
 
     private static Color ParseColorSafe(string hex)
     {
@@ -419,8 +368,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             (byte)(c.B * (1 - factor)));
     }
 
-    // SAVE HELPERS
-
     private void SaveNetworkSettings()
     {
         _library.Data.InternetProfile = SelectedInternetProfile;
@@ -441,8 +388,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         UpdateCacheStats();
     }
 
-    // CACHE LOGIC
-
     private async Task ClearImageCacheAsync()
     {
         await _imageCache.ClearAllAsync();
@@ -458,7 +403,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private void UpdateCacheStats()
     {
         var (imgCount, imgSize) = _imageCache.GetStats();
-        var audioStats = _streamCache.GetStats();
+        var audioStats = StreamCacheManager.GetStats();
 
         ImageCacheStats = $"{imgSize} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]})";
         AudioCacheStats = $"{audioStats.SizeMb} MB / {AudioCacheLimitMb} MB ({audioStats.FileCount} {SL["Common_Files"]})";
@@ -468,8 +413,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         AudioCacheUsagePercent = AudioCacheLimitMb > 0
             ? Math.Clamp((double)audioStats.SizeMb / AudioCacheLimitMb, 0, 1) : 0;
     }
-
-    // ACCOUNT LOGIC
 
     private async Task SetFakeAccountAsync()
     {
@@ -507,11 +450,21 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         RaiseAccountProperties();
     }
 
+    // --- REPLACED LOGIN LOGIC ---
     private async Task LoginAsync()
     {
-        await _auth.StartLoginAsync();
-        IsAuthenticated = _auth.IsAuthenticated;
-        RaiseAccountProperties();
+        // Используем новый метод IDialogService.ShowInputAsync
+        // Примечание: для перевода строк можно использовать Environment.NewLine в prompt
+        var cookies = await _dialog.ShowInputAsync("Login",
+            "1. Open music.youtube.com in browser\n2. Press F12 -> Network -> Click any request -> Copy 'Cookie' header\n3. Paste here:");
+
+        if (!string.IsNullOrWhiteSpace(cookies))
+        {
+            _auth.SaveCookies(cookies.Trim());
+            IsAuthenticated = _auth.IsAuthenticated;
+            RaiseAccountProperties();
+            await _dialog.ShowInfoAsync("Success", "Cookies saved. Restart might be required for all features.");
+        }
     }
 
     private async Task LogoutAsync()
@@ -531,8 +484,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(HasAccount));
         this.RaisePropertyChanged(nameof(IsFakeAccount));
     }
-
-    // GENERAL ACTIONS
 
     private async Task BrowseDownloadPathAsync()
     {
@@ -559,8 +510,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         LoadAllSettings();
         await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Dialog_ResetComplete"]);
     }
-
-    // IDISPOSABLE
 
     public void Dispose()
     {

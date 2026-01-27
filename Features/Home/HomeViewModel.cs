@@ -1,14 +1,14 @@
-﻿using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
-using MyLiteMusicPlayer.Features.Shared;
+﻿using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
+using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 
-namespace MyLiteMusicPlayer.Features.Home;
+namespace LMP.Features.Home;
 
 public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
 {
@@ -143,7 +143,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             // Можно просто сохранить result, так как он новый
             _ = _searchCache.SetAsync(_currentQuery, GetItemsSnapshot().Concat(result).ToList());
 
-            var imageUrls = result.Take(10).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+            var imageUrls = result.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
             _ = _imageCache.PrefetchAsync(imageUrls!, ct);
         }
         UpdateStats();
@@ -202,7 +202,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
                     if (tracks.Count > 0) _ = _searchCache.SetAsync(_currentQuery, tracks);
                 }
 
-                var imageUrls = tracks.Take(20).Select(t => t.ThumbnailUrl).Where(u => !string.IsNullOrEmpty(u));
+                var imageUrls = tracks.Take(20).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
                 _ = _imageCache.PrefetchAsync(imageUrls!, ct);
 
                 if (ct.IsCancellationRequested) return;

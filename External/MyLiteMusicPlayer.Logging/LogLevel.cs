@@ -1,4 +1,4 @@
-namespace MyLiteMusicPlayer.Logging;
+namespace LMP.Logging;
 
 public enum LogLevel
 {

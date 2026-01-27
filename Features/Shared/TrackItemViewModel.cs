@@ -1,11 +1,11 @@
 ﻿using System.Reactive;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Models;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-namespace MyLiteMusicPlayer.Features.Shared;
+namespace LMP.Features.Shared;
 
 /// <summary>
 /// ViewModel, представляющая один музыкальный трек в списке.
@@ -15,18 +15,15 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 {
     #region Fields
 
-    // Сервисы
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
 
-    // Внешние действия
     private Action<TrackInfo>? _onPlay;
-    
+
     private bool _isDisposed;
 
-    // Делегаты для гарантированной отписки
     private readonly Action<TrackInfo?> _onTrackChangedHandler;
     private readonly Action<bool, bool> _onPlaybackStateHandler;
     private readonly Action<TrackInfo> _onTrackUpdatedHandler;
@@ -37,81 +34,51 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #region Properties
 
-    /// <summary>
-    /// Проверка, не был ли объект уже уничтожен.
-    /// Критично для фабрики, использующей WeakReference.
-    /// </summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => this.RaiseAndSetIfChanged(ref _isSelected, value);
+    }
+    private bool _isSelected;
+
     public bool IsDisposed => _isDisposed;
-
-    /// <summary>
-    /// Данные трека.
-    /// </summary>
     public TrackInfo Track { get; }
-
-    /// <summary>
-    /// ID трека.
-    /// </summary>
     public string Id => Track.Id;
-
-    /// <summary>
-    /// Название трека.
-    /// </summary>
     public string Title { get; }
-
-    /// <summary>
-    /// Исполнитель.
-    /// </summary>
     public string Author { get; }
-
-    /// <summary>
-    /// Длительность.
-    /// </summary>
     public TimeSpan Duration { get; }
 
-    /// <summary>
-    /// URL обложки.
-    /// </summary>
+    // Форматированная строка времени (mm:ss) для UI
+    public string FormattedDuration => Duration.TotalHours >= 1
+        ? Duration.ToString(@"h\:mm\:ss")
+        : Duration.ToString(@"m\:ss");
+
     public string ThumbnailUrl { get; }
 
-    /// <summary>
-    /// Является ли этот трек текущим в AudioEngine.
-    /// </summary>
     [Reactive] public bool IsActive { get; private set; }
-
-    /// <summary>
-    /// Проигрывается ли этот трек прямо сейчас.
-    /// </summary>
     [Reactive] public bool IsPlaying { get; private set; }
-
-    /// <summary>
-    /// Лайкнут ли трек.
-    /// </summary>
     [Reactive] public bool IsLiked { get; set; }
-
-    /// <summary>
-    /// Скачан ли трек.
-    /// </summary>
     [Reactive] public bool IsDownloaded { get; set; }
-
-    /// <summary>
-    /// Идет ли загрузка.
-    /// </summary>
     [Reactive] public bool IsDownloading { get; set; }
-
-    /// <summary>
-    /// Прогресс загрузки (0..1).
-    /// </summary>
     [Reactive] public float DownloadProgress { get; set; }
-
-    /// <summary>
-    /// Является ли контекстом очереди (скрывает кнопку "Add to queue").
-    /// </summary>
     [Reactive] public bool IsQueueContext { get; set; }
+    [Reactive] public bool IsMenuOpen { get; set; }
 
-    /// <summary>
-    /// Видимость кнопки добавления в очередь.
-    /// </summary>
+    // Контекст плейлиста (для отображения кнопки удаления в меню)
+    [Reactive] public bool IsPlaylistContext { get; set; }
+
     public bool ShowAddToQueue => !IsQueueContext;
+
+    // Текст для кнопки скачивания в меню
+    public string DownloadStatusText => IsDownloaded ? L["Track_Downloaded"] : L["Track_Download"];
+
+    #endregion
+
+    #region Actions Injection
+
+    // Внешние действия, назначаемые родительской VM
+    public Action<TrackInfo>? StartRadioAction { get; set; }
+    public Action<TrackInfo>? RemoveFromPlaylistAction { get; set; }
 
     #endregion
 
@@ -120,6 +87,16 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
+
+    // Context Menu Commands
+    public ReactiveCommand<Unit, Unit> StartRadioCommand { get; }
+    public ReactiveCommand<Unit, Unit> DownloadTrackCommand { get; }
+    public ReactiveCommand<Unit, Unit> RemoveFromPlaylistCommand { get; }
+    public ReactiveCommand<Unit, Unit> RemoveFromQueueCommand { get; }
+
+    // Menu State Commands
+    public ReactiveCommand<Unit, Unit> MenuOpenedCommand { get; }
+    public ReactiveCommand<Unit, Unit> MenuClosedCommand { get; }
 
     #endregion
 
@@ -158,7 +135,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _downloads.OnCompleted += _onDownloadCompletedHandler;
 
         IsDownloading = _downloads.IsDownloading(track.Id);
-        if (IsDownloading) 
+        if (IsDownloading)
             DownloadProgress = _downloads.GetProgress(track.Id);
 
         IsDownloaded = track.IsDownloaded;
@@ -166,12 +143,51 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
         UpdateActiveState(_audio.CurrentTrack, _audio.IsPlaying);
 
+        // --- Commands ---
+
         PlayCommand = ReactiveCommand.CreateFromTask(ExecutePlayAsync);
         ToggleLikeCommand = ReactiveCommand.CreateFromTask(ExecuteToggleLikeAsync);
         AddToQueueCommand = ReactiveCommand.Create(ExecuteAddToQueue);
 
+        // Menu State Commands
+        MenuOpenedCommand = ReactiveCommand.Create(() => { IsMenuOpen = true; });
+        MenuClosedCommand = ReactiveCommand.Create(() => { IsMenuOpen = false; });
+
+        // 1. Start Radio
+        StartRadioCommand = ReactiveCommand.Create(() =>
+        {
+            if (StartRadioAction != null)
+                StartRadioAction(Track);
+            else
+                Log.Info($"[TrackItem] Start radio for {Title} (Action not bound)");
+        });
+
+        // 2. Download
+        DownloadTrackCommand = ReactiveCommand.Create(() =>
+        {
+            if (!IsDownloaded && !IsDownloading)
+            {
+                _downloads.StartDownload(Track);
+            }
+        });
+
+        // 3. Remove From Playlist
+        RemoveFromPlaylistCommand = ReactiveCommand.Create(() =>
+        {
+            RemoveFromPlaylistAction?.Invoke(Track);
+        }, this.WhenAnyValue(x => x.IsPlaylistContext));
+
+        // 4. Remove From Queue
+        RemoveFromQueueCommand = ReactiveCommand.Create(() =>
+        {
+            _audio.RemoveFromQueue(Track);
+        }, this.WhenAnyValue(x => x.IsQueueContext));
+
         this.WhenAnyValue(x => x.IsQueueContext)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowAddToQueue)));
+
+        this.WhenAnyValue(x => x.IsDownloaded)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(DownloadStatusText)));
     }
 
     #endregion
@@ -195,6 +211,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             IsLiked = updatedTrack.IsLiked;
             IsDownloaded = updatedTrack.IsDownloaded;
             this.RaisePropertyChanged(nameof(IsDownloaded));
+            this.RaisePropertyChanged(nameof(DownloadStatusText));
         }
     }
 
@@ -217,6 +234,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             {
                 IsDownloaded = true;
                 this.RaisePropertyChanged(nameof(IsDownloaded));
+                this.RaisePropertyChanged(nameof(DownloadStatusText));
             }
         }
     }
@@ -287,7 +305,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _library.OnTrackUpdated -= _onTrackUpdatedHandler;
         _downloads.OnProgress -= _onDownloadProgressHandler;
         _downloads.OnCompleted -= _onDownloadCompletedHandler;
-        
+
         GC.SuppressFinalize(this);
     }
 

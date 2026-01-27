@@ -1,14 +1,22 @@
 ﻿using System.Text.Json.Serialization;
+ // Для IBatchItem
+using LMP.Core.Youtube.Search; // Для ISearchResult
 
-namespace MyLiteMusicPlayer.Core.Models;
+namespace LMP.Core.Models;
 
-public class TrackInfo
+// Реализуем IBatchItem для поддержки пагинации YouTube
+// Реализуем ISearchResult для поддержки возврата из SearchClient
+public class TrackInfo : IBatchItem, ISearchResult
 {
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Author { get; set; } = string.Empty;
+    
+    // Свойства для YouTube
+    public string? ChannelId { get; set; }
     public bool IsOfficialArtist { get; set; } = false;
     public bool IsMusic { get; set; } = false;
+    
     public string Url { get; set; } = string.Empty;
     public string StreamUrl { get; set; } = string.Empty;
     public TimeSpan Duration { get; set; }
@@ -18,84 +26,50 @@ public class TrackInfo
     {
         get
         {
-            // Если есть URL, возвращаем его
-            if (!string.IsNullOrEmpty(_thumbnailUrl))
-                return _thumbnailUrl;
-
-            // Fallback: генерируем URL превью YouTube по ID
+            if (!string.IsNullOrEmpty(_thumbnailUrl)) return _thumbnailUrl;
             if (Id.StartsWith("yt_") && Id.Length > 3)
             {
                 var videoId = Id[3..];
-                // YouTube thumbnail URLs
                 return $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
             }
-
             return string.Empty;
         }
         set => _thumbnailUrl = value;
     }
 
-    /// <summary>
-    /// Для проверки - есть ли реальный thumbnail
-    /// </summary>
     public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl);
 
-    /// Состояние в библиотеке
+    // State
     public bool IsLiked { get; set; }
     public bool IsDisliked { get; set; }
     public bool IsDownloaded { get; set; }
     public string? LocalPath { get; set; }
 
-    /// <summary>
-    /// В каких плейлистах находится
-    /// </summary>
     public HashSet<string> InPlaylists { get; set; } = [];
-
-    /// <summary>
-    /// Метаданные для радио
-    /// </summary>
     public string? RadioSeedId { get; set; }
 
-    /// <summary>
-    /// Сохраняем предпочтительный кодек для этого трека (например: "webm" или "mp4")
-    /// </summary>
+    // Format preferences
     public string? PreferredContainer { get; set; }
-
-    /// <summary>
-    /// Предпочтительный битрейт (для точного выбора формата)
-    /// </summary>
     public int PreferredBitrate { get; set; }
+    
+    [JsonIgnore] public string? TransientContainer { get; set; }
+    [JsonIgnore] public int TransientBitrate { get; set; }
 
-    /// <summary>
-    /// Временный выбор контейнера для текущей сессии (ручное переключение).
-    /// Имеет приоритет над сохраненным. Не сохраняется на диск.
-    /// </summary>
-    [JsonIgnore]
-    public string? TransientContainer { get; set; }
-
-    /// <summary>
-    /// Временный выбор битрейта для текущей сессии.
-    /// </summary>
-    [JsonIgnore]
-    public int TransientBitrate { get; set; }
-
-    /// <summary>Закэшированный кодек (Opus/AAC/etc)</summary>
-    [JsonIgnore]
-    public string CachedCodec { get; set; } = "";
-
-    /// <summary>Закэшированный битрейт</summary>
-    [JsonIgnore]
-    public int CachedBitrate { get; set; }
-
-    /// <summary>Закэшированный контейнер</summary>
-    [JsonIgnore]
-    public string CachedContainer { get; set; } = "";
+    [JsonIgnore] public string CachedCodec { get; set; } = "";
+    [JsonIgnore] public int CachedBitrate { get; set; }
+    [JsonIgnore] public string CachedContainer { get; set; } = "";
+    
+    // ISearchResult implementation
+    // Для TrackInfo Url и Title уже есть, совпадают с интерфейсом
 
     public TrackInfo Clone() => new()
     {
         Id = Id,
         Title = Title,
         Author = Author,
+        ChannelId = ChannelId,
+        IsOfficialArtist = IsOfficialArtist,
+        IsMusic = IsMusic,
         Url = Url,
         StreamUrl = StreamUrl,
         Duration = Duration,
@@ -105,7 +79,8 @@ public class TrackInfo
         IsDownloaded = IsDownloaded,
         LocalPath = LocalPath,
         InPlaylists = [.. InPlaylists],
-        RadioSeedId = RadioSeedId
+        RadioSeedId = RadioSeedId,
+        PreferredContainer = PreferredContainer,
+        PreferredBitrate = PreferredBitrate
     };
 }
-

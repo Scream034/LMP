@@ -1,4 +1,4 @@
-namespace MyLiteMusicPlayer.Logging;
+namespace LMP.Logging;
 
 public readonly struct LogMessage(LogLevel level, string category, string message, Exception? exception = null)
 {

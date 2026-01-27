@@ -2,77 +2,30 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Home"
-    xmlns:svm="using:MyLiteMusicPlayer.Features.Shared"
-    x:Class="MyLiteMusicPlayer.UI.Controls.TrackListControl"
+    xmlns:ia="using:Avalonia.Xaml.Interactions.Core"
+    xmlns:b="using:LMP.Core.Behaviors"
+    xmlns:svm="using:LMP.Features.Shared"
+    xmlns:asyncImage="using:AsyncImageLoader"
+    x:Class="LMP.UI.Controls.TrackListControl"
     x:Name="Root"
     x:CompileBindings="True">
 
-    <UserControl.Styles>
-        <!-- Стили для строки трека -->
-        <Style Selector="Border.track-row">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="4,2" />
-            <Setter Property="Margin" Value="0,1" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.2" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Border.track-row:pointerover">
-            <Setter Property="Background" Value="#1AFFFFFF" />
-        </Style>
-        <Style Selector="Border.track-row.isActive">
-            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-        </Style>
-        <Style Selector="Border.track-row.isActive:pointerover">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-        </Style>
-        
-        <!-- Анимация точек -->
-        <Style Selector="TextBlock.dot1">
-            <Style.Animations>
-                <Animation Duration="0:0:1.2" IterationCount="Infinite">
-                    <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                    <KeyFrame Cue="25%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
-                    <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
-        <Style Selector="TextBlock.dot2">
-            <Style.Animations>
-                <Animation Duration="0:0:1.2" IterationCount="Infinite" Delay="0:0:0.2">
-                    <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                    <KeyFrame Cue="25%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
-                    <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
-        <Style Selector="TextBlock.dot3">
-            <Style.Animations>
-                <Animation Duration="0:0:1.2" IterationCount="Infinite" Delay="0:0:0.4">
-                    <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                    <KeyFrame Cue="25%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
-                    <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.2" /></KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
-    </UserControl.Styles>
-
     <Grid>
-        <!-- 1. НАЧАЛЬНАЯ ЗАГРУЗКА -->
+
+        <!-- 1. СОСТОЯНИЕ ЗАГРУЗКИ -->
         <Panel IsVisible="{Binding IsLoading, ElementName=Root}" ZIndex="10">
+
+            <!-- Плавная загрузка со скелетонами -->
             <Panel IsVisible="{Binding EnableSmoothLoading, ElementName=Root}">
+
+                <!-- Обычный лоадер -->
                 <ContentControl Classes="loading-initial"
                     IsVisible="{Binding !UseSearchLoader, ElementName=Root}" />
-                
-                <!-- Поиск: скелетоны + лупа -->
+
+                <!-- Лоадер для поиска (с лупой) -->
                 <Grid HorizontalAlignment="Stretch" Margin="0,20"
-                      IsVisible="{Binding UseSearchLoader, ElementName=Root}">
-                    
+                    IsVisible="{Binding UseSearchLoader, ElementName=Root}">
+
                     <StackPanel Classes="breathing skeleton-list-container">
                         <ContentControl Classes="track-skeleton-row" />
                         <ContentControl Classes="track-skeleton-row" />
@@ -81,22 +34,22 @@
                         <ContentControl Classes="track-skeleton-row" />
                     </StackPanel>
 
-                    <Canvas IsHitTestVisible="False" HorizontalAlignment="Center" 
-                            Width="300" Height="200">
+                    <Canvas IsHitTestVisible="False" HorizontalAlignment="Center"
+                        Width="300" Height="200">
                         <mi:MaterialIcon Kind="Magnify" Width="32" Height="32"
                             Classes="scanner-smooth" />
                     </Canvas>
 
-                    <!-- Локализованный текст через свойство контрола -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                VerticalAlignment="Bottom" Margin="0,280,0,0">
-                        <TextBlock Text="{Binding SearchingText, ElementName=Root}" 
-                                   FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource AccentBrush}" Opacity="0.8" />
+                        VerticalAlignment="Bottom" Margin="0,280,0,0">
+                        <TextBlock Text="{Binding SearchingText, ElementName=Root}"
+                            FontSize="13" FontWeight="SemiBold"
+                            Foreground="{DynamicResource AccentBrush}" Opacity="0.8" />
                     </StackPanel>
                 </Grid>
             </Panel>
 
+            <!-- Простой индикатор загрузки -->
             <ProgressBar IsIndeterminate="True"
                 Width="150"
                 VerticalAlignment="Center"
@@ -105,13 +58,15 @@
                 IsVisible="{Binding !EnableSmoothLoading, ElementName=Root}" />
         </Panel>
 
-        <!-- 2. КОНТЕНТ -->
+        <!-- 2. ОСНОВНОЙ КОНТЕНТ -->
         <Grid RowDefinitions="*, Auto" IsVisible="{Binding !IsLoading, ElementName=Root}">
 
             <ListBox x:Name="MainListBox"
+                Classes="track-list"
                 Grid.Row="0"
                 ItemsSource="{Binding Items, ElementName=Root}"
                 Background="Transparent"
+                SelectionMode="Single"
                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                 ScrollViewer.VerticalScrollBarVisibility="{Binding ScrollVisibility, ElementName=Root}">
 
@@ -122,33 +77,224 @@
                         Threshold="300" />
                 </i:Interaction.Behaviors>
 
-                <ListBox.Styles>
-                    <Style Selector="ListBoxItem">
-                        <Setter Property="Padding" Value="0" />
-                        <Setter Property="Margin" Value="0,0,0,2" />
-                        <Setter Property="Background" Value="Transparent" />
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                        <Setter Property="Template">
-                            <ControlTemplate>
-                                <ContentPresenter Name="PART_ContentPresenter"
-                                    Background="Transparent"
-                                    BorderBrush="Transparent"
-                                    BorderThickness="0"
-                                    CornerRadius="{TemplateBinding CornerRadius}"
-                                    ContentTemplate="{TemplateBinding ContentTemplate}"
-                                    Content="{TemplateBinding Content}"
-                                    Padding="{TemplateBinding Padding}"
-                                    VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                    HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
-                            </ControlTemplate>
-                        </Setter>
-                    </Style>
-                </ListBox.Styles>
-
                 <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="svm:TrackItemViewModel">
-                        <Border Classes="track-row" Classes.isActive="{Binding IsActive}">
-                            <ContentControl Content="{Binding}" />
+                        <Border Classes="track-row"
+                            Classes.is-active="{Binding IsActive}"
+                            Classes.menu-open="{Binding IsMenuOpen}"
+                            PointerReleased="OnTrackRowPointerReleased">
+
+                            <Grid ColumnDefinitions="Auto, *, Auto, Auto, 60"
+                                Background="Transparent">
+
+                                <!-- КОЛОНКА 0: Обложка (кликабельная) -->
+                                <Button Grid.Column="0"
+                                    Classes="cover-btn"
+                                    Command="{Binding PlayCommand}"
+                                    Width="44" Height="44"
+                                    Margin="0,0,12,0">
+                                    <Panel>
+                                        <!-- Обложка -->
+                                        <Border CornerRadius="6" ClipToBounds="True"
+                                            Background="{DynamicResource BgSkeletonBrush}">
+                                            <Image
+                                                asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
+                                                Stretch="UniformToFill"
+                                                Width="44" Height="44" />
+                                        </Border>
+
+                                        <!-- Оверлей (появляется при наведении ИЛИ когда активен) -->
+                                        <Panel Classes="cover-overlay">
+                                            <Panel.IsVisible>
+                                                <MultiBinding
+                                                    Converter="{x:Static BoolConverters.Or}">
+                                                    <Binding Path="IsActive" />
+                                                    <Binding Path="$parent[Button].IsPointerOver" />
+                                                </MultiBinding>
+                                            </Panel.IsVisible>
+
+                                            <Border CornerRadius="6" Background="#99000000" />
+
+                                            <!-- Play (когда НЕ играет) -->
+                                            <mi:MaterialIcon Kind="Play"
+                                                Classes="play-icon"
+                                                Width="24" Height="24"
+                                                Foreground="White"
+                                                IsVisible="{Binding !IsPlaying}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center" />
+
+                                            <!-- Pause (когда играет) -->
+                                            <mi:MaterialIcon Kind="Pause"
+                                                Classes="play-icon"
+                                                Width="24" Height="24"
+                                                Foreground="White"
+                                                IsVisible="{Binding IsPlaying}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center" />
+                                        </Panel>
+
+                                        <!-- Индикатор "сейчас играет" (маленький, в углу) -->
+                                        <Border IsVisible="{Binding IsPlaying}"
+                                            Width="12" Height="12"
+                                            CornerRadius="6"
+                                            Background="{DynamicResource AccentBrush}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Bottom"
+                                            Margin="0,0,2,2">
+                                            <mi:MaterialIcon Kind="VolumeHigh"
+                                                Width="8" Height="8"
+                                                Foreground="White"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center" />
+                                        </Border>
+                                    </Panel>
+                                </Button>
+
+                                <!-- КОЛОНКА 1: Информация о треке -->
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                    <TextBlock Text="{Binding Title}"
+                                        Classes="track-title"
+                                        TextTrimming="CharacterEllipsis"
+                                        MaxLines="1"
+                                        FontSize="14" />
+
+                                    <TextBlock Text="{Binding Author}"
+                                        Foreground="{DynamicResource TextMutedBrush}"
+                                        TextTrimming="CharacterEllipsis"
+                                        MaxLines="1"
+                                        FontSize="12" />
+                                </StackPanel>
+
+                                <!-- КОЛОНКА 2: Статус скачивания -->
+                                <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
+                                    <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        IsVisible="{Binding IsDownloaded}"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center" />
+
+                                    <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
+                                        Width="32" Height="3"
+                                        IsVisible="{Binding IsDownloading}"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center" />
+                                </Panel>
+
+                                <!-- КОЛОНКА 3: Кнопка "Лайк" -->
+                                <Button Grid.Column="3"
+                                    Classes="icon-btn like-btn"
+                                    Classes.is-liked="{Binding IsLiked}"
+                                    Command="{Binding ToggleLikeCommand}"
+                                    Width="32" Height="32"
+                                    Margin="4,0">
+                                    <mi:MaterialIcon
+                                        Kind="{Binding IsLiked, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Heart|HeartOutline'}"
+                                        Width="16" Height="16" />
+                                </Button>
+
+                                <!-- КОЛОНКА 4: Длительность / Действия -->
+                                <Panel Grid.Column="4">
+
+                                    <!-- РЕЖИМ: Обычный (не очередь) -->
+                                    <Panel IsVisible="{Binding !#Root.IsQueueContext}">
+
+                                        <TextBlock Text="{Binding FormattedDuration}"
+                                            Classes="duration-text"
+                                            VerticalAlignment="Center"
+                                            HorizontalAlignment="Right"
+                                            Foreground="{DynamicResource TextMutedBrush}"
+                                            FontSize="12"
+                                            Margin="0,0,8,0" />
+
+                                        <Button x:Name="MoreMenuButton"
+                                            Classes="icon-btn more-btn"
+                                            HorizontalAlignment="Right"
+                                            Background="Transparent"
+                                            Width="32" Height="32"
+                                            ToolTip.Tip="More options">
+                                            <mi:MaterialIcon Kind="DotsHorizontal" Width="20"
+                                                Height="20"
+                                                Foreground="{DynamicResource TextPrimaryBrush}" />
+
+                                            <Button.Flyout>
+                                                <MenuFlyout Placement="BottomEdgeAlignedRight"
+                                                    Opened="OnMenuFlyoutOpened"
+                                                    Closed="OnMenuFlyoutClosed">
+
+                                                    <MenuItem Header="{Binding L[Player_Play]}"
+                                                        Command="{Binding PlayCommand}">
+                                                        <MenuItem.Icon>
+                                                            <mi:MaterialIcon Kind="Play" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+
+                                                    <MenuItem Header="{Binding L[Queue_Add]}"
+                                                        Command="{Binding AddToQueueCommand}">
+                                                        <MenuItem.Icon>
+                                                            <mi:MaterialIcon Kind="PlaylistPlus" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+
+                                                    <Separator Classes="menu-separator" />
+
+                                                    <MenuItem Header="{Binding L[Track_StartRadio]}"
+                                                        Command="{Binding StartRadioCommand}">
+                                                        <MenuItem.Icon>
+                                                            <mi:MaterialIcon Kind="RadioTower" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+
+                                                    <MenuItem Header="{Binding DownloadStatusText}"
+                                                        Command="{Binding DownloadTrackCommand}"
+                                                        IsEnabled="{Binding !IsDownloaded}">
+                                                        <MenuItem.Icon>
+                                                            <mi:MaterialIcon
+                                                                Kind="{Binding IsDownloaded, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Check|Download'}" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+
+                                                    <Separator Classes="menu-separator"
+                                                        IsVisible="{Binding IsPlaylistContext}" />
+
+                                                    <MenuItem
+                                                        Header="{Binding L[Playlist_RemoveFrom]}"
+                                                        Classes="danger"
+                                                        Command="{Binding RemoveFromPlaylistCommand}"
+                                                        IsVisible="{Binding IsPlaylistContext}">
+                                                        <MenuItem.Icon>
+                                                            <mi:MaterialIcon Kind="PlaylistRemove" />
+                                                        </MenuItem.Icon>
+                                                    </MenuItem>
+
+                                                </MenuFlyout>
+                                            </Button.Flyout>
+                                        </Button>
+                                    </Panel>
+
+                                    <!-- РЕЖИМ: Очередь -->
+                                    <Panel IsVisible="{Binding #Root.IsQueueContext}">
+
+                                        <TextBlock Text="{Binding FormattedDuration}"
+                                            VerticalAlignment="Center"
+                                            HorizontalAlignment="Left"
+                                            Foreground="{DynamicResource TextMutedBrush}"
+                                            FontSize="12" />
+
+                                        <Button Classes="icon-btn remove-btn"
+                                            HorizontalAlignment="Right"
+                                            Width="28" Height="28"
+                                            Command="{Binding RemoveFromQueueCommand}"
+                                            ToolTip.Tip="Remove from queue">
+                                            <mi:MaterialIcon Kind="Close" Width="16" Height="16"
+                                                Foreground="{DynamicResource TextMutedBrush}" />
+                                        </Button>
+                                    </Panel>
+
+                                </Panel>
+
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -156,27 +302,25 @@
 
             <!-- 3. ФУТЕР -->
             <StackPanel Grid.Row="1" Margin="0,8,0,16">
-                
-                <!-- Загрузка из сети -->
-                <StackPanel Orientation="Horizontal" 
-                            HorizontalAlignment="Center"
-                            Margin="0,16,0,24"
-                            Opacity="0.6"
-                            IsVisible="{Binding IsFetchingFromNetwork, ElementName=Root}">
-                    
+
+                <!-- Индикатор сетевой загрузки -->
+                <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Margin="0,16,0,24"
+                    Opacity="0.6"
+                    IsVisible="{Binding IsFetchingFromNetwork, ElementName=Root}">
                     <TextBlock Text="{Binding LoadingMoreText, ElementName=Root}"
-                               FontSize="13"
-                               Foreground="{DynamicResource TextMutedBrush}" />
-                    
-                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
-                               Classes="dot1" Margin="2,0,0,0" />
-                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
-                               Classes="dot2" />
-                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}" 
-                               Classes="dot3" />
+                        FontSize="13"
+                        Foreground="{DynamicResource TextMutedBrush}" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="loading-dot1" Margin="2,0,0,0" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="loading-dot2" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="loading-dot3" />
                 </StackPanel>
 
-                <!-- Локальная подгрузка -->
+                <!-- Скелетоны загрузки -->
                 <ContentControl Classes="loading-skeletons">
                     <ContentControl.IsVisible>
                         <MultiBinding Converter="{x:Static BoolConverters.And}">
@@ -186,17 +330,17 @@
                     </ContentControl.IsVisible>
                 </ContentControl>
 
-                <!-- Конец списка -->
+                <!-- Индикатор конца списка -->
                 <Border IsVisible="{Binding ReachedEnd, ElementName=Root}"
-                        Margin="0,16,0,32"
-                        HorizontalAlignment="Center"
-                        Opacity="0.5">
+                    Margin="0,16,0,32"
+                    HorizontalAlignment="Center"
+                    Opacity="0.5">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
-                                         Foreground="{DynamicResource TextMutedBrush}" />
+                            Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding EndOfListText, ElementName=Root}"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   FontSize="13" />
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            FontSize="13" />
                     </StackPanel>
                 </Border>
             </StackPanel>

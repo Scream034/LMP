@@ -1,7 +1,7 @@
 ﻿// Services/MemoryMonitor.cs
 using System.Diagnostics;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class MemoryStats
 {

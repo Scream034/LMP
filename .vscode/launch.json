@@ -2,11 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "🎵 Launch MyLiteMusicPlayer (Debug)",
+            "name": "🎵 Launch LMP (Debug)",
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/bin/Debug/net10.0/MyLiteMusicPlayer.dll",
+            "program": "${workspaceFolder}/bin/Debug/net10.0/LMP.dll",
             "args": [],
             "cwd": "${workspaceFolder}",
             "stopAtEntry": false,

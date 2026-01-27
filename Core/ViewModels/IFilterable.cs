@@ -1,9 +1,9 @@
 using System.Reactive;
-using MyLiteMusicPlayer.Core.Models;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Models;
+using LMP.Core.Services;
 using ReactiveUI;
 
-namespace MyLiteMusicPlayer.Core.ViewModels;
+namespace LMP.Core.ViewModels;
 
 public interface IFilterable
 {

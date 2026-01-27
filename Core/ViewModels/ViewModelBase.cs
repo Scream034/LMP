@@ -1,7 +1,7 @@
-﻿using MyLiteMusicPlayer.Core.Services;
+﻿using LMP.Core.Services;
 using ReactiveUI;
 
-namespace MyLiteMusicPlayer.Core.ViewModels;
+namespace LMP.Core.ViewModels;
 
 public abstract class ViewModelBase : ReactiveObject
 {

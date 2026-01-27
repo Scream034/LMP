@@ -1,18 +1,18 @@
 ﻿using System.Reactive;
 using Microsoft.Extensions.DependencyInjection;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Diagnostics;
-using MyLiteMusicPlayer.Features.Player;
-using MyLiteMusicPlayer.Core.ViewModels;
-using MyLiteMusicPlayer.Features.Search;
-using MyLiteMusicPlayer.Features.Home;
-using MyLiteMusicPlayer.Features.Library;
-using MyLiteMusicPlayer.Features.Settings;
-using MyLiteMusicPlayer.Features.Playlist;
+using LMP.Features.Player;
+using LMP.Core.ViewModels;
+using LMP.Features.Search;
+using LMP.Features.Home;
+using LMP.Features.Library;
+using LMP.Features.Settings;
+using LMP.Features.Playlist;
 
-namespace MyLiteMusicPlayer.Features.Shell;
+namespace LMP.Features.Shell;
 
 public class MainWindowViewModel : ViewModelBase
 {

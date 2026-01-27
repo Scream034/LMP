@@ -3,9 +3,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class StreamCacheMetadata
 {
@@ -23,28 +23,24 @@ public class StreamCacheMetadata
 public class StreamCacheManager : IDisposable
 {
     private readonly LibraryService _library;
-    private readonly string _cacheFolder;
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
 
     public StreamCacheManager(LibraryService library)
     {
         _library = library;
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "StreamCache");
-        Directory.CreateDirectory(_cacheFolder);
         _ = Task.Run(CleanupOldCacheAsync);
     }
 
-    public string GetCachePath(string trackId)
+    public static string GetCachePath(string trackId)
     {
         var safeId = GetSafeFileName(trackId);
-        return Path.Combine(_cacheFolder, $"{safeId}.cache");
+        return Path.Combine(G.Folder.StreamCache, $"{safeId}.cache");
     }
 
-    public string GetMetaPath(string trackId)
+    public static string GetMetaPath(string trackId)
     {
         var safeId = GetSafeFileName(trackId);
-        return Path.Combine(_cacheFolder, $"{safeId}.meta");
+        return Path.Combine(G.Folder.StreamCache, $"{safeId}.meta");
     }
 
     public StreamCacheMetadata? TryGetMetadata(string trackId)
@@ -87,12 +83,12 @@ public class StreamCacheManager : IDisposable
         return newMeta;
     }
 
-    public void SaveMetadata(string trackId, StreamCacheMetadata meta)
+    public static void SaveMetadata(string trackId, StreamCacheMetadata meta)
     {
         try
         {
             var metaPath = GetMetaPath(trackId);
-            var json = JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(meta, G.Json.Beautiful);
             File.WriteAllText(metaPath, json);
         }
         catch { }
@@ -142,7 +138,7 @@ public class StreamCacheManager : IDisposable
         await _cleanupLock.WaitAsync();
         try
         {
-            foreach (var file in Directory.GetFiles(_cacheFolder))
+            foreach (var file in Directory.GetFiles(G.Folder.StreamCache))
             {
                 try { File.Delete(file); } catch { }
             }
@@ -151,12 +147,12 @@ public class StreamCacheManager : IDisposable
         finally { _cleanupLock.Release(); }
     }
     
-    public (int FileCount, long SizeMb) GetStats()
+    public static (int FileCount, long SizeMb) GetStats()
     {
         try
         {
-            var files = Directory.GetFiles(_cacheFolder, "*.cache");
-            long size = files.Sum(f => new FileInfo(f).Length);
+            var files = Directory.GetFiles(G.Folder.StreamCache, "*.cache");
+            long size = files.Sum(static f => new FileInfo(f).Length);
             return (files.Length, size / 1024 / 1024);
         }
         catch { return (0, 0); }
@@ -168,11 +164,11 @@ public class StreamCacheManager : IDisposable
 
         try
         {
-            var files = Directory.GetFiles(_cacheFolder, "*.cache")
-                .Select(f => new FileInfo(f))
+            var files = Directory.GetFiles(G.Folder.StreamCache, "*.cache")
+                .Select(static f => new FileInfo(f))
                 .ToList();
 
-            long totalSize = files.Sum(f => f.Length);
+            long totalSize = files.Sum(static f => f.Length);
             long maxCacheBytes = (long)_library.Data.Storage.AudioCacheLimitMb * 1024 * 1024;
 
             if (totalSize <= maxCacheBytes) return;
@@ -180,13 +176,13 @@ public class StreamCacheManager : IDisposable
             Log.Info($"Stream cache size {totalSize / 1024 / 1024}MB exceeds limit {maxCacheBytes / 1024 / 1024}MB, cleaning...");
 
             var metaFiles = files
-                .Select(f => new
+                .Select(static f => new
                 {
                     CacheFile = f,
                     MetaFile = new FileInfo(Path.ChangeExtension(f.FullName, ".meta")),
                     LastAccess = GetLastAccessTime(Path.ChangeExtension(f.FullName, ".meta"))
                 })
-                .OrderBy(x => x.LastAccess)
+                .OrderBy(static x => x.LastAccess)
                 .ToList();
 
             long targetSize = maxCacheBytes * 70 / 100;
@@ -227,8 +223,7 @@ public class StreamCacheManager : IDisposable
 
     private static string GetSafeFileName(string trackId)
     {
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(trackId));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(trackId));
         return Convert.ToHexString(bytes)[..32];
     }
 

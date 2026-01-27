@@ -1,14 +1,34 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Search"
+    xmlns:vm="using:LMP.Features.Search"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
-    xmlns:controls="using:MyLiteMusicPlayer.UI.Controls"
-    x:Class="MyLiteMusicPlayer.Features.Search.SearchView"
+    xmlns:b="using:LMP.Core.Behaviors"
+    xmlns:controls="using:LMP.UI.Controls"
+    x:Class="LMP.Features.Search.SearchView"
     x:DataType="vm:SearchViewModel"
     x:CompileBindings="True"
     x:Name="SearchRoot">
+
+    <UserControl.Styles>
+        <!-- Стиль для чипсов (кнопок истории) -->
+        <Style Selector="Button.chip">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Height" Value="28"/>
+        </Style>
+        <Style Selector="Button.chip:pointerover">
+            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource TextMutedBrush}" />
+        </Style>
+    </UserControl.Styles>
 
     <Grid RowDefinitions="Auto, *">
         <!-- HEADER -->
@@ -39,9 +59,40 @@
                         Foreground="{DynamicResource AccentBrush}" />
                 </Button>
             </Grid>
+            
+            <!-- RECENT SEARCH CHIPS (History) -->
+            <ItemsControl ItemsSource="{Binding RecentSearches}" Margin="0,12,0,0" MaxWidth="600" HorizontalAlignment="Left">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- Кнопка-чипс, клик вызывает поиск -->
+                        <Button Classes="chip" Content="{Binding}" 
+                                Command="{Binding $parent[UserControl].((vm:SearchViewModel)DataContext).HistoryClickCommand}" 
+                                CommandParameter="{Binding}" 
+                                Margin="0,0,8,8">
+                            <!-- Контекстное меню для удаления из истории -->
+                            <Button.ContextFlyout>
+                                <MenuFlyout>
+                                    <MenuItem Header="Remove" 
+                                              Command="{Binding $parent[UserControl].((vm:SearchViewModel)DataContext).RemoveHistoryCommand}"
+                                              CommandParameter="{Binding}">
+                                        <MenuItem.Icon>
+                                            <mi:MaterialIcon Kind="Delete" Width="16" Height="16"/>
+                                        </MenuItem.Icon>
+                                    </MenuItem>
+                                </MenuFlyout>
+                            </Button.ContextFlyout>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
 
-            <!-- History / Error blocks -->
-            <StackPanel Orientation="Horizontal" Spacing="6" Margin="4,8,0,0"
+            <!-- Cache Indicator -->
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="4,4,0,0"
                 IsVisible="{Binding IsFromCache}" Opacity="0.6">
                 <mi:MaterialIcon Kind="DatabaseOutline" Width="14" Height="14"
                     Foreground="{DynamicResource TextMutedBrush}" />
@@ -49,6 +100,7 @@
                     Foreground="{DynamicResource TextMutedBrush}" />
             </StackPanel>
 
+            <!-- Error Message -->
             <Border
                 IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                 Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8" Padding="12"

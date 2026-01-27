@@ -1,29 +1,44 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:MyLiteMusicPlayer.Features.Playlist"
+    xmlns:vm="using:LMP.Features.Playlist"
     xmlns:asyncImage="using:AsyncImageLoader"
     xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:controls="using:MyLiteMusicPlayer.UI.Controls"
+    xmlns:controls="using:LMP.UI.Controls"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:b="using:MyLiteMusicPlayer.Core.Behaviors"
-    x:Class="MyLiteMusicPlayer.Features.Playlist.PlaylistView"
+    xmlns:b="using:LMP.Core.Behaviors"
+    x:Class="LMP.Features.Playlist.PlaylistView"
     x:DataType="vm:PlaylistViewModel"
     x:CompileBindings="True">
 
+    <UserControl.Styles>
+        <!-- Стиль для GridSplitter -->
+        <Style Selector="GridSplitter.header-splitter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="MinHeight" Value="6" />
+            <Setter Property="Cursor" Value="SizeNorthSouth" />
+        </Style>
+        <Style Selector="GridSplitter.header-splitter:pointerover">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0.3" />
+        </Style>
+    </UserControl.Styles>
+
     <Grid>
         <Grid.RowDefinitions>
-            <!-- 0: Header -->
+            <!-- 0: Header (resizable) -->
+            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180" MaxHeight="500" />
+            <!-- 1: Splitter -->
             <RowDefinition Height="Auto" />
-            <!-- 1: Compact Filter -->
+            <!-- 2: Compact Filter -->
             <RowDefinition Height="Auto" />
-            <!-- 2: List -->
+            <!-- 3: List -->
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <!-- HEADER (Row 0) -->
         <Border Grid.Row="0"
             BorderBrush="{DynamicResource BgHighlightBrush}"
-            BorderThickness="0,0,0,1"
+            BorderThickness="0,0,0,0"
             Background="{DynamicResource BgBaseBrush}"
             Padding="24,16">
 
@@ -121,8 +136,15 @@
             </Viewbox>
         </Border>
 
-        <!-- COMPACT FILTER (Row 1) -->
-        <Grid Grid.Row="1" Margin="24,12,24,12">
+        <!-- GRIDSPLITTER (Row 1) - для изменения размера шапки -->
+        <GridSplitter Grid.Row="1" 
+            Classes="header-splitter"
+            ResizeDirection="Rows"
+            ResizeBehavior="PreviousAndNext"
+            HorizontalAlignment="Stretch" />
+
+        <!-- COMPACT FILTER (Row 2) -->
+        <Grid Grid.Row="2" Margin="24,12,24,12">
             <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36">
                 <Grid ColumnDefinitions="Auto, *, Auto">
                     <!-- Icon -->
@@ -137,23 +159,18 @@
 
                     <!-- Filter Types (Icons Only) -->
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="4">
-                        <!-- All -->
                         <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
                             Classes="filter-type-btn"
                             Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
                             ToolTip.Tip="All">
                             <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
                         </Button>
-                        
-                        <!-- Music -->
                         <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
                             Classes="filter-type-btn"
                             Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
                             ToolTip.Tip="Music Only">
                             <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
                         </Button>
-                        
-                        <!-- Video -->
                         <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
                             Classes="filter-type-btn"
                             Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
@@ -165,8 +182,8 @@
             </Border>
         </Grid>
 
-        <!-- LIST AREA (Row 2) -->
-        <ScrollViewer Grid.Row="2" Margin="24,0">
+        <!-- LIST AREA (Row 3) -->
+        <ScrollViewer Grid.Row="3" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
             </i:Interaction.Behaviors>
@@ -179,7 +196,8 @@
                 ReachedEnd="{Binding ReachedEnd}"
                 LoadMoreCommand="{Binding LoadMoreCommand}"
                 UseInternalScroll="False"
-                EnableSmoothLoading="{Binding EnableSmoothLoading}" />
+                EnableSmoothLoading="{Binding EnableSmoothLoading}"
+                IsPlaylistContext="{Binding CanEdit}" />
         </ScrollViewer>
     </Grid>
 </UserControl>

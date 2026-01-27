@@ -1,4 +1,4 @@
-﻿namespace MyLiteMusicPlayer.Core.Models;
+﻿namespace LMP.Core.Models;
 
 public enum InternetProfile
 {

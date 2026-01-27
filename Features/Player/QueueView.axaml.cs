@@ -5,7 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
 
-namespace MyLiteMusicPlayer.Features.Player;
+namespace LMP.Features.Player;
 
 public partial class QueueView : UserControl
 {

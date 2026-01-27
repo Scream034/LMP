@@ -2,11 +2,11 @@
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Microsoft.Extensions.DependencyInjection;
-using MyLiteMusicPlayer.Features.Shell;
-using MyLiteMusicPlayer.Core.Services;
+using LMP.Features.Shell;
+using LMP.Core.Services;
 using AsyncImageLoader;
 
-namespace MyLiteMusicPlayer;
+namespace LMP;
 
 public partial class App : Application
 {
@@ -41,7 +41,7 @@ public partial class App : Application
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
             // 3. Background initialization tasks
-            _ = Task.Run(async () =>
+            _ = Task.Run(static async () =>
             {
                 try
                 {
@@ -55,6 +55,10 @@ public partial class App : Application
                     Log.Error($"Background initialization failed: {ex.Message}");
                 }
             });
+
+#if DEBUG
+            desktop.MainWindow.AttachDevTools();
+#endif
         }
 
         base.OnFrameworkInitializationCompleted();

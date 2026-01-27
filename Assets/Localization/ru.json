@@ -84,6 +84,8 @@
   "Settings_RememberFormat": "Помнить формат для трека",
   "Settings_SearchBatchSize": "Размер загрузки поиска",
   "Settings_SearchBatchSizeDesc": "Количество треков для загрузки при прокрутке результатов поиска",
+  "Settings_UserAgentDesc": "Вставьте User-Agent из вашего браузера, чтобы предотвратить истечение срока действия файлов cookie.",
+  "Settings_UserAgentSave": "Сохранить",
 
   "Settings_General": "Общее",
 
@@ -158,6 +160,7 @@
   "Playlist_CannotDeleteLiked": "Нельзя удалить плейлист «Любимое».",
   "Playlist_DeleteConfirm": "Удалить плейлист «{0}»?",
   "Playlist_Deleting": "Удаление...",
+  "Playlist_RemoveFrom": "Удалить из плейлиста",
 
   "Player_Shuffle": "Перемешать",
   "Player_Previous": "Назад",
@@ -177,10 +180,14 @@
   "Track_Removed": "Убрано из любимого",
   "Track_CopyLink": "Копировать ссылку",
   "Track_Copied": "Скопировано!",
+  "Track_Download": "Скачать",
+  "Track_Downloaded": "Скачано",
+  "Track_StartRadio": "Запустить радио",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",
   "Dialog_Confirm_Title": "Подтверждение",
+  "Dialog_Input_Title": "Поле ввода",
   "Dialog_Warning_Title": "Внимание",
   "Dialog_Done_Title": "Готово",
   "Dialog_SelectDownloadFolder_Title": "Выберите папку для загрузок",
@@ -197,6 +204,8 @@
   "Dialog_Merge_Success_Msg": "Плейлисты успешно объединены.",
   "Dialog_Merge_Success": "Канал: {0}",
   "Dialog_Merge_Error": "Канал не найден",
+  "Input_Watermark": "Введите текст...",
+  "Input_PasteHere": "Вставьте сюда...",
 
   "Sync_Action": "Импорт",
   "Sync_ConfigureUrlFirst": "Сначала укажите ссылку на канал в настройках.",

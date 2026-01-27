@@ -1,6 +1,6 @@
 ﻿<ResourceDictionary xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:conv="using:MyLiteMusicPlayer.Core.Converters">
+    xmlns:conv="using:LMP.Core.Converters">
 
     <conv:TimeSpanToStringConverter x:Key="TimeSpanConverter" />
     <conv:BoolToOpacityConverter x:Key="BoolToOpacity" />
@@ -20,5 +20,7 @@
     <conv:RepeatModeActiveConverter x:Key="RepeatModeActive" />
     <conv:RepeatModeEqualsConverter x:Key="RepeatModeEquals" />
     <conv:EnumToBoolConverter x:Key="EnumToBool" />
+    <conv:BoolToFontWeightConverter x:Key="BoolToFontWeightConverter" />
+    <conv:BoolToIconConverter x:Key="BoolToIconConverter" />
 
 </ResourceDictionary>

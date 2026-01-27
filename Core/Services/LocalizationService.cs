@@ -3,11 +3,11 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text.Json;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public sealed class LocalizationService : INotifyPropertyChanged
 {
-    public static LocalizationService Instance = new();
+    public readonly static LocalizationService Instance = new();
 
     private string _currentLanguage = "en"; // Дефолт - английский
     private Dictionary<string, string> _resources = [];
@@ -87,7 +87,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
     {
         try
         {
-            var uri = new Uri($"avares://MyLiteMusicPlayer/Assets/Localization/{langCode}.json");
+            var uri = new Uri($"avares://LMP/Assets/Localization/{langCode}.json");
             if (AssetLoader.Exists(uri))
             {
                 using var stream = AssetLoader.Open(uri);

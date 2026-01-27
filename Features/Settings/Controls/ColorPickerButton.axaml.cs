@@ -4,7 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 
-namespace MyLiteMusicPlayer.Features.Settings.Controls;
+namespace LMP.Features.Settings.Controls;
 
 /// <summary>
 /// Кастомная кнопка выбора цвета с popup-диалогом.

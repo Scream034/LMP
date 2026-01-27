@@ -2,7 +2,7 @@
 using AsyncImageLoader;
 using Avalonia.Media.Imaging;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 /// <summary>
 /// Кастомный загрузчик для AsyncImageLoader с поддержкой нашего кэша

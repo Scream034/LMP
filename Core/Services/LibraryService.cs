@@ -2,18 +2,14 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
-using MyLiteMusicPlayer.Core.Models;
+using LMP.Core.Models;
 using ReactiveUI;
 
-namespace MyLiteMusicPlayer.Core.Services;
+namespace LMP.Core.Services;
 
 public class LibraryService : IDisposable
 {
     public const string LikedPlaylistId = "liked";
-    private const string LibraryFileName = "library.json";
-
-    private readonly string _libraryPath;
-    private readonly string _appFolder;
 
     private readonly Subject<Unit> _saveSignal = new();
     private readonly IDisposable _saveSubscription;
@@ -30,11 +26,6 @@ public class LibraryService : IDisposable
 
     public LibraryService()
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _appFolder = Path.Combine(appData, "LiteMusicPlayer");
-        Directory.CreateDirectory(_appFolder);
-        _libraryPath = Path.Combine(_appFolder, LibraryFileName);
-
         LocalizationService.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
 
         _saveSubscription = _saveSignal
@@ -45,12 +36,10 @@ public class LibraryService : IDisposable
         Load();
     }
 
-    public string AppFolder => _appFolder;
-
     public string DownloadPath
     {
         get => string.IsNullOrEmpty(Data.DownloadPath)
-            ? Path.Combine(_appFolder, "Downloads")
+            ? G.Folder.Downloads
             : Data.DownloadPath;
         set
         {
@@ -108,9 +97,9 @@ public class LibraryService : IDisposable
     {
         try
         {
-            if (File.Exists(_libraryPath))
+            if (File.Exists(G.File.Library))
             {
-                using var fs = new FileStream(_libraryPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var fs = new FileStream(G.File.Library, FileMode.Open, FileAccess.Read, FileShare.Read);
                 Data = JsonSerializer.Deserialize<LibraryData>(fs) ?? new LibraryData();
             }
         }
@@ -120,7 +109,6 @@ public class LibraryService : IDisposable
             Data = new LibraryData();
         }
         EnsureLikedPlaylist();
-        Directory.CreateDirectory(DownloadPath);
     }
 
     public void Save()
@@ -132,14 +120,14 @@ public class LibraryService : IDisposable
     {
         try
         {
-            var tempFile = _libraryPath + ".tmp";
+            var tempFile = G.File.Library + ".tmp";
 
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
             {
-                await JsonSerializer.SerializeAsync(fs, Data, new JsonSerializerOptions { WriteIndented = true });
+                await JsonSerializer.SerializeAsync(fs, Data, G.Json.Beautiful);
             }
 
-            File.Move(tempFile, _libraryPath, true);
+            File.Move(tempFile, G.File.Library, true);
         }
         catch (Exception ex)
         {
@@ -179,8 +167,6 @@ public class LibraryService : IDisposable
             value.Name = LocalizationService.Instance["Playlist_Liked"];
         }
     }
-
-    // ... остальные методы без изменений ...
 
     public Playlist GetLikedPlaylist()
     {
@@ -297,7 +283,7 @@ public class LibraryService : IDisposable
         return [.. Data.RecentlyPlayedIds
             .Take(count)
             .Select(GetTrack)
-            .Where(t => t != null)
+            .Where(static t => t != null)
             .Cast<TrackInfo>()];
     }
 
@@ -434,7 +420,7 @@ public class LibraryService : IDisposable
     public List<TrackInfo> GetPlaylistTracks(string playlistId)
     {
         if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
-        return [.. playlist.TrackIds.Select(GetTrack).Where(t => t != null).Cast<TrackInfo>()];
+        return [.. playlist.TrackIds.Select(GetTrack).Where(static t => t != null).Cast<TrackInfo>()];
     }
 
     public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
@@ -455,7 +441,7 @@ public class LibraryService : IDisposable
         {
             try
             {
-                var videoId = YoutubeExplode.Videos.VideoId.TryParse(track.Url);
+                var videoId = Youtube.Videos.VideoId.TryParse(track.Url);
                 if (videoId.HasValue)
                 {
                     return $"yt_{videoId.Value.Value}";
@@ -473,9 +459,9 @@ public class LibraryService : IDisposable
 
         try
         {
-            var options = new JsonSerializerOptions { WriteIndented = true };
+            var options = G.Json.Beautiful;
             string json = JsonSerializer.Serialize(Data, options);
-            File.WriteAllText(_libraryPath, json);
+            File.WriteAllText(G.File.Library, json);
         }
         catch { }
 

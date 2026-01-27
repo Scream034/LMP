@@ -1,7 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace MyLiteMusicPlayer.Features.Library;
+namespace LMP.Features.Library;
 
 public partial class MergeConflictDialog : Window
 {

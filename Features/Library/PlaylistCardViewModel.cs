@@ -1,9 +1,9 @@
 ﻿using System.Reactive;
-using MyLiteMusicPlayer.Core.Services;
-using MyLiteMusicPlayer.Core.ViewModels;
+using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 
-namespace MyLiteMusicPlayer.Features.Library;
+namespace LMP.Features.Library;
 
 /// <summary>
 /// ViewModel для карточки плейлиста в сетке библиотеки.

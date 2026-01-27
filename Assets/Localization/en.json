@@ -85,6 +85,8 @@
   "Settings_RememberFormat": "Remember format per track",
   "Settings_SearchBatchSize": "Search batch size",
   "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
+  "Settings_UserAgentDesc": "Insert the User-Agent from your browser to prevent cookie expiration.",
+  "Settings_UserAgentSave": "Save",
 
   "Settings_General": "General",
 
@@ -159,6 +161,7 @@
   "Playlist_CannotDeleteLiked": "You cannot delete the 'Liked' playlist.",
   "Playlist_DeleteConfirm": "Delete playlist \"{0}\"?",
   "Playlist_Deleting": "Deleting...",
+  "Playlist_RemoveFrom": "Remove from Playlist",
 
   "Player_Previous": "Previous",
   "Player_Play": "Play",
@@ -178,10 +181,14 @@
   "Track_Removed": "Removed from Liked",
   "Track_CopyLink": "Copy Link",
   "Track_Copied": "Copied!",
+  "Track_Download": "Download",
+  "Track_Downloaded": "Downloaded",
+  "Track_StartRadio": "Start Radio",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
   "Dialog_Confirm_Title": "Confirm",
+  "Dialog_Input_Title": "Input",
   "Dialog_Warning_Title": "Warning",
   "Dialog_Done_Title": "Done",
   "Dialog_SelectDownloadFolder_Title": "Select Folder",
@@ -198,6 +205,8 @@
   "Dialog_Merge_Success_Msg": "Playlists merged successfully.",
   "Dialog_Merge_Success": "Linked to {0}",
   "Dialog_Merge_Error": "Could not find channel",
+  "Input_Watermark": "Enter text...",
+  "Input_PasteHere": "Paste here...",
 
   "Sync_Action": "Import",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",

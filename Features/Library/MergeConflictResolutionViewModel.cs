@@ -1,10 +1,10 @@
-﻿using MyLiteMusicPlayer.Core.ViewModels;
+﻿using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 
-namespace MyLiteMusicPlayer.Features.Library;
+namespace LMP.Features.Library;
 
 public enum MergeAction { Skip, Merge, Duplicate }
 
