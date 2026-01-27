@@ -157,9 +157,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 x => x.ProxyHost, x => x.ProxyPort,
                 x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
             .Skip(1)
-            .Subscribe(_ =>
+            .Subscribe(x =>
             {
-                NetworkRestartRequired = true;
+                NetworkRestartRequired = x.Item2;
                 SaveNetworkSettings();
             });
 

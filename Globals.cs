@@ -37,13 +37,11 @@ public static class Globals
         public static readonly JsonSerializerOptions Beautiful = new()
         {
             WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
         public static readonly JsonSerializerOptions Compact = new()
         {
             WriteIndented = false,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
     }
 }
