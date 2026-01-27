@@ -15,7 +15,6 @@ public class CachedSearchResult
 
 public class SearchCacheService
 {
-    private readonly string _cacheFolder;
     private readonly int _maxCacheFiles = 50;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
@@ -38,10 +37,6 @@ public class SearchCacheService
 
     public SearchCacheService()
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "SearchCache");
-        Directory.CreateDirectory(_cacheFolder);
-
         // Очистка старого кэша при старте
         _ = Task.Run(CleanupOldCacheAsync);
     }
@@ -81,7 +76,7 @@ public class SearchCacheService
         await _lock.WaitAsync();
         try
         {
-            var filePath = Path.Combine(_cacheFolder, $"{key}.json");
+            var filePath = Path.Combine(G.Folder.SearchCache, $"{key}.json");
             if (!File.Exists(filePath)) return null;
 
             var json = await File.ReadAllTextAsync(filePath);
@@ -145,8 +140,8 @@ public class SearchCacheService
         await _lock.WaitAsync();
         try
         {
-            var filePath = Path.Combine(_cacheFolder, $"{key}.json");
-            var json = JsonSerializer.Serialize(cached, new JsonSerializerOptions { WriteIndented = false });
+            var filePath = Path.Combine(G.Folder.SearchCache, $"{key}.json");
+            var json = JsonSerializer.Serialize(cached, G.Json.Compact);
             await File.WriteAllTextAsync(filePath, json);
             Log.Info($"[SearchCache] Saved '{query}' to disk ({tracks.Count} tracks)");
         }
@@ -208,7 +203,7 @@ public class SearchCacheService
         try
         {
             var ttl = CacheTtl;
-            var files = Directory.GetFiles(_cacheFolder, "*.json")
+            var files = Directory.GetFiles(G.Folder.SearchCache, "*.json")
                 .Select(static f => new FileInfo(f))
                 .OrderByDescending(static f => f.LastWriteTimeUtc)
                 .ToList();
@@ -268,7 +263,7 @@ public class SearchCacheService
 
         try
         {
-            var filePath = Path.Combine(_cacheFolder, $"{key}.json");
+            var filePath = Path.Combine(G.Folder.SearchCache, $"{key}.json");
             if (File.Exists(filePath))
             {
                 File.Delete(filePath);
@@ -291,7 +286,7 @@ public class SearchCacheService
 
         try
         {
-            foreach (var file in Directory.GetFiles(_cacheFolder, "*.json"))
+            foreach (var file in Directory.GetFiles(G.Folder.SearchCache, "*.json"))
             {
                 File.Delete(file);
             }
@@ -341,7 +336,7 @@ public class SearchCacheService
     public (int MemoryItems, int DiskItems, long DiskSizeBytes, int TtlMinutes) GetStats()
     {
         int memCount = _memoryCache.Count;
-        var files = Directory.GetFiles(_cacheFolder, "*.json");
+        var files = Directory.GetFiles(G.Folder.SearchCache, "*.json");
         long size = files.Sum(static f => new FileInfo(f).Length);
         int ttl = (int)CacheTtl.TotalMinutes;
         return (memCount, files.Length, size, ttl);

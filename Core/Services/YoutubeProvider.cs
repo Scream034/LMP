@@ -24,7 +24,6 @@ public partial class YoutubeProvider : IDisposable
     private readonly CookieAuthService _cookieAuth;
     private readonly Timer? _cookieSyncTimer;
     private CookieContainer? _activeContainer; // Ссылка на текущий контейнер
-    private readonly string _downloadFolder;
     private readonly LibraryService? _libraryService;
 
     private readonly Dictionary<string, StreamCacheEntry> _streamCache = [];
@@ -57,11 +56,6 @@ public partial class YoutubeProvider : IDisposable
     {
         _libraryService = libraryService;
         _cookieAuth = cookieAuth;
-
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var appFolder = Path.Combine(appData, "LiteMusicPlayer");
-        _downloadFolder = Path.Combine(appFolder, "Downloads");
-        Directory.CreateDirectory(_downloadFolder);
 
         if (_cookieAuth != null)
         {
@@ -956,7 +950,7 @@ public partial class YoutubeProvider : IDisposable
             if (stream == null) return null;
 
             var fileName = SanitizeFileName($"{track.Author} - {track.Title}.{stream.Container.Name}");
-            var filePath = Path.Combine(_downloadFolder, fileName);
+            var filePath = Path.Combine(G.Folder.Downloads, fileName);
 
             var prog = progress != null ? new Progress<double>(p => progress.Report((float)p)) : null;
 

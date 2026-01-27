@@ -92,7 +92,7 @@ public sealed class MemoryFirstCachingStream : Stream
         _maxRamChunks = config.MaxRamChunks > 0 ? config.MaxRamChunks : 50; 
         _downloadTimeoutMs = config.DownloadTimeoutMs;
 
-        _cachePath = cacheManager.GetCachePath(trackId);
+        _cachePath = StreamCacheManager.GetCachePath(trackId);
         _downloadCts = new CancellationTokenSource();
         _downloadSemaphore = new SemaphoreSlim(_maxConcurrentDownloads);
         _totalChunks = (int)((_contentLength + _chunkSize - 1) / _chunkSize);

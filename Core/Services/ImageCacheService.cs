@@ -1,5 +1,4 @@
-﻿// === ФАЙЛ: Core/Services/ImageCacheService.cs ===
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media.Imaging;
@@ -23,7 +22,6 @@ public sealed class ImageCacheService : IDisposable
     
     private readonly HttpClient _http;
     private readonly LibraryService _library;
-    private readonly string _cacheFolder;
     private readonly SemaphoreSlim _downloadSemaphore = new(5);
 
     private readonly ConcurrentDictionary<string, CachedImage> _memoryCache = new();
@@ -39,10 +37,6 @@ public sealed class ImageCacheService : IDisposable
     {
         _library = library;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _cacheFolder = Path.Combine(appData, "LiteMusicPlayer", "ImageCache");
-        Directory.CreateDirectory(_cacheFolder);
 
         _ = Task.Run(CalculateDiskCacheSizeAsync);
     }
@@ -90,7 +84,7 @@ public sealed class ImageCacheService : IDisposable
         ClearMemoryCache();
         
         // Очистка диска
-        var files = Directory.GetFiles(_cacheFolder);
+        var files = Directory.GetFiles(G.Folder.ImageCache);
         foreach (var f in files)
         {
             try 
@@ -111,7 +105,7 @@ public sealed class ImageCacheService : IDisposable
     {
         try
         {
-            var files = Directory.GetFiles(_cacheFolder);
+            var files = Directory.GetFiles(G.Folder.ImageCache);
             long totalSize = files.Sum(static f => new FileInfo(f).Length);
             Interlocked.Exchange(ref _currentDiskCacheBytes, totalSize);
             return (files.Length, totalSize / 1024 / 1024);
@@ -228,13 +222,13 @@ public sealed class ImageCacheService : IDisposable
         return Convert.ToHexString(bytes)[..32];
     }
 
-    private string GetDiskPath(string key) => Path.Combine(_cacheFolder, $"{key}.jpg");
+    private static string GetDiskPath(string key) => Path.Combine(G.Folder.ImageCache, $"{key}.jpg");
 
     private async Task CalculateDiskCacheSizeAsync()
     {
         try
         {
-            var files = Directory.GetFiles(_cacheFolder);
+            var files = Directory.GetFiles(G.Folder.ImageCache);
             long total = 0;
             foreach (var file in files) total += new FileInfo(file).Length;
             Interlocked.Exchange(ref _currentDiskCacheBytes, total);
@@ -246,7 +240,7 @@ public sealed class ImageCacheService : IDisposable
     {
         try
         {
-            var files = Directory.GetFiles(_cacheFolder)
+            var files = Directory.GetFiles(G.Folder.ImageCache)
                 .Select(static f => new FileInfo(f))
                 .OrderBy(static f => f.LastAccessTime)
                 .ToList();

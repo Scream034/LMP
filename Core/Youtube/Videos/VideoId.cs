@@ -80,8 +80,7 @@ public partial struct VideoId
         // Try to extract the ID from the URL (shorts clip)
         // https://www.youtube.com/shorts/sKL1vjP0tIo
         {
-            var id = Regex
-                .Match(videoIdOrUrl, @"youtube\..+?/shorts/(.*?)(?:\?|&|/|$)")
+            var id = MyRegex4().Match(videoIdOrUrl)
                 .Groups[1]
                 .Value.Pipe(WebUtility.UrlDecode);
 
@@ -138,6 +137,8 @@ public partial struct VideoId
     private static partial Regex MyRegex2();
     [GeneratedRegex(@"youtube\..+?/embed/(.*?)(?:\?|&|/|$)")]
     private static partial Regex MyRegex3();
+    [GeneratedRegex(@"youtube\..+?/shorts/(.*?)(?:\?|&|/|$)")]
+    private static partial Regex MyRegex4();
 }
 
 public partial struct VideoId : IEquatable<VideoId>

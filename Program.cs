@@ -29,7 +29,9 @@ class Program
             Console.WriteLine("Logger initializing...");
             Log.Initialize();
 
-            Log.Info("LiteMusicPlayer starting...!");
+            Log.Info($"{G.AppId} starting...!");
+
+            G.Folder.Create();
 
             var services = new ServiceCollection();
             ConfigureServices(services);

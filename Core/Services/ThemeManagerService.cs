@@ -91,23 +91,7 @@ public sealed class ThemeSettings
 /// </summary>
 public sealed class ThemeManagerService
 {
-    private const string ThemeFileName = "theme.json";
-    private readonly string _themePath;
     private ThemeSettings? _cachedTheme;
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
-    public ThemeManagerService()
-    {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var appFolder = Path.Combine(appData, "LiteMusicPlayer");
-        Directory.CreateDirectory(appFolder);
-        _themePath = Path.Combine(appFolder, ThemeFileName);
-    }
 
     // PUBLIC API
 
@@ -174,8 +158,8 @@ public sealed class ThemeManagerService
     {
         try
         {
-            var json = JsonSerializer.Serialize(theme, JsonOptions);
-            File.WriteAllText(_themePath, json);
+            var json = JsonSerializer.Serialize(theme, G.Json.Beautiful);
+            File.WriteAllText(G.File.Theme, json);
             _cachedTheme = theme;
             Log.Info($"Theme '{theme.Name}' saved.");
         }
@@ -205,8 +189,8 @@ public sealed class ThemeManagerService
     {
         try
         {
-            if (File.Exists(_themePath))
-                File.Delete(_themePath);
+            if (File.Exists(G.File.Theme))
+                File.Delete(G.File.Theme);
         }
         catch { /* Игнорируем ошибку удаления */ }
 
@@ -335,10 +319,10 @@ public sealed class ThemeManagerService
     {
         try
         {
-            if (File.Exists(_themePath))
+            if (File.Exists(G.File.Theme))
             {
-                var json = File.ReadAllText(_themePath);
-                var theme = JsonSerializer.Deserialize<ThemeSettings>(json, JsonOptions);
+                var json = File.ReadAllText(G.File.Theme);
+                var theme = JsonSerializer.Deserialize<ThemeSettings>(json, G.Json.Beautiful);
                 if (theme != null)
                 {
                     _cachedTheme = theme;

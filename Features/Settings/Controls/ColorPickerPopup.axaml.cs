@@ -198,7 +198,7 @@ public partial class ColorPickerPopup : UserControl, INotifyPropertyChanged
             if (!hex.StartsWith('#'))
                 hex = "#" + hex;
 
-            if (!Regex.IsMatch(hex, @"^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"))
+            if (!OnlyHEXRegex().IsMatch(hex))
                 return false;
 
             color = Color.Parse(hex);
@@ -250,6 +250,9 @@ public partial class ColorPickerPopup : UserControl, INotifyPropertyChanged
             new("Ocean Dark", "#001219"),
         ];
     }
+
+    [GeneratedRegex(@"^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")]
+    private static partial Regex OnlyHEXRegex();
 
     #endregion
 }

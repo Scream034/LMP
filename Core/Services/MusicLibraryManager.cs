@@ -102,7 +102,7 @@ public class MusicLibraryManager(
         {
             try
             {
-                var ytId = await _ytUser.CreatePlaylistAsync(name, "Created via LiteMusicPlayer");
+                var ytId = await _ytUser.CreatePlaylistAsync(name, $"Created via {G.AppName}");
                 newPlaylist.YoutubeId = ytId;
             }
             catch (Exception ex)
@@ -145,7 +145,7 @@ public class MusicLibraryManager(
 
         try
         {
-            var ytId = await _ytUser.CreatePlaylistAsync(localPl.Name, "Uploaded from LiteMusicPlayer");
+            var ytId = await _ytUser.CreatePlaylistAsync(localPl.Name, $"Uploaded from {G.AppName}");
             localPl.YoutubeId = ytId;
             localPl.SyncMode = PlaylistSyncMode.TwoWaySync;
             _library.AddOrUpdatePlaylist(localPl);

@@ -403,7 +403,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private void UpdateCacheStats()
     {
         var (imgCount, imgSize) = _imageCache.GetStats();
-        var audioStats = _streamCache.GetStats();
+        var audioStats = StreamCacheManager.GetStats();
 
         ImageCacheStats = $"{imgSize} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]})";
         AudioCacheStats = $"{audioStats.SizeMb} MB / {AudioCacheLimitMb} MB ({audioStats.FileCount} {SL["Common_Files"]})";

@@ -47,7 +47,7 @@ internal partial class VideoWatchPage(string rawContent)
         get
         {
             // 1. Пробуем найти ytInitialPlayerResponse
-            var json = Regex.Match(rawContent, @"var\s+ytInitialPlayerResponse\s*=\s*(\{.*?\});", RegexOptions.Singleline)
+            var json = InitialYTRegex().Match(rawContent)
                 .Groups[1].Value;
 
             if (!string.IsNullOrWhiteSpace(json))
@@ -88,4 +88,6 @@ internal partial class VideoWatchPage(string rawContent)
     private static partial Regex LikeRegex1();
     [GeneratedRegex(@"([\d,\.]+)\s+likes")]
     private static partial Regex LikeRegex2();
+    [GeneratedRegex(@"var\s+ytInitialPlayerResponse\s*=\s*(\{.*?\});", RegexOptions.Singleline)]
+    private static partial Regex InitialYTRegex();
 }
