@@ -128,7 +128,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 try
                 {
                     // Получаем плейлисты пользователя через InnerTube (пока заглушка в Provider, но вызов верный)
-                    var ytPlaylists = await _youtube.GetUserPlaylistsByAuthAsync();
+                    var ytPlaylists = await YoutubeProvider.GetUserPlaylistsByAuthAsync();
                     ct.ThrowIfCancellationRequested();
                     SyncProgress = 0.1;
 

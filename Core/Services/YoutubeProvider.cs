@@ -1,5 +1,4 @@
 ﻿using LMP.Core.Youtube;
-
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Search;
 using LMP.Core.Youtube.Videos;
@@ -7,11 +6,10 @@ using LMP.Core.Youtube.Videos.Streams;
 using LMP.Core.Models;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-using Playlist = LMP.Core.Models.Playlist;
-using LMP.Core.Youtube.Channels;
-using Microsoft.Extensions.DependencyInjection;
-using System.Runtime.CompilerServices;
 using System.Net;
+using LMP.Core.Youtube.Channels;
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LMP.Core.Services;
 
@@ -21,11 +19,11 @@ public partial class YoutubeProvider : IDisposable
     private const int MaxCacheSize = 200;
 
     private YoutubeClient _youtube = null!;
-    private readonly CookieAuthService _cookieAuth;
-    private readonly Timer? _cookieSyncTimer;
-    private CookieContainer? _activeContainer; // Ссылка на текущий контейнер
-    private readonly LibraryService? _libraryService;
 
+    // Исправление warning CS8618: делаем поле nullable, так как есть конструктор без параметров
+    private readonly CookieAuthService? _cookieAuth;
+
+    private readonly LibraryService? _libraryService;
     private readonly Dictionary<string, StreamCacheEntry> _streamCache = [];
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
 
@@ -52,7 +50,7 @@ public partial class YoutubeProvider : IDisposable
     {
     }
 
-    public YoutubeProvider(LibraryService? libraryService, CookieAuthService cookieAuth)
+    public YoutubeProvider(LibraryService? libraryService, CookieAuthService? cookieAuth)
     {
         _libraryService = libraryService;
         _cookieAuth = cookieAuth;
@@ -62,40 +60,35 @@ public partial class YoutubeProvider : IDisposable
             ReloadClient();
             _cookieAuth.OnAuthStateChanged += ReloadClient;
 
-            // Запускаем таймер: старт через 1 мин, повтор каждые 3 мин
-            _cookieSyncTimer = new Timer(SyncCookiesCallback, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(3));
-        }
-    }
-
-    private void SyncCookiesCallback(object? state)
-    {
-        if (_activeContainer != null)
-        {
-            _cookieAuth.SyncCookiesFromContainer(_activeContainer);
+            // Таймер удален для защиты куки от стирания
         }
     }
 
     public void ReloadClient()
     {
-        // Получаем контейнер и сохраняем ссылку на него в классе
-        _activeContainer = _cookieAuth.GetCookieContainer();
+        if (_cookieAuth == null) return;
+
+        // 1. Получаем сырую строку куки из сервиса авторизации
+        string rawCookies = _cookieAuth.GetRawCookies();
 
         var handler = new HttpClientHandler
         {
-            CookieContainer = _activeContainer, // Используем этот инстанс
-            UseCookies = true,
+            // ВАЖНО: Отключаем автоматическую работу с куки.
+            // Теперь HttpClient не будет парсить Set-Cookie и очищать наши данные.
+            UseCookies = false,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
             AllowAutoRedirect = false
         };
 
         var baseHttpClient = new HttpClient(handler);
-        // Важно: передаем тот же _activeContainer в наш Handler для генерации хешей
-        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, _activeContainer, disposeClient: true);
+
+        // 2. Передаем сырую строку в наш обработчик
+        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, rawCookies, disposeClient: true);
         var finalHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
 
         _youtube = new YoutubeClient(finalHttpClient);
 
-        Log.Info($"[YouTube] Client reloaded. Cookies: {_activeContainer.Count}");
+        Log.Info($"[YouTube] Client reloaded. Auth provided: {!string.IsNullOrEmpty(rawCookies)}");
     }
 
     public Task InitializeAsync()
@@ -111,11 +104,10 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task<List<HomeSection>> GetPersonalizedHomeAsync(CancellationToken ct = default)
     {
-        if (!_cookieAuth.IsAuthenticated) return [];
+        if (_cookieAuth?.IsAuthenticated != true) return [];
 
         try
         {
-            // MusicClient теперь возвращает MusicShelf, который нужно сконвертировать в HomeSection
             var shelves = await _youtube.Music.GetPersonalizedHomeAsync(ct);
             var sections = new List<HomeSection>();
 
@@ -125,8 +117,6 @@ public partial class YoutubeProvider : IDisposable
 
                 foreach (var item in shelf.Items)
                 {
-                    // MusicItem -> TrackInfo
-                    // Выбираем лучшее превью
                     var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
                                    ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
 
@@ -166,7 +156,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task LikeTrackAsync(string trackId, bool like)
     {
-        if (!_cookieAuth.IsAuthenticated) return;
+        if (_cookieAuth?.IsAuthenticated != true) return;
         try
         {
             var vid = trackId.Replace("yt_", "");
@@ -182,7 +172,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task<string?> CreatePlaylistAsync(string title)
     {
-        if (!_cookieAuth.IsAuthenticated) return null;
+        if (_cookieAuth?.IsAuthenticated != true) return null;
         try
         {
             var id = await _youtube.Music.CreatePlaylistAsync(title);
@@ -197,7 +187,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task AddToPlaylistAsync(string playlistId, string trackId)
     {
-        if (!_cookieAuth.IsAuthenticated) return;
+        if (_cookieAuth?.IsAuthenticated != true) return;
         try
         {
             await _youtube.Music.AddToPlaylistAsync(playlistId, trackId.Replace("yt_", ""));
@@ -209,7 +199,6 @@ public partial class YoutubeProvider : IDisposable
     }
 
     #region RefreshStreamUrlAsync
-
     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
        TrackInfo track,
        bool forceRefresh = false,
@@ -378,11 +367,9 @@ public partial class YoutubeProvider : IDisposable
             return [];
         }
     }
-
     #endregion
 
     #region Cache
-
     private static string GenerateCacheKey(string videoId, string? container, int bitrate = 0)
     {
         var key = string.IsNullOrEmpty(container) ? videoId : $"{videoId}_{container}";
@@ -436,11 +423,9 @@ public partial class YoutubeProvider : IDisposable
         _streamCache.Clear();
         Log.Info("[YouTube] Stream cache cleared");
     }
-
     #endregion
 
     #region Search, Playlist, etc.
-
     public static QueryType DetectQueryType(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return QueryType.None;
@@ -496,7 +481,6 @@ public partial class YoutubeProvider : IDisposable
     }
 
     #region Search
-
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
         string query,
         int maxResults = 300,
@@ -586,9 +570,6 @@ public partial class YoutubeProvider : IDisposable
         return await SearchFastAsync(query, maxResults, SearchFilter.Video);
     }
 
-    /// <summary>
-    /// Поиск с поддержкой продолжения (continuation) для ленивой загрузки
-    /// </summary>
     public class SearchSession : IDisposable
     {
         private readonly YoutubeClient _youtube;
@@ -716,9 +697,6 @@ public partial class YoutubeProvider : IDisposable
 
     private SearchSession? _currentSearchSession;
 
-    /// <summary>
-    /// Создает сессию поиска для ленивой загрузки (с поддержкой фильтра)
-    /// </summary>
     public SearchSession CreateSearchSession(
         string query,
         int maxResults = 300,
@@ -734,9 +712,6 @@ public partial class YoutubeProvider : IDisposable
         return _currentSearchSession;
     }
 
-    /// <summary>
-    /// Быстрый первоначальный поиск с сессией
-    /// </summary>
     public async Task<(List<TrackInfo> Tracks, SearchSession Session)> SearchWithSessionAsync(
         string query,
         int initialCount = 50,
@@ -822,7 +797,7 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public async Task<List<Models.Playlist>> GetUserPlaylistsByAuthAsync()
+    public static async Task<List<Playlist>> GetUserPlaylistsByAuthAsync()
     {
         var userDataService = Program.Services.GetRequiredService<YoutubeUserDataService>();
         return await userDataService.GetMyPlaylistsAsync();
@@ -968,7 +943,6 @@ public partial class YoutubeProvider : IDisposable
     #endregion
 
     #region Helpers
-
     private static TrackInfo ConvertPlaylistSearchResultToTrackInfo(PlaylistSearchResult playlist)
     {
         var thumb = playlist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault();
@@ -1051,15 +1025,11 @@ public partial class YoutubeProvider : IDisposable
 
     public void Dispose()
     {
-        _cookieSyncTimer?.Dispose();
-
-        // Финальное сохранение перед выходом
-        if (_activeContainer != null)
+        if (_cookieAuth != null)
         {
-            _cookieAuth.SyncCookiesFromContainer(_activeContainer);
+            _cookieAuth.OnAuthStateChanged -= ReloadClient;
         }
 
-        _cookieAuth.OnAuthStateChanged -= ReloadClient;
         GC.SuppressFinalize(this);
     }
 
@@ -1075,7 +1045,6 @@ public partial class YoutubeProvider : IDisposable
 
     [GeneratedRegex(@"^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled)]
     private static partial Regex _ValidYoutubeId();
-
     #endregion
 }
 

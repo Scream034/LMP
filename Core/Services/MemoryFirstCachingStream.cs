@@ -89,7 +89,7 @@ public sealed class MemoryFirstCachingStream : Stream
         _readAheadChunks = config.ReadAheadChunks;
         _maxConcurrentDownloads = config.MaxConcurrentDownloads;
         // Fallback если в конфиге пришел 0 (защита от дурака)
-        _maxRamChunks = config.MaxRamChunks > 0 ? config.MaxRamChunks : 50; 
+        _maxRamChunks = config.MaxRamChunks > 0 ? config.MaxRamChunks : 50;
         _downloadTimeoutMs = config.DownloadTimeoutMs;
 
         _cachePath = StreamCacheManager.GetCachePath(trackId);
@@ -113,24 +113,42 @@ public sealed class MemoryFirstCachingStream : Stream
         Log.Info($"Opened {trackId}: {contentLength / 1024 / 1024}MB. RAM Limit: {_maxRamChunks} chunks.");
     }
 
-    // ... (Остальные методы: OpenCacheFileWithRetry, PreBufferAsync, CancelPendingReads, Read, Seek, TryReadChunk, ReadFromDisk, EnqueueUrgent, EnqueueReadAhead, TryEnqueue, HasChunk - БЕЗ ИЗМЕНЕНИЙ) ...
-    // Вставь сюда методы из оригинала, которые я не менял, чтобы не загромождать ответ
-    // (OpenCacheFileWithRetry, PreBufferAsync, CancelPendingReads, Read, Seek, TryReadChunk, ReadFromDisk, EnqueueUrgent, EnqueueReadAhead, TryEnqueue, HasChunk)
-
     private static FileStream? OpenCacheFileWithRetry(string path)
     {
+        // 1. Сначала проверяем директорию, чтобы избежать DirectoryNotFoundException
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+        {
+            try
+            {
+                Directory.CreateDirectory(directory);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to create cache directory: {ex.Message}");
+                return null; // Если не можем создать папку, нет смысла пытаться создать файл
+            }
+        }
+
         for (int attempt = 1; attempt <= MaxFileOpenRetries; attempt++)
         {
             try
             {
+                // Используем FileShare.ReadWrite, чтобы позволить другим процессам (или потокам) читать
                 return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
                     FileShare.ReadWrite, 65536, FileOptions.Asynchronous | FileOptions.RandomAccess);
             }
             catch (IOException) when (attempt < MaxFileOpenRetries)
             {
+                // Это ловит "File is being used by another process"
                 Thread.Sleep(FileOpenRetryDelayMs * attempt);
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                // Логируем реальную ошибку, чтобы не гадать (например, AccessDenied)
+                Log.Error($"Cache file open error ({path}): {ex.Message}");
+                return null;
+            }
         }
         return null;
     }
@@ -138,7 +156,8 @@ public sealed class MemoryFirstCachingStream : Stream
     public async Task<bool> PreBufferAsync(CancellationToken ct)
     {
         if (_disposed || _disposing) return false;
-        try {
+        try
+        {
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _downloadCts.Token, _disposeCts.Token);
             var token = linkedCts.Token;
             _downloadLoop ??= Task.Run(() => DownloadLoopAsync(token), token);
@@ -195,7 +214,7 @@ public sealed class MemoryFirstCachingStream : Stream
         }
         catch { return 0; }
     }
-    
+
     public override long Seek(long offset, SeekOrigin origin)
     {
         if (_disposed) return 0;
@@ -269,7 +288,7 @@ public sealed class MemoryFirstCachingStream : Stream
         if (_pendingDownloads.ContainsKey(idx)) return;
         if (_queuedChunks.Add(idx)) _downloadQueue.Enqueue(idx, priority);
     }
-    
+
     private bool HasChunk(int idx)
     {
         if (_chunks.ContainsKey(idx)) return true;
@@ -367,8 +386,8 @@ public sealed class MemoryFirstCachingStream : Stream
                         await _refreshLock.WaitAsync(cts.Token);
                         try
                         {
-                             var newUrl = await _urlRefresher(cts.Token);
-                             if (!string.IsNullOrEmpty(newUrl)) _url = newUrl;
+                            var newUrl = await _urlRefresher(cts.Token);
+                            if (!string.IsNullOrEmpty(newUrl)) _url = newUrl;
                         }
                         finally { _refreshLock.Release(); }
                         retry++;
@@ -397,22 +416,22 @@ public sealed class MemoryFirstCachingStream : Stream
                         // Copy for disk write
                         byte[] diskBuf = ArrayPool<byte>.Shared.Rent(totalRead);
                         Buffer.BlockCopy(buffer, 0, diskBuf, 0, totalRead);
-                        
+
                         // ПИШЕМ В КАНАЛ. Если канал полон и мы отменяем, writeAsync выбросит исключение,
                         // и мы должны будем вернуть diskBuf (см. finally/catch)
                         // НО здесь мы передаем владение каналу.
                         await _diskChannel.Writer.WriteAsync((start, diskBuf, totalRead), cts.Token);
                     }
-                    
+
                     // Buffer успешно передан в _chunks, обнуляем ссылку, чтобы finally не вернул его
-                    buffer = null; 
-                    
+                    buffer = null;
+
                     // Trigger RAM cleanup
                     if (_chunks.Count > _maxRamChunks) TrimRamCache();
                 }
-                
+
                 tcs.SetResult();
-                break; 
+                break;
             }
             catch (Exception ex)
             {
@@ -439,7 +458,7 @@ public sealed class MemoryFirstCachingStream : Stream
         if (_chunks.Count <= _maxRamChunks) return;
 
         int current = (int)(Volatile.Read(ref _position) / _chunkSize);
-        
+
         // Удаляем все, что слишком далеко позади или слишком далеко впереди
         var toRemove = _chunks.Keys
             .Where(i => i < current - 2 || i > current + _readAheadChunks * 2)
@@ -508,13 +527,13 @@ public sealed class MemoryFirstCachingStream : Stream
                 }
             }
         }
-        catch (OperationCanceledException) 
+        catch (OperationCanceledException)
         {
             // Нормальное завершение при Dispose
         }
         catch (Exception ex)
         {
-             Log.Error($"Disk writer loop crash: {ex.Message}");
+            Log.Error($"Disk writer loop crash: {ex.Message}");
         }
 
         // При выходе из цикла (отмена или ошибка) может остаться мусор в канале?
@@ -538,7 +557,7 @@ public sealed class MemoryFirstCachingStream : Stream
         {
             Try(_downloadCts.Cancel);
             Try(_disposeCts.Cancel);
-            
+
             // 1. Закрываем Writer, чтобы никто больше не писал
             Try(() => _diskChannel.Writer.TryComplete());
 

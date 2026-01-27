@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using LMP.Core.Youtube.Channels;
 using LMP.Core.Youtube.Music;
 using LMP.Core.Youtube.Playlists;
@@ -33,12 +34,15 @@ public class YoutubeClient : IDisposable
 
     /// <summary>
     /// Конструктор для создания клиента с настройкой CookieContainer.
-    /// Используется, если нужно создать клиент с нуля внутри YoutubeExplode.
+    /// Адаптирует контейнер в строку для YoutubeHttpHandler.
     /// </summary>
     public YoutubeClient(HttpClient http, CookieContainer cookieContainer)
     {
+        // Конвертируем Container в строку для нашего "Hardcore Mode"
+        string rawCookies = ConvertContainerToString(cookieContainer);
+
         // Создаем HttpClient, обернутый в наш YoutubeHttpHandler
-        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, cookieContainer), true);
+        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, rawCookies), true);
 
         Videos = new VideoClient(_youtubeHttp);
         Playlists = new PlaylistClient(_youtubeHttp);
@@ -48,26 +52,20 @@ public class YoutubeClient : IDisposable
     }
 
     /// <summary>
-    /// Легаси-конструктор для совместимости (List -> CookieContainer).
+    /// Легаси-конструктор для совместимости (List -> String).
     /// </summary>
     public YoutubeClient(HttpClient http, IReadOnlyList<Cookie> initialCookies)
     {
-        var container = new CookieContainer();
-        // Добавляем куки для нужных доменов
-        var youtubeUri = new Uri("https://youtube.com");
-        var musicUri = new Uri("https://music.youtube.com");
-
+        // Конвертируем список в строку
+        var sb = new StringBuilder();
         foreach (var cookie in initialCookies)
         {
-            try 
-            {
-                container.Add(youtubeUri, new Cookie(cookie.Name, cookie.Value));
-                container.Add(musicUri, new Cookie(cookie.Name, cookie.Value));
-            }
-            catch { /* Игнорируем некорректные куки */ }
+            if (sb.Length > 0) sb.Append("; ");
+            sb.Append($"{cookie.Name}={cookie.Value}");
         }
+        string rawCookies = sb.ToString();
 
-        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, container), true);
+        _youtubeHttp = new HttpClient(new YoutubeHttpHandler(http, rawCookies), true);
 
         Videos = new VideoClient(_youtubeHttp);
         Playlists = new PlaylistClient(_youtubeHttp);
@@ -106,4 +104,39 @@ public class YoutubeClient : IDisposable
 
     /// <inheritdoc />
     public void Dispose() => _youtubeHttp.Dispose();
+
+    // Вспомогательный метод для извлечения куки из контейнера в строку
+    private static string ConvertContainerToString(CookieContainer container)
+    {
+        // Собираем куки с основных доменов, чтобы сформировать полную строку
+        var uris = new[] 
+        { 
+            new Uri("https://youtube.com"), 
+            new Uri("https://music.youtube.com"), 
+            new Uri("https://google.com") 
+        };
+
+        var uniqueCookies = new Dictionary<string, string>();
+
+        foreach (var uri in uris)
+        {
+            var collection = container.GetCookies(uri);
+            foreach (Cookie cookie in collection)
+            {
+                if (!uniqueCookies.ContainsKey(cookie.Name))
+                {
+                    uniqueCookies[cookie.Name] = cookie.Value;
+                }
+            }
+        }
+
+        var sb = new StringBuilder();
+        foreach (var kvp in uniqueCookies)
+        {
+            if (sb.Length > 0) sb.Append("; ");
+            sb.Append($"{kvp.Key}={kvp.Value}");
+        }
+
+        return sb.ToString();
+    }
 }

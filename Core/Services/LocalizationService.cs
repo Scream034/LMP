@@ -7,7 +7,7 @@ namespace LMP.Core.Services;
 
 public sealed class LocalizationService : INotifyPropertyChanged
 {
-    public static LocalizationService Instance = new();
+    public readonly static LocalizationService Instance = new();
 
     private string _currentLanguage = "en"; // Дефолт - английский
     private Dictionary<string, string> _resources = [];

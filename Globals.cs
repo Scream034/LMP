@@ -20,6 +20,7 @@ public static class Globals
             Directory.CreateDirectory(Data);
             Directory.CreateDirectory(Downloads);
             Directory.CreateDirectory(ImageCache);
+            Directory.CreateDirectory(StreamCache);
             Directory.CreateDirectory(SearchCache);
         }
     }

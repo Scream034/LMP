@@ -109,7 +109,6 @@ public class LibraryService : IDisposable
             Data = new LibraryData();
         }
         EnsureLikedPlaylist();
-        Directory.CreateDirectory(DownloadPath);
     }
 
     public void Save()
