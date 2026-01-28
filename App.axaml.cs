@@ -48,7 +48,13 @@ public partial class App : Application
                     var youtube = Program.Services.GetRequiredService<YoutubeProvider>();
                     await youtube.InitializeAsync();
                     var musicLibraryManager = Program.Services.GetRequiredService<MusicLibraryManager>();
+#if DEBUG
+                    var dialogService = Program.Services.GetRequiredService<IDialogService>();
+                    var canSync =await dialogService.ConfirmAsync("Debug", "Sync liked tracks?", "Yes", "No");
+                    if (canSync) await musicLibraryManager.SyncLikedTracksAsync();
+#else
                     await musicLibraryManager.SyncLikedTracksAsync();
+#endif
                 }
                 catch (Exception ex)
                 {

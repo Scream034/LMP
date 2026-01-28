@@ -16,22 +16,24 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private readonly DownloadService _downloads;
     private readonly TrackViewModelFactory _vmFactory;
 
-    private IDisposable? _queueSub;
-    private IDisposable? _trackSub;
+    private readonly IDisposable? _queueSub;
+    private readonly IDisposable? _trackSub;
+    private bool _isMovingInternally; // Флаг для подавления обновления
 
     [Reactive] public bool IsEmpty { get; private set; } = true;
+    [Reactive] public bool CanReorderItems { get; private set; }
 
     [Reactive] public string FilterQuery { get; set; } = string.Empty;
     [Reactive] public ContentFilterType FilterType { get; set; } = ContentFilterType.All;
-    public ReactiveCommand<string, Unit> SetFilterTypeCommand { get; }
 
     public ObservableCollection<TrackItemViewModel> QueueItems { get; } = [];
 
+    public ReactiveCommand<string, Unit> SetFilterTypeCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearQueueCommand { get; }
     public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; }
     public ReactiveCommand<Unit, Unit> DownloadAllCommand { get; }
     public ReactiveCommand<TrackItemViewModel, Unit> RemoveTrackCommand { get; }
-    public ReactiveCommand<(int, int), Unit> MoveTrackCommand { get; }
+    public ReactiveCommand<(int, int), Unit> MoveItemCommand { get; }
 
     public QueueViewModel(
         AudioEngine audio,
@@ -51,10 +53,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
         ClearQueueCommand = ReactiveCommand.Create(() => _audio.ClearQueue());
         ShuffleQueueCommand = ReactiveCommand.Create(() => _audio.ShuffleQueue());
-        
+
         DownloadAllCommand = ReactiveCommand.Create(() =>
         {
-            // Скачиваем только те, что сейчас ВИДИМЫ в списке (с учетом фильтра)
             foreach (var item in QueueItems.Where(t => !t.IsDownloaded))
                 _downloads.StartDownload(item.Track);
         });
@@ -64,11 +65,34 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             _audio.RemoveFromQueue(item.Track);
         });
 
-        MoveTrackCommand = ReactiveCommand.Create<(int oldIndex, int newIndex)>(tuple =>
+        // Оптимизированная команда перемещения
+        MoveItemCommand = ReactiveCommand.Create<(int oldIndex, int newIndex)>(tuple =>
         {
-            // Запрещаем перемещение, если включен фильтр, чтобы не сломать индексы
+            // Запрещаем перемещение, если включен фильтр (индексы не совпадают с реальными)
             if (!string.IsNullOrEmpty(FilterQuery) || FilterType != ContentFilterType.All) return;
-            _audio.MoveQueueItem(tuple.oldIndex, tuple.newIndex);
+
+            var (oldIdx, newIdx) = tuple;
+            if (oldIdx == newIdx) return;
+
+            try
+            {
+                _isMovingInternally = true;
+
+                // 1. Мгновенно обновляем UI (High Performance)
+                // ObservableCollection.Move не пересоздает список, а уведомляет только о перемещении
+                if (oldIdx >= 0 && oldIdx < QueueItems.Count &&
+                    newIdx >= 0 && newIdx < QueueItems.Count)
+                {
+                    QueueItems.Move(oldIdx, newIdx);
+                }
+
+                // 2. Обновляем AudioEngine
+                _audio.MoveQueueItem(oldIdx, newIdx);
+            }
+            finally
+            {
+                _isMovingInternally = false;
+            }
         });
 
         // Подписки
@@ -77,7 +101,14 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
                 h => _audio.OnQueueChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(50))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => RefreshQueue());
+            .Subscribe(_ =>
+            {
+                // Если изменение вызвано нашим перемещением, не перестраиваем список заново
+                if (!_isMovingInternally)
+                {
+                    RefreshQueue();
+                }
+            });
 
         _trackSub = Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
@@ -91,22 +122,31 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => RefreshQueue());
 
+        this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
+             .Throttle(TimeSpan.FromMilliseconds(200))
+             .ObserveOn(RxApp.MainThreadScheduler)
+             .Subscribe(_ =>
+             {
+                 CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery) && FilterType == ContentFilterType.All;
+                 RefreshQueue();
+             });
+
         RefreshQueue();
     }
 
     private void RefreshQueue()
     {
-        var allQueue = _audio.Queue; // Полный список из движка
+        var allQueue = _audio.Queue;
         var currentId = _audio.CurrentTrack?.Id;
 
         // Применяем фильтр
         var filteredTracks = allQueue.Where(FilterItem).ToList();
 
-        // Полная перерисовка (для простоты и надежности при фильтрации)
-        // При большом кол-ве элементов тут стоило бы использовать DynamicData, как в PaginatedViewModel,
-        // но очередь обычно небольшая.
-        
-        // Очищаем старые VM
+        // Полная очистка только если структура изменилась
+        // Для производительности при больших списках лучше было бы использовать DynamicData,
+        // но для очереди плеера (обычно < 1000 элементов) полная замена приемлема,
+        // если это происходит не часто (не при перемещении).
+
         foreach (var item in QueueItems) item.Cleanup();
         QueueItems.Clear();
 
@@ -122,11 +162,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     private bool FilterItem(TrackInfo item)
     {
-        // 1. Фильтр по типу
         if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
         if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
 
-        // 2. Текстовый поиск
         if (!string.IsNullOrWhiteSpace(FilterQuery))
         {
             return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
@@ -153,10 +191,10 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     {
         _queueSub?.Dispose();
         _trackSub?.Dispose();
-        
+
         foreach (var item in QueueItems)
             item.Cleanup();
-        
+
         QueueItems.Clear();
         GC.SuppressFinalize(this);
     }

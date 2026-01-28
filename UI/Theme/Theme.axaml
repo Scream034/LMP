@@ -585,25 +585,40 @@
         <Setter Property="Padding" Value="0" />
     </Style>
 
-    <!-- LISTBOXITEM - полностью прозрачный, без выделения -->
+    <!-- LISTBOXITEM - с поддержкой drag & drop индикаторов -->
     <Style Selector="ListBox.track-list ListBoxItem">
         <Setter Property="Padding" Value="0" />
         <Setter Property="Margin" Value="0" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="FocusAdorner" Value="{x:Null}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <ThicknessTransition Property="BorderThickness" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
         <Setter Property="Template">
             <ControlTemplate TargetType="ListBoxItem">
-                <ContentPresenter
-                    Name="PART_ContentPresenter"
-                    Background="Transparent"
+                <Border
+                    Name="PART_RootBorder"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
                     Padding="0"
-                    Margin="0"
-                    HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
-                    VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                    Content="{TemplateBinding Content}"
-                    ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    Margin="0">
+                    <ContentPresenter
+                        Name="PART_ContentPresenter"
+                        Background="Transparent"
+                        Padding="0"
+                        Margin="0"
+                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                        Content="{TemplateBinding Content}"
+                        ContentTemplate="{TemplateBinding ContentTemplate}" />
+                </Border>
             </ControlTemplate>
         </Setter>
     </Style>
@@ -948,4 +963,22 @@
         </Style.Animations>
     </Style>
 
+    <!-- ════════ DRAG & DROP STYLES ════════ -->
+
+    <!-- Перетаскиваемый элемент становится полупрозрачным -->
+    <Style Selector="ListBox.track-list ListBoxItem.dragging">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- Линия вставки СВЕРХУ -->
+    <Style Selector="ListBox.track-list ListBoxItem.insert-top">
+        <Setter Property="BorderThickness" Value="0,2,0,0" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- Линия вставки СНИЗУ -->
+    <Style Selector="ListBox.track-list ListBoxItem.insert-bottom">
+        <Setter Property="BorderThickness" Value="0,0,0,2" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
 </Styles>

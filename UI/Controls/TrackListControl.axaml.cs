@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -12,16 +13,31 @@ using LMP.Features.Shared;
 
 namespace LMP.UI.Controls;
 
-/// <summary>
-/// Универсальный элемент управления для отображения списка музыкальных треков.
-/// Поддерживает различные контексты: поиск, плейлист, очередь.
-/// </summary>
 public partial class TrackListControl : UserControl
 {
-    #region Fields
+    #region Constants
+    private const string DragFormatTrackIndex = "application/x-lmp-track-index";
+    private const double DragThreshold = 5.0;
+    private static readonly DataFormat<string> TrackIndexDataFormat = DataFormat.CreateStringPlatformFormat(DragFormatTrackIndex);
+    
+    // ★ НОВОЕ: Константы для авто-скролла
+    private const int AutoScrollMargin = 50; // Размер "горячей зоны" у краев списка
+    private const double AutoScrollAmount = 12.0; // На сколько пикселей скроллить за тик
+    #endregion
 
+    #region Fields
     private readonly EventHandler<string> _languageChangedHandler;
 
+    // Drag & Drop State
+    private Point _dragStartPoint;
+    private ListBox? _listBox;
+    private ListBoxItem? _lastDragOverItem;
+    private bool _isDragging;
+
+    // ★ НОВОЕ: Поля для авто-скролла
+    private ScrollViewer? _scrollViewer;
+    private DispatcherTimer? _autoScrollTimer;
+    private double _autoScrollOffset;
     #endregion
 
     #region Styled Properties
@@ -42,6 +58,24 @@ public partial class TrackListControl : UserControl
     {
         get => GetValue(LoadMoreCommandProperty);
         set => SetValue(LoadMoreCommandProperty, value);
+    }
+
+    public static readonly StyledProperty<ICommand?> MoveItemCommandProperty =
+        AvaloniaProperty.Register<TrackListControl, ICommand?>(nameof(MoveItemCommand));
+
+    public ICommand? MoveItemCommand
+    {
+        get => GetValue(MoveItemCommandProperty);
+        set => SetValue(MoveItemCommandProperty, value);
+    }
+
+    public static readonly StyledProperty<bool> EnableReorderingProperty =
+    AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableReordering), false);
+
+    public bool EnableReordering
+    {
+        get => GetValue(EnableReorderingProperty);
+        set => SetValue(EnableReorderingProperty, value);
     }
 
     public static readonly StyledProperty<bool> IsLoadingProperty =
@@ -212,12 +246,42 @@ public partial class TrackListControl : UserControl
         base.OnAttachedToVisualTree(e);
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
         UpdateLocalizedTexts();
+        _listBox = this.FindControl<ListBox>("MainListBox");
+
+        // ★ НОВОЕ: Находим ScrollViewer и инициализируем таймер
+        if (_listBox is { IsLoaded: true })
+        {
+            _scrollViewer = _listBox.FindDescendantOfType<ScrollViewer>();
+        }
+        else if (_listBox != null)
+        {
+            _listBox.Loaded += OnListBoxLoaded;
+        }
+
+        _autoScrollTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Render, OnAutoScrollTick);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
         base.OnDetachedFromVisualTree(e);
+
+        // ★ НОВОЕ: Очищаем ресурсы
+        _autoScrollTimer?.Stop();
+        _autoScrollTimer = null;
+
+        if (_listBox != null)
+        {
+            _listBox.Loaded -= OnListBoxLoaded;
+        }
+        _listBox = null;
+        _lastDragOverItem = null;
+        _scrollViewer = null;
+    }
+
+    private void OnListBoxLoaded(object? sender, RoutedEventArgs e)
+    {
+        _scrollViewer = _listBox?.FindDescendantOfType<ScrollViewer>();
     }
 
     #endregion
@@ -244,24 +308,301 @@ public partial class TrackListControl : UserControl
 
     #endregion
 
-    #region Event Handlers
+    #region Drag & Drop Logic
 
-    /// <summary>
-    /// ПКМ на строке трека открывает контекстное меню.
-    /// </summary>
+    private void OnListBoxPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!EnableReordering) return;
+
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsLeftButtonPressed)
+        {
+            _dragStartPoint = e.GetPosition(null);
+            _isDragging = false;
+        }
+    }
+
+    private async void OnListBoxPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!EnableReordering || _isDragging) return;
+
+        var props = e.GetCurrentPoint(this).Properties;
+        if (!props.IsLeftButtonPressed) return;
+
+        var currentPoint = e.GetPosition(null);
+        double deltaX = Math.Abs(currentPoint.X - _dragStartPoint.X);
+        double deltaY = Math.Abs(currentPoint.Y - _dragStartPoint.Y);
+
+        if (deltaX < DragThreshold && deltaY < DragThreshold) return;
+
+        if (e.Source is not Visual sourceVisual) return;
+        var draggedItem = sourceVisual.FindAncestorOfType<ListBoxItem>();
+        if (draggedItem == null) return;
+
+        int dragIndex = _listBox?.IndexFromContainer(draggedItem) ?? -1;
+        if (dragIndex < 0) return;
+
+        _isDragging = true;
+        using var dragData = new DragDataTransfer(dragIndex);
+        draggedItem.Classes.Add("dragging");
+
+        try { await DragDrop.DoDragDropAsync(e, dragData, DragDropEffects.Move); }
+        finally
+        {
+            draggedItem.Classes.Remove("dragging");
+            CleanupDragStyles();
+            _isDragging = false;
+        }
+    }
+
+    private void OnListBoxPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _isDragging = false;
+        CleanupDragStyles();
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        if (!EnableReordering || !HasTrackIndexData(e))
+        {
+            e.DragEffects = DragDropEffects.None;
+            return;
+        }
+
+        e.DragEffects = DragDropEffects.Move;
+
+        if (e.Source is not Visual sourceVisual) return;
+
+        var overItem = sourceVisual.FindAncestorOfType<ListBoxItem>();
+
+        if (_lastDragOverItem != null && _lastDragOverItem != overItem)
+        {
+            _lastDragOverItem.Classes.Remove("insert-top");
+            _lastDragOverItem.Classes.Remove("insert-bottom");
+        }
+
+        if (overItem == null) return;
+
+        _lastDragOverItem = overItem;
+
+        var position = e.GetPosition(overItem);
+        double halfHeight = overItem.Bounds.Height / 2;
+
+        if (position.Y < halfHeight)
+        {
+            overItem.Classes.Add("insert-top");
+            overItem.Classes.Remove("insert-bottom");
+        }
+        else
+        {
+            overItem.Classes.Remove("insert-top");
+            overItem.Classes.Add("insert-bottom");
+        }
+
+        // ★ НОВОЕ: Запускаем или останавливаем авто-скролл
+        HandleAutoScroll(e);
+    }
+
+    private void OnDragLeave(object? sender, RoutedEventArgs e)
+    {
+        CleanupDragStyles();
+        _autoScrollTimer?.Stop(); // ★ НОВОЕ: Останавливаем таймер
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        CleanupDragStyles();
+        _autoScrollTimer?.Stop(); // ★ НОВОЕ: Останавливаем таймер
+
+        if (!EnableReordering || !HasTrackIndexData(e) || _listBox == null) return;
+
+        int oldIndex = GetTrackIndex(e);
+        if (oldIndex < 0) return;
+
+        int newIndex = CalculateDropIndex(e, oldIndex);
+        if (newIndex >= 0 && oldIndex != newIndex && newIndex < _listBox.ItemCount)
+        {
+            MoveItemCommand?.Execute((oldIndex, newIndex));
+        }
+    }
+    
+    // ★★★ НОВЫЕ МЕТОДЫ ДЛЯ АВТО-СКРОЛЛА ★★★
+    private void HandleAutoScroll(DragEventArgs e)
+    {
+        if (_scrollViewer == null) return;
+
+        var positionInScroller = e.GetPosition(_scrollViewer);
+
+        if (positionInScroller.Y < AutoScrollMargin)
+        {
+            // Прокрутка вверх
+            _autoScrollOffset = -AutoScrollAmount;
+            _autoScrollTimer?.Start();
+        }
+        else if (positionInScroller.Y > _scrollViewer.Bounds.Height - AutoScrollMargin)
+        {
+            // Прокрутка вниз
+            _autoScrollOffset = AutoScrollAmount;
+            _autoScrollTimer?.Start();
+        }
+        else
+        {
+            // Зона без прокрутки
+            _autoScrollOffset = 0;
+            _autoScrollTimer?.Stop();
+        }
+    }
+
+    private void OnAutoScrollTick(object? sender, EventArgs e)
+    {
+        if (_scrollViewer == null || _autoScrollOffset == 0) return;
+
+        var newOffset = _scrollViewer.Offset + new Vector(0, _autoScrollOffset);
+        _scrollViewer.Offset = newOffset;
+    }
+    // ★★★ КОНЕЦ НОВЫХ МЕТОДОВ ★★★
+
+    private static bool HasTrackIndexData(DragEventArgs e)
+    {
+        return e.DataTransfer is DragDataTransfer || e.DataTransfer.Formats.Any(f => f.Identifier == DragFormatTrackIndex);
+    }
+
+    private static int GetTrackIndex(DragEventArgs e)
+    {
+        IDataTransfer transfer = e.DataTransfer;
+
+        if (transfer is DragDataTransfer adapter)
+        {
+            return adapter.TrackIndex;
+        }
+
+        foreach (var item in transfer.Items)
+        {
+            if (item is DragDataTransferItem dragItem)
+            {
+                return dragItem.TrackIndex;
+            }
+            
+            object? rawValue = item.TryGetRaw(TrackIndexDataFormat);
+
+            if (rawValue is string strValue && int.TryParse(strValue, out int index))
+            {
+                return index;
+            }
+            
+            if (rawValue is int intValue)
+            {
+                return intValue;
+            }
+        }
+
+        return -1;
+    }
+
+    private int CalculateDropIndex(DragEventArgs e, int oldIndex)
+    {
+        if (_listBox == null || e.Source is not Visual sourceVisual)
+            return -1;
+
+        var targetItem = sourceVisual.FindAncestorOfType<ListBoxItem>();
+
+        if (targetItem == null)
+        {
+            return _listBox.ItemCount - 1;
+        }
+
+        int containerIndex = _listBox.IndexFromContainer(targetItem);
+        if (containerIndex < 0)
+            return -1;
+
+        var position = e.GetPosition(targetItem);
+        bool insertAfter = position.Y > targetItem.Bounds.Height / 2;
+
+        int targetVisualIndex = containerIndex;
+        if (insertAfter)
+            targetVisualIndex++;
+
+        int moveIndex = targetVisualIndex;
+        if (oldIndex < targetVisualIndex)
+            moveIndex--;
+
+        return Math.Clamp(moveIndex, 0, _listBox.ItemCount - 1);
+    }
+
+    private void CleanupDragStyles()
+    {
+        if (_lastDragOverItem != null)
+        {
+            _lastDragOverItem.Classes.Remove("insert-top");
+            _lastDragOverItem.Classes.Remove("insert-bottom");
+            _lastDragOverItem = null;
+        }
+    }
+
+    #endregion
+
+    #region Drag Data Types (Avalonia 11.3+ IDataTransfer)
+
+    private sealed class DragDataTransferItem : IDataTransferItem
+    {
+        private readonly IReadOnlyList<DataFormat> _formats;
+
+        public int TrackIndex { get; }
+        public DragDataTransferItem(int trackIndex)
+        {
+            TrackIndex = trackIndex;
+            _formats = new List<DataFormat> { TrackIndexDataFormat };
+        }
+
+        public IReadOnlyList<DataFormat> Formats => _formats;
+
+        public object? TryGetRaw(DataFormat format)
+        {
+            if (format.Identifier == DragFormatTrackIndex)
+            {
+                return TrackIndex.ToString();
+            }
+            return null;
+        }
+    }
+    
+    private sealed class DragDataTransfer : IDataTransfer
+    {
+        private readonly IReadOnlyList<DataFormat> _formats;
+        private readonly IReadOnlyList<IDataTransferItem> _items;
+        private bool _disposed;
+        public int TrackIndex { get; }
+
+        public DragDataTransfer(int trackIndex)
+        {
+            TrackIndex = trackIndex;
+            _formats = new List<DataFormat> { TrackIndexDataFormat };
+            _items = new List<IDataTransferItem> { new DragDataTransferItem(trackIndex) };
+        }
+
+        public IReadOnlyList<DataFormat> Formats => _formats;
+        public IReadOnlyList<IDataTransferItem> Items => _items;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+    }
+
+    #endregion
+
+    #region Context Menu & Other Handlers
+
     private void OnTrackRowPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (e.InitialPressMouseButton != MouseButton.Right)
-            return;
-
-        if (IsQueueContext)
             return;
 
         if (sender is not Border border)
             return;
 
         var moreButton = FindDescendantOfType<Button>(border, b => b.Classes.Contains("more-btn"));
-
         if (moreButton?.Flyout is { } flyout)
         {
             flyout.ShowAt(moreButton);
@@ -269,9 +610,6 @@ public partial class TrackListControl : UserControl
         }
     }
 
-    /// <summary>
-    /// Меню открылось — устанавливаем IsMenuOpen = true.
-    /// </summary>
     private void OnMenuFlyoutOpened(object? sender, EventArgs e)
     {
         if (sender is MenuFlyout { Target: Button button } &&
@@ -281,9 +619,6 @@ public partial class TrackListControl : UserControl
         }
     }
 
-    /// <summary>
-    /// Меню закрылось — устанавливаем IsMenuOpen = false.
-    /// </summary>
     private void OnMenuFlyoutClosed(object? sender, EventArgs e)
     {
         if (sender is MenuFlyout { Target: Button button } &&
@@ -324,9 +659,6 @@ public partial class TrackListControl : UserControl
         }
     }
 
-    /// <summary>
-    /// Находит первый дочерний элемент указанного типа, удовлетворяющий условию.
-    /// </summary>
     private static T? FindDescendantOfType<T>(Visual visual, Func<T, bool>? predicate = null)
         where T : Visual
     {
