@@ -398,17 +398,24 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     #region Filter Implementation
 
-    protected override bool FilterItem(TrackInfo item)
+    protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
     {
-        // 1. Фильтр по типу (Music / Video)
-        if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
-        if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
+        // 1. Text search - using captured query value
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            bool matchesText = item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
+            if (!matchesText) return false;
+        }
 
-        // 2. Текстовый поиск
-        if (string.IsNullOrWhiteSpace(FilterQuery)) return true;
-
-        return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+        // 2. Type filter - using captured filterType value
+        return filterType switch
+        {
+            ContentFilterType.All => true,
+            ContentFilterType.Music => item.IsMusic,
+            ContentFilterType.Video => !item.IsMusic,
+            _ => true
+        };
     }
 
     #endregion

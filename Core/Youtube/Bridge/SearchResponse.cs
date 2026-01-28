@@ -1,4 +1,7 @@
-﻿using System.Globalization;
+﻿using System.Buffers;
+using System.Collections.Frozen;
+using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using LMP.Core.Youtube.Utils;
@@ -8,6 +11,30 @@ namespace LMP.Core.Youtube.Bridge;
 
 internal partial class SearchResponse
 {
+    // FrozenSet для O(1) проверки имён рендереров
+    private static readonly FrozenSet<string> ItemRendererNames = new[]
+    {
+        "musicResponsiveListItemRenderer",
+        "videoRenderer",
+        "playlistRenderer",
+        "channelRenderer",
+        "shortsLockupViewModel",
+        "reelItemRenderer",
+        "continuationItemRenderer",
+        "lockupViewModel"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    // FrozenSet для контейнеров (не нужно проверять каждый по отдельности)
+    private static readonly FrozenSet<string> ContainerNames = new[]
+    {
+        "contents", "items", "primaryContents", "secondaryContents",
+        "twoColumnSearchResultsRenderer", "sectionListRenderer", 
+        "itemSectionRenderer", "musicShelfRenderer", "richGridRenderer",
+        "shelfRenderer", "tabbedSearchResultsRenderer", "tabRenderer",
+        "tabs", "content", "continuations", "onResponseReceivedCommands",
+        "appendContinuationItemsAction", "continuationItems"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
     public IReadOnlyList<VideoData> Videos { get; }
     public IReadOnlyList<PlaylistData> Playlists { get; }
     public IReadOnlyList<ChannelData> Channels { get; }
@@ -15,344 +42,727 @@ internal partial class SearchResponse
 
     private SearchResponse(JsonElement content)
     {
-        var items = EnumerateItems(content);
-        
-        var videos = new List<VideoData>();
-        var playlists = new List<PlaylistData>();
-        var channels = new List<ChannelData>();
+        // Используем начальную ёмкость для уменьшения реаллокаций
+        var videos = new List<VideoData>(32);
+        var playlists = new List<PlaylistData>(8);
+        var channels = new List<ChannelData>(4);
+        string? foundToken = null;
 
-        foreach (var item in items)
+        // Оптимизированный сбор элементов
+        foreach (var item in CollectItemsFast(content))
         {
-            // 1. YouTube Music Item (WEB_REMIX)
-            if (item.TryGetProperty("musicResponsiveListItemRenderer", out var musicItemJson))
-            {
-                // Проверяем, является ли это песней/видео
-                var isVideoOrSong = 
-                    musicItemJson.EnumerateDescendantProperties("watchEndpoint").Any() ||
-                    musicItemJson.EnumerateDescendantProperties("videoId").Any() ||
-                    musicItemJson.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId") != null;
-
-                if (isVideoOrSong)
-                {
-                    videos.Add(new VideoData(musicItemJson));
-                }
-                continue;
-            }
-
-            // 2. Standard Video (WEB)
-            if (item.TryGetProperty("videoRenderer", out var videoJson))
-            {
-                videos.Add(new VideoData(videoJson));
-                continue;
-            }
+            // Один проход по свойствам объекта вместо множественных TryGetProperty
+            var result = ClassifyAndExtract(item, ref foundToken);
             
-            // 3. Shorts
-            if (item.TryGetProperty("shortsLockupViewModel", out var shortJson))
+            switch (result.Type)
             {
-                videos.Add(new VideoData(shortJson));
-                continue;
-            }
-
-            // 4. Playlists
-            if (item.TryGetProperty("playlistRenderer", out var playlistJson))
-            {
-                playlists.Add(new PlaylistData(playlistJson));
-                continue;
-            }
-            if (item.TryGetProperty("lockupViewModel", out var lockupJson))
-            {
-                 var contentId = lockupJson.GetPropertyOrNull("contentId")?.GetStringOrNull();
-                 if (contentId != null && contentId.StartsWith("PL"))
-                        playlists.Add(new PlaylistData(lockupJson));
-                 continue;
-            }
-
-            // 5. Channels
-            if (item.TryGetProperty("channelRenderer", out var channelJson))
-            {
-                channels.Add(new ChannelData(channelJson));
-                continue;
+                case ItemType.Video when result.Video is not null:
+                    videos.Add(result.Video);
+                    break;
+                case ItemType.Playlist when result.Playlist is not null:
+                    playlists.Add(result.Playlist);
+                    break;
+                case ItemType.Channel when result.Channel is not null:
+                    channels.Add(result.Channel);
+                    break;
             }
         }
 
         Videos = videos;
         Playlists = playlists;
         Channels = channels;
-
-        // Поиск токена продолжения
-        ContinuationToken = 
-            content.GetPropertyOrNull("onResponseReceivedCommands")?.EnumerateArrayOrNull()?.FirstOrDefault()
-                .GetPropertyOrNull("appendContinuationItemsAction")
-                ?.GetPropertyOrNull("continuationItems")?.EnumerateArrayOrNull()?.LastOrDefault()
-                .GetPropertyOrNull("continuationItemRenderer")
-                ?.GetPropertyOrNull("continuationEndpoint")
-                ?.GetPropertyOrNull("continuationCommand")
-                ?.GetPropertyOrNull("token")
-                ?.GetStringOrNull()
-            ??
-            content.EnumerateDescendantProperties("continuationCommand")
-                .FirstOrDefault().GetPropertyOrNull("token")?.GetStringOrNull();
+        ContinuationToken = foundToken ?? ExtractContinuationTokenFast(content);
     }
 
-    private IReadOnlyList<JsonElement> EnumerateItems(JsonElement content)
+    /// <summary>
+    /// Классифицирует элемент за ОДИН проход по его свойствам
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ClassificationResult ClassifyAndExtract(JsonElement item, ref string? token)
     {
-        var results = new List<JsonElement>();
-
-        // 1. Стандартный список
-        var sectionListContents = content.GetPropertyOrNull("contents")
-            ?.GetPropertyOrNull("twoColumnSearchResultsRenderer")
-            ?.GetPropertyOrNull("primaryContents")
-            ?.GetPropertyOrNull("sectionListRenderer")
-            ?.GetPropertyOrNull("contents");
-
-        if (sectionListContents.HasValue)
+        foreach (var prop in item.EnumerateObject())
         {
-            foreach (var section in sectionListContents.Value.EnumerateArrayOrEmpty())
+            switch (prop.Name)
             {
-                // Музыкальная полка
-                if (section.TryGetProperty("musicShelfRenderer", out var musicShelf))
-                {
-                    foreach(var item in musicShelf.GetPropertyOrNull("contents")?.EnumerateArrayOrEmpty() ?? [])
-                         results.Add(item);
-                    continue;
-                }
-                // Обычная секция
-                var sectionItems = section.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
-                if (sectionItems.HasValue)
-                {
-                    foreach (var item in sectionItems.Value.EnumerateArrayOrEmpty())
-                        results.Add(item);
-                }
+                case "continuationItemRenderer":
+                    token = prop.Value.GetPropertyOrNull("continuationEndpoint")
+                        ?.GetPropertyOrNull("continuationCommand")
+                        ?.GetPropertyOrNull("token")?.GetStringOrNull();
+                    return default;
+
+                case "musicResponsiveListItemRenderer":
+                    return ProcessMusicItem(prop.Value);
+
+                case "videoRenderer":
+                    var videoData = new VideoData(prop.Value, isYtm: false);
+                    return string.IsNullOrEmpty(videoData.Id) 
+                        ? default 
+                        : new(ItemType.Video, videoData, null, null);
+
+                case "shortsLockupViewModel":
+                case "reelItemRenderer":
+                    var shortData = new VideoData(prop.Value, isYtm: false);
+                    return string.IsNullOrEmpty(shortData.Id) 
+                        ? default 
+                        : new(ItemType.Video, shortData, null, null);
+
+                case "lockupViewModel":
+                    var contentId = prop.Value.GetPropertyOrNull("contentId")?.GetStringOrNull();
+                    if (!string.IsNullOrEmpty(contentId) && IsPlaylistId(contentId))
+                        return new(ItemType.Playlist, null, new PlaylistData(prop.Value), null);
+                    return default;
+
+                case "playlistRenderer":
+                    return new(ItemType.Playlist, null, new PlaylistData(prop.Value), null);
+
+                case "channelRenderer":
+                    return new(ItemType.Channel, null, null, new ChannelData(prop.Value));
             }
         }
-        
-        // 2. YT Music Tabs (иногда поиск возвращает табы: Top result, Songs, Videos...)
-        var tabs = content.GetPropertyOrNull("contents")
-             ?.GetPropertyOrNull("tabbedSearchResultsRenderer")
-             ?.GetPropertyOrNull("tabs");
-        
-        if (tabs.HasValue)
-        {
-             foreach(var tab in tabs.Value.EnumerateArrayOrEmpty())
-             {
-                 var sectionList = tab.GetPropertyOrNull("tabRenderer")?.GetPropertyOrNull("content")?.GetPropertyOrNull("sectionListRenderer")?.GetPropertyOrNull("contents");
-                 if (sectionList.HasValue)
-                 {
-                      foreach (var section in sectionList.Value.EnumerateArrayOrEmpty())
-                      {
-                           if (section.TryGetProperty("musicShelfRenderer", out var musicShelf))
-                           {
-                                foreach(var item in musicShelf.GetPropertyOrNull("contents")?.EnumerateArrayOrEmpty() ?? [])
-                                     results.Add(item);
-                           }
-                      }
-                 }
-             }
-        }
+        return default;
+    }
 
-        // 3. Continuation
-        var continuationCommands = content.GetPropertyOrNull("onResponseReceivedCommands");
-        if (continuationCommands.HasValue)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsPlaylistId(string id) =>
+        id.StartsWith("PL", StringComparison.Ordinal) || 
+        id.StartsWith("OL", StringComparison.Ordinal) || 
+        id.StartsWith("RD", StringComparison.Ordinal);
+
+    private static ClassificationResult ProcessMusicItem(JsonElement musicItem)
+    {
+        var data = new VideoData(musicItem, isYtm: true);
+        
+        if (data.IsPlaylistContext)
+            return new(ItemType.Playlist, null, new PlaylistData(musicItem, isYtm: true), null);
+        
+        if (data.IsArtistContext)
+            return new(ItemType.Channel, null, null, new ChannelData(musicItem, isYtm: true));
+        
+        return string.IsNullOrEmpty(data.Id) 
+            ? default 
+            : new(ItemType.Video, data, null, null);
+    }
+
+    /// <summary>
+    /// Оптимизированный сборщик с использованием Stack (меньше аллокаций чем Queue для DFS)
+    /// </summary>
+    private static IEnumerable<JsonElement> CollectItemsFast(JsonElement root)
+    {
+        // Stack выделяется на стеке для небольших размеров
+        var stack = new Stack<JsonElement>(64);
+        stack.Push(root);
+
+        while (stack.Count > 0)
         {
-            foreach (var cmd in continuationCommands.Value.EnumerateArrayOrEmpty())
+            var current = stack.Pop();
+
+            if (current.ValueKind == JsonValueKind.Array)
             {
-                var continuationItems = cmd.GetPropertyOrNull("appendContinuationItemsAction")?.GetPropertyOrNull("continuationItems");
-                if (continuationItems.HasValue)
+                foreach (var item in current.EnumerateArray())
+                    stack.Push(item);
+                continue;
+            }
+
+            if (current.ValueKind != JsonValueKind.Object) 
+                continue;
+
+            // Проверяем является ли это целевым элементом за один проход
+            bool isItem = false;
+            bool hasLockupWithId = false;
+
+            foreach (var prop in current.EnumerateObject())
+            {
+                if (ItemRendererNames.Contains(prop.Name))
                 {
-                    foreach (var item in continuationItems.Value.EnumerateArrayOrEmpty())
+                    if (prop.Name == "lockupViewModel")
                     {
-                         if (item.TryGetProperty("musicResponsiveListItemRenderer", out _))
-                         {
-                             results.Add(item);
-                         }
-                         else
-                         {
-                             var innerItems = item.GetPropertyOrNull("itemSectionRenderer")?.GetPropertyOrNull("contents");
-                             if(innerItems.HasValue)
-                             {
-                                foreach(var inner in innerItems.Value.EnumerateArrayOrEmpty()) results.Add(inner);
-                             }
-                             else
-                             {
-                                results.Add(item);
-                             }
-                         }
+                        // Дополнительная проверка для lockupViewModel
+                        hasLockupWithId = prop.Value.GetPropertyOrNull("contentId") != null;
+                        if (hasLockupWithId) { isItem = true; break; }
+                    }
+                    else
+                    {
+                        isItem = true;
+                        break;
                     }
                 }
             }
+
+            if (isItem)
+            {
+                yield return current;
+                continue; // Не углубляемся в item renderers
+            }
+
+            // Добавляем только известные контейнеры
+            foreach (var prop in current.EnumerateObject())
+            {
+                if (ContainerNames.Contains(prop.Name))
+                    stack.Push(prop.Value);
+            }
         }
-        
-        return results;
+    }
+
+    /// <summary>
+    /// Быстрый поиск токена с ранним выходом
+    /// </summary>
+    private static string? ExtractContinuationTokenFast(JsonElement root)
+    {
+        var stack = new Stack<JsonElement>(32);
+        stack.Push(root);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+
+            if (current.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in current.EnumerateObject())
+                {
+                    if (prop.Name == "continuationCommand")
+                    {
+                        var token = prop.Value.GetPropertyOrNull("token")?.GetStringOrNull();
+                        if (token != null) return token;
+                    }
+                    else if (prop.Name == "nextContinuationData")
+                    {
+                        var token = prop.Value.GetPropertyOrNull("continuation")?.GetStringOrNull();
+                        if (token != null) return token;
+                    }
+                    else if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                    {
+                        stack.Push(prop.Value);
+                    }
+                }
+            }
+            else if (current.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in current.EnumerateArray())
+                    stack.Push(item);
+            }
+        }
+        return null;
     }
 
     public static SearchResponse Parse(string raw) => new(Json.Parse(raw));
-}
 
-internal partial class SearchResponse
-{
-    internal class VideoData
+    // Вспомогательные типы
+    private enum ItemType { None, Video, Playlist, Channel }
+
+    private readonly record struct ClassificationResult(
+        ItemType Type, 
+        VideoData? Video, 
+        PlaylistData? Playlist, 
+        ChannelData? Channel);
+
+    // VideoData с кэшированием свойств при первом доступе
+    internal sealed class VideoData
     {
         private readonly JsonElement _content;
-        public bool IsMusicItem { get; }
+        private readonly bool _isYtm;
+        
+        // Кэшированные значения
+        private string? _id;
+        private bool _idComputed;
+        private string? _title;
+        private bool _titleComputed;
+        private string? _author;
+        private bool _authorComputed;
+        private string? _channelId;
+        private bool _channelIdComputed;
+        private TimeSpan? _duration;
+        private bool _durationComputed;
+        private IReadOnlyList<ThumbnailData>? _thumbnails;
+        private bool? _isPlaylistContext;
+        private bool? _isArtistContext;
 
-        public VideoData(JsonElement content)
+        public VideoData(JsonElement content, bool isYtm)
         {
             _content = content;
-            // В YT Music основной элемент - это musicResponsiveListItemRenderer
-            IsMusicItem = content.ValueKind == JsonValueKind.Object && content.TryGetProperty("flexColumns", out _);
+            _isYtm = isYtm;
         }
+
+        public bool IsMusicItem => _isYtm;
 
         public string? Id
         {
             get
             {
-                if (IsMusicItem)
-                {
-                    // 1. Ищем в navigationEndpoint (самый надежный)
-                    var navId = _content.GetPropertyOrNull("playNavigationEndpoint")?.GetPropertyOrNull("watchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull()
-                             ?? _content.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("watchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
-                    
-                    if (!string.IsNullOrEmpty(navId)) return navId;
-
-                    // 2. Ищем в playlistItemData
-                    var plId = _content.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
-                    if (!string.IsNullOrEmpty(plId)) return plId;
-
-                    // 3. Fallback
-                    return _content.EnumerateDescendantProperties("videoId").FirstOrDefault().GetStringOrNull();
-                }
-
-                // Standard YouTube
-                return _content.GetPropertyOrNull("videoId")?.GetStringOrNull() ?? 
-                       _content.GetPropertyOrNull("onTap")?.GetPropertyOrNull("innertubeCommand")?.GetPropertyOrNull("reelWatchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+                if (_idComputed) return _id;
+                _id = ComputeId();
+                _idComputed = true;
+                return _id;
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private string? ComputeId()
+        {
+            if (_isYtm)
+            {
+                // Проверяем наиболее вероятные пути первыми
+                var vid = _content.GetPropertyOrNull("playlistItemData")
+                    ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+                if (!string.IsNullOrEmpty(vid)) return vid;
+
+                var nav = _content.GetPropertyOrNull("playNavigationEndpoint") 
+                    ?? _content.GetPropertyOrNull("navigationEndpoint");
+                return nav?.GetPropertyOrNull("watchEndpoint")
+                    ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+            }
+
+            var id = _content.GetPropertyOrNull("videoId")?.GetStringOrNull();
+            if (!string.IsNullOrEmpty(id)) return id;
+
+            return _content.GetPropertyOrNull("onTap")
+                ?.GetPropertyOrNull("innertubeCommand")
+                ?.GetPropertyOrNull("reelWatchEndpoint")
+                ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
         }
 
         public string? Title
         {
             get
             {
-                if (IsMusicItem)
-                {
-                    // Первая колонка flexColumns
-                    var titleRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)
-                        ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
-                    
-                    if (titleRuns != null)
-                    {
-                        var sb = new StringBuilder();
-                        foreach (var run in titleRuns.Value.EnumerateArrayOrEmpty())
-                            sb.Append(run.GetPropertyOrNull("text")?.GetStringOrNull());
-                        return sb.ToString();
-                    }
-                }
+                if (_titleComputed) return _title;
+                _title = ComputeTitle();
+                _titleComputed = true;
+                return _title;
+            }
+        }
 
-                // Standard
-                var runs = _content.GetPropertyOrNull("title")?.GetPropertyOrNull("runs");
+        private string? ComputeTitle()
+        {
+            if (_isYtm) return GetRunText(_content, 0);
+
+            var titleProp = _content.GetPropertyOrNull("title");
+            if (titleProp.HasValue)
+            {
+                var runs = titleProp.Value.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
                 if (runs != null)
                 {
-                    var sb = new StringBuilder();
-                    foreach (var run in runs.Value.EnumerateArrayOrEmpty())
-                        sb.Append(run.GetPropertyOrNull("text")?.GetStringOrNull());
-                    return sb.ToString();
+                    foreach (var run in runs)
+                        return run.GetPropertyOrNull("text")?.GetStringOrNull();
                 }
-                return _content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull() ??
-                       _content.GetPropertyOrNull("overlayMetadata")?.GetPropertyOrNull("primaryText")?.GetPropertyOrNull("content")?.GetStringOrNull();
+                
+                return titleProp.Value.GetPropertyOrNull("simpleText")?.GetStringOrNull();
             }
+
+            return _content.GetPropertyOrNull("overlayMetadata")
+                ?.GetPropertyOrNull("primaryText")
+                ?.GetPropertyOrNull("content")?.GetStringOrNull();
         }
 
         public string? Author
         {
-            get 
+            get
             {
-                if (IsMusicItem)
-                {
-                    // Вторая колонка (Artist • Album • Time)
-                    var metaRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(1)
-                        ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
-
-                    if (metaRuns != null)
-                    {
-                        foreach (var run in metaRuns.Value.EnumerateArrayOrEmpty())
-                        {
-                            // Обычно у артиста есть navigationEndpoint с переходом на browse/artist
-                            var nav = run.GetPropertyOrNull("navigationEndpoint")?.GetPropertyOrNull("browseEndpoint");
-                            var pageType = nav?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
-                                ?.GetPropertyOrNull("browseEndpointContextMusicConfig")?.GetPropertyOrNull("pageType")?.GetStringOrNull();
-
-                            if (pageType == "MUSIC_PAGE_TYPE_ARTIST") 
-                                return run.GetPropertyOrNull("text")?.GetStringOrNull();
-                        }
-                        // Если не нашли явно, берем первый элемент (часто это артист)
-                        return metaRuns.Value.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull();
-                    }
-                    return null;
-                }
-
-                return _content.GetPropertyOrNull("longBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)?.GetPropertyOrNull("text")?.GetStringOrNull() ??
-                       _content.GetPropertyOrNull("shortBylineText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)?.GetPropertyOrNull("text")?.GetStringOrNull() ??
-                       _content.GetPropertyOrNull("ownerText")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)?.GetPropertyOrNull("text")?.GetStringOrNull();
+                if (_authorComputed) return _author;
+                _author = ComputeAuthor();
+                _authorComputed = true;
+                return _author;
             }
         }
 
-        public string? ChannelId => null; // Упрощено для музыки
+        private string? ComputeAuthor()
+        {
+            if (_isYtm)
+            {
+                var runs = GetRuns(_content, 1);
+                if (runs == null) return null;
 
-        public bool IsOfficialArtist => false; 
+                foreach (var run in runs)
+                {
+                    var pageType = run.GetPropertyOrNull("navigationEndpoint")
+                        ?.GetPropertyOrNull("browseEndpoint")
+                        ?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
+                        ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
+                        ?.GetPropertyOrNull("pageType")?.GetStringOrNull();
 
-        public bool IsShort => 
-            _content.TryGetProperty("shortsLockupViewModel", out _) ||
-            _content.GetPropertyOrNull("onTap")?.GetPropertyOrNull("innertubeCommand")?.GetPropertyOrNull("reelWatchEndpoint") != null;
+                    if (pageType is "MUSIC_PAGE_TYPE_ARTIST" or "MUSIC_PAGE_TYPE_USER_CHANNEL")
+                        return run.GetPropertyOrNull("text")?.GetStringOrNull();
+                }
+                
+                foreach (var run in runs)
+                    return run.GetPropertyOrNull("text")?.GetStringOrNull();
+                
+                return null;
+            }
+
+            var ownerRuns = _content.GetPropertyOrNull("ownerText")
+                ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
+            if (ownerRuns != null)
+            {
+                foreach (var run in ownerRuns)
+                    return run.GetPropertyOrNull("text")?.GetStringOrNull();
+            }
+
+            var bylineRuns = _content.GetPropertyOrNull("shortBylineText")
+                ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
+            if (bylineRuns != null)
+            {
+                foreach (var run in bylineRuns)
+                    return run.GetPropertyOrNull("text")?.GetStringOrNull();
+            }
+
+            return null;
+        }
+
+        public string? ChannelId
+        {
+            get
+            {
+                if (_channelIdComputed) return _channelId;
+                _channelId = ComputeChannelId();
+                _channelIdComputed = true;
+                return _channelId;
+            }
+        }
+
+        private string? ComputeChannelId()
+        {
+            if (_isYtm)
+            {
+                var runs = GetRuns(_content, 1);
+                if (runs != null)
+                {
+                    foreach (var run in runs)
+                    {
+                        var id = run.GetPropertyOrNull("navigationEndpoint")
+                            ?.GetPropertyOrNull("browseEndpoint")
+                            ?.GetPropertyOrNull("browseId")?.GetStringOrNull();
+                        
+                        if (id != null && id.StartsWith("UC", StringComparison.Ordinal)) 
+                            return id;
+                    }
+                }
+                return null;
+            }
+
+            // Ищем browseId только в известных местах, а не через EnumerateDescendantProperties
+            var browsePath = _content.GetPropertyOrNull("ownerText")
+                ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
+            if (browsePath != null)
+            {
+                foreach (var run in browsePath)
+                {
+                    var id = run.GetPropertyOrNull("navigationEndpoint")
+                        ?.GetPropertyOrNull("browseEndpoint")
+                        ?.GetPropertyOrNull("browseId")?.GetStringOrNull();
+                    if (id != null) return id;
+                }
+            }
+
+            return _content.GetPropertyOrNull("channelThumbnailSupportedRenderers")
+                ?.GetPropertyOrNull("channelThumbnailWithLinkRenderer")
+                ?.GetPropertyOrNull("navigationEndpoint")
+                ?.GetPropertyOrNull("browseEndpoint")
+                ?.GetPropertyOrNull("browseId")?.GetStringOrNull();
+        }
+
+        public bool IsOfficialArtist
+        {
+            get
+            {
+                if (_isYtm) return true;
+                
+                // Быстрая проверка без полного обхода
+                var badges = _content.GetPropertyOrNull("ownerBadges")?.EnumerateArrayOrNull();
+                if (badges != null)
+                {
+                    foreach (var badge in badges)
+                    {
+                        var iconType = badge.GetPropertyOrNull("metadataBadgeRenderer")
+                            ?.GetPropertyOrNull("icon")
+                            ?.GetPropertyOrNull("iconType")?.GetStringOrNull();
+                        if (iconType == "AUDIO_BADGE") return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        public bool IsShort => !_isYtm && 
+            (_content.TryGetProperty("shortsLockupViewModel", out _) || 
+             _content.TryGetProperty("reelItemRenderer", out _));
 
         public TimeSpan? Duration
         {
             get
             {
-                if (IsMusicItem)
-                {
-                     // Парсим время из текста во второй колонке
-                     var metaRuns = _content.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(1)
-                        ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")?.GetPropertyOrNull("runs");
-                    
-                    if (metaRuns != null)
-                    {
-                        foreach (var run in metaRuns.Value.EnumerateArrayOrEmpty())
-                        {
-                            var text = run.GetPropertyOrNull("text")?.GetStringOrNull();
-                            if (text != null && text.Contains(":")) 
-                            {
-                                if (TimeSpan.TryParseExact(text.AsSpan(), [@"m\:ss", @"mm\:ss", @"h\:mm\:ss"], CultureInfo.InvariantCulture, out var r))
-                                    return r;
-                            }
-                        }
-                    }
-                    return null;
-                }
-
-                return _content.GetPropertyOrNull("lengthText")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
-                    ?.Pipe<string?, TimeSpan?>(static s => TimeSpan.TryParseExact(s.AsSpan(), [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"], CultureInfo.InvariantCulture, out var r) ? r : null);
+                if (_durationComputed) return _duration;
+                _duration = ComputeDuration();
+                _durationComputed = true;
+                return _duration;
             }
         }
 
-        public IReadOnlyList<ThumbnailData> Thumbnails =>
-            _content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("musicThumbnailRenderer")?.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(static j => new ThumbnailData(j)).ToArray() ??
-            _content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(static j => new ThumbnailData(j)).ToArray() ?? 
-            _content.GetPropertyOrNull("thumbnailViewModel")?.GetPropertyOrNull("image")?.GetPropertyOrNull("sources")?.EnumerateArrayOrNull()?.Select(static j => new ThumbnailData(j)).ToArray() ?? 
-            [];
-    }
-    
-    public class PlaylistData(JsonElement content)
-    {
-        public string? Id => content.GetPropertyOrNull("playlistId")?.GetStringOrNull() ?? content.GetPropertyOrNull("contentId")?.GetStringOrNull();
-        public string? Title => content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull() ?? content.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ?? content.GetPropertyOrNull("metadata")?.GetPropertyOrNull("lockupMetadataViewModel")?.GetPropertyOrNull("title")?.GetPropertyOrNull("content")?.GetStringOrNull();
-        public string? Author => null;
-        public string? ChannelId => null;
-        public IReadOnlyList<ThumbnailData> Thumbnails => content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(j => new ThumbnailData(j)).ToArray() ?? [];
+        private TimeSpan? ComputeDuration()
+        {
+            if (_isYtm)
+            {
+                var runs = GetRuns(_content, 1);
+                if (runs != null)
+                {
+                    foreach (var run in runs)
+                    {
+                        var text = run.GetPropertyOrNull("text")?.GetStringOrNull();
+                        if (text != null && text.Contains(':') && !text.Contains('•'))
+                        {
+                            if (TryParseDuration(text, out var ts)) return ts;
+                        }
+                    }
+                }
+                return null;
+            }
+
+            var textDuration = _content.GetPropertyOrNull("lengthText")
+                ?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
+            
+            return textDuration != null && TryParseDuration(textDuration, out var d) ? d : null;
+        }
+
+        public IReadOnlyList<ThumbnailData> Thumbnails
+        {
+            get
+            {
+                if (_thumbnails != null) return _thumbnails;
+                _thumbnails = ComputeThumbnails();
+                return _thumbnails;
+            }
+        }
+
+        private IReadOnlyList<ThumbnailData> ComputeThumbnails()
+        {
+            var thumbs = _content.GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("musicThumbnailRenderer")
+                ?.GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
+
+            if (thumbs == null)
+            {
+                thumbs = _content.GetPropertyOrNull("thumbnail")
+                    ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
+            }
+
+            if (thumbs == null)
+            {
+                thumbs = _content.GetPropertyOrNull("thumbnailViewModel")
+                    ?.GetPropertyOrNull("image")
+                    ?.GetPropertyOrNull("sources")?.EnumerateArrayOrNull();
+            }
+
+            if (thumbs == null) return Array.Empty<ThumbnailData>();
+
+            var list = new List<ThumbnailData>(4);
+            foreach (var t in thumbs)
+                list.Add(new ThumbnailData(t));
+            return list;
+        }
+
+        public bool IsPlaylistContext
+        {
+            get
+            {
+                if (_isPlaylistContext.HasValue) return _isPlaylistContext.Value;
+                _isPlaylistContext = ComputeIsPlaylistContext();
+                return _isPlaylistContext.Value;
+            }
+        }
+
+        private bool ComputeIsPlaylistContext()
+        {
+            if (!_isYtm) return false;
+
+            var pageType = _content.GetPropertyOrNull("navigationEndpoint")
+                ?.GetPropertyOrNull("browseEndpoint")
+                ?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
+                ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
+                ?.GetPropertyOrNull("pageType")?.GetStringOrNull();
+
+            return pageType == "MUSIC_PAGE_TYPE_ALBUM" || (Id == null && Title != null);
+        }
+
+        public bool IsArtistContext
+        {
+            get
+            {
+                if (_isArtistContext.HasValue) return _isArtistContext.Value;
+                _isArtistContext = ComputeIsArtistContext();
+                return _isArtistContext.Value;
+            }
+        }
+
+        private bool ComputeIsArtistContext()
+        {
+            if (!_isYtm) return false;
+
+            var pageType = _content.GetPropertyOrNull("navigationEndpoint")
+                ?.GetPropertyOrNull("browseEndpoint")
+                ?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
+                ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
+                ?.GetPropertyOrNull("pageType")?.GetStringOrNull();
+
+            return pageType == "MUSIC_PAGE_TYPE_ARTIST";
+        }
+
+        private static IEnumerable<JsonElement>? GetRuns(JsonElement item, int columnIndex)
+        {
+            var cols = item.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull();
+            if (cols == null) return null;
+
+            int idx = 0;
+            foreach (var col in cols)
+            {
+                if (idx == columnIndex)
+                {
+                    return col.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")
+                        ?.GetPropertyOrNull("text")
+                        ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
+                }
+                idx++;
+            }
+            return null;
+        }
+
+        public static string? GetRunText(JsonElement item, int columnIndex)
+        {
+            var runs = GetRuns(item, columnIndex);
+            if (runs == null) return null;
+
+            StringBuilder? sb = null;
+            string? single = null;
+            int count = 0;
+
+            foreach (var run in runs)
+            {
+                var text = run.GetPropertyOrNull("text")?.GetStringOrNull();
+                if (text == null) continue;
+
+                if (count == 0)
+                {
+                    single = text;
+                }
+                else
+                {
+                    sb ??= new StringBuilder(single);
+                    sb.Append(text);
+                }
+                count++;
+            }
+
+            return sb?.ToString() ?? single;
+        }
+
+        // Кэшированные форматы для парсинга
+        private static readonly string[] DurationFormats = 
+            { @"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss" };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryParseDuration(string text, out TimeSpan timeSpan) =>
+            TimeSpan.TryParseExact(text, DurationFormats, CultureInfo.InvariantCulture, out timeSpan);
     }
 
-    public class ChannelData(JsonElement content)
+    internal sealed class PlaylistData
     {
-        public string? Id => content.GetPropertyOrNull("channelId")?.GetStringOrNull();
-        public string? Title => content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
-        public IReadOnlyList<ThumbnailData> Thumbnails => content.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.Select(j => new ThumbnailData(j)).ToArray() ?? [];
+        private readonly JsonElement _content;
+        private readonly bool _isYtm;
+
+        public PlaylistData(JsonElement content, bool isYtm = false)
+        {
+            _content = content;
+            _isYtm = isYtm;
+        }
+
+        public string? Id =>
+            _content.GetPropertyOrNull("playlistId")?.GetStringOrNull() ??
+            _content.GetPropertyOrNull("contentId")?.GetStringOrNull() ??
+            (_isYtm ? _content.GetPropertyOrNull("navigationEndpoint")
+                ?.GetPropertyOrNull("browseEndpoint")
+                ?.GetPropertyOrNull("browseId")?.GetStringOrNull() : null);
+
+        public string? Title =>
+            _content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull() ??
+            _content.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()
+                ?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ??
+            _content.GetPropertyOrNull("metadata")?.GetPropertyOrNull("lockupMetadataViewModel")
+                ?.GetPropertyOrNull("title")?.GetPropertyOrNull("content")?.GetStringOrNull() ??
+            (_isYtm ? VideoData.GetRunText(_content, 0) : null);
+
+        public string? Author =>
+            _content.GetPropertyOrNull("shortBylineText")?.GetPropertyOrNull("runs")
+                ?.EnumerateArrayOrNull()?.FirstOrDefault()
+                .GetPropertyOrNull("text")?.GetStringOrNull() ??
+            (_isYtm ? VideoData.GetRunText(_content, 1) : null);
+
+        public IReadOnlyList<ThumbnailData> Thumbnails
+        {
+            get
+            {
+                var thumbs = _content.GetPropertyOrNull("thumbnail")
+                    ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
+
+                if (thumbs == null)
+                {
+                    thumbs = _content.GetPropertyOrNull("thumbnail")
+                        ?.GetPropertyOrNull("musicThumbnailRenderer")
+                        ?.GetPropertyOrNull("thumbnail")
+                        ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
+                }
+
+                if (thumbs == null) return Array.Empty<ThumbnailData>();
+
+                var list = new List<ThumbnailData>(4);
+                foreach (var t in thumbs)
+                    list.Add(new ThumbnailData(t));
+                return list;
+            }
+        }
+    }
+
+    internal sealed class ChannelData
+    {
+        private readonly JsonElement _content;
+        private readonly bool _isYtm;
+
+        public ChannelData(JsonElement content, bool isYtm = false)
+        {
+            _content = content;
+            _isYtm = isYtm;
+        }
+
+        public string? Id =>
+            _content.GetPropertyOrNull("channelId")?.GetStringOrNull() ??
+            (_isYtm ? _content.GetPropertyOrNull("navigationEndpoint")
+                ?.GetPropertyOrNull("browseEndpoint")
+                ?.GetPropertyOrNull("browseId")?.GetStringOrNull() : null);
+
+        public string? Title =>
+            _content.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull() ??
+            (_isYtm ? VideoData.GetRunText(_content, 0) : null);
+
+        public IReadOnlyList<ThumbnailData> Thumbnails
+        {
+            get
+            {
+                var thumbs = _content.GetPropertyOrNull("thumbnail")
+                    ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
+
+                if (thumbs == null)
+                {
+                    thumbs = _content.GetPropertyOrNull("thumbnail")
+                        ?.GetPropertyOrNull("musicThumbnailRenderer")
+                        ?.GetPropertyOrNull("thumbnail")
+                        ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
+                }
+
+                if (thumbs == null) return Array.Empty<ThumbnailData>();
+
+                var list = new List<ThumbnailData>(4);
+                foreach (var t in thumbs)
+                    list.Add(new ThumbnailData(t));
+                return list;
+            }
+        }
     }
 }

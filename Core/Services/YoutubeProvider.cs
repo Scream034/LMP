@@ -107,7 +107,7 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeHttpHandler.MuzzaUserAgent);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeHttpHandler.UserAgentWeb);
 
             if (_cookieAuth != null)
             {
@@ -152,6 +152,12 @@ public partial class YoutubeProvider : IDisposable
                     var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
                                    ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
 
+                    // ИСПРАВЛЕНИЕ: Логика классификации для Home
+                    // Если YTM отдает item.Type == "Song", это аудио-трек -> Music
+                    // Если YTM отдает item.Type == "Video", это видеоклип -> Video (IsMusic = false)
+                    // Это позволит фильтру "Video" показывать клипы, а фильтру "Music" - только аудио.
+                    bool isMusicContent = string.Equals(item.Type, "Song", StringComparison.OrdinalIgnoreCase);
+
                     var track = new TrackInfo
                     {
                         Id = "yt_" + item.Id,
@@ -159,7 +165,7 @@ public partial class YoutubeProvider : IDisposable
                         Author = item.Author ?? "Unknown",
                         ThumbnailUrl = thumbUrl,
                         Duration = item.Duration ?? TimeSpan.Zero,
-                        IsMusic = true,
+                        IsMusic = isMusicContent,
                         Url = $"https://music.youtube.com/watch?v={item.Id}"
                     };
 
@@ -623,7 +629,7 @@ public partial class YoutubeProvider : IDisposable
 
         internal SearchSession(
             YoutubeClient youtube,
-            TrackRegistry registry, // ISPR
+            TrackRegistry registry,
             string query,
             int maxResults = 300,
             SearchFilter filter = SearchFilter.Video,
@@ -640,6 +646,7 @@ public partial class YoutubeProvider : IDisposable
             {
                 foreach (var id in skipTrackIds)
                 {
+                    // Убираем префикс yt_, если он есть, для корректной сверки
                     var cleanId = id.StartsWith("yt_") ? id[3..] : id;
                     _seenIds.Add(cleanId);
                 }
@@ -669,34 +676,48 @@ public partial class YoutubeProvider : IDisposable
                     if (!await _enumerator.MoveNextAsync())
                     {
                         _hasMore = false;
+                        // Log.Info("[SearchSession] Enumerator finished (No more items).");
                         break;
                     }
 
                     var batch = _enumerator.Current;
+                    // Log.Info($"[SearchSession] Got batch with {batch.Items.Count} items.");
 
                     foreach (var item in batch.Items)
                     {
                         if (_seenIds.Count >= _maxResults) break;
 
-                        string? id = null;
                         TrackInfo? track = null;
+                        string? rawId = null;
 
-                        if (item is VideoSearchResult video)
+                        // Диагностика типа элемента
+                        // Log.Debug($"[SearchSession] Processing item of type: {item.GetType().Name}");
+
+                        if (item is TrackInfo tInfo)
                         {
-                            id = video.Id.Value;
-                            if (_seenIds.Add(id))
-                                track = ConvertSearchResultToTrackInfo(video);
+                            rawId = tInfo.Id.StartsWith("yt_") ? tInfo.Id[3..] : tInfo.Id;
+                            if (_seenIds.Add(rawId)) track = tInfo;
                         }
-                        else if (item is PlaylistSearchResult playlist)
+                        else if (item is Playlist pInfo)
                         {
-                            id = playlist.Id.Value;
-                            if (_seenIds.Add(id))
-                                track = ConvertPlaylistSearchResultToTrackInfo(playlist);
+                            rawId = pInfo.YoutubeId;
+                            if (!string.IsNullOrEmpty(rawId) && _seenIds.Add(rawId))
+                                track = ConvertPlaylistToTrackInfo(pInfo);
+                        }
+                        else if (item is VideoSearchResult video)
+                        {
+                            // На всякий случай, если SearchClient вернет легаси тип
+                            rawId = video.Id.Value;
+                            if (_seenIds.Add(rawId))
+                                track = ConvertSearchResultToTrackInfo(video);
                         }
 
                         if (track != null)
                         {
                             track = _registry.RegisterOrUpdate(track);
+
+                            // Лог успешного добавления
+                            // Log.Info($"[SearchSession] Added: {track.Title} (IsMusic: {track.IsMusic})");
 
                             if (results.Count < count)
                                 results.Add(track);
@@ -714,6 +735,7 @@ public partial class YoutubeProvider : IDisposable
                 }
             }
 
+            // Log.Info($"[SearchSession] Returning {results.Count} items. Buffer size: {_buffer.Count}");
             return results;
         }
 
@@ -728,9 +750,9 @@ public partial class YoutubeProvider : IDisposable
             {
                 _ = _enumerator.DisposeAsync().AsTask();
             }
+            GC.SuppressFinalize(this);
         }
     }
-
     private SearchSession? _currentSearchSession;
 
     public SearchSession CreateSearchSession(
@@ -970,18 +992,19 @@ public partial class YoutubeProvider : IDisposable
     #endregion
 
     #region Helpers
-    private static TrackInfo ConvertPlaylistSearchResultToTrackInfo(PlaylistSearchResult playlist)
+    // Вспомогательный метод конвертации Плейлиста в Трек (для UI)
+    private static TrackInfo ConvertPlaylistToTrackInfo(Playlist playlist)
     {
-        var thumb = playlist.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault();
         return new TrackInfo
         {
-            Id = $"yt_pl_{playlist.Id.Value}",
-            Title = playlist.Title,
-            Author = playlist.Author?.ChannelTitle ?? "Unknown",
+            Id = playlist.Id, // Уже с префиксом yt_ или yt_pl_
+            Title = playlist.Name,
+            Author = playlist.Author ?? "Unknown Playlist",
             Url = playlist.Url,
             Duration = TimeSpan.Zero,
-            ThumbnailUrl = thumb?.Url ?? "",
-            IsMusic = false
+            ThumbnailUrl = playlist.ThumbnailUrl ?? "",
+            IsMusic = false,
+            // Можно добавить спец. флаг или логику отображения иконки плейлиста
         };
     }
 

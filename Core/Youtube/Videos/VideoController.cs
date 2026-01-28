@@ -83,27 +83,24 @@ internal class VideoController(HttpClient http)
     }
 
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(
-        VideoId videoId,
-        CancellationToken cancellationToken = default
-    )
+      VideoId videoId,
+      CancellationToken cancellationToken = default
+  )
     {
         Log.Info($"GetPlayerResponse START: {videoId}");
-
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
-        // The most optimal client to impersonate is any mobile client, because they
-        // don't require signature deciphering (for both normal and n-parameter signatures).
-        // However, we can't use the ANDROID client because it has a limitation, preventing it
-        // from downloading multiple streams from the same manifest (or the same stream multiple times).
-        // https://github.com/Tyrrrz/YoutubeExplode/issues/705
-        // Previously, we were using ANDROID_TESTSUITE as a workaround, which appeared to offer the same
-        // functionality, but without the aforementioned limitation. However, YouTube discontinued this
-        // client, so now we have to use IOS instead.
-        // https://github.com/Tyrrrz/YoutubeExplode/issues/817
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             "https://www.youtube.com/youtubei/v1/player"
         );
+
+        // MARK THIS AS ANDROID CONTEXT
+        // The HttpHandler will see this and NOT send SAPISIDHASH, preventing 400 errors
+        request.Options.Set(YoutubeHttpHandler.IsAndroidContextKey, true);
+
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
 
         request.Content = new StringContent(
             // lang=json
@@ -119,8 +116,8 @@ internal class VideoController(HttpClient http)
                   "osVersion": "11",
                   "platform": "MOBILE",
                   "visitorData": {{Json.Serialize(visitorData)}},
-                  "hl": "en",
-                  "gl": "US",
+                  "hl": {{Json.Serialize(hl)}},
+                  "gl": {{Json.Serialize(gl)}},
                   "utcOffsetMinutes": 0
                 }
               }
@@ -128,16 +125,10 @@ internal class VideoController(HttpClient http)
             """
         );
 
-        // User agent appears to be sometimes required when impersonating Android
-        // https://github.com/iv-org/invidious/issues/3230#issuecomment-1226887639
-        request.Headers.Add(
-            "User-Agent",
-            "com.google.android.youtube/20.10.38 (Linux; U; ANDROID 11) gzip"
-        );
+        // Required header for Android masquerading
+        request.Headers.Add("User-Agent", YoutubeHttpHandler.UserAgentAndroid);
 
-        Log.Info($"Requesting: {request.RequestUri?.AbsoluteUri}");
         using var response = await Http.SendAsync(request, cancellationToken);
-        Log.Info($"Response: {response.StatusCode}");
         response.EnsureSuccessStatusCode();
 
         var playerResponse = PlayerResponse.Parse(
@@ -166,6 +157,9 @@ internal class VideoController(HttpClient http)
             "https://www.youtube.com/youtubei/v1/player"
         );
 
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
         request.Content = new StringContent(
             // lang=json
             $$"""
@@ -176,8 +170,8 @@ internal class VideoController(HttpClient http)
                   "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
                   "clientVersion": "2.0",
                   "visitorData": {{Json.Serialize(visitorData)}},
-                  "hl": "en",
-                  "gl": "US",
+                  "hl": {{Json.Serialize(hl)}},
+                  "gl": {{Json.Serialize(gl)}},
                   "utcOffsetMinutes": 0
                 },
                 "thirdParty": {

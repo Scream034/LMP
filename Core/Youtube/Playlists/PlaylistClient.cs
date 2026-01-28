@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using LMP.Core.Models;
-
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Videos;
 
@@ -26,18 +25,17 @@ public class PlaylistClient(HttpClient http)
 
         return new Playlist
         {
-            Id = $"yt_{playlistId.Value}", // Локальный ID с префиксом
+            Id = $"yt_{playlistId.Value}",
             YoutubeId = playlistId.Value,
             StoredName = title,
             Author = channelTitle,
             Description = response.Description,
             RemoteCount = response.Count,
             ThumbnailUrl = bestThumb,
-            SyncMode = PlaylistSyncMode.CloudPublic // По умолчанию считаем публичным
+            SyncMode = PlaylistSyncMode.CloudPublic
         };
     }
 
-    // Возвращает TrackInfo вместо PlaylistVideo
     public async IAsyncEnumerable<Batch<TrackInfo>> GetVideoBatchesAsync(
         PlaylistId playlistId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default
@@ -65,7 +63,6 @@ public class PlaylistClient(HttpClient http)
                 var videoId = videoData.Id;
                 if (videoId == null) continue;
 
-                // Для PlaylistNextResponse videoId это строка, преобразуем в структуру для проверки уникальности
                 var vIdStruct = new VideoId(videoId);
                 
                 lastVideoId = vIdStruct;
@@ -81,6 +78,9 @@ public class PlaylistClient(HttpClient http)
                     .TryGetWithHighestResolution()?.Url 
                     ?? $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
 
+                // IMPROVED: Better music detection heuristics
+                bool isMusic = DetectIfMusic(title, author, videoData.Duration);
+
                 var track = new TrackInfo
                 {
                     Id = $"yt_{videoId}",
@@ -90,7 +90,7 @@ public class PlaylistClient(HttpClient http)
                     Duration = videoData.Duration ?? TimeSpan.Zero,
                     ThumbnailUrl = bestThumb,
                     Url = $"https://www.youtube.com/watch?v={videoId}",
-                    // Контекст плейлиста можно сохранить, если нужно
+                    IsMusic = isMusic
                 };
 
                 batch.Add(track);
@@ -103,6 +103,79 @@ public class PlaylistClient(HttpClient http)
             visitorData ??= response.VisitorData;
 
         } while (true);
+    }
+
+    /// <summary>
+    /// Heuristic-based music detection since YouTube API doesn't provide this info.
+    /// </summary>
+    private static bool DetectIfMusic(string title, string author, TimeSpan? duration)
+    {
+        // 1. Topic channels and VEVO are always music
+        if (author.EndsWith(" - Topic", StringComparison.OrdinalIgnoreCase) ||
+            author.EndsWith("VEVO", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 2. Duration heuristic: Most songs are 1:30 - 10:00
+        if (duration.HasValue)
+        {
+            var mins = duration.Value.TotalMinutes;
+            // Very short (< 1 min) or very long (> 15 min) are likely NOT music
+            if (mins < 1 || mins > 15)
+            {
+                // But could still be music if title suggests it
+                return ContainsMusicKeywords(title);
+            }
+            
+            // Typical song length (2-6 min) - lean towards music
+            if (mins >= 2 && mins <= 6)
+            {
+                return true;
+            }
+        }
+
+        // 3. Title keyword analysis
+        if (ContainsMusicKeywords(title))
+        {
+            return true;
+        }
+
+        // 4. Check for common non-music patterns
+        if (ContainsNonMusicKeywords(title))
+        {
+            return false;
+        }
+
+        // 5. Default: Consider content from music playlists as potentially music
+        // This gives benefit of the doubt for playlist context
+        return true;
+    }
+
+    private static bool ContainsMusicKeywords(string title)
+    {
+        var keywords = new[]
+        {
+            "official video", "official music", "official audio", "music video",
+            "lyrics", "lyric video", "(audio)", "[audio]", "ft.", "feat.",
+            "official mv", "m/v", "visualizer", "acoustic", "remix", "cover",
+            "live performance", "official lyric", "audio only"
+        };
+
+        return keywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool ContainsNonMusicKeywords(string title)
+    {
+        var keywords = new[]
+        {
+            "tutorial", "how to", "review", "unboxing", "gameplay", "walkthrough",
+            "podcast", "interview", "news", "trailer", "teaser", "behind the scenes",
+            "making of", "reaction", "compilation", "best of", "highlights",
+            "episode", "ep.", "part ", "chapter", "lecture", "course"
+        };
+
+        return keywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
     }
 
     public IAsyncEnumerable<TrackInfo> GetVideosAsync(

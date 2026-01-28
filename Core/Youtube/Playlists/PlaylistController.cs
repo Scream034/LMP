@@ -1,4 +1,5 @@
-﻿using LMP.Core.Youtube.Bridge;
+﻿using LMP.Core.Services;
+using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Videos;
@@ -7,7 +8,6 @@ namespace LMP.Core.Youtube.Playlists;
 
 internal class PlaylistController(HttpClient http)
 {
-    // Works only with user-made playlists
     public async ValueTask<PlaylistBrowseResponse> GetPlaylistBrowseResponseAsync(
         PlaylistId playlistId,
         CancellationToken cancellationToken = default
@@ -18,17 +18,31 @@ internal class PlaylistController(HttpClient http)
             "https://www.youtube.com/youtubei/v1/browse"
         );
 
+        string browseId = playlistId.Value;
+
+        // Логика для приватных/специальных плейлистов
+        if (browseId == "LL") browseId = "VLLL"; // Понравившиеся (Основной YouTube)
+        else if (browseId == "LM") browseId = "VLLM"; // Понравившиеся (YouTube Music)
+        else if (browseId == "WL") browseId = "VLWL"; // Посмотреть позже
+        else if (!browseId.StartsWith("VL")) browseId = "VL" + browseId;
+
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
+        // Мы используем здесь WEB-клиент, так как для приватных списков нужны куки.
+        // YoutubeHttpHandler внедрит куки автоматически.
+        // Также будет добавлен SAPISIDHASH, так как запрос НЕ помечен как Android-контекст.
         request.Content = new StringContent(
             // lang=json
             $$"""
             {
-              "browseId": {{Json.Serialize("VL" + playlistId)}},
+              "browseId": {{Json.Serialize(browseId)}},
               "context": {
                 "client": {
                   "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
-                  "hl": "en",
-                  "gl": "US",
+                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                  "hl": {{Json.Serialize(hl)}},
+                  "gl": {{Json.Serialize(gl)}},
                   "utcOffsetMinutes": 0
                 }
               }
@@ -43,13 +57,14 @@ internal class PlaylistController(HttpClient http)
             await response.Content.ReadAsStringAsync(cancellationToken)
         );
 
-        if (!playlistResponse.IsAvailable)
-            throw new PlaylistUnavailableException($"Playlist '{playlistId}' is not available.");
+        // Проверки сайдбара обычно достаточно для определения доступности,
+        // но для пустых приватных плейлистов структура может отличаться.
+        if (!playlistResponse.IsAvailable && browseId != "VLLL") 
+            throw new PlaylistUnavailableException($"Плейлист '{playlistId}' недоступен.");
 
         return playlistResponse;
     }
 
-    // Works on all playlists, but contains limited metadata
     public async ValueTask<PlaylistNextResponse> GetPlaylistNextResponseAsync(
         PlaylistId playlistId,
         VideoId? videoId = null,
@@ -58,13 +73,25 @@ internal class PlaylistController(HttpClient http)
         CancellationToken cancellationToken = default
     )
     {
-        const int retriesCount = 5;
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
+        // Примечание: Для пагинации «Понравившихся», иногда продолжение 'browse' лучше,
+        // но эндпоинт 'next' работает, если у нас есть контекст видео.
+
+        const int retriesCount = 3;
         for (var retriesRemaining = retriesCount; ; retriesRemaining--)
         {
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
                 "https://www.youtube.com/youtubei/v1/next"
             );
+            
+            // Передаем visitor data, если она есть из предыдущих запросов
+            if (!string.IsNullOrEmpty(visitorData))
+            {
+                request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
+            }
 
             request.Content = new StringContent(
                 // lang=json
@@ -76,9 +103,9 @@ internal class PlaylistController(HttpClient http)
                   "context": {
                     "client": {
                       "clientName": "WEB",
-                      "clientVersion": "2.20210408.08.00",
-                      "hl": "en",
-                      "gl": "US",
+                      "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                      "hl": {{Json.Serialize(hl)}},
+                      "gl": {{Json.Serialize(gl)}},
                       "utcOffsetMinutes": 0,
                       "visitorData": {{Json.Serialize(visitorData)}}
                     }
@@ -96,36 +123,8 @@ internal class PlaylistController(HttpClient http)
 
             if (!playlistResponse.IsAvailable)
             {
-                // Retry if this is not the first request, meaning that the previous requests were successful,
-                // indicating that it's most likely a transient error.
-                if (index > 0 && !string.IsNullOrWhiteSpace(visitorData) && retriesRemaining > 0)
-                    continue;
-
-                // Some system playlists are unavailable through this endpoint until their page is opened by
-                // at least one user. If this is the first request, and we haven't retried yet, attempt to
-                // warm up the playlist by opening its page, and then retry.
-                if (
-                    index <= 0
-                    && string.IsNullOrWhiteSpace(visitorData)
-                    && retriesRemaining >= retriesCount
-                )
-                {
-                    using (
-                        await http.GetAsync(
-                            $"https://youtube.com/playlist?list={playlistId}",
-                            cancellationToken
-                        )
-                    )
-                    {
-                        // We don't actually care about the outcome of this request
-                    }
-
-                    continue;
-                }
-
-                throw new PlaylistUnavailableException(
-                    $"Playlist '{playlistId}' is not available."
-                );
+                if (retriesRemaining > 0) continue;
+                throw new PlaylistUnavailableException($"Плейлист '{playlistId}' недоступен.");
             }
 
             return playlistResponse;
@@ -143,6 +142,7 @@ internal class PlaylistController(HttpClient http)
         }
         catch (PlaylistUnavailableException)
         {
+            // Резервный вариант для некоторых публичных плейлистов или миксов
             return await GetPlaylistNextResponseAsync(playlistId, null, 0, null, cancellationToken);
         }
     }

@@ -24,8 +24,8 @@ internal class MusicController(HttpClient http)
                 "client": {
                     "clientName": "WEB_REMIX",
                     "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
-                    "hl": "ru",
-                    "gl": "RU",
+                    "hl": {{YoutubeHttpHandler.GetHl()}},
+                    "gl": {{YoutubeHttpHandler.GetGl()}},
                     "visitorData": {{visitorDataJson}}
                 },
                 "user": {}

@@ -22,6 +22,11 @@ public sealed class LocalizationService : INotifyPropertyChanged
         new() { Code = "ru", Name = "Русский" }
     ];
 
+    /// <summary>
+    /// Публичное свойство для доступа к коду языка (hl)
+    /// </summary>
+    public string CurrentLanguageCode => _currentLanguage;
+
     public string CurrentLanguage
     {
         get => _currentLanguage;

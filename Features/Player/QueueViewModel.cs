@@ -162,15 +162,22 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     private bool FilterItem(TrackInfo item)
     {
-        if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
-        if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
-
+        // 1. Текстовый поиск
         if (!string.IsNullOrWhiteSpace(FilterQuery))
         {
-            return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
-                   item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+            bool matchesText = item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
+                               item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+            if (!matchesText) return false;
         }
-        return true;
+
+        // 2. Фильтр по типу
+        return FilterType switch
+        {
+            ContentFilterType.All => true,
+            ContentFilterType.Music => item.IsMusic,
+            ContentFilterType.Video => !item.IsMusic,
+            _ => true
+        };
     }
 
     private void PlayFromQueue(TrackInfo track)

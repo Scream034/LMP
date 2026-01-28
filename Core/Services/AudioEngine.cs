@@ -2,6 +2,7 @@
 using LibVLCSharp.Shared;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
+using LMP.Core.Youtube;
 using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.Services;
@@ -111,6 +112,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(5)
         })
         { Timeout = TimeSpan.FromMinutes(5) };
+
+        // Без этого YouTube может возвращать 403 Forbidden на запросы скачивания.
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeHttpHandler.UserAgentAndroid);
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", YoutubeHttpHandler.GetHl());
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br, zstd");
 
         ShuffleEnabled = library.Data.ShuffleEnabled;
         RepeatMode = library.Data.RepeatMode;
@@ -550,7 +557,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             track.PreferredContainer = container;
             track.PreferredBitrate = targetBitrate;
-            
+
             // Сохраняем изменения. Так как объект canonical, просто говорим библиотеке обновить его статус.
             _library.AddOrUpdateTrack(track);
         }
@@ -993,6 +1000,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(1500);
             using var req = new HttpRequestMessage(HttpMethod.Head, url);
+            // Добавляем UA и здесь, на всякий случай, хотя _httpClient уже настроен
+            // Но HeadAsync может использовать внутренний клиент, если это Extension метод на HttpClient
+            // В данном случае мы используем _httpClient.SendAsync
             using var resp = await _httpClient.SendAsync(req, cts.Token);
             return resp.Content.Headers.ContentLength ?? -1;
         }

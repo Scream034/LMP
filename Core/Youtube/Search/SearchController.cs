@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using LMP.Core.Services;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Utils;
 
@@ -6,25 +7,22 @@ namespace LMP.Core.Youtube.Search;
 
 internal class SearchController(HttpClient http)
 {
-  // Params из Muzza (YouTube.kt -> SearchFilter)
   private const string FilterSong = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
   private const string FilterVideo = "EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D";
   private const string FilterAlbum = "EgWKAQIYAWoKEAkQChAFEAMQBA%3D%3D";
   private const string FilterArtist = "EgWKAQIgAWoKEAkQChAFEAMQBA%3D%3D";
-  private const string FilterFeaturedPlaylist = "EgeKAQQoADgBagwQDhAKEAMQBRAJEAQ%3D";
   private const string FilterCommunityPlaylist = "EgeKAQQoAEABagoQAxAEEAoQCRAF";
 
   private static JsonElement GetMusicContext()
   {
-    // Используем WEB_REMIX как в Muzza
     var json = $$"""
         {
             "context": {
                 "client": {
                     "clientName": "WEB_REMIX",
-                    "clientVersion": {{YoutubeHttpHandler.MusicClientVersion}},
-                    "hl": "en",
-                    "gl": "US"
+                    "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
+                    "hl": "{{YoutubeHttpHandler.GetHl()}}",
+                    "gl": "{{YoutubeHttpHandler.GetGl()}}"
                 },
                 "user": {}
             }
@@ -35,14 +33,14 @@ internal class SearchController(HttpClient http)
 
   private static JsonElement GetWebContext()
   {
-    var json = """
+    var json = $$"""
         {
             "context": {
                 "client": {
                   "clientName": "WEB",
-                  "clientVersion": "2.20250331.09.00",
-                  "hl": "en",
-                  "gl": "US"
+                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                  "hl": "{{YoutubeHttpHandler.GetHl()}}",
+                  "gl": "{{YoutubeHttpHandler.GetGl()}}"
                 }
             }
         }
@@ -57,8 +55,8 @@ internal class SearchController(HttpClient http)
       CancellationToken cancellationToken = default
   )
   {
-    // Определяем, используем ли мы YouTube Music (WEB_REMIX) или обычный YouTube (WEB)
-    bool isMusicContext = searchFilter is SearchFilter.MusicSong
+    bool isMusicContext = searchFilter is SearchFilter.Music
+                                       or SearchFilter.MusicSong
                                        or SearchFilter.MusicVideo
                                        or SearchFilter.MusicAlbum
                                        or SearchFilter.MusicArtist
@@ -70,17 +68,17 @@ internal class SearchController(HttpClient http)
     {
       searchParams = searchFilter switch
       {
+        SearchFilter.Music => FilterSong,
         SearchFilter.MusicSong => FilterSong,
         SearchFilter.MusicVideo => FilterVideo,
         SearchFilter.MusicAlbum => FilterAlbum,
         SearchFilter.MusicArtist => FilterArtist,
-        SearchFilter.MusicPlaylist => FilterCommunityPlaylist, // Или Featured, по ситуации
+        SearchFilter.MusicPlaylist => FilterCommunityPlaylist,
         _ => null
       };
     }
     else
     {
-      // Стандартные фильтры YouTube
       searchParams = searchFilter switch
       {
         SearchFilter.Video => "EgIQAQ%3D%3D",
@@ -90,7 +88,6 @@ internal class SearchController(HttpClient http)
       };
     }
 
-    // Если есть токен продолжения, параметры не нужны (они вшиты в токен)
     if (continuationToken != null) searchParams = null;
 
     var url = isMusicContext

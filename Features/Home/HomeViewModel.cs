@@ -7,6 +7,7 @@ using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
+using LMP.Core.Youtube.Search; // Добавлен using для SearchFilter
 
 namespace LMP.Features.Home;
 
@@ -91,21 +92,24 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #region Overrides & Filter Implementation
 
-    // FIX: Реализация фильтрации для HomeViewModel
-    protected override bool FilterItem(TrackInfo item)
+    protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
     {
-        // 1. Фильтр по типу
-        if (FilterType == ContentFilterType.Music && !item.IsMusic) return false;
-        if (FilterType == ContentFilterType.Video && item.IsMusic) return false;
-
-        // 2. Локальный поиск по уже загруженным рекомендациям
-        if (!string.IsNullOrWhiteSpace(FilterQuery))
+        // 1. Text search - using captured query value
+        if (!string.IsNullOrWhiteSpace(query))
         {
-            return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
-                   item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+            bool matchesText = item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
+            if (!matchesText) return false;
         }
 
-        return true;
+        // 2. Type filter - using captured filterType value
+        return filterType switch
+        {
+            ContentFilterType.All => true,
+            ContentFilterType.Music => item.IsMusic,
+            ContentFilterType.Video => !item.IsMusic,
+            _ => true
+        };
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -129,7 +133,10 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     {
         if (SelectedCategory?.IsSpecial == true) return [];
 
+        // Увеличиваем оффсет для запроса большего количества видео
         _fetchOffset += 50;
+
+        // ВНИМАНИЕ: YoutubeProvider.SearchAsync использует ContentFilterTypeExtensions.ToSearchFilter(FilterType) внутри.
         var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
 
         if (ct.IsCancellationRequested) return [];
@@ -139,12 +146,11 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         if (result.Count > 0)
         {
-            // Здесь используем снапшот для кэша, но аккуратно, чтобы не блокировать UI
-            // Можно просто сохранить result, так как он новый
-            _ = _searchCache.SetAsync(_currentQuery, GetItemsSnapshot().Concat(result).ToList());
+            // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
+            _ = _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), [.. GetItemsSnapshot(), .. result]);
 
             var imageUrls = result.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
-            _ = _imageCache.PrefetchAsync(imageUrls!, ct);
+            _ = _imageCache.PrefetchAsync(imageUrls, ct);
         }
         UpdateStats();
         return result;
@@ -162,8 +168,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         _categoryCts = new CancellationTokenSource();
         var ct = _categoryCts.Token;
 
-        // IsLoading теперь управляется базовым классом через Clear/Initialize, но можно ставить флаг для UI
-        // ClearItems() в базе сбрасывает состояние
         ClearItems();
         _fetchOffset = 0;
 
@@ -181,7 +185,9 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             else
             {
                 _currentQuery = category.Query;
-                var cached = await _searchCache.GetAsync(_currentQuery, 30);
+
+                // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
+                var cached = await _searchCache.GetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), 30);
 
                 if (cached != null && cached.Count > 0 && !force)
                 {
@@ -191,15 +197,15 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
                 }
                 else
                 {
-                    // Вручную ставим флаг, так как InitializeItemsAsync сбросит его, 
-                    // но нам нужно показать лоадер ДО получения первых данных
-                    // (Хотя базовый класс сам умеет, если вызывать Initialize с пустым списком,
-                    // но здесь логика гибридная)
                     tracks = await _youtube.SearchAsync(_currentQuery, 100);
 
                     if (ct.IsCancellationRequested) return;
 
-                    if (tracks.Count > 0) _ = _searchCache.SetAsync(_currentQuery, tracks);
+                    if (tracks.Count > 0)
+                    {
+                        // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
+                        _ = _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), tracks);
+                    }
                 }
 
                 var imageUrls = tracks.Take(20).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
@@ -224,18 +230,19 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             await Task.Delay(3000, ct);
             var fresh = await _youtube.SearchAsync(_currentQuery, 100);
             if (ct.IsCancellationRequested) return;
-            if (fresh.Count > 0) await _searchCache.SetAsync(_currentQuery, fresh);
+
+            if (fresh.Count > 0)
+            {
+                // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
+                await _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), fresh);
+            }
         }
         catch { }
     }
 
     private void PlayWithContext(TrackInfo track)
     {
-        // Задача 1: Не добавляем весь список Home в очередь.
-        // Используем PlayTrackAsync, который очищает очередь и играет только один трек.
         _ = _audio.PlayTrackAsync(track);
-
-        // Сохраняем в историю (Recently Played)
         LibService.AddToRecentlyPlayed(track);
     }
 
