@@ -13,12 +13,12 @@ namespace LMP.Core.ViewModels;
 
 public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IDisposable, IFilterable
     where TViewModel : class
-    where TSource : notnull 
+    where TSource : notnull
 {
     #region Fields
 
     protected readonly LibraryService LibService;
-    
+
     // DynamicData Source
     private readonly SourceList<TSource> _sourceList = new();
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
@@ -53,13 +53,13 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
     // --- FIX: Ручная реализация свойств для устранения краша Fody ---
-    public string FilterQuery 
+    public string FilterQuery
     {
         get => _filterQuery;
         set => this.RaiseAndSetIfChanged(ref _filterQuery, value);
     }
 
-    public ContentFilterType FilterType 
+    public ContentFilterType FilterType
     {
         get => _filterType;
         set => this.RaiseAndSetIfChanged(ref _filterType, value);
@@ -67,7 +67,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     // ---------------------------------------------------------------
 
     public ReadOnlyObservableCollection<TViewModel> Items => _items;
-    protected int TotalCount => _totalSourceCount; 
+    protected int TotalCount => _totalSourceCount;
 
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
     public ReactiveCommand<string, Unit> SetFilterTypeCommand { get; }
@@ -131,7 +131,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                 }
             })
             .DisposeWith(_cleanUp);
-        
+
         this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
             .Subscribe(_ => _consecutiveEmptyLoads = 0)
             .DisposeWith(_cleanUp);
@@ -143,10 +143,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     protected abstract TViewModel CreateItemViewModel(TSource item);
     protected abstract bool FilterItem(TSource item);
-    
+
     protected virtual string GetItemId(TSource item) => item?.GetHashCode().ToString() ?? "";
-    
-    protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct) 
+
+    protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct)
         => Task.FromResult(new List<TSource>());
 
     #endregion
@@ -155,12 +155,24 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     private Func<TSource, bool> BuildFilter((string Query, ContentFilterType Type) tuple)
     {
-        return item => FilterItem(item);
+        return FilterItem;
     }
 
     #endregion
 
     #region Public Methods
+
+    protected void MoveSourceItem(int oldIndex, int newIndex)
+    {
+        _sourceList.Edit(list =>
+        {
+            if (oldIndex >= 0 && oldIndex < list.Count &&
+                newIndex >= 0 && newIndex < list.Count)
+            {
+                list.Move(oldIndex, newIndex);
+            }
+        });
+    }
 
     protected async Task InitializeItemsAsync(IEnumerable<TSource> items, bool canFetchMore = true)
     {
@@ -171,7 +183,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         _canFetchMore = canFetchMore;
         _consecutiveEmptyLoads = 0;
 
-        await Task.Run(() => 
+        await Task.Run(() =>
         {
             _sourceList.Edit(innerList =>
             {
@@ -182,10 +194,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
         _totalSourceCount = _sourceList.Count;
         UpdateState();
-        
+
         if (_totalSourceCount == 0 && canFetchMore)
         {
-             await LoadNextBatchAsync();
+            await LoadNextBatchAsync();
         }
     }
 
@@ -196,7 +208,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         _canFetchMore = false;
         UpdateState();
     }
-    
+
     protected List<TSource> GetItemsSnapshot() => _sourceList.Items.ToList();
     protected List<string> GetLoadedItemsIds() => _sourceList.Items.Select(GetItemId).ToList();
 
@@ -232,7 +244,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
         IsLoadingMore = true;
         IsFetchingFromNetwork = true;
-        
+
         int visibleBefore = _items.Count;
 
         try
@@ -244,7 +256,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
             if (newItems != null && newItems.Count > 0)
             {
-                _sourceList.Edit(list => 
+                _sourceList.Edit(list =>
                 {
                     var existingIds = list.Select(GetItemId).ToHashSet();
                     foreach (var item in newItems)
@@ -256,7 +268,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                         }
                     }
                 });
-                
+
                 int visibleAfter = _items.Count;
                 if (visibleAfter == visibleBefore) _consecutiveEmptyLoads++;
                 else _consecutiveEmptyLoads = 0;

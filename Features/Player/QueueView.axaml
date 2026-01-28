@@ -96,7 +96,9 @@
                 ReachedEnd="True"
                 UseInternalScroll="True"
                 EnableSmoothLoading="False"
-                IsQueueContext="True" />
+                IsQueueContext="True" 
+                EnableReordering="{Binding CanReorderItems}"
+                MoveItemCommand="{Binding MoveItemCommand}" />
                 
         </Grid>
     </Grid>

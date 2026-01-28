@@ -6,11 +6,11 @@ namespace LMP.Core.Services;
 public class MusicLibraryManager(
     LibraryService library,
     YoutubeUserDataService ytUser,
-    CookieAuthService auth) : ReactiveObject // Changed
+    CookieAuthService auth) : ReactiveObject
 {
     private readonly LibraryService _library = library;
     private readonly YoutubeUserDataService _ytUser = ytUser;
-    private readonly CookieAuthService _auth = auth; // Changed
+    private readonly CookieAuthService _auth = auth;
 
     public async Task ToggleLikeAsync(TrackInfo track)
     {
@@ -21,10 +21,12 @@ public class MusicLibraryManager(
             {
                 bool newStatus = !track.IsLiked;
                 string rating = newStatus ? "like" : "none";
-                await _ytUser.RateVideoAsync(track.Id, rating);
 
+                await _ytUser.RateVideoAsync(track.Id, rating);
+                
                 // Только если не вылетело исключение:
                 _library.ToggleLike(track);
+                
                 Log.Info($"[Sync] Track {track.Id} rated '{rating}' on YouTube.");
             }
             catch (Exception ex)
@@ -39,7 +41,6 @@ public class MusicLibraryManager(
             _library.ToggleLike(track);
         }
     }
-
 
     public async Task SyncLikedTracksAsync()
     {
@@ -139,7 +140,6 @@ public class MusicLibraryManager(
     public async Task UploadPlaylistToAccountAsync(string localPlaylistId)
     {
         if (!_auth.IsAuthenticated) return;
-
         var localPl = _library.GetPlaylist(localPlaylistId);
         if (localPl == null || localPl.SyncMode != PlaylistSyncMode.LocalOnly) return;
 
@@ -207,10 +207,22 @@ public class MusicLibraryManager(
         {
             playlist.UpdatedAt = DateTime.Now;
             _library.AddOrUpdatePlaylist(playlist);
+            
             var t = _library.GetTrack(trackId);
-            if (t != null) t.InPlaylists.Remove(playlistId);
+            t?.InPlaylists.Remove(playlistId);
         }
         // Removal from YouTube via InnerTube needs extra logic (setVideoId), skipped for now
+    }
+    
+    // NEW: Method for reordering tracks
+    public Task MovePlaylistTrackAsync(string playlistId, int oldIndex, int newIndex)
+    {
+        _library.MoveTrackInPlaylist(playlistId, oldIndex, newIndex);
+        
+        // Remote reordering on YouTube is skipped because it requires specific PlaylistItem IDs
+        // which are not currently mapped/tracked in the local library.
+        
+        return Task.CompletedTask;
     }
 
     public void ConvertToLocal(string playlistId)

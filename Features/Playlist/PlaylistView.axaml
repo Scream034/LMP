@@ -183,21 +183,21 @@
         </Grid>
 
         <!-- LIST AREA (Row 3) -->
-        <ScrollViewer Grid.Row="3" Margin="24,0">
-            <i:Interaction.Behaviors>
-                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
-            </i:Interaction.Behaviors>
-
-            <controls:TrackListControl
-                Items="{Binding Items}"
-                IsLoading="{Binding IsLoading}"
-                IsLoadingMore="{Binding IsLoadingMore}"
-                IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
-                ReachedEnd="{Binding ReachedEnd}"
-                LoadMoreCommand="{Binding LoadMoreCommand}"
-                UseInternalScroll="False"
-                EnableSmoothLoading="{Binding EnableSmoothLoading}"
-                IsPlaylistContext="{Binding CanEdit}" />
-        </ScrollViewer>
+        <!-- Removed external ScrollViewer to fix virtualization (Enable reordering lag issue) -->
+        <controls:TrackListControl
+            Grid.Row="3"
+            Margin="24,0"
+            Items="{Binding Items}"
+            IsLoading="{Binding IsLoading}"
+            IsLoadingMore="{Binding IsLoadingMore}"
+            IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
+            ReachedEnd="{Binding ReachedEnd}"
+            LoadMoreCommand="{Binding LoadMoreCommand}"
+            UseInternalScroll="True"
+            EnableSmoothLoading="{Binding EnableSmoothLoading}"
+            IsPlaylistContext="{Binding CanEdit}"
+            EnableReordering="{Binding CanReorderItems}"
+            MoveItemCommand="{Binding MoveItemCommand}" />
+            
     </Grid>
 </UserControl>

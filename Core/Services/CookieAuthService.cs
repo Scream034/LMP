@@ -5,20 +5,26 @@ namespace LMP.Core.Services;
 
 public partial class CookieAuthService
 {
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private readonly Dictionary<string, string> _cookieMap = [];
     private string _cachedHeaderString = "";
 
-    public bool IsAuthenticated 
+    // Список критически важных кук для сессии.
+    private static readonly HashSet<string> CriticalCookieKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        get 
+        "__Secure-1PSIDTS", "__Secure-3PSIDTS", "SIDCC", "SAPISID"
+    };
+
+    public bool IsAuthenticated
+    {
+        get
         {
             lock (_lock) return _cookieMap.ContainsKey("SAPISID");
         }
     }
 
     public event Action? OnAuthStateChanged;
-    
+
     public CookieAuthService() => Load();
 
     private void Load()
@@ -40,34 +46,27 @@ public partial class CookieAuthService
         lock (_lock) return _cookieMap.TryGetValue(key, out var val) ? val : null;
     }
 
-    /// <summary>
-    /// Возвращает куки для "реанимации".
-    /// Логика Muzza: используем все куки, но исключаем протухшие сессионные.
-    /// ВАЖНО: LOGIN_INFO и PAPISID должны остаться!
-    /// </summary>
-    public string GetBaseCookieHeader()
+    public string GetResurrectionCookieHeader()
     {
         lock (_lock)
         {
             var sb = new StringBuilder();
-            
-            // Черный список токенов, которые вызывают 401, если они протухли
-            var blackList = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+
+            var allowList = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "__Secure-1PSIDTS", 
-                "__Secure-3PSIDTS",
-                "SIDCC", 
-                "__Secure-1PSIDCC", 
-                "__Secure-3PSIDCC"
+                "SID", "HSID", "SSID", "APISID", "SAPISID",
+                "__Secure-1PSID", "__Secure-3PSID",
+                "__Secure-1PAPISID", "__Secure-3PAPISID",
+                "LOGIN_INFO", "PREF"
             };
 
             foreach (var kvp in _cookieMap)
             {
-                // Пропускаем "плохие" токены
-                if (blackList.Contains(kvp.Key)) continue;
-
-                if (sb.Length > 0) sb.Append("; ");
-                sb.Append($"{kvp.Key}={kvp.Value}");
+                if (allowList.Contains(kvp.Key))
+                {
+                    if (sb.Length > 0) sb.Append("; ");
+                    sb.Append($"{kvp.Key}={kvp.Value}");
+                }
             }
             return sb.ToString();
         }
@@ -88,38 +87,14 @@ public partial class CookieAuthService
 
         ParseAndSetCookies(clean);
         SaveToFile();
-        
+
         Log.Info($"[Auth] Cookies saved manually. Total keys: {_cookieMap.Count}");
         OnAuthStateChanged?.Invoke();
     }
 
-    public void RemoveSessionTokens()
-    {
-        lock (_lock)
-        {
-            var keysToRemove = new[] 
-            { 
-                "__Secure-1PSIDTS", "__Secure-3PSIDTS",
-                "SIDCC", "__Secure-1PSIDCC", "__Secure-3PSIDCC" 
-            };
-
-            bool removedAny = false;
-            foreach (var key in keysToRemove)
-            {
-                if (_cookieMap.Remove(key)) removedAny = true;
-            }
-
-            if (removedAny)
-            {
-                RebuildHeaderString();
-                Log.Warn("[Auth] Session tokens (TS/CC) cleared due to auth failure.");
-            }
-        }
-    }
-
     public bool UpdateCookies(IEnumerable<string> setCookieHeaders)
     {
-        bool changed = false;
+        bool criticalCookieUpdated = false;
         lock (_lock)
         {
             foreach (var header in setCookieHeaders)
@@ -129,7 +104,7 @@ public partial class CookieAuthService
 
                 var firstPart = parts[0];
                 var equalIndex = firstPart.IndexOf('=');
-                
+
                 if (equalIndex > 0)
                 {
                     var key = firstPart[..equalIndex].Trim();
@@ -141,21 +116,26 @@ public partial class CookieAuthService
                     if (!_cookieMap.TryGetValue(key, out var existingVal) || existingVal != value)
                     {
                         _cookieMap[key] = value;
-                        changed = true;
-                        
+
+                        if (key.Contains("1PSIDTS") || key.Contains("SAPISID") || key.Contains("SIDCC"))
+                        {
+                            criticalCookieUpdated = true;
+                        }
+
                         if (key == "__Secure-1PSIDTS")
                         {
-                             _cookieMap["__Secure-3PSIDTS"] = value;
+                            _cookieMap["__Secure-3PSIDTS"] = value;
                         }
                     }
                 }
             }
 
-            if (changed) RebuildHeaderString();
+            if (criticalCookieUpdated || _cookieMap.Count > 0) RebuildHeaderString();
         }
 
-        if (changed) SaveToFile();
-        return changed;
+        if (criticalCookieUpdated) SaveToFile();
+
+        return criticalCookieUpdated;
     }
 
     public void Logout()

@@ -121,12 +121,10 @@ public class LibraryService : IDisposable
         try
         {
             var tempFile = G.File.Library + ".tmp";
-
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
             {
                 await JsonSerializer.SerializeAsync(fs, Data, G.Json.Beautiful);
             }
-
             File.Move(tempFile, G.File.Library, true);
         }
         catch (Exception ex)
@@ -192,7 +190,6 @@ public class LibraryService : IDisposable
             track.LocalPath = existing.LocalPath ?? track.LocalPath;
             track.InPlaylists = existing.InPlaylists;
         }
-
         Data.Tracks[track.Id] = track;
         Save();
     }
@@ -265,7 +262,6 @@ public class LibraryService : IDisposable
     }
 
     public TrackInfo? GetTrack(string id) => Data.Tracks.TryGetValue(id, out var track) ? track : null;
-
     public bool HasTrack(string id) => Data.Tracks.ContainsKey(id);
 
     public void AddToRecentlyPlayed(TrackInfo track)
@@ -299,8 +295,8 @@ public class LibraryService : IDisposable
         AddOrUpdateTrack(track);
         track.IsLiked = !track.IsLiked;
         track.IsDisliked = false;
-        var likedPlaylist = Data.Playlists[LikedPlaylistId];
 
+        var likedPlaylist = Data.Playlists[LikedPlaylistId];
         if (track.IsLiked)
         {
             if (!likedPlaylist.TrackIds.Contains(track.Id))
@@ -351,7 +347,6 @@ public class LibraryService : IDisposable
     public void RemovePlaylist(string playlistId)
     {
         if (IsSystemPlaylist(playlistId)) return;
-
         if (Data.Playlists.Remove(playlistId))
         {
             Save();
@@ -362,7 +357,6 @@ public class LibraryService : IDisposable
     public void RenamePlaylist(string playlistId, string newName)
     {
         if (IsSystemPlaylist(playlistId)) return;
-
         if (Data.Playlists.TryGetValue(playlistId, out var playlist))
         {
             playlist.Name = newName;
@@ -375,7 +369,6 @@ public class LibraryService : IDisposable
     public void DeletePlaylist(string playlistId)
     {
         if (IsSystemPlaylist(playlistId)) return;
-
         if (Data.Playlists.Remove(playlistId))
         {
             foreach (var track in Data.Tracks.Values)
@@ -411,6 +404,23 @@ public class LibraryService : IDisposable
         OnDataChanged?.Invoke();
     }
 
+    public void MoveTrackInPlaylist(string playlistId, int oldIndex, int newIndex)
+    {
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return;
+
+        if (oldIndex < 0 || oldIndex >= playlist.TrackIds.Count ||
+            newIndex < 0 || newIndex >= playlist.TrackIds.Count ||
+            oldIndex == newIndex) return;
+
+        var trackId = playlist.TrackIds[oldIndex];
+        playlist.TrackIds.RemoveAt(oldIndex);
+        playlist.TrackIds.Insert(newIndex, trackId);
+
+        playlist.UpdatedAt = DateTime.Now;
+        Save();
+        OnDataChanged?.Invoke();
+    }
+
     public bool IsTrackInPlaylist(string trackId, string playlistId)
     {
         if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return false;
@@ -424,7 +434,6 @@ public class LibraryService : IDisposable
     }
 
     public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
-
     public Playlist? GetPlaylist(string playlistId) => Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
 
     public void MergeAccountPlaylists(IEnumerable<Playlist> accountPlaylists)
@@ -456,7 +465,6 @@ public class LibraryService : IDisposable
     {
         _saveSubscription.Dispose();
         _saveSignal.Dispose();
-
         try
         {
             var options = G.Json.Beautiful;
@@ -464,8 +472,6 @@ public class LibraryService : IDisposable
             File.WriteAllText(G.File.Library, json);
         }
         catch { }
-
         GC.SuppressFinalize(this);
     }
 }
-

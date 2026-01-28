@@ -24,12 +24,13 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     private readonly TrackViewModelFactory _vmFactory;
 
     private readonly EventHandler<string> _languageChangedHandler;
-    
+
     private string _currentPlaylistId = "";
-    private IDisposable? _librarySubscription;
-    private IDisposable? _audioStateSub;
-    private IDisposable? _trackChangeSub;
-    
+    private readonly IDisposable? _librarySubscription;
+    private readonly IDisposable? _audioStateSub;
+    private readonly IDisposable? _trackChangeSub;
+
+    private bool _isMovingInternally; // Флаг для подавления полной перезагрузки
     private bool _isDisposed;
 
     #endregion
@@ -49,6 +50,8 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     [Reactive] public bool IsPlayingThisPlaylist { get; private set; }
     [Reactive] public bool IsShuffleActive { get; private set; }
     [Reactive] public bool IsDownloadingActive { get; private set; }
+
+    [Reactive] public bool CanReorderItems { get; private set; }
 
     private GridLength _headerHeight;
     public GridLength HeaderHeight
@@ -84,6 +87,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     public ReactiveCommand<Unit, Unit> MergePlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshPlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
+    public ReactiveCommand<(int oldIndex, int newIndex), Unit> MoveItemCommand { get; }
 
     #endregion
 
@@ -147,6 +151,43 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             _audio.EnqueueRange(GetItemsSnapshot());
         }, hasTracks);
 
+        MoveItemCommand = ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
+        {
+            var (oldIdx, newIdx) = tuple;
+            if (!CanReorderItems || oldIdx == newIdx) return;
+        
+            try
+            {
+                _isMovingInternally = true;
+        
+                // 1. Оптимистичное (мгновенное) обновление UI
+                MoveSourceItem(oldIdx, newIdx);
+        
+                // 2. Сохранение изменений в сервисе
+                await _manager.MovePlaylistTrackAsync(_currentPlaylistId, oldIdx, newIdx);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to move track in playlist: {ex.Message}");
+                // В случае ошибки, принудительно перезагружаем плейлист, чтобы отменить
+                // оптимистичное обновление
+                _isMovingInternally = false;
+                LoadPlaylist(_currentPlaylistId);
+            }
+            finally
+            {
+                _isMovingInternally = false;
+            }
+        });
+
+        this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery, x => x.FilterType)
+            .Subscribe(_ =>
+            {
+                CanReorderItems = CanEdit &&
+                                  string.IsNullOrWhiteSpace(FilterQuery) &&
+                                  FilterType == ContentFilterType.All;
+            });
+
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
@@ -154,6 +195,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
+                if (_isMovingInternally) return; // Игнорируем событие, если оно вызвано нами же
                 if (!string.IsNullOrEmpty(_currentPlaylistId))
                 {
                     LoadPlaylist(_currentPlaylistId);
@@ -257,10 +299,10 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
         var vm = _vmFactory.GetOrCreate(track, PlayFromPlaylist);
-        
+
         // Устанавливаем контекст плейлиста для отображения пункта "Remove from playlist"
         vm.IsPlaylistContext = CanEdit; // Можно удалять только если плейлист редактируемый
-        
+
         // Логика удаления
         vm.RemoveFromPlaylistAction = async (t) =>
         {
@@ -274,7 +316,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         };
 
         // Логика радио (пока заглушка, или вызов движка если есть метод)
-        vm.StartRadioAction = (t) => 
+        vm.StartRadioAction = (t) =>
         {
             // Пример: _audio.StartRadio(t);
             Log.Info($"Start radio requested for {t.Title}");

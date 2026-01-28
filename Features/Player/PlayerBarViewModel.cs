@@ -30,6 +30,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly DownloadService _downloads;
     private readonly IClipboardService _clipboard;
     private readonly YoutubeProvider _youtube;
+    private readonly MusicLibraryManager _musicManager; // Добавлено
 
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
@@ -38,7 +39,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly IDisposable? _downloadProgressSub;
     private readonly IDisposable _nextSub;
     private readonly IDisposable _prevSub;
-    private readonly IDisposable? _loadingSub; // Добавлено для корректной очистки
+    private readonly IDisposable? _loadingSub;
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
 
@@ -198,13 +199,15 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         LibraryService library,
         DownloadService downloads,
         IClipboardService clipboard,
-        YoutubeProvider youtube)
+        YoutubeProvider youtube,
+        MusicLibraryManager musicManager) // Injection
     {
         _audio = audio;
         _library = library;
         _downloads = downloads;
         _clipboard = clipboard;
         _youtube = youtube;
+        _musicManager = musicManager; // Assign
 
         // Initialize values
         MaxVolume = _library.Data.MaxVolumeLimit < 100 ? 100 : _library.Data.MaxVolumeLimit;
@@ -216,7 +219,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         Log.Info($"[PlayerBar] Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
-        // Event handlers (уже используют Dispatcher, это хорошо)
+        // Event handlers
         _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() => 
         {
             SyncPlaybackState(isPlaying, isPaused);
@@ -278,10 +281,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         this.WhenAnyValue(x => x.IsLiked)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(LikeTooltip)));
 
-        // ИСПРАВЛЕНО: IsLoading подписка теперь переключается на UI поток
-        // Это предотвращает Call from invalid thread при обновлении команд
         _loadingSub = _audio.WhenValueChanged(x => x.IsLoading)
-            .ObserveOn(RxApp.MainThreadScheduler) // !!! ВАЖНО !!!
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(l =>
             {
                 IsLoading = l;
@@ -379,11 +380,12 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(VolumeTooltip));
         });
 
-        ToggleLikeCommand = ReactiveCommand.Create(() =>
+        // ISPR: Используем MusicLibraryManager для корректной синхронизации с YouTube
+        ToggleLikeCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             if (CurrentTrack != null)
             {
-                _library.ToggleLike(CurrentTrack);
+                await _musicManager.ToggleLikeAsync(CurrentTrack);
                 ShowLikeHint();
             }
         }, this.WhenAnyValue(x => x.HasTrack));
