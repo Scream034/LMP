@@ -16,31 +16,68 @@ public class PlaylistRepository : IPlaylistRepository
     public async Task<Playlist?> GetByIdAsync(string id, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var entity = await ctx.Playlists.FirstOrDefaultAsync(p => p.Id == id, ct);
         if (entity is null) return null;
 
-        var trackIds = await GetTrackIdsAsync(id, ct);
         var playlist = MapToModel(entity);
-        playlist.TrackIds = trackIds;
+
+        // Load track IDs and set count
+        playlist.TrackIds = await ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId == id)
+            .OrderBy(pt => pt.Position)
+            .Select(pt => pt.TrackId)
+            .ToListAsync(ct);
+
+        playlist.TrackCount = playlist.TrackIds.Count;
+
         return playlist;
+    }
+
+    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        // Get playlists with track counts in a single query
+        var playlistsWithCounts = await ctx.Playlists
+            .Select(p => new
+            {
+                Playlist = p,
+                TrackCount = ctx.PlaylistTracks.Count(pt => pt.PlaylistId == p.Id)
+            })
+            .OrderBy(x => x.Playlist.Name)
+            .ToListAsync(ct);
+
+        return [.. playlistsWithCounts.Select(x => (MapToModel(x.Playlist), x.TrackCount))];
     }
 
     public async Task<List<Playlist>> GetAllAsync(CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
-        var entities = await ctx.Playlists
-            .OrderBy(p => p.Name)
+
+        // Get playlists with track counts in efficient query
+        var playlistsWithCounts = await ctx.Playlists
+            .Select(p => new
+            {
+                Playlist = p,
+                TrackCount = ctx.PlaylistTracks.Count(pt => pt.PlaylistId == p.Id)
+            })
+            .OrderBy(x => x.Playlist.Name)
             .ToListAsync(ct);
 
-        return entities.Select(MapToModel).ToList();
+        return [.. playlistsWithCounts
+            .Select(x =>
+            {
+                var playlist = MapToModel(x.Playlist);
+                playlist.TrackCount = x.TrackCount;
+                return playlist;
+            })];
     }
 
     public async Task<List<string>> GetTrackIdsAsync(string playlistId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         return await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
             .OrderBy(pt => pt.Position)
@@ -57,10 +94,10 @@ public class PlaylistRepository : IPlaylistRepository
     public async Task UpsertAsync(Playlist playlist, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var existing = await ctx.Playlists.FirstOrDefaultAsync(p => p.Id == playlist.Id, ct);
         var entity = MapToEntity(playlist);
-        
+
         if (existing != null)
         {
             entity.CreatedAt = existing.CreatedAt;
@@ -94,7 +131,7 @@ public class PlaylistRepository : IPlaylistRepository
     public async Task AddTrackAsync(string playlistId, string trackId, int? position = null, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         // Check if relationship already exists
         var exists = await ctx.PlaylistTracks
             .AnyAsync(pt => pt.PlaylistId == playlistId && pt.TrackId == trackId, ct);
@@ -120,7 +157,7 @@ public class PlaylistRepository : IPlaylistRepository
         });
 
         await ctx.SaveChangesAsync(ct);
-        
+
         // Update playlist timestamp
         await ctx.Playlists
             .Where(p => p.Id == playlistId)
@@ -134,7 +171,7 @@ public class PlaylistRepository : IPlaylistRepository
     public async Task<int> AddTracksAsync(string playlistId, IEnumerable<string> trackIds, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var trackIdList = trackIds.ToList();
         if (trackIdList.Count == 0) return 0;
 
@@ -175,7 +212,7 @@ public class PlaylistRepository : IPlaylistRepository
         if (added > 0)
         {
             await ctx.SaveChangesAsync(ct);
-            
+
             await ctx.Playlists
                 .Where(p => p.Id == playlistId)
                 .ExecuteUpdateAsync(s => s.SetProperty(p => p.UpdatedAt, DateTime.UtcNow), ct);
@@ -187,10 +224,10 @@ public class PlaylistRepository : IPlaylistRepository
     public async Task RemoveTrackAsync(string playlistId, string trackId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var entry = await ctx.PlaylistTracks
             .FirstOrDefaultAsync(pt => pt.PlaylistId == playlistId && pt.TrackId == trackId, ct);
-        
+
         if (entry is null) return;
 
         int removedPos = entry.Position;
@@ -208,13 +245,13 @@ public class PlaylistRepository : IPlaylistRepository
         if (oldIndex == newIndex) return;
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var tracks = await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
             .OrderBy(pt => pt.Position)
             .ToListAsync(ct);
 
-        if (oldIndex < 0 || oldIndex >= tracks.Count || 
+        if (oldIndex < 0 || oldIndex >= tracks.Count ||
             newIndex < 0 || newIndex >= tracks.Count) return;
 
         var movingTrack = tracks[oldIndex];

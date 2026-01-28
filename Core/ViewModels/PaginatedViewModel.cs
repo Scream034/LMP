@@ -204,8 +204,8 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         UpdateState();
     }
 
-    protected List<TSource> GetItemsSnapshot() => _sourceList.Items.ToList();
-    protected List<string> GetLoadedItemsIds() => _sourceList.Items.Select(GetItemId).ToList();
+    protected List<TSource> GetItemsSnapshot() => [.. _sourceList.Items];
+    protected List<string> GetLoadedItemsIds() => [.. _sourceList.Items.Select(GetItemId)];
 
     #endregion
 

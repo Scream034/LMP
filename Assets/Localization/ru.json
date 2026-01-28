@@ -163,7 +163,12 @@
   "Queue_NowPlaying": "Сейчас играет",
 
   "Playlist_Type": "ПЛЕЙЛИСТ",
-  "Playlist_TracksCount": "трек|трека|треков",
+  "Playlist_Empty": "Пусто",
+  "Playlist_TracksCount_0": "Пусто",
+  "Playlist_TracksCount_1": "{0} трек",
+  "Playlist_TracksCount_2": "{0} трека",
+  "Playlist_TracksCount_5": "{0} треков",
+  "Playlist_TracksCount_other": "{0} треков",
   "Playlist_PlayAll": "Слушать всё",
   "Playlist_ShufflePlay": "Перемешать",
   "Playlist_DownloadAll": "Скачать всё",

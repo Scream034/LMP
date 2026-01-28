@@ -35,10 +35,9 @@ public partial class TrackRepository : ITrackRepository
             .Where(t => idList.Contains(t.Id))
             .ToDictionaryAsync(t => t.Id, ct);
 
-        return idList
+        return [.. idList
             .Where(entities.ContainsKey)
-            .Select(id => MapToModel(entities[id]))
-            .ToList();
+            .Select(id => MapToModel(entities[id]))];
     }
 
     public async Task<List<TrackInfo>> SearchAsync(string query, int limit = 50, int offset = 0, CancellationToken ct = default)
@@ -57,7 +56,7 @@ public partial class TrackRepository : ITrackRepository
             .Take(limit)
             .ToListAsync(ct);
 
-        return entities.Select(MapToModel).ToList();
+        return [.. entities.Select(MapToModel)];
     }
 
     public async Task<List<TrackInfo>> GetLikedAsync(int limit = 100, int offset = 0, CancellationToken ct = default)
@@ -71,7 +70,7 @@ public partial class TrackRepository : ITrackRepository
             .Take(limit)
             .ToListAsync(ct);
 
-        return entities.Select(MapToModel).ToList();
+        return [.. entities.Select(MapToModel)];
     }
 
     public async Task<List<TrackInfo>> GetDownloadedAsync(int limit = 100, int offset = 0, CancellationToken ct = default)
@@ -85,7 +84,7 @@ public partial class TrackRepository : ITrackRepository
             .Take(limit)
             .ToListAsync(ct);
 
-        return entities.Select(MapToModel).ToList();
+        return [.. entities.Select(MapToModel)];
     }
 
     public async Task<List<TrackInfo>> GetRecentlyPlayedAsync(int limit = 50, CancellationToken ct = default)

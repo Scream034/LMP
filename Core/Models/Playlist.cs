@@ -1,15 +1,15 @@
 ﻿using System.Text.Json.Serialization;
 using LMP.Core.Services;
- // Для IBatchItem
+// Для IBatchItem
 using LMP.Core.Youtube.Search; // Для ISearchResult
 
 namespace LMP.Core.Models;
 
 public enum PlaylistSyncMode
 {
-    LocalOnly,      
-    TwoWaySync,     
-    CloudPublic     
+    LocalOnly,
+    TwoWaySync,
+    CloudPublic
 }
 
 // Реализуем IBatchItem и ISearchResult
@@ -35,7 +35,7 @@ public class Playlist : IBatchItem, ISearchResult
     // ISearchResult implementation
     [JsonIgnore]
     public string Title => Name;
-    
+
     [JsonIgnore]
     public string Url => YoutubeId != null ? $"https://www.youtube.com/playlist?list={YoutubeId}" : string.Empty;
 
@@ -55,7 +55,8 @@ public class Playlist : IBatchItem, ISearchResult
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 
+    [JsonIgnore]
     public List<string> TrackIds { get; set; } = [];
-    [JsonIgnore] public int? RemoteCount { get; set; } // Количество треков на сервере (для отображения)
-    [JsonIgnore] public int TrackCount => TrackIds.Count;
+    [JsonIgnore]
+    public int TrackCount { get; set; }
 }

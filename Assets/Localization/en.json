@@ -164,7 +164,10 @@
   "Queue_NowPlaying": "Now Playing",
 
   "Playlist_Type": "PLAYLIST",
-  "Playlist_TracksCount": "track|tracks",
+  "Playlist_Empty": "Empty",
+  "Playlist_TracksCount_0": "Empty",
+  "Playlist_TracksCount_1": "{0} track",
+  "Playlist_TracksCount_other": "{0} tracks",
   "Playlist_PlayAll": "Play All",
   "Playlist_ShufflePlay": "Shuffle",
   "Playlist_DownloadAll": "Download All",

@@ -383,6 +383,27 @@ public sealed class LibraryService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Gets all playlists with their track counts.
+    /// </summary>
+    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllPlaylistsWithCountsAsync(CancellationToken ct = default)
+    {
+        var results = await _playlists.GetAllWithCountsAsync(ct);
+
+        // Update "Liked" playlist name
+        for (int i = 0; i < results.Count; i++)
+        {
+            if (results[i].Playlist.Id == LikedPlaylistId)
+            {
+                var pl = results[i].Playlist;
+                pl.Name = LocalizationService.Instance["Playlist_Liked"];
+                results[i] = (pl, results[i].TrackCount);
+            }
+        }
+
+        return results;
+    }
+
     public async Task<Playlist?> GetPlaylistAsync(string id, CancellationToken ct = default)
     {
         var pl = await _playlists.GetByIdAsync(id, ct);

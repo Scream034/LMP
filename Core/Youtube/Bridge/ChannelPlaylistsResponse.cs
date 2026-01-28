@@ -159,13 +159,13 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             Id = id,
             YoutubeId = id,
             StoredName = title ?? "Unknown",
-            RemoteCount = count,
+            // RemoteCount = count,
             ThumbnailUrl = thumb,
             SyncMode = PlaylistSyncMode.CloudPublic
         };
     }
 
-    private Playlist? ParseLockupViewModel(JsonElement json)
+    private static Playlist? ParseLockupViewModel(JsonElement json)
     {
         var id = json.GetPropertyOrNull("contentId")?.GetStringOrNull();
         if (string.IsNullOrEmpty(id) || !id.StartsWith("PL")) return null;

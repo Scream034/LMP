@@ -30,7 +30,7 @@ public class PlaylistClient(HttpClient http)
             StoredName = title,
             Author = channelTitle,
             Description = response.Description,
-            RemoteCount = response.Count,
+            // RemoteCount = response.Count,
             ThumbnailUrl = bestThumb,
             SyncMode = PlaylistSyncMode.CloudPublic
         };

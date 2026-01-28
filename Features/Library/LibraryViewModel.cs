@@ -358,17 +358,22 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         }
     }
 
-    // Changed: Made async
     private async Task LoadPlaylistsAsync()
     {
         if (_isDisposed) return;
 
+        // Dispose old ViewModels
         foreach (var vm in Playlists) vm.Dispose();
         Playlists.Clear();
 
-        // Changed: Use async method
+        // GetAllPlaylistsAsync now returns playlists with TrackCount populated
         var allPlaylists = await _library.GetAllPlaylistsAsync();
-        var sorted = allPlaylists.OrderByDescending(p => p.IsLocal).ThenBy(p => p.Name);
+
+        // Sort: Liked first, then local, then by name
+        var sorted = allPlaylists
+            .OrderByDescending(p => p.Id == LibraryService.LikedPlaylistId)
+            .ThenByDescending(p => p.IsLocal)
+            .ThenBy(p => p.Name);
 
         foreach (var playlist in sorted)
         {
@@ -377,7 +382,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 _mainWindow.NavigateToPlaylist,
                 async (p) =>
                 {
-                    // Changed: Use async method
                     var tracks = await _library.GetPlaylistTracksAsync(p.Id);
                     _audio.EnqueueRange(tracks);
                 },
