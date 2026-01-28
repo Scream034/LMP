@@ -25,7 +25,45 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.ElementAtOrNull(1)
             ?.GetPropertyOrNull("playlistSidebarSecondaryInfoRenderer");
 
-    public bool IsAvailable => Sidebar is not null;
+    // Новый путь для контента плейлиста (основной)
+    private JsonElement? PlaylistContents =>
+        content
+            .GetPropertyOrNull("contents")
+            ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
+            ?.GetPropertyOrNull("tabs")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("tabRenderer")
+            ?.GetPropertyOrNull("content")
+            ?.GetPropertyOrNull("sectionListRenderer")
+            ?.GetPropertyOrNull("contents")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("itemSectionRenderer")
+            ?.GetPropertyOrNull("contents")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("playlistVideoListRenderer");
+
+    // Альтернативный путь (для некоторых плейлистов)
+    private JsonElement? PlaylistContentsAlt =>
+        content
+            .GetPropertyOrNull("contents")
+            ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
+            ?.GetPropertyOrNull("tabs")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("tabRenderer")
+            ?.GetPropertyOrNull("content")
+            ?.GetPropertyOrNull("sectionListRenderer")
+            ?.GetPropertyOrNull("contents")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("playlistVideoListRenderer");
+
+    private JsonElement? EffectivePlaylistContents => PlaylistContents ?? PlaylistContentsAlt;
+
+    public bool IsAvailable => Sidebar is not null || EffectivePlaylistContents is not null;
 
     public string? Title =>
         SidebarPrimary
@@ -45,6 +83,13 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetPropertyOrNull("formField")
             ?.GetPropertyOrNull("textInputFormFieldRenderer")
             ?.GetPropertyOrNull("value")
+            ?.GetStringOrNull()
+        // Fallback: из header
+        ?? content
+            .GetPropertyOrNull("header")
+            ?.GetPropertyOrNull("playlistHeaderRenderer")
+            ?.GetPropertyOrNull("title")
+            ?.GetPropertyOrNull("simpleText")
             ?.GetStringOrNull();
 
     private JsonElement? AuthorDetails =>
@@ -61,7 +106,17 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.EnumerateArrayOrNull()
             ?.Select(static j => j.GetPropertyOrNull("text")?.GetStringOrNull())
             .WhereNotNull()
-            .Pipe(string.Concat);
+            .Pipe(string.Concat)
+        // Fallback: из header
+        ?? content
+            .GetPropertyOrNull("header")
+            ?.GetPropertyOrNull("playlistHeaderRenderer")
+            ?.GetPropertyOrNull("ownerText")
+            ?.GetPropertyOrNull("runs")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("text")
+            ?.GetStringOrNull();
 
     public string? ChannelId =>
         AuthorDetails
@@ -101,7 +156,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetPropertyOrNull("text")
             ?.GetStringOrNull()
             ?.Pipe(static s =>
-                int.TryParse(s, CultureInfo.InvariantCulture, out var result) ? result : (int?)null
+                int.TryParse(s.Replace(",", "").Replace(" ", ""), CultureInfo.InvariantCulture, out var result) ? result : (int?)null
             )
         ?? SidebarPrimary
             ?.GetPropertyOrNull("stats")
@@ -111,6 +166,7 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.GetStringOrNull()
             ?.Split(' ')
             ?.FirstOrDefault()
+            ?.Replace(",", "")
             ?.Pipe(static s =>
                 int.TryParse(s, CultureInfo.InvariantCulture, out var result) ? result : (int?)null
             );
@@ -133,6 +189,45 @@ internal partial class PlaylistBrowseResponse(JsonElement content) : IPlaylistDa
             ?.Select(static j => new ThumbnailData(j))
             .ToArray()
         ?? [];
+
+    // ===== НОВОЕ: Получение видео из browse response =====
+    public IReadOnlyList<PlaylistVideoData> Videos =>
+        EffectivePlaylistContents
+            ?.GetPropertyOrNull("contents")
+            ?.EnumerateArrayOrNull()
+            ?.Select(static j => j.GetPropertyOrNull("playlistVideoRenderer"))
+            .WhereNotNull()
+            .Select(static j => new PlaylistVideoData(j))
+            .ToArray() ?? [];
+
+    // ===== НОВОЕ: Токен продолжения для пагинации =====
+    public string? ContinuationToken =>
+        EffectivePlaylistContents
+            ?.GetPropertyOrNull("continuations")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("nextContinuationData")
+            ?.GetPropertyOrNull("continuation")
+            ?.GetStringOrNull()
+        ?? content
+            .GetPropertyOrNull("onResponseReceivedActions")
+            ?.EnumerateArrayOrNull()
+            ?.FirstOrNull()
+            ?.GetPropertyOrNull("appendContinuationItemsAction")
+            ?.GetPropertyOrNull("continuationItems")
+            ?.EnumerateArrayOrNull()
+            ?.LastOrDefault()
+            .GetPropertyOrNull("continuationItemRenderer")
+            ?.GetPropertyOrNull("continuationEndpoint")
+            ?.GetPropertyOrNull("continuationCommand")
+            ?.GetPropertyOrNull("token")
+            ?.GetStringOrNull();
+
+    public string? VisitorData =>
+        content
+            .GetPropertyOrNull("responseContext")
+            ?.GetPropertyOrNull("visitorData")
+            ?.GetStringOrNull();
 }
 
 internal partial class PlaylistBrowseResponse

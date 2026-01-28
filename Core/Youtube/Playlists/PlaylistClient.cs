@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using LMP.Core.Models;
+using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Videos;
 
@@ -18,7 +19,7 @@ public class PlaylistClient(HttpClient http)
 
         var title = response.Title ?? throw new YoutubeExplodeException("Failed to extract playlist title.");
         var channelTitle = response.Author;
-        
+
         var bestThumb = response.Thumbnails
             .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
             .TryGetWithHighestResolution()?.Url;
@@ -30,7 +31,6 @@ public class PlaylistClient(HttpClient http)
             StoredName = title,
             Author = channelTitle,
             Description = response.Description,
-            // RemoteCount = response.Count,
             ThumbnailUrl = bestThumb,
             SyncMode = PlaylistSyncMode.CloudPublic
         };
@@ -41,44 +41,67 @@ public class PlaylistClient(HttpClient http)
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        var encounteredIds = new HashSet<VideoId>();
-        var lastVideoId = default(VideoId?);
-        var lastVideoIndex = 0;
-        var visitorData = default(string?);
+        var encounteredIds = new HashSet<string>();
+        string? continuationToken = null;
+        string? visitorData = null;
+        bool isFirstRequest = true;
 
         do
         {
-            var response = await _controller.GetPlaylistNextResponseAsync(
-                playlistId,
-                lastVideoId,
-                lastVideoIndex,
-                visitorData,
-                cancellationToken
-            );
+            List<PlaylistVideoData> videos;
+
+            if (isFirstRequest)
+            {
+                // Первый запрос через browse
+                var browseResponse = await _controller.GetPlaylistBrowseResponseAsync(
+                    playlistId,
+                    cancellationToken
+                );
+
+                videos = browseResponse.Videos.ToList();
+                continuationToken = browseResponse.ContinuationToken;
+                visitorData = browseResponse.VisitorData;
+                isFirstRequest = false;
+
+                Log.Debug($"[PlaylistClient] Initial browse: {videos.Count} videos, has continuation: {continuationToken != null}");
+            }
+            else if (!string.IsNullOrEmpty(continuationToken))
+            {
+                // Последующие запросы через continuation
+                var contResponse = await _controller.GetPlaylistContinuationAsync(
+                    continuationToken,
+                    visitorData,
+                    cancellationToken
+                );
+
+                videos = contResponse.Videos.ToList();
+                continuationToken = contResponse.ContinuationToken;
+                visitorData ??= contResponse.VisitorData;
+
+                Log.Debug($"[PlaylistClient] Continuation: {videos.Count} videos, has more: {continuationToken != null}");
+            }
+            else
+            {
+                break;
+            }
 
             var batch = new List<TrackInfo>();
 
-            foreach (var videoData in response.Videos)
+            foreach (var videoData in videos)
             {
                 var videoId = videoData.Id;
-                if (videoId == null) continue;
+                if (string.IsNullOrEmpty(videoId)) continue;
 
-                var vIdStruct = new VideoId(videoId);
-                
-                lastVideoId = vIdStruct;
-                lastVideoIndex = videoData.Index ?? 0;
-
-                if (!encounteredIds.Add(vIdStruct)) continue;
+                if (!encounteredIds.Add(videoId)) continue;
 
                 var title = videoData.Title ?? "";
                 var author = videoData.Author ?? "Unknown";
-                
+
                 var bestThumb = videoData.Thumbnails
                     .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-                    .TryGetWithHighestResolution()?.Url 
+                    .TryGetWithHighestResolution()?.Url
                     ?? $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
 
-                // IMPROVED: Better music detection heuristics
                 bool isMusic = DetectIfMusic(title, author, videoData.Duration);
 
                 var track = new TrackInfo
@@ -96,13 +119,18 @@ public class PlaylistClient(HttpClient http)
                 batch.Add(track);
             }
 
-            if (batch.Count == 0) break;
+            if (batch.Count > 0)
+            {
+                yield return Batch.Create(batch);
+            }
 
-            yield return Batch.Create(batch);
+            // Если нет continuation и batch пустой - выходим
+            if (string.IsNullOrEmpty(continuationToken) && batch.Count == 0)
+            {
+                break;
+            }
 
-            visitorData ??= response.VisitorData;
-
-        } while (true);
+        } while (!string.IsNullOrEmpty(continuationToken));
     }
 
     /// <summary>
@@ -110,45 +138,36 @@ public class PlaylistClient(HttpClient http)
     /// </summary>
     private static bool DetectIfMusic(string title, string author, TimeSpan? duration)
     {
-        // 1. Topic channels and VEVO are always music
         if (author.EndsWith(" - Topic", StringComparison.OrdinalIgnoreCase) ||
             author.EndsWith("VEVO", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        // 2. Duration heuristic: Most songs are 1:30 - 10:00
         if (duration.HasValue)
         {
             var mins = duration.Value.TotalMinutes;
-            // Very short (< 1 min) or very long (> 15 min) are likely NOT music
             if (mins < 1 || mins > 15)
             {
-                // But could still be music if title suggests it
                 return ContainsMusicKeywords(title);
             }
-            
-            // Typical song length (2-6 min) - lean towards music
+
             if (mins >= 2 && mins <= 6)
             {
                 return true;
             }
         }
 
-        // 3. Title keyword analysis
         if (ContainsMusicKeywords(title))
         {
             return true;
         }
 
-        // 4. Check for common non-music patterns
         if (ContainsNonMusicKeywords(title))
         {
             return false;
         }
 
-        // 5. Default: Consider content from music playlists as potentially music
-        // This gives benefit of the doubt for playlist context
         return true;
     }
 

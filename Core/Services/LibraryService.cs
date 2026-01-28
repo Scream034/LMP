@@ -462,6 +462,23 @@ public sealed class LibraryService : IAsyncDisposable
     public async Task AddOrUpdatePlaylistAsync(Playlist playlist, CancellationToken ct = default)
     {
         await _playlists.UpsertAsync(playlist, ct);
+
+        // Если плейлист содержит TrackIds, синхронизируем связи
+        if (playlist.TrackIds.Count > 0)
+        {
+            // Получаем текущие треки плейлиста из БД
+            var existingTrackIds = await _playlists.GetTrackIdsAsync(playlist.Id, ct);
+            var existingSet = new HashSet<string>(existingTrackIds);
+
+            // Добавляем только новые треки
+            var newTrackIds = playlist.TrackIds.Where(id => !existingSet.Contains(id)).ToList();
+            if (newTrackIds.Count > 0)
+            {
+                await _playlists.AddTracksAsync(playlist.Id, newTrackIds, ct);
+                Log.Debug($"[LibraryService] Added {newTrackIds.Count} tracks to playlist '{playlist.Name}'");
+            }
+        }
+
         OnDataChanged?.Invoke();
     }
 

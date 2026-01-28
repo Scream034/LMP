@@ -1,4 +1,4 @@
-﻿using LMP.Core.Services;
+﻿using System.Net.Http.Headers;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
@@ -20,20 +20,15 @@ internal class PlaylistController(HttpClient http)
 
         string browseId = playlistId.Value;
 
-        // Логика для приватных/специальных плейлистов
-        if (browseId == "LL") browseId = "VLLL"; // Понравившиеся (Основной YouTube)
-        else if (browseId == "LM") browseId = "VLLM"; // Понравившиеся (YouTube Music)
-        else if (browseId == "WL") browseId = "VLWL"; // Посмотреть позже
+        if (browseId == "LL") browseId = "VLLL";
+        else if (browseId == "LM") browseId = "VLLM";
+        else if (browseId == "WL") browseId = "VLWL";
         else if (!browseId.StartsWith("VL")) browseId = "VL" + browseId;
 
         var hl = YoutubeHttpHandler.GetHl();
         var gl = YoutubeHttpHandler.GetGl();
 
-        // Мы используем здесь WEB-клиент, так как для приватных списков нужны куки.
-        // YoutubeHttpHandler внедрит куки автоматически.
-        // Также будет добавлен SAPISIDHASH, так как запрос НЕ помечен как Android-контекст.
         request.Content = new StringContent(
-            // lang=json
             $$"""
             {
               "browseId": {{Json.Serialize(browseId)}},
@@ -49,6 +44,7 @@ internal class PlaylistController(HttpClient http)
             }
             """
         );
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -57,12 +53,58 @@ internal class PlaylistController(HttpClient http)
             await response.Content.ReadAsStringAsync(cancellationToken)
         );
 
-        // Проверки сайдбара обычно достаточно для определения доступности,
-        // но для пустых приватных плейлистов структура может отличаться.
-        if (!playlistResponse.IsAvailable && browseId != "VLLL") 
+        if (!playlistResponse.IsAvailable && browseId != "VLLL")
             throw new PlaylistUnavailableException($"Плейлист '{playlistId}' недоступен.");
 
         return playlistResponse;
+    }
+
+    /// <summary>
+    /// Получает следующую страницу видео плейлиста через continuation token
+    /// </summary>
+    public async ValueTask<PlaylistContinuationResponse> GetPlaylistContinuationAsync(
+        string continuationToken,
+        string? visitorData = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "https://www.youtube.com/youtubei/v1/browse"
+        );
+
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
+        if (!string.IsNullOrEmpty(visitorData))
+        {
+            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
+        }
+
+        request.Content = new StringContent(
+            $$"""
+            {
+              "continuation": {{Json.Serialize(continuationToken)}},
+              "context": {
+                "client": {
+                  "clientName": "WEB",
+                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                  "hl": {{Json.Serialize(hl)}},
+                  "gl": {{Json.Serialize(gl)}},
+                  "utcOffsetMinutes": 0,
+                  "visitorData": {{Json.Serialize(visitorData)}}
+                }
+              }
+            }
+            """
+        );
+
+        using var response = await http.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return PlaylistContinuationResponse.Parse(
+            await response.Content.ReadAsStringAsync(cancellationToken)
+        );
     }
 
     public async ValueTask<PlaylistNextResponse> GetPlaylistNextResponseAsync(
@@ -76,9 +118,6 @@ internal class PlaylistController(HttpClient http)
         var hl = YoutubeHttpHandler.GetHl();
         var gl = YoutubeHttpHandler.GetGl();
 
-        // Примечание: Для пагинации «Понравившихся», иногда продолжение 'browse' лучше,
-        // но эндпоинт 'next' работает, если у нас есть контекст видео.
-
         const int retriesCount = 3;
         for (var retriesRemaining = retriesCount; ; retriesRemaining--)
         {
@@ -86,15 +125,13 @@ internal class PlaylistController(HttpClient http)
                 HttpMethod.Post,
                 "https://www.youtube.com/youtubei/v1/next"
             );
-            
-            // Передаем visitor data, если она есть из предыдущих запросов
+
             if (!string.IsNullOrEmpty(visitorData))
             {
                 request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
             }
 
             request.Content = new StringContent(
-                // lang=json
                 $$"""
                 {
                   "playlistId": {{Json.Serialize(playlistId)}},
@@ -142,7 +179,6 @@ internal class PlaylistController(HttpClient http)
         }
         catch (PlaylistUnavailableException)
         {
-            // Резервный вариант для некоторых публичных плейлистов или миксов
             return await GetPlaylistNextResponseAsync(playlistId, null, 0, null, cancellationToken);
         }
     }
