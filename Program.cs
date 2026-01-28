@@ -56,6 +56,7 @@ class Program
         Log.Info("Configuring services...");
 
         // --- Core Services ---
+        services.AddSingleton<TrackRegistry>();
         services.AddSingleton<LibraryService>();
         services.AddSingleton<ThemeManagerService>();
         services.AddSingleton<CookieAuthService>();

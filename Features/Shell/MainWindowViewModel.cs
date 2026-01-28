@@ -132,6 +132,12 @@ public class MainWindowViewModel : ViewModelBase
             _ => CurrentPage
         };
 
+        // При смене страницы чистим мертвые VM из фабрики
+        Program.Services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
+
+        // И чистим мертвые ссылки в реестре треков
+        Program.Services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
+
         CurrentPageName = pageName;
         sw.Stop();
         Log.Info($"Successfully switched to {pageName} in {sw.ElapsedMilliseconds}ms");

@@ -29,7 +29,11 @@ public partial class App : Application
             var library = Program.Services.GetRequiredService<LibraryService>();
             LocalizationService.Instance.Initialize(library.Data.LanguageCode);
 
-            // 2. Create UI
+            // 2. Start Memory Monitor
+            var memoryMonitor = Program.Services.GetRequiredService<MemoryMonitor>();
+            memoryMonitor.OnMemoryWarning += Log.Warn;
+
+            // 3. Create UI
             var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow
             {
@@ -40,7 +44,7 @@ public partial class App : Application
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
-            // 3. Background initialization tasks
+            // 4. Background initialization tasks
             _ = Task.Run(static async () =>
             {
                 try
@@ -50,7 +54,7 @@ public partial class App : Application
                     var musicLibraryManager = Program.Services.GetRequiredService<MusicLibraryManager>();
 #if DEBUG
                     var dialogService = Program.Services.GetRequiredService<IDialogService>();
-                    var canSync =await dialogService.ConfirmAsync("Debug", "Sync liked tracks?", "Yes", "No");
+                    var canSync = await dialogService.ConfirmAsync("Debug", "Sync liked tracks?", "Yes", "No");
                     if (canSync) await musicLibraryManager.SyncLikedTracksAsync();
 #else
                     await musicLibraryManager.SyncLikedTracksAsync();

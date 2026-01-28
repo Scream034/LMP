@@ -193,7 +193,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         _trackSub?.Dispose();
 
         foreach (var item in QueueItems)
-            item.Cleanup();
+        {
+            item.Dispose(); // Важно вызвать Dispose, а не просто Cleanup (если они отличаются)
+        }
 
         QueueItems.Clear();
         GC.SuppressFinalize(this);

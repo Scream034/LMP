@@ -69,7 +69,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         SavePlaylistCommand = ReactiveCommand.Create(() =>
         {
             var playlist = _library.CreatePlaylist(NewPlaylistName.Trim());
-            // Cookies support playlists, so TwoWaySync is possible
             playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly;
             _library.AddOrUpdatePlaylist(playlist);
             IsCreatingPlaylist = false;
@@ -127,20 +126,16 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 try
                 {
-                    // Получаем плейлисты пользователя
                     var ytPlaylists = await YoutubeProvider.GetUserPlaylistsByAuthAsync();
                     ct.ThrowIfCancellationRequested();
                     SyncProgress = 0.1;
 
-                    // Фильтруем:
-                    // 1. Исключаем "Liked Music" (LM), так как они синхуются отдельно автоматом.
-                    // 2. Исключаем Миксы (RD...), так как их нельзя импортировать стандартным способом.
                     playlistsToImport = [.. ytPlaylists
                         .Where(p =>
                             !string.IsNullOrEmpty(p.YoutubeId) &&
                             p.YoutubeId != "LM" &&
                             p.YoutubeId != "VLLM" &&
-                            !p.YoutubeId.StartsWith("RD") // Исключаем радио и миксы
+                            !p.YoutubeId.StartsWith("RD")
                         )
                         .Select(p =>
                         {
@@ -172,7 +167,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
             if (playlistsToImport.Count == 0)
             {
-                // Если плейлистов нет, но мы авторизованы - попробуем синкнуть хотя бы лайки
                 if (_auth.IsAuthenticated)
                 {
                     SyncStatus = SL["Sync_LikedSongs"];
@@ -189,16 +183,11 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             SyncStatus = SL["Sync_SelectPlaylists"];
 
             var selected = await _dialog.ShowSyncSelectionAsync(playlistsToImport);
-            // Если нажали Отмена в диалоге - выходим
             if (selected.Count == 0 || _isDisposed) return;
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
 
-            // === ПАРАЛЛЕЛЬНАЯ СИНХРОНИЗАЦИЯ ЛАЙКОВ ===
-            // Запускаем задачу синхронизации лайков в фоне.
-            // Она будет выполняться одновременно с импортом плейлистов.
-            // ВАЖНО: LibraryService теперь потокобезопасен.
             Task? likedSongsSyncTask = null;
             if (_auth.IsAuthenticated)
             {
@@ -215,8 +204,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     }
                 }, ct);
             }
-
-            // === ОБРАБОТКА ПЛЕЙЛИСТОВ ===
 
             var existingLocalPlaylists = _library.GetAllPlaylists()
                 .Where(p => p.IsLocal)
@@ -275,14 +262,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     processed++;
                     continue;
                 }
-                else
-                {
-                    foreach (var trackId in fullPlaylist.TrackIds)
-                    {
-                        var track = _library.GetTrack(trackId);
-                        if (track != null) _library.SynchronizeTrackState(track);
-                    }
-                }
 
                 existingLocalPlaylists.TryGetValue(candidate.Title, out var existing);
 
@@ -299,7 +278,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             changed = true;
                         }
 
-                        // Обновляем принадлежность трека к плейлисту
                         var t = _library.GetTrack(trackId);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
                         {
@@ -333,7 +311,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 SyncProgress = 0.25 + (0.75 * processed / totalToProcess);
             }
 
-            // Ожидаем завершения синхронизации лайков, если она еще идет
             if (likedSongsSyncTask != null)
             {
                 if (!likedSongsSyncTask.IsCompleted)
@@ -379,7 +356,10 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
 
+        // ВАЖНО: Очищаем старые VM перед созданием новых!
+        foreach (var vm in Playlists) vm.Dispose();
         Playlists.Clear();
+
         var allPlaylists = _library.GetAllPlaylists();
         var sorted = allPlaylists.OrderByDescending(p => p.IsLocal).ThenBy(p => p.Name);
 
@@ -435,6 +415,10 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
+
+        // ВАЖНО: Диспозим все карточки, чтобы отписать их от событий
+        foreach (var vm in Playlists) vm.Dispose();
+        Playlists.Clear();
 
         _auth.OnAuthStateChanged -= OnAuthChanged;
         _syncCts?.Cancel();

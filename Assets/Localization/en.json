@@ -87,8 +87,18 @@
   "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
   "Settings_UserAgentDesc": "Insert the User-Agent from your browser to prevent cookie expiration.",
   "Settings_UserAgentSave": "Save",
+  "Settings_RamCache": "RAM Image Cache",
+  "Settings_RamCacheDesc": "Max number of images in memory. Lower = less RAM, more disk reads.",
 
   "Settings_General": "General",
+
+  "NetProfile_Low": "Data Saver",
+  "NetProfile_Medium": "Balanced",
+  "NetProfile_High": "High Quality",
+  "NetProfile_Ultra": "Lossless / LAN",
+  "Cache_Low": "Economy",
+  "Cache_Medium": "Balanced",
+  "Cache_High": "Smooth",
 
   "Theme_Custom": "Custom",
   "Theme_Presets": "Theme Presets",
@@ -229,7 +239,6 @@
   "Sync_InProgress": "Syncing...",
   "Sync_LikedSongs": "Syncing Liked Songs...",
   "Sync_FinalizingLikedSongs": "Finalizing Liked Songs...",
-
 
   "Conflict_Title": "Conflict",
   "Conflict_Header": "Playlist exists",

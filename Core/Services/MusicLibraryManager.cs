@@ -77,9 +77,6 @@ public class MusicLibraryManager(
                     track.InPlaylists.Add(LibraryService.LikedPlaylistId);
                     addedCount++;
                 }
-                
-                // 4. Гарантируем консистентность ссылок
-                _library.SynchronizeTrackState(track);
             }
 
             if (addedCount > 0)

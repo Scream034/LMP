@@ -436,6 +436,11 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             _searchCts = null;
             try { _searchSession?.Dispose(); } catch { }
             _searchSession = null;
+
+            foreach (var item in Items)
+            {
+                item.Dispose();
+            }
         }
         base.Dispose(disposing);
         _isDisposed = true;

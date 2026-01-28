@@ -5,11 +5,6 @@ using Avalonia.Media.Imaging;
 
 namespace LMP.Core.Services;
 
-/// <summary>
-/// Управляет загрузкой и кэшированием изображений.
-/// Реализует двухуровневый кэш: Память (LRU) + Диск.
-/// С поддержкой динамических лимитов из настроек.
-/// </summary>
 public sealed class ImageCacheService : IDisposable
 {
     private class CachedImage
@@ -18,8 +13,6 @@ public sealed class ImageCacheService : IDisposable
         public DateTime CachedAt { get; set; }
     }
 
-    private const int MaxMemoryCacheItems = 60;
-    
     private readonly HttpClient _http;
     private readonly LibraryService _library;
     private readonly SemaphoreSlim _downloadSemaphore = new(5);
@@ -32,6 +25,15 @@ public sealed class ImageCacheService : IDisposable
 
     private long _currentDiskCacheBytes = 0;
     private bool _isDisposed;
+
+    // Счетчик загрузок мимо кэша для триггера GC
+    private int _transientLoadCounter = 0;
+    private const int GcTriggerThreshold = 50;
+
+    // Получаем лимит динамически
+    private int MaxMemoryItems => _library.Data.Storage.MaxBitmapCacheItems > 0
+        ? _library.Data.Storage.MaxBitmapCacheItems
+        : 40;
 
     public ImageCacheService(LibraryService library)
     {
@@ -64,7 +66,7 @@ public sealed class ImageCacheService : IDisposable
             .Where(u => !_memoryCache.ContainsKey(GetCacheKey(u)))
             .Take(15)
             .Select(u => EnsureCachedDiskOnlyAsync(u, ct));
-        
+
         try { await Task.WhenAll(tasks); } catch { }
     }
 
@@ -75,21 +77,40 @@ public sealed class ImageCacheService : IDisposable
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
+        // Агрессивная очистка
         GC.Collect(2, GCCollectionMode.Optimized);
         Log.Info("Memory cache cleared.");
     }
-    
+
+    public void EnforceLimits()
+    {
+        lock (_lruLock)
+        {
+            int limit = MaxMemoryItems;
+            if (_memoryCache.Count > limit)
+            {
+                Log.Info($"[ImageCache] Enforcing limit: reducing from {_memoryCache.Count} to {limit}");
+                while (_memoryCache.Count > limit && _lruOrder.Count > 0)
+                {
+                    var oldest = _lruOrder.Last!.Value;
+                    _lruOrder.RemoveLast();
+                    _memoryCache.TryRemove(oldest, out _);
+                }
+                // Если сильно почистили - дергаем GC
+                Task.Run(() => GC.Collect(2, GCCollectionMode.Optimized));
+            }
+        }
+    }
+
     public async Task ClearAllAsync()
     {
         ClearMemoryCache();
-        
-        // Очистка диска
+
         var files = Directory.GetFiles(G.Folder.ImageCache);
         foreach (var f in files)
         {
-            try 
+            try
             {
-                // Пытаемся взять лок на файл если он используется
                 var key = Path.GetFileNameWithoutExtension(f);
                 var lockObj = GetFileLock(key);
                 await lockObj.WaitAsync();
@@ -100,7 +121,7 @@ public sealed class ImageCacheService : IDisposable
         Interlocked.Exchange(ref _currentDiskCacheBytes, 0);
         Log.Info("Image disk cache cleared.");
     }
-    
+
     public (int FileCount, long SizeMb) GetStats()
     {
         try
@@ -143,8 +164,7 @@ public sealed class ImageCacheService : IDisposable
                         var bytes = await _http.GetByteArrayAsync(url, ct);
                         await File.WriteAllBytesAsync(diskPath, bytes, ct);
                         Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
-                        
-                        // Check limit
+
                         long limitBytes = (long)_library.Data.Storage.ImageCacheLimitMb * 1024 * 1024;
                         if (_currentDiskCacheBytes > limitBytes)
                         {
@@ -159,8 +179,17 @@ public sealed class ImageCacheService : IDisposable
                             try
                             {
                                 using var stream = File.OpenRead(diskPath);
+                                // Декодируем с уменьшенным размером
                                 var bmp = Bitmap.DecodeToWidth(stream, 300);
                                 AddToMemoryCache(key, bmp);
+
+                                // Если кэш переполнен и мы не добавили (или вытеснили), 
+                                // значит это "транзитная" картинка. Увеличиваем счетчик.
+                                if (!_memoryCache.ContainsKey(key))
+                                {
+                                    CheckGcPressure();
+                                }
+
                                 return bmp;
                             }
                             catch (Exception)
@@ -179,6 +208,21 @@ public sealed class ImageCacheService : IDisposable
         catch { return null; }
     }
 
+    private void CheckGcPressure()
+    {
+        var count = Interlocked.Increment(ref _transientLoadCounter);
+        if (count >= GcTriggerThreshold)
+        {
+            Interlocked.Exchange(ref _transientLoadCounter, 0);
+            // Подсказываем GC, что у нас много мусора (отброшенных битмапов)
+            // Не блокируем поток, делаем это фоном, но с низким приоритетом
+            Task.Run(() =>
+            {
+                GC.Collect(2, GCCollectionMode.Optimized, false);
+            });
+        }
+    }
+
     private async Task EnsureCachedDiskOnlyAsync(string url, CancellationToken ct)
     {
         var key = GetCacheKey(url);
@@ -191,15 +235,22 @@ public sealed class ImageCacheService : IDisposable
     {
         lock (_lruLock)
         {
-            while (_memoryCache.Count >= MaxMemoryCacheItems && _lruOrder.Count > 0)
+            int limit = MaxMemoryItems;
+
+            while (_memoryCache.Count >= limit && _lruOrder.Count > 0)
             {
                 var oldest = _lruOrder.Last!.Value;
                 _lruOrder.RemoveLast();
                 _memoryCache.TryRemove(oldest, out _);
             }
-            if (_memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
+
+            // Защита: если лимит 0 или очень мал, не добавляем вовсе
+            if (limit > 0)
             {
-                _lruOrder.AddFirst(key);
+                if (_memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
+                {
+                    _lruOrder.AddFirst(key);
+                }
             }
         }
     }

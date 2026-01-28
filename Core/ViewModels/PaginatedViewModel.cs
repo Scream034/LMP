@@ -12,7 +12,7 @@ using ReactiveUI.Fody.Helpers;
 namespace LMP.Core.ViewModels;
 
 public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IDisposable, IFilterable
-    where TViewModel : class
+    where TViewModel : IDisposable
     where TSource : notnull
 {
     #region Fields
@@ -22,7 +22,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     // DynamicData Source
     private readonly SourceList<TSource> _sourceList = new();
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
-    private readonly CompositeDisposable _cleanUp = new();
+    private readonly CompositeDisposable _cleanUp = [];
 
     // Loop protection
     private int _consecutiveEmptyLoads = 0;
@@ -34,7 +34,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     private bool _isDisposed;
     private int _totalSourceCount;
 
-    // Backing fields для ручной реализации (чтобы избежать ошибки Fody)
+    // Backing fields
     private string _filterQuery = string.Empty;
     private ContentFilterType _filterType = ContentFilterType.All;
 
@@ -52,7 +52,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     [Reactive] public bool ReachedEnd { get; protected set; }
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
-    // --- FIX: Ручная реализация свойств для устранения краша Fody ---
     public string FilterQuery
     {
         get => _filterQuery;
@@ -64,7 +63,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         get => _filterType;
         set => this.RaiseAndSetIfChanged(ref _filterType, value);
     }
-    // ---------------------------------------------------------------
 
     public ReadOnlyObservableCollection<TViewModel> Items => _items;
     protected int TotalCount => _totalSourceCount;
@@ -81,7 +79,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         LibService = Program.Services.GetRequiredService<LibraryService>();
         EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
 
-        // Команда переключения фильтра
         SetFilterTypeCommand = ReactiveCommand.Create<string>(typeStr =>
         {
             if (Enum.TryParse<ContentFilterType>(typeStr, true, out var result))
@@ -90,18 +87,16 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             }
         });
 
-        // Предикат фильтрации
         var filterPredicate = this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
             .Throttle(TimeSpan.FromMilliseconds(250))
             .ObserveOn(RxApp.TaskpoolScheduler)
             .Select(BuildFilter);
 
-        // DynamicData pipeline
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Transform(CreateItemViewModel)
             .Bind(out _items)
-            .DisposeMany()
+            .DisposeMany() // Это работает только при удалении из SourceList
             .Subscribe()
             .DisposeWith(_cleanUp);
 
@@ -114,7 +109,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
         LoadMoreCommand = ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore);
 
-        // Smart Auto-Load
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Count()
@@ -185,9 +179,12 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
         await Task.Run(() =>
         {
+            // Явная очистка предыдущих элементов для вызова Dispose
+            // Хотя Edit(Clear) должно триггерить DisposeMany, явный вызов безопаснее при полной замене
+            ClearItems();
+
             _sourceList.Edit(innerList =>
             {
-                innerList.Clear();
                 if (items != null) innerList.AddRange(items);
             });
         });
@@ -203,6 +200,15 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     protected void ClearItems()
     {
+        // ВАЖНО: Сначала диспозим текущие ViewModels, потом чистим SourceList
+        if (Items != null)
+        {
+            foreach (var item in Items)
+            {
+                item.Dispose();
+            }
+        }
+
         _sourceList.Clear();
         _totalSourceCount = 0;
         _canFetchMore = false;
@@ -307,6 +313,13 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         if (disposing)
         {
             CancelLoading();
+
+            // Явный диспоз элементов при уничтожении VM
+            if (Items != null)
+            {
+                foreach (var item in Items) item.Dispose();
+            }
+
             _cleanUp.Dispose();
             _sourceList.Dispose();
         }

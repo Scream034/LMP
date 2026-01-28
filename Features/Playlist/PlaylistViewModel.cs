@@ -155,14 +155,14 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         {
             var (oldIdx, newIdx) = tuple;
             if (!CanReorderItems || oldIdx == newIdx) return;
-        
+
             try
             {
                 _isMovingInternally = true;
-        
+
                 // 1. Оптимистичное (мгновенное) обновление UI
                 MoveSourceItem(oldIdx, newIdx);
-        
+
                 // 2. Сохранение изменений в сервисе
                 await _manager.MovePlaylistTrackAsync(_currentPlaylistId, oldIdx, newIdx);
             }
@@ -426,6 +426,17 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         _audioStateSub?.Dispose();
         _trackChangeSub?.Dispose();
         CancelLoading();
+
+        // --- ИСПРАВЛЕНИЕ: Принудительно очищаем ViewModels треков ---
+        // Items - это коллекция из базового PaginatedViewModel
+        if (Items != null)
+        {
+            foreach (var item in Items)
+            {
+                item.Dispose();
+            }
+        }
+        // -----------------------------------------------------------
 
         base.Dispose();
     }

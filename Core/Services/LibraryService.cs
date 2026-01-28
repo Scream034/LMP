@@ -7,27 +7,38 @@ using ReactiveUI;
 
 namespace LMP.Core.Services;
 
+/// <summary>
+/// Сервис управления персистентностью библиотеки.
+/// Взаимодействует с <see cref="TrackRegistry"/> для поддержания единства данных.
+/// </summary>
 public class LibraryService : IDisposable
 {
     public const string LikedPlaylistId = "liked";
 
+    private readonly TrackRegistry _registry;
     private readonly Subject<Unit> _saveSignal = new();
     private readonly IDisposable _saveSubscription;
 
+    // LibraryData теперь хранит настройки и плейлисты, но треки живут в Registry
     public LibraryData Data { get; private set; } = new();
 
-    // --- Fake Account кэш (в памяти, не сохраняется) ---
+    // Кэш фейкового аккаунта
     private string? _fakeAccountName;
     private string? _fakeAccountAvatarUrl;
 
     public event Action? OnDataChanged;
     public event Action? OnFakeAccountChanged;
+    // Событие OnTrackUpdated можно оставить для специфических уведомлений, 
+    // но благодаря ReactiveObject в TrackInfo, UI обновляется сам.
     public event Action<TrackInfo>? OnTrackUpdated;
 
-    public LibraryService()
+    public LibraryService(TrackRegistry registry)
     {
+        _registry = registry;
+
         LocalizationService.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
 
+        // Автосохранение с троттлингом (не чаще раза в 2 сек)
         _saveSubscription = _saveSignal
             .Throttle(TimeSpan.FromSeconds(2))
             .ObserveOn(RxApp.TaskpoolScheduler)
@@ -48,7 +59,7 @@ public class LibraryService : IDisposable
         }
     }
 
-    // --- Fake Account API ---
+    // Fake Account API
 
     public bool HasFakeAccount => !string.IsNullOrEmpty(Data.FakeAccountChannelUrl);
     public string? FakeAccountUrl => Data.FakeAccountChannelUrl;
@@ -91,7 +102,7 @@ public class LibraryService : IDisposable
         OnDataChanged?.Invoke();
     }
 
-    // --- Загрузка/Сохранение ---
+    #region Save/Load
 
     public void Load()
     {
@@ -101,6 +112,12 @@ public class LibraryService : IDisposable
             {
                 using var fs = new FileStream(G.File.Library, FileMode.Open, FileAccess.Read, FileShare.Read);
                 Data = JsonSerializer.Deserialize<LibraryData>(fs) ?? new LibraryData();
+
+                // ВАЖНО: "Оживляем" треки, загружая их в реестр
+                if (Data.Tracks != null)
+                {
+                    _registry.Hydrate(Data.Tracks.Values);
+                }
             }
         }
         catch (Exception ex)
@@ -120,6 +137,15 @@ public class LibraryService : IDisposable
     {
         try
         {
+            // Перед сохранением собираем актуальное состояние из Registry.
+            // Сохраняем только "значимые" треки (Лайк, Скачан, В плейлисте, Дизлайк),
+            // чтобы не засорять файл кэшем поиска.
+            var valuableTracks = _registry.GetPinnedTracks()
+                .Where(t => t.IsLiked || t.IsDownloaded || t.IsDisliked || t.InPlaylists.Count > 0)
+                .ToDictionary(t => t.Id);
+
+            Data.Tracks = valuableTracks;
+
             var tempFile = G.File.Library + ".tmp";
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
             {
@@ -133,19 +159,163 @@ public class LibraryService : IDisposable
         }
     }
 
-    public void Reset()
+    #endregion
+
+    #region Track Management (Proxy to Registry)
+
+    /// <summary>
+    /// Добавляет или обновляет трек в системе через Реестр.
+    /// Автоматически вызывает сохранение, если состояние изменилось.
+    /// </summary>
+    public void AddOrUpdateTrack(TrackInfo track)
     {
-        Data = new LibraryData();
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
-        EnsureLikedPlaylist();
+        // Пропускаем через реестр, чтобы получить каноническую ссылку и обновить метаданные
+        _registry.RegisterOrUpdate(track);
+        Save();
+    }
+
+    public TrackInfo? GetTrack(string id) => _registry.TryGet(id);
+    public bool HasTrack(string id) => _registry.TryGet(id) != null;
+
+    /// <summary>
+    /// Вызывать это после любого изменения флагов IsLiked, IsDownloaded, InPlaylists
+    /// </summary>
+    private void UpdateTrackPersistence(TrackInfo track)
+    {
+        _registry.UpdatePinStatus(track);
+        Save();
+    }
+
+    #endregion
+
+    #region History
+
+    public void AddToRecentlyPlayed(TrackInfo track)
+    {
+        // Убеждаемся, что трек зарегистрирован
+        AddOrUpdateTrack(track);
+
+        Data.RecentlyPlayedIds.Remove(track.Id);
+        Data.RecentlyPlayedIds.Insert(0, track.Id);
+
+        if (Data.RecentlyPlayedIds.Count > 100)
+            Data.RecentlyPlayedIds.RemoveRange(100, Data.RecentlyPlayedIds.Count - 100);
+
+        Save();
+    }
+
+    public List<TrackInfo> GetRecentlyPlayed(int count = 20)
+    {
+        return [.. Data.RecentlyPlayedIds
+            .Take(count)
+            .Select(id => _registry.TryGet(id)) // Берем живые объекты из реестра
+            .Where(static t => t != null)
+            .Cast<TrackInfo>()];
+    }
+
+    public void ClearHistory()
+    {
+        Data.RecentlyPlayedIds.Clear();
         Save();
         OnDataChanged?.Invoke();
     }
 
-    private void OnLanguageChanged()
+    #endregion
+
+    #region Likes
+
+    public void ToggleLike(TrackInfo track)
     {
+        // Работаем с каноническим объектом
+        track = _registry.RegisterOrUpdate(track);
+
+        track.IsLiked = !track.IsLiked;
+        if (track.IsLiked) track.IsDisliked = false;
+
+        var likedPlaylist = GetLikedPlaylist();
+
+        if (track.IsLiked)
+        {
+            if (!likedPlaylist.TrackIds.Contains(track.Id))
+            {
+                likedPlaylist.TrackIds.Insert(0, track.Id);
+                likedPlaylist.UpdatedAt = DateTime.Now;
+            }
+            track.InPlaylists.Add(LikedPlaylistId);
+        }
+        else
+        {
+            likedPlaylist.TrackIds.Remove(track.Id);
+            likedPlaylist.UpdatedAt = DateTime.Now;
+            track.InPlaylists.Remove(LikedPlaylistId);
+        }
+
+        UpdateTrackPersistence(track);
         OnDataChanged?.Invoke();
+        OnTrackUpdated?.Invoke(track);
+    }
+
+    public void ToggleDislike(TrackInfo track)
+    {
+        AddOrUpdateTrack(track);
+        track.IsDisliked = !track.IsDisliked;
+        if (track.IsDisliked)
+        {
+            track.IsLiked = false;
+            Data.Playlists[LikedPlaylistId].TrackIds.Remove(track.Id);
+            track.InPlaylists.Remove(LikedPlaylistId);
+        }
+        Data.Tracks[track.Id] = track;
+       
+        UpdateTrackPersistence(track);
+        OnDataChanged?.Invoke();
+        OnTrackUpdated?.Invoke(track);
+    }
+
+    #endregion
+
+    #region Playlists
+
+    public void AddOrUpdatePlaylist(Playlist playlist)
+    {
+        // Логика плейлистов остается, но они хранят ID, которые резолвятся через Registry
+        if (playlist.Id == LikedPlaylistId)
+        {
+            if (Data.Playlists.TryGetValue(LikedPlaylistId, out var existing))
+            {
+                existing.TrackIds = playlist.TrackIds;
+                existing.UpdatedAt = DateTime.Now;
+            }
+        }
+        else
+        {
+            if (Data.Playlists.TryGetValue(playlist.Id, out var existing))
+            {
+                existing.Name = playlist.Name;
+                existing.ThumbnailUrl = playlist.ThumbnailUrl;
+                existing.TrackIds = playlist.TrackIds;
+                existing.YoutubeId = playlist.YoutubeId;
+                existing.SyncMode = playlist.SyncMode;
+                existing.UpdatedAt = DateTime.Now;
+            }
+            else
+            {
+                Data.Playlists[playlist.Id] = playlist;
+            }
+        }
+        Save();
+        OnDataChanged?.Invoke();
+    }
+
+    public List<TrackInfo> GetPlaylistTracks(string playlistId)
+    {
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
+
+        // Резолвим ID в живые объекты
+        return [.. playlist.TrackIds
+            .Select(id => _registry.TryGet(id))
+            .Where(t => t != null)
+            .Cast<TrackInfo>()];
     }
 
     private void EnsureLikedPlaylist()
@@ -176,54 +346,6 @@ public class LibraryService : IDisposable
     public static bool IsSystemPlaylist(string playlistId)
     {
         return playlistId == LikedPlaylistId;
-    }
-
-    public void AddOrUpdateTrack(TrackInfo track)
-    {
-        if (string.IsNullOrEmpty(track.Id))
-            track.Id = GenerateTrackId(track);
-
-        if (Data.Tracks.TryGetValue(track.Id, out var existing))
-        {
-            track.IsLiked = existing.IsLiked;
-            track.IsDisliked = existing.IsDisliked;
-            track.IsDownloaded = existing.IsDownloaded || track.IsDownloaded;
-            track.LocalPath = existing.LocalPath ?? track.LocalPath;
-            track.InPlaylists = existing.InPlaylists;
-        }
-        Data.Tracks[track.Id] = track;
-        Save();
-    }
-
-    public void AddOrUpdatePlaylist(Playlist playlist)
-    {
-        if (playlist.Id == LikedPlaylistId)
-        {
-            if (Data.Playlists.TryGetValue(LikedPlaylistId, out var existing))
-            {
-                existing.TrackIds = playlist.TrackIds;
-                existing.UpdatedAt = DateTime.Now;
-            }
-            Save();
-            OnDataChanged?.Invoke();
-            return;
-        }
-
-        if (Data.Playlists.TryGetValue(playlist.Id, out var existingPlaylist))
-        {
-            existingPlaylist.Name = playlist.Name;
-            existingPlaylist.ThumbnailUrl = playlist.ThumbnailUrl;
-            existingPlaylist.TrackIds = playlist.TrackIds;
-            existingPlaylist.YoutubeId = playlist.YoutubeId;
-            existingPlaylist.SyncMode = playlist.SyncMode;
-            existingPlaylist.UpdatedAt = DateTime.Now;
-        }
-        else
-        {
-            Data.Playlists[playlist.Id] = playlist;
-        }
-        Save();
-        OnDataChanged?.Invoke();
     }
 
     public bool MergePlaylists(string sourceId, string targetId)
@@ -262,78 +384,21 @@ public class LibraryService : IDisposable
         return true;
     }
 
-    public TrackInfo? GetTrack(string id) => Data.Tracks.TryGetValue(id, out var track) ? track : null;
-    public bool HasTrack(string id) => Data.Tracks.ContainsKey(id);
-
-    public void AddToRecentlyPlayed(TrackInfo track)
+    public bool IsTrackInPlaylist(string trackId, string playlistId)
     {
-        AddOrUpdateTrack(track);
-        Data.RecentlyPlayedIds.Remove(track.Id);
-        Data.RecentlyPlayedIds.Insert(0, track.Id);
-        if (Data.RecentlyPlayedIds.Count > 100)
-            Data.RecentlyPlayedIds.RemoveRange(100, Data.RecentlyPlayedIds.Count - 100);
-        Save();
+        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return false;
+        return playlist.TrackIds.Contains(trackId);
     }
 
-    public List<TrackInfo> GetRecentlyPlayed(int count = 20)
-    {
-        return [.. Data.RecentlyPlayedIds
-            .Take(count)
-            .Select(GetTrack)
-            .Where(static t => t != null)
-            .Cast<TrackInfo>()];
-    }
+    public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
+    public Playlist? GetPlaylist(string playlistId) => Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
 
-    public void ClearHistory()
+    public void MergeAccountPlaylists(IEnumerable<Playlist> accountPlaylists)
     {
-        Data.RecentlyPlayedIds.Clear();
+        foreach (var playlist in accountPlaylists)
+            if (!Data.Playlists.ContainsKey(playlist.Id)) Data.Playlists[playlist.Id] = playlist;
         Save();
         OnDataChanged?.Invoke();
-    }
-
-    public void ToggleLike(TrackInfo track)
-    {
-        AddOrUpdateTrack(track);
-        track.IsLiked = !track.IsLiked;
-        track.IsDisliked = false;
-
-        var likedPlaylist = Data.Playlists[LikedPlaylistId];
-        if (track.IsLiked)
-        {
-            if (!likedPlaylist.TrackIds.Contains(track.Id))
-            {
-                likedPlaylist.TrackIds.Insert(0, track.Id);
-                likedPlaylist.UpdatedAt = DateTime.Now;
-            }
-            track.InPlaylists.Add(LikedPlaylistId);
-        }
-        else
-        {
-            likedPlaylist.TrackIds.Remove(track.Id);
-            likedPlaylist.UpdatedAt = DateTime.Now;
-            track.InPlaylists.Remove(LikedPlaylistId);
-        }
-
-        Data.Tracks[track.Id] = track;
-        Save();
-        OnDataChanged?.Invoke();
-        OnTrackUpdated?.Invoke(track);
-    }
-
-    public void ToggleDislike(TrackInfo track)
-    {
-        AddOrUpdateTrack(track);
-        track.IsDisliked = !track.IsDisliked;
-        if (track.IsDisliked)
-        {
-            track.IsLiked = false;
-            Data.Playlists[LikedPlaylistId].TrackIds.Remove(track.Id);
-            track.InPlaylists.Remove(LikedPlaylistId);
-        }
-        Data.Tracks[track.Id] = track;
-        Save();
-        OnDataChanged?.Invoke();
-        OnTrackUpdated?.Invoke(track);
     }
 
     public Playlist CreatePlaylist(string name)
@@ -422,85 +487,22 @@ public class LibraryService : IDisposable
         OnDataChanged?.Invoke();
     }
 
-    public bool IsTrackInPlaylist(string trackId, string playlistId)
-    {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return false;
-        return playlist.TrackIds.Contains(trackId);
-    }
+    #endregion // Playlists
 
-    public List<TrackInfo> GetPlaylistTracks(string playlistId)
+    private void OnLanguageChanged()
     {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
-        return [.. playlist.TrackIds.Select(GetTrack).Where(static t => t != null).Cast<TrackInfo>()];
-    }
-
-    public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
-    public Playlist? GetPlaylist(string playlistId) => Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
-
-    public void MergeAccountPlaylists(IEnumerable<Playlist> accountPlaylists)
-    {
-        foreach (var playlist in accountPlaylists)
-            if (!Data.Playlists.ContainsKey(playlist.Id)) Data.Playlists[playlist.Id] = playlist;
-        Save();
         OnDataChanged?.Invoke();
     }
 
-    private static string GenerateTrackId(TrackInfo track)
+    public void Reset()
     {
-        if (!string.IsNullOrEmpty(track.Url))
-        {
-            try
-            {
-                var videoId = Youtube.Videos.VideoId.TryParse(track.Url);
-                if (videoId.HasValue)
-                {
-                    return $"yt_{videoId.Value.Value}";
-                }
-            }
-            catch { }
-        }
-        return $"local_{Guid.NewGuid():N}";
-    }
-
-    public void SynchronizeTrackState(TrackInfo track)
-    {
-        // 1. Проверяем наличие в глобальном словаре
-        if (Data.Tracks.TryGetValue(track.Id, out var localTrack))
-        {
-            track.IsDownloaded = localTrack.IsDownloaded;
-            track.LocalPath = localTrack.LocalPath;
-            // И другие персистентные свойства, если есть
-        }
-
-        // 2. Истина по лайкам - это наличие ID в плейлисте "liked"
-        if (Data.Playlists.TryGetValue(LikedPlaylistId, out var likedPlaylist))
-        {
-            track.IsLiked = likedPlaylist.TrackIds.Contains(track.Id);
-
-            // Если в словаре треков состояние рассинхронизировано - чиним
-            if (localTrack != null && localTrack.IsLiked != track.IsLiked)
-            {
-                localTrack.IsLiked = track.IsLiked;
-                Save(); // Сохраняем исправление
-            }
-        }
-        else
-        {
-            track.IsLiked = false;
-        }
-
-        // Синхронизируем InPlaylists для корректного отображения
-        foreach (var playlist in Data.Playlists.Values)
-        {
-            if (playlist.TrackIds.Contains(track.Id))
-            {
-                track.InPlaylists.Add(playlist.Id);
-            }
-            else
-            {
-                track.InPlaylists.Remove(playlist.Id);
-            }
-        }
+        Data = new LibraryData();
+        _registry.Clear();
+        _fakeAccountName = null;
+        _fakeAccountAvatarUrl = null;
+        EnsureLikedPlaylist();
+        Save();
+        OnDataChanged?.Invoke();
     }
 
     public void Dispose()

@@ -152,7 +152,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     #endregion
     #region Private Methods
 
-     private async Task LoadTracksAsync(bool force = false)
+    private async Task LoadTracksAsync(bool force = false)
     {
         var category = SelectedCategory;
         if (category == null) return;
@@ -164,12 +164,12 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         // IsLoading теперь управляется базовым классом через Clear/Initialize, но можно ставить флаг для UI
         // ClearItems() в базе сбрасывает состояние
-        ClearItems(); 
+        ClearItems();
         _fetchOffset = 0;
 
         try
         {
-            await Task.Delay(50, ct); 
+            await Task.Delay(50, ct);
 
             List<TrackInfo> tracks;
             if (category.IsSpecial)
@@ -309,6 +309,11 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         _categoryCts?.Cancel();
         _categoryCts?.Dispose();
         CancelLoading();
+
+        foreach (var item in Items)
+        {
+            item.Dispose();
+        }
 
         base.Dispose();
     }

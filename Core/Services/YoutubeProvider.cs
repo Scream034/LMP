@@ -20,6 +20,7 @@ public partial class YoutubeProvider : IDisposable
     private const int DefaultCacheLifetimeHours = 4;
     private const int MaxCacheSize = 200;
 
+    private readonly TrackRegistry _trackRegistry;
     private YoutubeClient _youtube = null!;
     private readonly CookieAuthService? _cookieAuth;
     private readonly LibraryService? _libraryService;
@@ -48,12 +49,9 @@ public partial class YoutubeProvider : IDisposable
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
-    public YoutubeProvider() : this(null!, null!)
+    public YoutubeProvider(TrackRegistry trackRegistry, LibraryService? libraryService, CookieAuthService? cookieAuth)
     {
-    }
-
-    public YoutubeProvider(LibraryService? libraryService, CookieAuthService? cookieAuth)
-    {
+        _trackRegistry = trackRegistry;
         _libraryService = libraryService;
         _cookieAuth = cookieAuth;
 
@@ -62,14 +60,6 @@ public partial class YoutubeProvider : IDisposable
             ReloadClient();
             _cookieAuth.OnAuthStateChanged += ReloadClient;
         }
-    }
-
-    private void HydrateTrackState(TrackInfo track)
-    {
-        if (_libraryService == null) return;
-
-        // Делегируем всю логику сервису библиотеки, так как он владеет данными
-        _libraryService.SynchronizeTrackState(track);
     }
 
     public void ReloadClient()
@@ -179,8 +169,7 @@ public partial class YoutubeProvider : IDisposable
                     }
                     else
                     {
-                        // ISPR: Hydrate
-                        HydrateTrackState(track);
+                        track = _trackRegistry.RegisterOrUpdate(track);
                     }
 
                     section.Tracks.Add(track);
@@ -515,9 +504,12 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             var videoId = VideoId.TryParse(url) ?? VideoId.Parse(ExtractVideoId(url) ?? "");
-            var track = await _youtube.Videos.GetAsync(videoId);
-            HydrateTrackState(track); // ISPR
-            return track;
+
+            // Получаем "сырой" трек от YoutubeClient
+            var rawTrack = await _youtube.Videos.GetAsync(videoId);
+
+            // Регистрируем его и получаем канонический экземпляр
+            return _trackRegistry.RegisterOrUpdate(rawTrack);
         }
         catch (Exception ex)
         {
@@ -550,9 +542,9 @@ public partial class YoutubeProvider : IDisposable
             {
                 if (count >= maxResults) break;
 
-                if (result is TrackInfo track)
+                if (result is TrackInfo rawTrack)
                 {
-                    HydrateTrackState(track); // ISPR
+                    var track = _trackRegistry.RegisterOrUpdate(rawTrack);
                     tracks.Add(track);
                     count++;
                 }
@@ -586,10 +578,10 @@ public partial class YoutubeProvider : IDisposable
         {
             var enumerable = _youtube.Search.GetVideosAsync(query, ct);
 
-            await foreach (var track in enumerable)
+            await foreach (var item in enumerable)
             {
                 if (results.Count >= maxResults) break;
-                HydrateTrackState(track); // ISPR
+                var track = _trackRegistry.RegisterOrUpdate(item);
                 results.Add(track);
             }
 
@@ -616,7 +608,7 @@ public partial class YoutubeProvider : IDisposable
     public class SearchSession : IDisposable
     {
         private readonly YoutubeClient _youtube;
-        private readonly YoutubeProvider _provider; // ISPR
+        private readonly TrackRegistry _registry;
         private readonly string _query;
         private readonly int _maxResults;
         private readonly SearchFilter _filter;
@@ -631,14 +623,14 @@ public partial class YoutubeProvider : IDisposable
 
         internal SearchSession(
             YoutubeClient youtube,
-            YoutubeProvider provider, // ISPR
+            TrackRegistry registry, // ISPR
             string query,
             int maxResults = 300,
             SearchFilter filter = SearchFilter.Video,
             IEnumerable<string>? skipTrackIds = null)
         {
             _youtube = youtube;
-            _provider = provider;
+            _registry = registry;
             _query = query;
             _maxResults = maxResults;
             _filter = filter;
@@ -704,7 +696,7 @@ public partial class YoutubeProvider : IDisposable
 
                         if (track != null)
                         {
-                            _provider.HydrateTrackState(track); // ISPR
+                            track = _registry.RegisterOrUpdate(track);
 
                             if (results.Count < count)
                                 results.Add(track);
@@ -748,9 +740,7 @@ public partial class YoutubeProvider : IDisposable
         IEnumerable<string>? skipTrackIds = null)
     {
         _currentSearchSession?.Dispose();
-        _currentSearchSession = new SearchSession(_youtube, this, query, maxResults, filter, skipTrackIds);
-
-        var skipCount = skipTrackIds?.Count() ?? 0;
+        _currentSearchSession = new SearchSession(_youtube, _trackRegistry, query, maxResults, filter, skipTrackIds);
         NotifyStatus($"[YouTube] Created search session for '{query}' (max: {maxResults}, filter: {filter})");
 
         return _currentSearchSession;
@@ -788,8 +778,7 @@ public partial class YoutubeProvider : IDisposable
             var playlist = await _youtube.Playlists.GetAsync(playlistId.Value);
             var tracks = await _youtube.Playlists.GetVideosAsync(playlistId.Value).CollectAsync();
 
-            // ISPR: Hydrate
-            foreach (var t in tracks) HydrateTrackState(t);
+            foreach (var t in tracks) _trackRegistry.RegisterOrUpdate(t);
 
             NotifyStatus($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
             return (playlist.Name, tracks.ToList());

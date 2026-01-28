@@ -86,8 +86,18 @@
   "Settings_SearchBatchSizeDesc": "Количество треков для загрузки при прокрутке результатов поиска",
   "Settings_UserAgentDesc": "Вставьте User-Agent из вашего браузера, чтобы предотвратить истечение срока действия файлов cookie.",
   "Settings_UserAgentSave": "Сохранить",
+  "Settings_RamCache": "Кэш картинок в ОЗУ",
+  "Settings_RamCacheDesc": "Макс. число картинок в памяти. Меньше = экономия ОЗУ, больше чтения с диска.",
 
   "Settings_General": "Общее",
+  
+  "NetProfile_Low": "Экономия трафика",
+  "NetProfile_Medium": "Сбалансированный",
+  "NetProfile_High": "Высокое качество",
+  "NetProfile_Ultra": "Максимальный / LAN",
+  "Cache_Low": "Эконом",
+  "Cache_Medium": "Баланс",
+  "Cache_High": "Плавный",
 
   "Theme_Custom": "Своя тема",
   "Theme_Presets": "Пресеты тем",

@@ -22,6 +22,7 @@ public class StorageSettings
 {
     public int ImageCacheLimitMb { get; set; } = 500;
     public int AudioCacheLimitMb { get; set; } = 2048;
+    public int MaxBitmapCacheItems { get; set; } = 40; 
 }
 
 public class StreamingConfig
