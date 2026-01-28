@@ -26,7 +26,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <!-- 0: Header (resizable) -->
-            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180" MaxHeight="500" />
+            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="220" MaxHeight="340" />
             <!-- 1: Splitter -->
             <RowDefinition Height="Auto" />
             <!-- 2: Compact Filter -->

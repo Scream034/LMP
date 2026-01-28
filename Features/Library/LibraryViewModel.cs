@@ -16,7 +16,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly YoutubeProvider _youtube;
-    private readonly CookieAuthService _auth; // Changed
+    private readonly CookieAuthService _auth;
     private readonly IDialogService _dialog;
     private readonly MainWindowViewModel _mainWindow;
     private readonly MusicLibraryManager _manager;
@@ -45,7 +45,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     public LibraryViewModel(
         LibraryService library,
         YoutubeProvider youtube,
-        CookieAuthService auth, // Changed
+        CookieAuthService auth,
         MainWindowViewModel mainWindow,
         IDialogService dialog,
         MusicLibraryManager manager,
@@ -70,7 +70,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         {
             var playlist = _library.CreatePlaylist(NewPlaylistName.Trim());
             // Cookies support playlists, so TwoWaySync is possible
-            playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly; 
+            playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly;
             _library.AddOrUpdatePlaylist(playlist);
             IsCreatingPlaylist = false;
             NewPlaylistName = string.Empty;
@@ -127,19 +127,26 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 try
                 {
-                    // Получаем плейлисты пользователя через InnerTube (пока заглушка в Provider, но вызов верный)
+                    // Получаем плейлисты пользователя
                     var ytPlaylists = await YoutubeProvider.GetUserPlaylistsByAuthAsync();
                     ct.ThrowIfCancellationRequested();
                     SyncProgress = 0.1;
 
-                    playlistsToImport = [.. ytPlaylists.Select(p =>
-                    {
-                        var pid = !string.IsNullOrEmpty(p.YoutubeId)
-                            ? new Core.Youtube.Playlists.PlaylistId(p.YoutubeId)
-                            : new Core.Youtube.Playlists.PlaylistId("PL0000000000000000");
-
-                        return new PlaylistSearchResult(pid, p.Name, null, []);
-                    })];
+                    // Фильтруем:
+                    // 1. Исключаем "Liked Music" (LM), так как они синхуются отдельно автоматом.
+                    // 2. Исключаем Миксы (RD...), так как их нельзя импортировать стандартным способом.
+                    playlistsToImport = [.. ytPlaylists
+                        .Where(p =>
+                            !string.IsNullOrEmpty(p.YoutubeId) &&
+                            p.YoutubeId != "LM" &&
+                            p.YoutubeId != "VLLM" &&
+                            !p.YoutubeId.StartsWith("RD") // Исключаем радио и миксы
+                        )
+                        .Select(p =>
+                        {
+                            var pid = new Core.Youtube.Playlists.PlaylistId(p.YoutubeId!);
+                            return new PlaylistSearchResult(pid, p.Name, null, []);
+                        })];
                 }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex)
@@ -165,6 +172,13 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
             if (playlistsToImport.Count == 0)
             {
+                // Если плейлистов нет, но мы авторизованы - попробуем синкнуть хотя бы лайки
+                if (_auth.IsAuthenticated)
+                {
+                    SyncStatus = SL["Sync_LikedSongs"];
+                    await _manager.SyncLikedTracksAsync();
+                }
+
                 if (!_isDisposed)
                     await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_NoPlaylists"]);
                 return;
@@ -175,10 +189,34 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             SyncStatus = SL["Sync_SelectPlaylists"];
 
             var selected = await _dialog.ShowSyncSelectionAsync(playlistsToImport);
+            // Если нажали Отмена в диалоге - выходим
             if (selected.Count == 0 || _isDisposed) return;
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
+
+            // === ПАРАЛЛЕЛЬНАЯ СИНХРОНИЗАЦИЯ ЛАЙКОВ ===
+            // Запускаем задачу синхронизации лайков в фоне.
+            // Она будет выполняться одновременно с импортом плейлистов.
+            // ВАЖНО: LibraryService теперь потокобезопасен.
+            Task? likedSongsSyncTask = null;
+            if (_auth.IsAuthenticated)
+            {
+                Log.Info("[Sync] Starting background Liked Songs sync...");
+                likedSongsSyncTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _manager.SyncLikedTracksAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"[Sync] Background liked songs sync failed: {ex.Message}");
+                    }
+                }, ct);
+            }
+
+            // === ОБРАБОТКА ПЛЕЙЛИСТОВ ===
 
             var existingLocalPlaylists = _library.GetAllPlaylists()
                 .Where(p => p.IsLocal)
@@ -237,6 +275,14 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     processed++;
                     continue;
                 }
+                else
+                {
+                    foreach (var trackId in fullPlaylist.TrackIds)
+                    {
+                        var track = _library.GetTrack(trackId);
+                        if (track != null) _library.SynchronizeTrackState(track);
+                    }
+                }
 
                 existingLocalPlaylists.TryGetValue(candidate.Title, out var existing);
 
@@ -253,6 +299,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             changed = true;
                         }
 
+                        // Обновляем принадлежность трека к плейлисту
                         var t = _library.GetTrack(trackId);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
                         {
@@ -271,7 +318,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 else
                 {
                     if (decision == MergeAction.Duplicate && existing != null)
-                        fullPlaylist.Name = $"{candidate.Title} (Imported)";
+                        fullPlaylist.Name = $"{candidate.Title} ({SL["Sync_DuplicateName"]})";
 
                     if (_auth.IsAuthenticated)
                     {
@@ -284,6 +331,16 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
                 processed++;
                 SyncProgress = 0.25 + (0.75 * processed / totalToProcess);
+            }
+
+            // Ожидаем завершения синхронизации лайков, если она еще идет
+            if (likedSongsSyncTask != null)
+            {
+                if (!likedSongsSyncTask.IsCompleted)
+                {
+                    SyncStatus = SL["Sync_FinalizingLikedSongs"];
+                }
+                await likedSongsSyncTask;
             }
 
             SyncProgress = 1.0;
@@ -331,7 +388,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             Playlists.Add(new PlaylistCardViewModel(
                 playlist,
                 _mainWindow.NavigateToPlaylist,
-                (p) => 
+                (p) =>
                 {
                     var tracks = _library.GetPlaylistTracks(p.Id);
                     _audio.EnqueueRange(tracks);

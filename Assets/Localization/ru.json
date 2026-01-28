@@ -112,6 +112,7 @@
 
   "Auth_NotSignedIn": "Вход не выполнен",
   "Auth_LoggedIn": "Вход выполнен",
+  "Auth_LoggedInAs": "Вход выполнен: {0}",
   "Auth_Guest": "Гостевой режим",
   "Auth_Login": "Войти",
   "Auth_Logout": "Выйти",
@@ -190,6 +191,7 @@
   "Dialog_Input_Title": "Поле ввода",
   "Dialog_Warning_Title": "Внимание",
   "Dialog_Done_Title": "Готово",
+  "Dialog_Login_Title": "Логин",
   "Dialog_SelectDownloadFolder_Title": "Выберите папку для загрузок",
   "Dialog_Success": "Успешно",
   
@@ -198,6 +200,7 @@
   "Dialog_ResetMessage": "Сбросить настройки? Ваша музыка останется.",
   "Dialog_ResetComplete": "Настройки сброшены.",
   "Dialog_LogoutMessage": "Вы уверены, что хотите выйти из аккаунта?",
+  "Dialog_AuthMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые XHR запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
   
   "Dialog_Merge_NoTarget_Title": "Нечего объединять",
   "Dialog_Merge_NoTarget_Msg": "Нет других локальных плейлистов для объединения.",
@@ -208,6 +211,7 @@
   "Input_PasteHere": "Вставьте сюда...",
 
   "Sync_Action": "Импорт",
+  "Sync_DuplicateName": "Импортировано",
   "Sync_ConfigureUrlFirst": "Сначала укажите ссылку на канал в настройках.",
   "Sync_Success_Msg": "Импортировано: {0}, объединено: {1}",
   "Sync_Title": "Выбор плейлистов",
@@ -222,6 +226,8 @@
   "Sync_NoPlaylists": "Плейлисты не найдены",
   "Sync_Error_API": "Ошибка API",
   "Sync_InProgress": "Синхронизация...",
+  "Sync_LikedSongs": "Синхронизация понравившихся песен...",
+  "Sync_FinalizingLikedSongs": "Завершение синхронизации понравившихся песен...",
 
   "Conflict_Title": "Конфликт",
   "Conflict_Header": "Плейлист уже есть",

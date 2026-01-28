@@ -64,35 +64,12 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    // ISPR: Вспомогательный метод для синхронизации локального состояния
     private void HydrateTrackState(TrackInfo track)
     {
         if (_libraryService == null) return;
 
-        // Пытаемся найти трек в базе (по ID или по URL)
-        var localTrack = _libraryService.GetTrack(track.Id);
-
-        if (localTrack != null)
-        {
-            track.IsLiked = localTrack.IsLiked;
-            track.IsDisliked = localTrack.IsDisliked;
-            track.IsDownloaded = localTrack.IsDownloaded;
-            track.LocalPath = localTrack.LocalPath;
-            // Копируем настройки формата, если есть
-            track.PreferredContainer = localTrack.PreferredContainer;
-            track.PreferredBitrate = localTrack.PreferredBitrate;
-        }
-        else
-        {
-            // Если трека нет в базе, он может быть в плейлисте Liked
-            // (например, при первом синке, когда GetTrack ещё не вернул его)
-            // Но обычно LibraryService.AddOrUpdateTrack вызывается при синке.
-            // Однако проверим на всякий случай
-            if (_libraryService.IsTrackInPlaylist(track.Id, LibraryService.LikedPlaylistId))
-            {
-                track.IsLiked = true;
-            }
-        }
+        // Делегируем всю логику сервису библиотеки, так как он владеет данными
+        _libraryService.SynchronizeTrackState(track);
     }
 
     public void ReloadClient()

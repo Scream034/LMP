@@ -6,16 +6,25 @@ namespace LMP.Core.Youtube.Search;
 
 internal class SearchController(HttpClient http)
 {
-  private JsonElement GetMusicContext()
+  // Params из Muzza (YouTube.kt -> SearchFilter)
+  private const string FilterSong = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
+  private const string FilterVideo = "EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D";
+  private const string FilterAlbum = "EgWKAQIYAWoKEAkQChAFEAMQBA%3D%3D";
+  private const string FilterArtist = "EgWKAQIgAWoKEAkQChAFEAMQBA%3D%3D";
+  private const string FilterFeaturedPlaylist = "EgeKAQQoADgBagwQDhAKEAMQBRAJEAQ%3D";
+  private const string FilterCommunityPlaylist = "EgeKAQQoAEABagoQAxAEEAoQCRAF";
+
+  private static JsonElement GetMusicContext()
   {
+    // Используем WEB_REMIX как в Muzza
     var json = $$"""
         {
             "context": {
                 "client": {
                     "clientName": "WEB_REMIX",
                     "clientVersion": {{YoutubeHttpHandler.MusicClientVersion}},
-                    "hl": "ru",
-                    "gl": "RU"
+                    "hl": "en",
+                    "gl": "US"
                 },
                 "user": {}
             }
@@ -24,7 +33,7 @@ internal class SearchController(HttpClient http)
     return Json.Parse(json);
   }
 
-  private JsonElement GetWebContext()
+  private static JsonElement GetWebContext()
   {
     var json = """
         {
@@ -48,15 +57,30 @@ internal class SearchController(HttpClient http)
       CancellationToken cancellationToken = default
   )
   {
-    var isMusicContext = searchFilter == SearchFilter.Music;
+    // Определяем, используем ли мы YouTube Music (WEB_REMIX) или обычный YouTube (WEB)
+    bool isMusicContext = searchFilter is SearchFilter.MusicSong
+                                       or SearchFilter.MusicVideo
+                                       or SearchFilter.MusicAlbum
+                                       or SearchFilter.MusicArtist
+                                       or SearchFilter.MusicPlaylist;
+
     string? searchParams = null;
 
     if (isMusicContext)
     {
-      searchParams = "EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D";
+      searchParams = searchFilter switch
+      {
+        SearchFilter.MusicSong => FilterSong,
+        SearchFilter.MusicVideo => FilterVideo,
+        SearchFilter.MusicAlbum => FilterAlbum,
+        SearchFilter.MusicArtist => FilterArtist,
+        SearchFilter.MusicPlaylist => FilterCommunityPlaylist, // Или Featured, по ситуации
+        _ => null
+      };
     }
     else
     {
+      // Стандартные фильтры YouTube
       searchParams = searchFilter switch
       {
         SearchFilter.Video => "EgIQAQ%3D%3D",
@@ -66,18 +90,26 @@ internal class SearchController(HttpClient http)
       };
     }
 
-    using var request = new HttpRequestMessage(
-           HttpMethod.Post,
-           isMusicContext ? "https://music.youtube.com/youtubei/v1/search" : "https://www.youtube.com/youtubei/v1/search"
-       );
+    // Если есть токен продолжения, параметры не нужны (они вшиты в токен)
+    if (continuationToken != null) searchParams = null;
 
-    // Формируем тело запроса через Utf8JsonWriter
+    var url = isMusicContext
+        ? "https://music.youtube.com/youtubei/v1/search"
+        : "https://www.youtube.com/youtubei/v1/search";
+
+    using var request = new HttpRequestMessage(HttpMethod.Post, url);
+
     using var ms = new MemoryStream();
     using (var writer = new Utf8JsonWriter(ms))
     {
       writer.WriteStartObject();
       writer.WriteString("query", searchQuery);
-      if (continuationToken != null) writer.WriteString("continuation", continuationToken);
+
+      if (continuationToken != null)
+        writer.WriteString("continuation", continuationToken);
+
+      if (searchParams != null)
+        writer.WriteString("params", searchParams);
 
       var context = isMusicContext ? GetMusicContext() : GetWebContext();
       foreach (var prop in context.EnumerateObject()) prop.WriteTo(writer);

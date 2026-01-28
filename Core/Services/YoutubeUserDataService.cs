@@ -1,11 +1,12 @@
 ﻿using LMP.Core.Models;
+using LMP.Core.Youtube.Utils.Extensions;
 
 namespace LMP.Core.Services;
 
 public partial class YoutubeUserDataService
 {
     private readonly YoutubeProvider _provider;
-    private readonly CookieAuthService _auth; 
+    private readonly CookieAuthService _auth;
 
     public YoutubeUserDataService(YoutubeProvider provider, CookieAuthService auth)
     {
@@ -18,7 +19,7 @@ public partial class YoutubeUserDataService
         await _provider.LikeTrackAsync(videoId, rating == "like");
     }
 
-     public async Task<List<TrackInfo>> GetLikedTracksAsync()
+    public async Task<List<TrackInfo>> GetLikedTracksAsync()
     {
         if (!_auth.IsAuthenticated) return [];
 
@@ -50,6 +51,40 @@ public partial class YoutubeUserDataService
             Log.Error($"[Sync] Failed to fetch liked tracks (LM): {ex.Message}");
             return [];
         }
+    }
+
+    public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()
+    {
+        if (!_auth.IsAuthenticated) return ("Guest", "", "");
+
+        try
+        {
+            var json = await _provider.GetClient().Music.GetAccountMenuAsync();
+
+            // Путь из Muzza: actions[0].openPopupAction.popup.multiPageMenuRenderer.header.activeAccountHeaderRenderer
+            var header = json.GetPropertyOrNull("actions")?.EnumerateArrayOrNull()?.FirstOrDefault()
+                .GetPropertyOrNull("openPopupAction")
+                ?.GetPropertyOrNull("popup")
+                ?.GetPropertyOrNull("multiPageMenuRenderer")
+                ?.GetPropertyOrNull("header")
+                ?.GetPropertyOrNull("activeAccountHeaderRenderer");
+
+            if (header != null)
+            {
+                var name = header.Value.GetPropertyOrNull("accountName")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ?? "User";
+                var email = header.Value.GetPropertyOrNull("email")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ?? "";
+
+                var thumbs = header.Value.GetPropertyOrNull("accountPhoto")?.GetPropertyOrNull("thumbnails");
+                var avatar = thumbs?.EnumerateArrayOrNull()?.LastOrDefault().GetPropertyOrNull("url")?.GetStringOrNull() ?? "";
+
+                return (name, email, avatar);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to get account menu: {ex.Message}");
+        }
+        return ("User", "", "");
     }
 
     public async Task<string> CreatePlaylistAsync(string title, string description = "")

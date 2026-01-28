@@ -113,6 +113,7 @@
 
   "Auth_NotSignedIn": "Not signed in",
   "Auth_LoggedIn": "Signed in",
+  "Auth_LoggedInAs": "Signed in: {0}",
   "Auth_Guest": "Guest Mode",
   "Auth_Login": "Sign In",
   "Auth_Logout": "Sign Out",
@@ -191,6 +192,7 @@
   "Dialog_Input_Title": "Input",
   "Dialog_Warning_Title": "Warning",
   "Dialog_Done_Title": "Done",
+  "Dialog_Login_Title": "Login",
   "Dialog_SelectDownloadFolder_Title": "Select Folder",
   "Dialog_Success": "Success",
 
@@ -199,6 +201,7 @@
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
+  "Dialog_AuthMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (XHR requests) -> Copy 'Cookie' header\n3. Paste here:",
 
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",
@@ -209,6 +212,7 @@
   "Input_PasteHere": "Paste here...",
 
   "Sync_Action": "Import",
+  "Sync_DuplicateName": "Imported",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",
   "Sync_Success_Msg": "Imported: {0}, Merged: {1}",
   "Sync_Title": "Select Playlists",
@@ -223,6 +227,9 @@
   "Sync_NoPlaylists": "No playlists found",
   "Sync_Error_API": "API Error",
   "Sync_InProgress": "Syncing...",
+  "Sync_LikedSongs": "Syncing Liked Songs...",
+  "Sync_FinalizingLikedSongs": "Finalizing Liked Songs...",
+
 
   "Conflict_Title": "Conflict",
   "Conflict_Header": "Playlist exists",

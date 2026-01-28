@@ -172,6 +172,7 @@ public class LibraryService : IDisposable
         return Data.Playlists[LikedPlaylistId];
     }
 
+
     public static bool IsSystemPlaylist(string playlistId)
     {
         return playlistId == LikedPlaylistId;
@@ -459,6 +460,47 @@ public class LibraryService : IDisposable
             catch { }
         }
         return $"local_{Guid.NewGuid():N}";
+    }
+
+    public void SynchronizeTrackState(TrackInfo track)
+    {
+        // 1. Проверяем наличие в глобальном словаре
+        if (Data.Tracks.TryGetValue(track.Id, out var localTrack))
+        {
+            track.IsDownloaded = localTrack.IsDownloaded;
+            track.LocalPath = localTrack.LocalPath;
+            // И другие персистентные свойства, если есть
+        }
+
+        // 2. Истина по лайкам - это наличие ID в плейлисте "liked"
+        if (Data.Playlists.TryGetValue(LikedPlaylistId, out var likedPlaylist))
+        {
+            track.IsLiked = likedPlaylist.TrackIds.Contains(track.Id);
+
+            // Если в словаре треков состояние рассинхронизировано - чиним
+            if (localTrack != null && localTrack.IsLiked != track.IsLiked)
+            {
+                localTrack.IsLiked = track.IsLiked;
+                Save(); // Сохраняем исправление
+            }
+        }
+        else
+        {
+            track.IsLiked = false;
+        }
+
+        // Синхронизируем InPlaylists для корректного отображения
+        foreach (var playlist in Data.Playlists.Values)
+        {
+            if (playlist.TrackIds.Contains(track.Id))
+            {
+                track.InPlaylists.Add(playlist.Id);
+            }
+            else
+            {
+                track.InPlaylists.Remove(playlist.Id);
+            }
+        }
     }
 
     public void Dispose()

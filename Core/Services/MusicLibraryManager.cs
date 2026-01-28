@@ -23,10 +23,10 @@ public class MusicLibraryManager(
                 string rating = newStatus ? "like" : "none";
 
                 await _ytUser.RateVideoAsync(track.Id, rating);
-                
+
                 // Только если не вылетело исключение:
                 _library.ToggleLike(track);
-                
+
                 Log.Info($"[Sync] Track {track.Id} rated '{rating}' on YouTube.");
             }
             catch (Exception ex)
@@ -44,38 +44,42 @@ public class MusicLibraryManager(
 
     public async Task SyncLikedTracksAsync()
     {
-        if (!_auth.IsAuthenticated) return;
-
-        try
+        if (!_auth.IsAuthenticated)
+        {
+            Log.Info("[Sync] Not authenticated. Skipping liked videos sync.");
+            return;
+        }
+  try
         {
             Log.Info("[Sync] Starting liked videos sync from YouTube...");
             var likedTracks = await _ytUser.GetLikedTracksAsync();
             var localLiked = _library.GetLikedPlaylist();
             int addedCount = 0;
 
-            // Важный момент с порядком! 
-            // likedTracks[0] - это самый последний лайкнутый (Newest).
-            // Мы вставляем в начало списка (Insert 0).
-            // Чтобы сохранить порядок [Newest, Old1, Old2...], нужно вставлять с конца.
-            // Иначе получится [Old2, Old1, Newest].
-            
-            // Если likedTracks пуст или null, метод вернет управление без ошибок
             if (likedTracks == null || likedTracks.Count == 0) return;
 
-            // Переворачиваем список для вставки
             var tracksToProcess = ((IEnumerable<TrackInfo>)likedTracks).Reverse();
 
             foreach (var track in tracksToProcess)
             {
+                // 1. Обновляем статус
                 track.IsLiked = true;
+                
+                // 2. Сохраняем сам трек. Это важно!
+                // Если трека не было в базе, он создастся.
+                // Если был, обновятся поля (включая IsLiked).
                 _library.AddOrUpdateTrack(track);
 
+                // 3. Обновляем плейлист
                 if (!localLiked.TrackIds.Contains(track.Id))
                 {
                     localLiked.TrackIds.Insert(0, track.Id);
-                    track.InPlaylists.Add("liked");
+                    track.InPlaylists.Add(LibraryService.LikedPlaylistId);
                     addedCount++;
                 }
+                
+                // 4. Гарантируем консистентность ссылок
+                _library.SynchronizeTrackState(track);
             }
 
             if (addedCount > 0)
@@ -85,6 +89,20 @@ public class MusicLibraryManager(
                 Log.Info($"[Sync] Successfully added {addedCount} new liked tracks.");
             } else
             {
+                // Для существующих треков тоже полезно обновить метаданные (если они изменились на сервере)
+                foreach(var t in likedTracks)
+                {
+                     // Просто убеждаемся, что IsLiked = true в базе
+                     if (_library.GetTrack(t.Id)?.IsLiked == false)
+                     {
+                         var local = _library.GetTrack(t.Id);
+                         if (local != null) 
+                         {
+                             local.IsLiked = true;
+                             _library.AddOrUpdateTrack(local);
+                         }
+                     }
+                }
                 Log.Info("[Sync] No new liked tracks found.");
             }
         }
@@ -207,21 +225,21 @@ public class MusicLibraryManager(
         {
             playlist.UpdatedAt = DateTime.Now;
             _library.AddOrUpdatePlaylist(playlist);
-            
+
             var t = _library.GetTrack(trackId);
             t?.InPlaylists.Remove(playlistId);
         }
         // Removal from YouTube via InnerTube needs extra logic (setVideoId), skipped for now
     }
-    
+
     // NEW: Method for reordering tracks
     public Task MovePlaylistTrackAsync(string playlistId, int oldIndex, int newIndex)
     {
         _library.MoveTrackInPlaylist(playlistId, oldIndex, newIndex);
-        
+
         // Remote reordering on YouTube is skipped because it requires specific PlaylistItem IDs
         // which are not currently mapped/tracked in the local library.
-        
+
         return Task.CompletedTask;
     }
 

@@ -5,6 +5,7 @@ using Avalonia.Media;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
@@ -17,7 +18,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private readonly ImageCacheService _imageCache;
     private readonly StreamCacheManager _streamCache;
     private readonly ThemeManagerService _themeManager;
-    private readonly CookieAuthService _auth; // Changed
+    private readonly CookieAuthService _auth;
     private readonly IDialogService _dialog;
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
@@ -33,15 +34,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
 
     public string AccountName => IsAuthenticated
-        ? "YouTube Music User" // Cookie Auth не отдает имя сразу, можно вытащить позже
+        ? _auth.State.UserName // Берем сохраненное имя
         : _library.FakeAccountName ?? SL["Auth_NotSignedIn"];
 
     public string? AccountAvatarUrl => IsAuthenticated
-        ? null
+        ? _auth.State.AvatarUrl // Берем сохраненный аватар
         : _library.FakeAccountAvatarUrl;
 
     public string AccountSubtitle => IsAuthenticated
-        ? "Authorized via Cookies"
+        ? _auth.State.UserEmail // Показываем email если есть
         : IsFakeAccount ? SL["Account_LimitedAccess"] : SL["Auth_Guest"];
 
     public List<InternetProfile> InternetProfileOptions { get; } = [.. Enum.GetValues<InternetProfile>()];
@@ -106,7 +107,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ImageCacheService imageCache,
         StreamCacheManager streamCache,
         ThemeManagerService themeManager,
-        CookieAuthService auth, // Changed
+        CookieAuthService auth,
         IDialogService dialog,
         AudioEngine audio,
         YoutubeProvider youtube)
@@ -450,20 +451,29 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         RaiseAccountProperties();
     }
 
-    // --- REPLACED LOGIN LOGIC ---
-    private async Task LoginAsync()
+     private async Task LoginAsync()
     {
-        // Используем новый метод IDialogService.ShowInputAsync
-        // Примечание: для перевода строк можно использовать Environment.NewLine в prompt
-        var cookies = await _dialog.ShowInputAsync("Login",
-            "1. Open music.youtube.com in browser\n2. Press F12 -> Network -> Click any request -> Copy 'Cookie' header\n3. Paste here:");
+        var cookies = await _dialog.ShowInputAsync(SL["Dialog_Auth_Title"], 
+            SL["Dialog_AuthMessage"]);
 
         if (!string.IsNullOrWhiteSpace(cookies))
         {
+            // 1. Сохраняем куки
             _auth.SaveCookies(cookies.Trim());
+            
+            // 2. Получаем инфо об аккаунте
+            var (Name, Email, AvatarUrl) = await Program.Services
+                .GetRequiredService<YoutubeUserDataService>()
+                .GetAccountInfoAsync();
+
+            // 3. Сохраняем инфо в AuthState
+            _auth.UpdateUserProfile(Name, Email, AvatarUrl);
+            
+            // 4. Обновляем UI
             IsAuthenticated = _auth.IsAuthenticated;
             RaiseAccountProperties();
-            await _dialog.ShowInfoAsync("Success", "Cookies saved. Restart might be required for all features.");
+            
+            await _dialog.ShowInfoAsync(SL["Dialog_Success"], string.Format(SL["Auth_LoggedInAs"], Name));
         }
     }
 
@@ -471,7 +481,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     {
         if (!await _dialog.ConfirmAsync(SL["Auth_Logout"], SL["Dialog_LogoutMessage"]))
             return;
+        
         _auth.Logout();
+        
         IsAuthenticated = _auth.IsAuthenticated;
         RaiseAccountProperties();
     }

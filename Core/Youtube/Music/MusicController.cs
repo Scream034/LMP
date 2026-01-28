@@ -186,4 +186,27 @@ internal class MusicController(HttpClient http)
 
         try { UpdateVisitorData(Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken))); } catch { }
     }
+
+    public async Task<JsonElement> GetAccountMenuAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/account/account_menu");
+        AttachVisitorDataToRequest(request);
+
+        using var ms = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(ms))
+        {
+            writer.WriteStartObject();
+            foreach (var prop in GetContext().EnumerateObject()) prop.WriteTo(writer);
+            writer.WriteEndObject();
+        }
+
+        request.Content = new ByteArrayContent(ms.ToArray());
+        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+        using var response = await http.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        return Json.Parse(content);
+    }
 }

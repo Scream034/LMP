@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LMP.Core.Models;
 
 
@@ -111,6 +112,8 @@ public class MusicClient(HttpClient http)
         var endpoint = like ? "like/like" : "like/removelike";
         await _controller.SendLikeActionAsync(endpoint, videoId, cancellationToken);
     }
+
+    public async Task<JsonElement> GetAccountMenuAsync(CancellationToken cancellationToken = default) => await _controller.GetAccountMenuAsync(cancellationToken);
 
     public async Task<string> CreatePlaylistAsync(string title, string description = "", List<string>? initialVideoIds = null, CancellationToken cancellationToken = default)
     {

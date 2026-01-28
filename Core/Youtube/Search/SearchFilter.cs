@@ -11,22 +11,49 @@ public enum SearchFilter
     None,
 
     /// <summary>
-    /// Only search for videos.
+    /// Only search for videos (Standard YouTube).
     /// </summary>
     Video,
 
     /// <summary>
-    /// Only search for playlists.
+    /// Only search for playlists (Standard YouTube).
     /// </summary>
     Playlist,
 
     /// <summary>
-    /// Only search for channels.
+    /// Only search for channels (Standard YouTube).
     /// </summary>
     Channel,
 
+    // --- YouTube Music Specific (WEB_REMIX context) ---
+
     /// <summary>
-    /// Only search for music (Songs).
+    /// General Music search (Songs + Videos + Albums).
     /// </summary>
-    Music
+    Music,
+
+    /// <summary>
+    /// Only search for songs (YouTube Music).
+    /// </summary>
+    MusicSong,
+
+    /// <summary>
+    /// Only search for music videos (YouTube Music).
+    /// </summary>
+    MusicVideo,
+
+    /// <summary>
+    /// Only search for albums (YouTube Music).
+    /// </summary>
+    MusicAlbum,
+
+    /// <summary>
+    /// Only search for artists (YouTube Music).
+    /// </summary>
+    MusicArtist,
+
+    /// <summary>
+    /// Only search for playlists (YouTube Music).
+    /// </summary>
+    MusicPlaylist
 }

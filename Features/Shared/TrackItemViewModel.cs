@@ -134,6 +134,10 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _downloads.OnProgress += _onDownloadProgressHandler;
         _downloads.OnCompleted += _onDownloadCompletedHandler;
 
+        // ПЕРЕД ПОДПИСКАМИ: Принудительно синхронизируем состояние трека с библиотекой
+        // Это важно, если TrackInfo пришел из кэша поиска или старого списка, а состояние в базе изменилось
+        _library.SynchronizeTrackState(Track);
+
         IsDownloading = _downloads.IsDownloading(track.Id);
         if (IsDownloading)
             DownloadProgress = _downloads.GetProgress(track.Id);
