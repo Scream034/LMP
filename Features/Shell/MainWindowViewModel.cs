@@ -155,10 +155,13 @@ public class MainWindowViewModel : ViewModelBase
             disposable.Dispose();
         }
 
-        var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
-        playlistVM.LoadPlaylist(playlistId);
-        CurrentPage = playlistVM;
-        CurrentPageName = "Playlist";
+        _ = Task.Run(async () =>
+        {
+            var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
+            await playlistVM.LoadPlaylistAsync(playlistId);
+            CurrentPage = playlistVM;
+            CurrentPageName = "Playlist";
+        });
     }
 }
 

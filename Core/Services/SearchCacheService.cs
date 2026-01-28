@@ -32,8 +32,8 @@ public class SearchCacheService
     /// TTL из настроек пользователя (в минутах), по умолчанию 60
     /// </summary>
     private TimeSpan CacheTtl => TimeSpan.FromMinutes(
-        LibService.Data.SearchCacheTtlMinutes > 0
-            ? LibService.Data.SearchCacheTtlMinutes
+        LibService.Settings.SearchCacheTtlMinutes > 0
+            ? LibService.Settings.SearchCacheTtlMinutes
             : 60);
 
     public SearchCacheService()

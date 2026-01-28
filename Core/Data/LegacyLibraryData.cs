@@ -1,0 +1,44 @@
+using LMP.Core.Models;
+
+namespace LMP.Core.Data;
+
+/// <summary>
+/// Legacy model for JSON migration. Matches old LibraryData structure.
+/// </summary>
+internal class LegacyLibraryData
+{
+    public Dictionary<string, TrackInfo>? Tracks { get; set; }
+    public Dictionary<string, Playlist>? Playlists { get; set; }
+    public List<string>? LikedTrackIds { get; set; }
+    public List<string>? RecentlyPlayedIds { get; set; }
+    public List<string>? SearchHistory { get; set; }
+    public string LastSearchQuery { get; set; } = "";
+    public string? FakeAccountChannelUrl { get; set; }
+    
+    // Audio
+    public float Volume { get; set; } = 0.5f;
+    public int LastVolume { get; set; } = 50;
+    public bool ShuffleEnabled { get; set; }
+    public RepeatMode RepeatMode { get; set; } = RepeatMode.None;
+    public int MaxVolumeLimit { get; set; } = 100;
+    public float TargetGainDb { get; set; } = 0f;
+    public AudioQualityPreference QualityPreference { get; set; } = AudioQualityPreference.BestAvailable;
+    public bool RememberTrackFormat { get; set; } = true;
+    
+    // Network
+    public InternetProfile InternetProfile { get; set; } = InternetProfile.Medium;
+    public ProxySettings Proxy { get; set; } = new();
+    public StorageSettings Storage { get; set; } = new();
+    
+    // UI
+    public double PlaylistHeaderHeight { get; set; } = 320;
+    public string LanguageCode { get; set; } = "en";
+    public string DownloadPath { get; set; } = string.Empty;
+    public bool DiscordRpcEnabled { get; set; } = true;
+    public bool AutoPlayOnUrlPaste { get; set; } = true;
+    public int LoadBatchSize { get; set; } = 20;
+    public int SearchBatchSize { get; set; } = 30;
+    public bool EnableSearchCache { get; set; } = true;
+    public int SearchCacheTtlMinutes { get; set; } = 120;
+    public bool EnableSmoothLoading { get; set; } = true;
+}

@@ -34,15 +34,15 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     #endregion
 
     #region Properties
-    private int InitialBatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize * 2 : 50;
-    private int ScrollBatchSize => LibService.Data.SearchBatchSize > 0 ? LibService.Data.SearchBatchSize : 30;
+    private int InitialBatchSize => LibService.Settings.LoadBatchSize > 0 ? LibService.Settings.LoadBatchSize * 2 : 50;
+    private int ScrollBatchSize => LibService.Settings.SearchBatchSize > 0 ? LibService.Settings.SearchBatchSize : 30;
 
     // Это строка для API запроса (Глобальный поиск)
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
     [Reactive] public bool HasResults { get; private set; }
     [Reactive] public string? ErrorMessage { get; private set; }
     [Reactive] public bool IsFromCache { get; private set; }
-    public bool ShowForceSearchButton => LibService.Data.EnableSearchCache && IsFromCache && !IsLoading;
+    public bool ShowForceSearchButton => LibService.Settings.EnableSearchCache && IsFromCache && !IsLoading;
     public ObservableCollection<string> RecentSearches { get; } = [];
     #endregion
 
@@ -66,11 +66,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         _audio = audio;
         _vmFactory = vmFactory;
 
-        if (LibService.Data.SearchHistory != null)
-        {
-            foreach (var item in LibService.Data.SearchHistory)
-                RecentSearches.Add(item);
-        }
+        foreach (var item in LibService.Settings.SearchHistory)
+            RecentSearches.Add(item);
 
         var canSearch = this.WhenAnyValue(x => x.SearchQuery, x => x.IsLoading,
             (q, loading) => !string.IsNullOrWhiteSpace(q) && !loading);
@@ -118,9 +115,9 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                     await ExecuteSearchAsync(forceNetwork: false);
             });
 
-        if (!string.IsNullOrEmpty(LibService.Data.LastSearchQuery))
+        if (!string.IsNullOrEmpty(LibService.Settings.LastSearchQuery))
         {
-            SearchQuery = LibService.Data.LastSearchQuery;
+            SearchQuery = LibService.Settings.LastSearchQuery;
             _ = ExecuteSearchAsync(false);
         }
     }
@@ -199,7 +196,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 if (ct.IsCancellationRequested) return [];
 
-                if (newTracks.Count > 0 && LibService.Data.EnableSearchCache)
+                if (newTracks.Count > 0 && LibService.Settings.EnableSearchCache)
                 {
                     var currentItems = GetItemsSnapshot();
                     var allTracks = currentItems.Concat(newTracks).ToList();
@@ -271,9 +268,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
             try
             {
-                LibService.Data.LastSearchQuery = _currentQuery;
+                LibService.UpdateSettings(s => s.LastSearchQuery = _currentQuery);
                 AddToHistory(_currentQuery);
-                LibService.Save();
             }
             catch (Exception ex) { Log.Error($"History save error: {ex.Message}"); }
 
@@ -318,7 +314,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         var tracks = track != null ? [track] : new List<TrackInfo>();
         await InitializeItemsAsync(tracks, canFetchMore: false);
 
-        if (track != null && LibService.Data.AutoPlayOnUrlPaste)
+        if (track != null && LibService.Settings.AutoPlayOnUrlPaste)
         {
             _ = _audio.PlayTrackAsync(track);
         }
@@ -348,7 +344,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         // 1. Проверяем кэш (ТЕПЕРЬ ДЛЯ ВСЕХ ФИЛЬТРОВ)
         // Убрали проверку FilterType == ContentFilterType.All
-        bool useCache = !forceNetwork && LibService.Data.EnableSearchCache;
+        bool useCache = !forceNetwork && LibService.Settings.EnableSearchCache;
 
         if (useCache)
         {
@@ -393,7 +389,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         IsFetchingFromNetwork = false;
 
         // 3. Сохраняем в кэш (ТЕПЕРЬ ДЛЯ ВСЕХ ФИЛЬТРОВ)
-        if (tracks.Count > 0 && LibService.Data.EnableSearchCache)
+        if (tracks.Count > 0 && LibService.Settings.EnableSearchCache)
         {
             // Сохраняем с учетом фильтра
             _ = _searchCache.SetAsync(_currentQuery, apiFilter, tracks);
@@ -418,14 +414,13 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void UpdateHistoryStorage()
     {
-        LibService.Data.SearchHistory = [.. RecentSearches];
-        LibService.Save();
+        LibService.UpdateSettings(s => s.SearchHistory = [.. RecentSearches]);
     }
 
     private void PlayTrackWithContext(TrackInfo track)
     {
         _ = _audio.PlayTrackAsync(track);
-        LibService.AddToRecentlyPlayed(track);
+        _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 
     protected override void Dispose(bool disposing)

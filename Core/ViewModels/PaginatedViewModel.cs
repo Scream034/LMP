@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+﻿// Core/ViewModels/PaginatedViewModel.cs
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -19,22 +20,18 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     protected readonly LibraryService LibService;
 
-    // DynamicData Source
     private readonly SourceList<TSource> _sourceList = new();
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
     private readonly CompositeDisposable _cleanUp = [];
 
-    // Loop protection
     private int _consecutiveEmptyLoads = 0;
     private const int MaxConsecutiveEmptyLoads = 5;
 
-    // State
     private CancellationTokenSource? _loadCts;
     private bool _canFetchMore;
     private bool _isDisposed;
     private int _totalSourceCount;
 
-    // Backing fields
     private string _filterQuery = string.Empty;
     private ContentFilterType _filterType = ContentFilterType.All;
 
@@ -42,7 +39,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Properties
 
-    protected virtual int BatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize : 20;
+    // Changed: Access Settings property instead of Data
+    protected virtual int BatchSize => LibService.Settings.LoadBatchSize > 0 
+        ? LibService.Settings.LoadBatchSize 
+        : 20;
     protected virtual int PrefetchThreshold => 10;
 
     [Reactive] public bool IsLoading { get; protected set; }
@@ -77,7 +77,8 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     protected PaginatedViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
-        EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
+        // Changed: Access Settings property
+        EnableSmoothLoading = LibService.Settings.EnableSmoothLoading;
 
         SetFilterTypeCommand = ReactiveCommand.Create<string>(typeStr =>
         {
@@ -87,18 +88,16 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             }
         });
 
-        // FIX 1: Create filter observable that captures values and creates NEW predicate each time
         var filterPredicate = this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.TaskpoolScheduler)
             .Select(tuple => BuildFilterPredicate(tuple.Item1, tuple.Item2))
-            // FIX 2: Provide immediate initial filter (bypass throttle for first emission)
             .StartWith(BuildFilterPredicate(_filterQuery, _filterType));
 
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Transform(CreateItemViewModel)
-            .ObserveOn(RxApp.MainThreadScheduler) // Ensure binding happens on UI thread
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out _items)
             .DisposeMany()
             .Subscribe()
@@ -140,16 +139,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     #region Abstract Methods
 
     protected abstract TViewModel CreateItemViewModel(TSource item);
-    
-    /// <summary>
-    /// Override this to implement custom filtering logic.
-    /// </summary>
-    /// <param name="item">The item to filter</param>
-    /// <param name="query">Current search query (captured at filter creation time)</param>
-    /// <param name="filterType">Current filter type (captured at filter creation time)</param>
-    /// <returns>True if item should be included</returns>
     protected abstract bool FilterItem(TSource item, string query, ContentFilterType filterType);
-
     protected virtual string GetItemId(TSource item) => item?.GetHashCode().ToString() ?? "";
 
     protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct)
@@ -159,14 +149,8 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Private Helpers
 
-    /// <summary>
-    /// Creates a NEW predicate function that captures the current filter values.
-    /// This ensures DynamicData detects the change and re-evaluates all items.
-    /// </summary>
     private Func<TSource, bool> BuildFilterPredicate(string query, ContentFilterType filterType)
     {
-        // CRITICAL: Return a NEW lambda that captures the values.
-        // This creates a new delegate instance, forcing DynamicData to re-filter.
         return item => FilterItem(item, query, filterType);
     }
 
@@ -195,8 +179,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         _canFetchMore = canFetchMore;
         _consecutiveEmptyLoads = 0;
 
-        // FIX 3: Don't access UI-bound collections from background thread
-        // Just edit the SourceList - DynamicData handles the rest
         var itemsList = items?.ToList() ?? [];
 
         _sourceList.Edit(innerList =>
@@ -216,7 +198,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     protected void ClearItems()
     {
-        // FIX 4: Just clear the SourceList - DisposeMany in the pipeline handles disposal
         _sourceList.Clear();
         _totalSourceCount = 0;
         _canFetchMore = false;
@@ -323,7 +304,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             CancelLoading();
             _cleanUp.Dispose();
             _sourceList.Dispose();
-            // DisposeMany in the pipeline handles ViewModel disposal
         }
         _isDisposed = true;
     }

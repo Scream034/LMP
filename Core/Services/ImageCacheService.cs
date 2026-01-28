@@ -31,8 +31,8 @@ public sealed class ImageCacheService : IDisposable
     private const int GcTriggerThreshold = 50;
 
     // Получаем лимит динамически
-    private int MaxMemoryItems => _library.Data.Storage.MaxBitmapCacheItems > 0
-        ? _library.Data.Storage.MaxBitmapCacheItems
+    private int MaxMemoryItems => _library.Settings.Storage.MaxBitmapCacheItems > 0
+        ? _library.Settings.Storage.MaxBitmapCacheItems
         : 40;
 
     public ImageCacheService(LibraryService library)
@@ -165,7 +165,7 @@ public sealed class ImageCacheService : IDisposable
                         await File.WriteAllBytesAsync(diskPath, bytes, ct);
                         Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
 
-                        long limitBytes = (long)_library.Data.Storage.ImageCacheLimitMb * 1024 * 1024;
+                        long limitBytes = (long)_library.Settings.Storage.ImageCacheLimitMb * 1024 * 1024;
                         if (_currentDiskCacheBytes > limitBytes)
                         {
                             _ = Task.Run(CleanupDiskCacheAsync, CancellationToken.None);
@@ -296,7 +296,7 @@ public sealed class ImageCacheService : IDisposable
                 .OrderBy(static f => f.LastAccessTime)
                 .ToList();
 
-            long limitBytes = (long)_library.Data.Storage.ImageCacheLimitMb * 1024 * 1024;
+            long limitBytes = (long)_library.Settings.Storage.ImageCacheLimitMb * 1024 * 1024;
             long targetSize = limitBytes / 2;
             long deleted = 0;
 

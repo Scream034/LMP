@@ -1,148 +1,216 @@
+// Core/Services/TrackRegistry.cs
 using System.Collections.Concurrent;
+using LMP.Core.Data.Repositories;
 using LMP.Core.Models;
 
 namespace LMP.Core.Services;
 
 /// <summary>
-/// Реализация Identity Map с поддержкой автоматической сборки мусора для неиспользуемых треков.
-/// Использует WeakReference для временных данных (поиск) и жесткие ссылки для библиотеки.
+/// Identity Map / L1 Cache for TrackInfo objects.
+/// Combines in-memory caching with database backing.
 /// </summary>
 public sealed class TrackRegistry
 {
-    // Основное хранилище: ID -> Слабая ссылка на объект
-    private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _map = new();
+    // Weak references for transient tracks (search results)
+    private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _cache = new();
 
-    // Хранилище "важных" треков: ID -> Жесткая ссылка.
-    // Это предотвращает удаление GC треков, которые есть в библиотеке, но сейчас не отображаются на экране.
-    private readonly ConcurrentDictionary<string, TrackInfo> _pinnedTracks = new();
+    // Strong references for important tracks (library items)
+    private readonly ConcurrentDictionary<string, TrackInfo> _pinned = new();
 
-    private readonly Lock _cleanupLock = new();
+    private readonly ITrackRepository? _repository;
+    private readonly IPlaylistRepository? _playlists;
+
+    public TrackRegistry(ITrackRepository? repository = null, IPlaylistRepository? playlists = null)
+    {
+        _repository = repository;
+        _playlists = playlists;
+    }
 
     /// <summary>
-    /// Получает существующий или регистрирует новый трек.
+    /// Registers or updates a track. Returns the canonical instance.
     /// </summary>
     public TrackInfo RegisterOrUpdate(TrackInfo incoming)
     {
         if (string.IsNullOrEmpty(incoming.Id)) return incoming;
 
-        // 1. Пытаемся получить живой объект из слабой ссылки
-        if (_map.TryGetValue(incoming.Id, out var weakRef))
+        // Check pinned first (faster)
+        if (_pinned.TryGetValue(incoming.Id, out var pinned))
         {
-            if (weakRef.TryGetTarget(out var existing))
-            {
-                // Объект жив — обновляем метаданные и возвращаем его
-                existing.UpdateMetadata(incoming);
-                
-                // Проверяем, нужно ли его "закрепить" (если он стал важным)
-                UpdatePinStatus(existing);
-                
-                return existing;
-            }
-            else
-            {
-                // Объект умер (собран GC), удаляем мертвую ссылку
-                _map.TryRemove(incoming.Id, out _);
-            }
+            pinned.UpdateMetadata(incoming);
+            return pinned;
         }
 
-        // 2. Объект не найден или умер — регистрируем incoming как новый оригинал
-        var newRef = new WeakReference<TrackInfo>(incoming);
-        _map.AddOrUpdate(incoming.Id, newRef, (_, _) => newRef);
-        
-        // Проверяем статус закрепления сразу при создании
-        UpdatePinStatus(incoming);
+        // Check weak cache
+        if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
+        {
+            cached.UpdateMetadata(incoming);
+            UpdatePinStatus(cached);
+            return cached;
+        }
 
+        // Register as new
+        _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
+        UpdatePinStatus(incoming);
         return incoming;
     }
 
     /// <summary>
-    /// Пытается найти живой трек.
+    /// Gets track from L1 cache only (no DB access).
     /// </summary>
     public TrackInfo? TryGet(string id)
     {
-        if (_map.TryGetValue(id, out var weakRef) && weakRef.TryGetTarget(out var track))
-        {
-            return track;
-        }
+        if (string.IsNullOrEmpty(id)) return null;
+
+        if (_pinned.TryGetValue(id, out var pinned)) return pinned;
+        if (_cache.TryGetValue(id, out var weak) && weak.TryGetTarget(out var cached)) return cached;
+
         return null;
     }
 
     /// <summary>
-    /// Управляет "закреплением" трека в памяти.
-    /// Если трек в библиотеке/лайкнут/скачан — держим жесткую ссылку.
-    /// Если нет — отпускаем (удаляем из _pinnedTracks), оставляя только слабую в _map.
+    /// Gets track from cache or loads from database.
+    /// </summary>
+    public async Task<TrackInfo?> GetOrLoadAsync(string id, CancellationToken ct = default)
+    {
+        var cached = TryGet(id);
+        if (cached != null) return cached;
+
+        if (_repository == null) return null;
+
+        var fromDb = await _repository.GetByIdAsync(id, ct);
+        if (fromDb == null) return null;
+
+        // Load InPlaylists
+        if (_playlists != null)
+        {
+            fromDb.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(id, ct);
+        }
+
+        return RegisterOrUpdate(fromDb);
+    }
+
+    /// <summary>
+    /// Batch preload tracks into cache.
+    /// </summary>
+    public async Task PreloadAsync(IEnumerable<string> ids, CancellationToken ct = default)
+    {
+        if (_repository == null) return;
+
+        var toLoad = ids.Where(id => TryGet(id) == null).ToList();
+        if (toLoad.Count == 0) return;
+
+        var loaded = await _repository.GetByIdsAsync(toLoad, ct);
+
+        foreach (var track in loaded)
+        {
+            if (_playlists != null)
+            {
+                track.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(track.Id, ct);
+            }
+            RegisterOrUpdate(track);
+        }
+    }
+
+    /// <summary>
+    /// Updates pinning status based on track importance.
     /// </summary>
     public void UpdatePinStatus(TrackInfo track)
     {
-        bool shouldBePinned = track.IsLiked || 
-                              track.IsDownloaded || 
-                              track.IsDisliked || 
-                              track.InPlaylists.Count > 0;
+        bool shouldPin = track.IsLiked ||
+                        track.IsDownloaded ||
+                        track.IsDisliked ||
+                        track.InPlaylists.Count > 0;
 
-        if (shouldBePinned)
+        if (shouldPin)
         {
-            _pinnedTracks.TryAdd(track.Id, track);
+            _pinned.TryAdd(track.Id, track);
         }
         else
         {
-            _pinnedTracks.TryRemove(track.Id, out _);
+            _pinned.TryRemove(track.Id, out _);
         }
     }
 
     /// <summary>
-    /// Загрузка из базы при старте. Все эти треки сразу становятся Pinned.
+    /// Hydrates cache with important tracks from database.
+    /// Called at startup.
     /// </summary>
-    public void Hydrate(IEnumerable<TrackInfo> tracks)
+    public async Task HydrateAsync(CancellationToken ct = default)
     {
-        foreach (var track in tracks)
-        {
-            if (string.IsNullOrEmpty(track.Id)) continue;
+        if (_repository == null) return;
 
-            // Добавляем в общую карту (Weak)
-            _map[track.Id] = new WeakReference<TrackInfo>(track);
-            
-            // И закрепляем, так как это данные из библиотеки
-            UpdatePinStatus(track);
+        Log.Info("[TrackRegistry] Hydrating from database...");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        // Load liked tracks
+        var liked = await _repository.GetLikedAsync(500, 0, ct);
+        foreach (var t in liked)
+        {
+            if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            RegisterOrUpdate(t);
         }
+
+        // Load downloaded tracks
+        var downloaded = await _repository.GetDownloadedAsync(500, 0, ct);
+        foreach (var t in downloaded)
+        {
+            if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            RegisterOrUpdate(t);
+        }
+
+        // Load recent tracks
+        var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
+        foreach (var t in recent)
+        {
+            if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            RegisterOrUpdate(t);
+        }
+
+        sw.Stop();
+        Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} tracks in {sw.ElapsedMilliseconds}ms");
     }
 
     /// <summary>
-    /// Возвращает все "Закрепленные" треки (для сохранения библиотеки).
-    /// Мы не сохраняем мусор из поиска.
+    /// Persists all pinned tracks to database.
     /// </summary>
-    public IEnumerable<TrackInfo> GetPinnedTracks() => _pinnedTracks.Values;
+    public async Task FlushAsync(CancellationToken ct = default)
+    {
+        if (_repository == null) return;
+
+        var tracks = _pinned.Values.ToList();
+        if (tracks.Count == 0) return;
+
+        try
+        {
+            await _repository.UpsertBatchAsync(tracks, ct);
+            Log.Info($"[TrackRegistry] Flushed {tracks.Count} tracks to database");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[TrackRegistry] Flush failed: {ex.Message}");
+        }
+    }
+    public IEnumerable<TrackInfo> GetPinnedTracks() => _pinned.Values;
 
     /// <summary>
-    /// Метод для периодической очистки словаря от мертвых ссылок (Optional).
-    /// Можно вызывать раз в N минут или при навигации.
+    /// Cleans dead weak references. Call periodically.
     /// </summary>
-    public void CleanupDeadReferences()
+    public int CleanupDeadReferences()
     {
-        // Запускаем в фоне, чтобы не блочить UI
-        Task.Run(() =>
-        {
-            lock (_cleanupLock)
-            {
-                var keysToRemove = new List<string>();
-                foreach (var kvp in _map)
-                {
-                    if (!kvp.Value.TryGetTarget(out _))
-                    {
-                        keysToRemove.Add(kvp.Key);
-                    }
-                }
+        var dead = _cache
+            .Where(kvp => !kvp.Value.TryGetTarget(out _) && !_pinned.ContainsKey(kvp.Key))
+            .Select(kvp => kvp.Key)
+            .ToList();
 
-                foreach (var key in keysToRemove)
-                {
-                    _map.TryRemove(key, out _);
-                }
-            }
-        });
+        foreach (var key in dead)
+            _cache.TryRemove(key, out _);
+
+        return dead.Count;
     }
 
     public void Clear()
     {
-        _pinnedTracks.Clear();
-        _map.Clear();
+        _cache.Clear();
+        _pinned.Clear();
     }
 }

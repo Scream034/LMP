@@ -62,10 +62,9 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             this.RaiseAndSetIfChanged(ref _headerHeight, value);
             if (value.IsAbsolute && value.Value > 50)
             {
-                if (Math.Abs(LibService.Data.PlaylistHeaderHeight - value.Value) > 1)
+                if (Math.Abs(LibService.Settings.PlaylistHeaderHeight - value.Value) > 1)
                 {
-                    LibService.Data.PlaylistHeaderHeight = value.Value;
-                    LibService.Save();
+                    LibService.UpdateSettings(s => s.PlaylistHeaderHeight = value.Value);
                 }
             }
         }
@@ -110,11 +109,11 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
         IsShuffleActive = _audio.ShuffleEnabled;
-        _headerHeight = new GridLength(LibService.Data.PlaylistHeaderHeight);
+        _headerHeight = new GridLength(LibService.Settings.PlaylistHeaderHeight);
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
 
-        PlayAllCommand = ReactiveCommand.Create(PlayAll, hasTracks);
+        PlayAllCommand = ReactiveCommand.CreateFromTask(PlayAllAsync, hasTracks);
 
         DeletePlaylistCommand = ReactiveCommand.CreateFromTask(async () =>
         {
@@ -130,16 +129,16 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         UploadToCloudCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             await _manager.UploadPlaylistToAccountAsync(_currentPlaylistId);
-            LoadPlaylist(_currentPlaylistId);
+            await LoadPlaylistAsync(_currentPlaylistId);
         });
 
-        UnlinkFromCloudCommand = ReactiveCommand.Create(() =>
+        UnlinkFromCloudCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            _manager.ConvertToLocal(_currentPlaylistId);
-            LoadPlaylist(_currentPlaylistId);
+            await _manager.ConvertToLocalAsync(_currentPlaylistId);
+            await LoadPlaylistAsync(_currentPlaylistId);
         });
 
-        RefreshPlaylistCommand = ReactiveCommand.Create(() => LoadPlaylist(_currentPlaylistId));
+        RefreshPlaylistCommand = ReactiveCommand.CreateFromTask(() => LoadPlaylistAsync(_currentPlaylistId));
 
         ShufflePlayCommand = ReactiveCommand.Create(ToggleShuffle, hasTracks);
         DownloadAllCommand = ReactiveCommand.Create(DownloadAll, hasTracks);
@@ -172,7 +171,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
                 // В случае ошибки, принудительно перезагружаем плейлист, чтобы отменить
                 // оптимистичное обновление
                 _isMovingInternally = false;
-                LoadPlaylist(_currentPlaylistId);
+                await LoadPlaylistAsync(_currentPlaylistId);
             }
             finally
             {
@@ -193,12 +192,12 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
                 h => LibService.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(500))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ =>
+            .Subscribe(async _ =>
             {
                 if (_isMovingInternally) return; // Игнорируем событие, если оно вызвано нами же
                 if (!string.IsNullOrEmpty(_currentPlaylistId))
                 {
-                    LoadPlaylist(_currentPlaylistId);
+                    await LoadPlaylistAsync(_currentPlaylistId);
                 }
             });
 
@@ -207,24 +206,24 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             h => _audio.OnPlaybackStateChanged += h,
             h => _audio.OnPlaybackStateChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => CheckPlaybackState());
+            .Subscribe(async _ => await CheckPlaybackStateAsync());
 
         _trackChangeSub = Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
             h => _audio.OnTrackChanged += h,
             h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => CheckPlaybackState());
+            .Subscribe(async _ => await CheckPlaybackStateAsync());
     }
 
     #endregion
 
     #region Methods
 
-    private void CheckPlaybackState()
+    private async Task CheckPlaybackStateAsync()
     {
         if (_audio.CurrentTrack != null && _audio.IsPlaying)
         {
-            IsPlayingThisPlaylist = LibService.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId);
+            IsPlayingThisPlaylist = await LibService.IsTrackInPlaylistAsync(_audio.CurrentTrack.Id, _currentPlaylistId);
         }
         else
         {
@@ -232,7 +231,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         }
     }
 
-    private void PlayAll()
+    private async Task PlayAllAsync()
     {
         // Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
         var allTracks = GetItemsSnapshot();
@@ -246,7 +245,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
         if (_audio.CurrentTrack != null &&
             _audio.IsPaused &&
-            LibService.IsTrackInPlaylist(_audio.CurrentTrack.Id, _currentPlaylistId))
+            await LibService.IsTrackInPlaylistAsync(_audio.CurrentTrack.Id, _currentPlaylistId))
         {
             _ = _audio.SetPlaybackStateAsync(true);
             return;
@@ -325,10 +324,10 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         return vm;
     }
 
-    public async void LoadPlaylist(string playlistId)
+    public async Task LoadPlaylistAsync(string playlistId)
     {
         _currentPlaylistId = playlistId;
-        var playlist = LibService.GetPlaylist(playlistId);
+        var playlist = await LibService.GetPlaylistAsync(playlistId);
         if (playlist == null) return;
 
         PlaylistName = playlist.Name;
@@ -337,14 +336,14 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         IsCloud = playlist.IsFromAccount;
         IsReadOnly = !playlist.IsEditable;
 
-        var tracks = LibService.GetPlaylistTracks(playlistId);
+        var tracks = await LibService.GetPlaylistTracksAsync(playlistId);
         TrackCount = tracks.Count;
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
         CalculateTotalDuration(tracks);
 
         await InitializeItemsAsync(tracks, canFetchMore: false);
-        CheckPlaybackState();
+        await CheckPlaybackStateAsync();
     }
 
     private void CalculateTotalDuration(List<TrackInfo> tracks)
@@ -367,12 +366,12 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         IsShuffleActive = false;
         var tracks = Items.Select(static vm => vm.Track).ToList();
         _ = _audio.StartQueueAsync(tracks, track);
-        LibService.AddToRecentlyPlayed(track);
+        _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 
     private async Task MergePlaylistAsync()
     {
-        var otherPlaylists = LibService.GetAllPlaylists()
+        var otherPlaylists = (await LibService.GetAllPlaylistsAsync())
             .Where(p => p.Id != _currentPlaylistId && p.IsLocal)
             .ToList();
 
@@ -387,7 +386,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         var targetId = otherPlaylists.First().Id;
         if (!string.IsNullOrEmpty(targetId))
         {
-            if (LibService.MergePlaylists(_currentPlaylistId, targetId))
+            if (await _manager.MergePlaylistsAsync(_currentPlaylistId, targetId))
                 await _dialog.ShowInfoAsync(SL["Dialog_Success"], SL["Merge_Success_Msg"]);
             else
                 await _dialog.ShowInfoAsync(SL["Dialog_Error"], SL["Merge_Error_Msg"]);

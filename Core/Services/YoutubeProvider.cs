@@ -263,9 +263,11 @@ public partial class YoutubeProvider : IDisposable
         string? targetContainer = track.TransientContainer;
         int targetBitrate = track.TransientBitrate;
 
+        // Access settings through the new property
         if (string.IsNullOrEmpty(targetContainer))
         {
-            if (_libraryService?.Data.RememberTrackFormat == true)
+            var settings = _libraryService?.Settings;
+            if (settings?.RememberTrackFormat == true)
             {
                 targetContainer = track.PreferredContainer;
                 targetBitrate = track.PreferredBitrate;
@@ -351,7 +353,8 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        var qualityPref = _libraryService?.Data.QualityPreference ?? AudioQualityPreference.BestAvailable;
+        // Access settings through the new property
+        var qualityPref = _libraryService?.Settings.QualityPreference ?? AudioQualityPreference.BestAvailable;
 
         return qualityPref switch
         {
@@ -361,6 +364,7 @@ public partial class YoutubeProvider : IDisposable
             _ => streams.FirstOrDefault(),
         };
     }
+    #endregion
 
     private static string DetermineCodec(string container, AudioOnlyStreamInfo stream)
     {
@@ -408,7 +412,6 @@ public partial class YoutubeProvider : IDisposable
             return [];
         }
     }
-    #endregion
 
     #region Cache
     private static string GenerateCacheKey(string videoId, string? container, int bitrate = 0)
@@ -869,7 +872,10 @@ public partial class YoutubeProvider : IDisposable
 
             foreach (var track in tracks)
             {
-                _libraryService?.AddOrUpdateTrack(track);
+                if (_libraryService != null)
+                {
+                    await _libraryService.AddOrUpdateTrackAsync(track, ct);
+                }
                 playlist.TrackIds.Add(track.Id);
             }
             return playlist;

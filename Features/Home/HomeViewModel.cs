@@ -178,7 +178,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             List<TrackInfo> tracks;
             if (category.IsSpecial)
             {
-                tracks = LibService.GetRecentlyPlayed(100);
+                tracks = await LibService.GetRecentlyPlayedAsync(100);
                 if (ct.IsCancellationRequested) return;
                 await InitializeItemsAsync(tracks, canFetchMore: false);
             }
@@ -243,7 +243,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     private void PlayWithContext(TrackInfo track)
     {
         _ = _audio.PlayTrackAsync(track);
-        LibService.AddToRecentlyPlayed(track);
+        _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 
     private void UpdateGreeting()

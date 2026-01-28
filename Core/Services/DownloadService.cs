@@ -88,7 +88,7 @@ public class DownloadService
                 {
                     track.IsDownloaded = true;
                     track.LocalPath = path;
-                    _library.AddOrUpdateTrack(track);
+                    await _library.AddOrUpdateTrackAsync(track);
                     OnCompleted?.Invoke(track.Id, true, path);
                 }
                 else

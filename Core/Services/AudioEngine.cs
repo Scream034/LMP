@@ -119,18 +119,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br, zstd");
 
-        ShuffleEnabled = library.Data.ShuffleEnabled;
-        RepeatMode = library.Data.RepeatMode;
-        _volumePercent = NormalizeVolume(library.Data.Volume);
+        ShuffleEnabled = library.Settings.ShuffleEnabled;
+        RepeatMode = library.Settings.RepeatMode;
+        _volumePercent = NormalizeVolume(library.Settings.Volume);
 
         // Инициализация профиля
-        _currentStreamingConfig = GetConfigForProfile(library.Data.InternetProfile);
+        _currentStreamingConfig = GetConfigForProfile(library.Settings.InternetProfile);
 
         InitializeLibVLC();
         InitializePlayer();
 
         _ = VolumeSaveLoopAsync();
-        Log.Info($"[AudioEngine] Initialized. Volume: {_volumePercent}%, Profile: {library.Data.InternetProfile}");
+        Log.Info($"[AudioEngine] Initialized. Volume: {_volumePercent}%, Profile: {library.Settings.InternetProfile}");
     }
 
     private void InitializeLibVLC()
@@ -238,12 +238,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_volumePercent > 0)
         {
-            _library.Data.LastVolume = _volumePercent;
+            _library.UpdateSettings(s => s.LastVolume = _volumePercent);
             SetVolumeInstant(0);
         }
         else
         {
-            int restoreVol = _library.Data.LastVolume > 0 ? _library.Data.LastVolume : 50;
+            int restoreVol = _library.Settings.LastVolume > 0 ? _library.Settings.LastVolume : 50;
             SetVolumeInstant(restoreVol);
         }
     }
@@ -253,7 +253,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public void SetVolumeInstant(float value)
     {
         _volumePercent = Math.Clamp((int)Math.Round(value), 0, 500);
-        _library.Data.Volume = _volumePercent;
+        _library.UpdateSettings(s => s.LastVolume = _volumePercent);
         _lastVolumeChange = DateTime.UtcNow;
         _volumeSavePending = true;
         Task.Run(ApplyVolume);
@@ -261,7 +261,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void UpdateAudioSettings()
     {
-        RaiseEvent(() => OnMaxVolumeChanged?.Invoke(_library.Data.MaxVolumeLimit));
+        RaiseEvent(() => OnMaxVolumeChanged?.Invoke(_library.Settings.MaxVolumeLimit));
         Task.Run(ApplyVolume);
     }
 
@@ -269,7 +269,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (!_volumeSavePending) return;
         _volumeSavePending = false;
-        _library.Save();
+        _library.UpdateSettings(s => s.Volume = _volumePercent);
     }
 
     private void ApplyVolume()
@@ -277,7 +277,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_player == null || _isDisposed) return;
         Try(() =>
         {
-            float gain = MathF.Pow(10f, Math.Clamp(_library.Data.TargetGainDb, -20f, 20f) / 20f);
+            float gain = MathF.Pow(10f, Math.Clamp(_library.Settings.TargetGainDb, -20f, 20f) / 20f);
             int finalVolume = Math.Clamp((int)Math.Round(_volumePercent * gain), 0, 500);
 
             if (_player.Volume != finalVolume)
@@ -553,13 +553,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         track.TransientContainer = container;
         track.TransientBitrate = targetBitrate;
 
-        if (_library.Data.RememberTrackFormat)
+        if (_library.Settings.RememberTrackFormat)
         {
             track.PreferredContainer = container;
             track.PreferredBitrate = targetBitrate;
 
             // Сохраняем изменения. Так как объект canonical, просто говорим библиотеке обновить его статус.
-            _library.AddOrUpdateTrack(track);
+            _ = _library.AddOrUpdateTrackAsync(track);
         }
 
         track.StreamUrl = string.Empty;

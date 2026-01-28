@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+﻿// Features/Settings/SettingsViewModel.cs
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Media;
@@ -11,7 +12,6 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Features.Settings;
 
-// Вспомогательный класс для локализации Enum в ComboBox
 public class LocalizedItem<T>(T value, string name)
 {
     public T Value { get; } = value;
@@ -21,9 +21,9 @@ public class LocalizedItem<T>(T value, string name)
 public enum ImageCachePreset
 {
     Custom,
-    Low,    // 20 items (Economy)
-    Medium, // 50 items (Balanced)
-    High    // 100 items (Smooth)
+    Low,
+    Medium,
+    High
 }
 
 public sealed class SettingsViewModel : ViewModelBase, IDisposable
@@ -40,7 +40,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private bool _isDisposed;
     private bool _isLoadingTheme;
-    private bool _isUpdatingPreset; // Флаг для предотвращения циклов
+    private bool _isUpdatingPreset;
 
     [Reactive] public bool IsAuthenticated { get; private set; }
     [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
@@ -50,15 +50,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
 
     public string AccountName => IsAuthenticated
-        ? _auth.State.UserName // Берем сохраненное имя
+        ? _auth.State.UserName
         : _library.FakeAccountName ?? SL["Auth_NotSignedIn"];
 
     public string? AccountAvatarUrl => IsAuthenticated
-        ? _auth.State.AvatarUrl // Берем сохраненный аватар
+        ? _auth.State.AvatarUrl
         : _library.FakeAccountAvatarUrl;
 
     public string AccountSubtitle => IsAuthenticated
-        ? _auth.State.UserEmail // Показываем email если есть
+        ? _auth.State.UserEmail
         : IsFakeAccount ? SL["Account_LimitedAccess"] : SL["Auth_Guest"];
 
     public ObservableCollection<LocalizedItem<InternetProfile>> InternetProfileOptions { get; } = [];
@@ -73,10 +73,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
 
-    // Image Cache Settings
     public List<LocalizedItem<ImageCachePreset>> ImageCachePresets { get; } = [];
     [Reactive] public LocalizedItem<ImageCachePreset>? SelectedImageCachePreset { get; set; }
-    [Reactive] public int MaxBitmapCacheItems { get; set; } // Slider Value
+    [Reactive] public int MaxBitmapCacheItems { get; set; }
 
     [Reactive] public int ImageCacheLimitMb { get; set; }
     [Reactive] public int AudioCacheLimitMb { get; set; }
@@ -145,7 +144,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _audio = audio;
         _youtube = youtube;
 
-        InitializeLists(); // Заполняем списки (Network profiles, Image presets, Themes)
+        InitializeLists();
 
         LoginCommand = ReactiveCommand.CreateFromTask(LoginAsync);
         LogoutCommand = ReactiveCommand.CreateFromTask(LogoutAsync);
@@ -163,13 +162,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         UpdateCacheStats();
         SetupSubscriptions();
 
-        // Обновляем локализацию списков при смене языка
         LocalizationService.Instance.LanguageChanged += (_, _) => RefreshLocalizedLists();
     }
 
     private void InitializeLists()
     {
-        // Themes
         ThemePresets.Clear();
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);
@@ -179,8 +176,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void RefreshLocalizedLists()
     {
-        // 1. Internet Profiles
-        var currentProfile = SelectedInternetProfile?.Value ?? _library.Data.InternetProfile;
+        var currentProfile = SelectedInternetProfile?.Value ?? _library.Settings.InternetProfile;
         InternetProfileOptions.Clear();
         foreach (var p in Enum.GetValues<InternetProfile>())
         {
@@ -188,47 +184,39 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
         SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == currentProfile) ?? InternetProfileOptions[1];
 
-        // 2. Image Cache Presets
         var currentImgPreset = SelectedImageCachePreset?.Value ?? ImageCachePreset.Custom;
         ImageCachePresets.Clear();
         ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.Low, $"{SL["Cache_Low"]} (20)"));
         ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.Medium, $"{SL["Cache_Medium"]} (50)"));
         ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.High, $"{SL["Cache_High"]} (100)"));
-        // Custom не добавляем в список для выбора пользователем, он ставится автоматически
 
-        // Восстанавливаем выбор (если был Custom, сбрасываем выделение, слайдер покажет значение)
         if (currentImgPreset != ImageCachePreset.Custom)
             SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == currentImgPreset);
     }
 
     private void SetupSubscriptions()
     {
+        // Changed: Use UpdateSettings instead of Data + Save
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1).WhereNotNull()
             .Subscribe(lang =>
             {
                 LocalizationService.Instance.CurrentLanguage = lang.Code;
-                _library.Data.LanguageCode = lang.Code;
-                _library.Save();
+                _library.UpdateSettings(s => s.LanguageCode = lang.Code);
             });
 
-        // Network Profile
         this.WhenAnyValue(x => x.SelectedInternetProfile).Skip(1).WhereNotNull().Subscribe(p =>
         {
-            _library.Data.InternetProfile = p.Value;
+            _library.UpdateSettings(s => s.InternetProfile = p.Value);
             NetworkRestartRequired = true;
-            _library.Save();
         });
 
-        // Proxy settings
         this.WhenAnyValue(x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort, x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
             .Skip(1).Subscribe(x => { NetworkRestartRequired = true; SaveNetworkSettings(); });
 
-        // Storage Limits
         this.WhenAnyValue(x => x.ImageCacheLimitMb, x => x.AudioCacheLimitMb)
             .Skip(1).Throttle(TimeSpan.FromMilliseconds(500)).Subscribe(_ => SaveStorageSettings());
 
-        // Image Cache Preset Logic
         this.WhenAnyValue(x => x.SelectedImageCachePreset)
             .Skip(1)
             .Where(p => !_isUpdatingPreset && p != null)
@@ -245,23 +233,20 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 _isUpdatingPreset = false;
             });
 
-        // Slider Logic -> Custom Preset
         this.WhenAnyValue(x => x.MaxBitmapCacheItems)
             .Skip(1)
             .Subscribe(val =>
             {
-                _library.Data.Storage.MaxBitmapCacheItems = val;
-                _library.Save();
-                _imageCache.EnforceLimits(); // Применяем немедленно!
+                _library.UpdateSettings(s => s.Storage.MaxBitmapCacheItems = val);
+                _imageCache.EnforceLimits();
 
                 if (!_isUpdatingPreset)
                 {
                     _isUpdatingPreset = true;
-                    // Если значение совпадает с пресетом, выбираем его, иначе null (Custom)
                     if (val == 20) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low);
                     else if (val == 50) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium);
                     else if (val == 100) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High);
-                    else SelectedImageCachePreset = null; // Custom visual state
+                    else SelectedImageCachePreset = null;
                     _isUpdatingPreset = false;
                 }
             });
@@ -287,105 +272,82 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         this.WhenAnyValue(x => x.MaxVolumeLimit).Skip(1).Subscribe(v =>
         {
-            _library.Data.MaxVolumeLimit = v;
-            _library.Save();
+            _library.UpdateSettings(s => s.MaxVolumeLimit = v);
             _audio.UpdateAudioSettings();
         });
 
         this.WhenAnyValue(x => x.TargetGainDb).Skip(1).Subscribe(v =>
         {
-            _library.Data.TargetGainDb = v;
-            _library.Save();
+            _library.UpdateSettings(s => s.TargetGainDb = v);
             _audio.UpdateAudioSettings();
         });
 
         this.WhenAnyValue(x => x.QualityPreference).Skip(1).Subscribe(v =>
         {
-            _library.Data.QualityPreference = v;
-            _library.Save();
+            _library.UpdateSettings(s => s.QualityPreference = v);
             _youtube.ClearCache();
         });
 
         this.WhenAnyValue(x => x.DiscordRpcEnabled).Skip(1).Subscribe(v =>
-        {
-            _library.Data.DiscordRpcEnabled = v;
-            _library.Save();
-        });
+            _library.UpdateSettings(s => s.DiscordRpcEnabled = v));
 
         this.WhenAnyValue(x => x.AutoPlayOnPaste).Skip(1).Subscribe(v =>
-        {
-            _library.Data.AutoPlayOnUrlPaste = v;
-            _library.Save();
-        });
+            _library.UpdateSettings(s => s.AutoPlayOnUrlPaste = v));
 
         this.WhenAnyValue(x => x.EnableSmoothLoading).Skip(1).Subscribe(v =>
-        {
-            _library.Data.EnableSmoothLoading = v;
-            _library.Save();
-        });
+            _library.UpdateSettings(s => s.EnableSmoothLoading = v));
 
         this.WhenAnyValue(x => x.RememberTrackFormat).Skip(1).Subscribe(v =>
-        {
-            _library.Data.RememberTrackFormat = v;
-            _library.Save();
-        });
+            _library.UpdateSettings(s => s.RememberTrackFormat = v));
 
         this.WhenAnyValue(x => x.SearchBatchSize).Skip(1).Subscribe(v =>
-        {
-            _library.Data.SearchBatchSize = v;
-            _library.Save();
-        });
+            _library.UpdateSettings(s => s.SearchBatchSize = v));
 
         this.WhenAnyValue(x => x.EnableSearchCache).Skip(1).Subscribe(v =>
-        {
-            _library.Data.EnableSearchCache = v;
-            _library.Save();
-        });
+            _library.UpdateSettings(s => s.EnableSearchCache = v));
 
         this.WhenAnyValue(x => x.SearchCacheTtlMinutes).Skip(1).Subscribe(v =>
         {
-            _library.Data.SearchCacheTtlMinutes = v;
-            _library.Save();
+            _library.UpdateSettings(s => s.SearchCacheTtlMinutes = v);
             _ = _searchCache.CleanupExpiredAsync();
         });
     }
 
     private void LoadAllSettings()
     {
+        var s = _library.Settings;
+
         DownloadPath = _library.DownloadPath;
-        DiscordRpcEnabled = _library.Data.DiscordRpcEnabled;
-        AutoPlayOnPaste = _library.Data.AutoPlayOnUrlPaste;
-        SearchBatchSize = _library.Data.SearchBatchSize;
-        EnableSmoothLoading = _library.Data.EnableSmoothLoading;
-        MaxVolumeLimit = _library.Data.MaxVolumeLimit;
-        TargetGainDb = _library.Data.TargetGainDb;
-        QualityPreference = _library.Data.QualityPreference;
-        RememberTrackFormat = _library.Data.RememberTrackFormat;
-        EnableSearchCache = _library.Data.EnableSearchCache;
-        SearchCacheTtlMinutes = _library.Data.SearchCacheTtlMinutes;
-        SelectedLanguage = Languages.FirstOrDefault(x => x.Code == _library.Data.LanguageCode) ?? Languages[0];
+        DiscordRpcEnabled = s.DiscordRpcEnabled;
+        AutoPlayOnPaste = s.AutoPlayOnUrlPaste;
+        SearchBatchSize = s.SearchBatchSize;
+        EnableSmoothLoading = s.EnableSmoothLoading;
+        MaxVolumeLimit = s.MaxVolumeLimit;
+        TargetGainDb = s.TargetGainDb;
+        QualityPreference = s.QualityPreference;
+        RememberTrackFormat = s.RememberTrackFormat;
+        EnableSearchCache = s.EnableSearchCache;
+        SearchCacheTtlMinutes = s.SearchCacheTtlMinutes;
+        SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
 
         FakeChannelInput = _library.FakeAccountUrl ?? "";
         IsAuthenticated = _auth.IsAuthenticated;
         RaiseAccountProperties();
 
-        // Network (через wrapper)
-        var savedProfile = _library.Data.InternetProfile;
+        var savedProfile = s.InternetProfile;
         SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == savedProfile) ?? InternetProfileOptions[1];
 
-        ProxyEnabled = _library.Data.Proxy.Enabled;
-        ProxyHost = _library.Data.Proxy.Host;
-        ProxyPort = _library.Data.Proxy.Port;
-        ProxyAuth = _library.Data.Proxy.UseAuth;
-        ProxyUser = _library.Data.Proxy.Username;
-        ProxyPass = _library.Data.Proxy.Password;
+        ProxyEnabled = s.Proxy.Enabled;
+        ProxyHost = s.Proxy.Host;
+        ProxyPort = s.Proxy.Port;
+        ProxyAuth = s.Proxy.UseAuth;
+        ProxyUser = s.Proxy.Username;
+        ProxyPass = s.Proxy.Password;
 
-        ImageCacheLimitMb = _library.Data.Storage.ImageCacheLimitMb;
-        AudioCacheLimitMb = _library.Data.Storage.AudioCacheLimitMb;
+        ImageCacheLimitMb = s.Storage.ImageCacheLimitMb;
+        AudioCacheLimitMb = s.Storage.AudioCacheLimitMb;
 
-        // Image Cache Items
-        MaxBitmapCacheItems = _library.Data.Storage.MaxBitmapCacheItems > 0 ? _library.Data.Storage.MaxBitmapCacheItems : 40;
-        // Preset auto-select logic runs via subscription on MaxBitmapCacheItems change or manually:
+        MaxBitmapCacheItems = s.Storage.MaxBitmapCacheItems > 0 ? s.Storage.MaxBitmapCacheItems : 40;
         if (MaxBitmapCacheItems == 20) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low);
         else if (MaxBitmapCacheItems == 50) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium);
         else if (MaxBitmapCacheItems == 100) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High);
@@ -483,21 +445,25 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void SaveNetworkSettings()
     {
-        _library.Data.InternetProfile = SelectedInternetProfile?.Value ?? InternetProfile.Medium;
-        _library.Data.Proxy.Enabled = ProxyEnabled;
-        _library.Data.Proxy.Host = ProxyHost;
-        _library.Data.Proxy.Port = ProxyPort;
-        _library.Data.Proxy.UseAuth = ProxyAuth;
-        _library.Data.Proxy.Username = ProxyUser;
-        _library.Data.Proxy.Password = ProxyPass;
-        _library.Save();
+        _library.UpdateSettings(s =>
+        {
+            s.InternetProfile = SelectedInternetProfile?.Value ?? InternetProfile.Medium;
+            s.Proxy.Enabled = ProxyEnabled;
+            s.Proxy.Host = ProxyHost;
+            s.Proxy.Port = ProxyPort;
+            s.Proxy.UseAuth = ProxyAuth;
+            s.Proxy.Username = ProxyUser;
+            s.Proxy.Password = ProxyPass;
+        });
     }
 
     private void SaveStorageSettings()
     {
-        _library.Data.Storage.ImageCacheLimitMb = ImageCacheLimitMb;
-        _library.Data.Storage.AudioCacheLimitMb = AudioCacheLimitMb;
-        _library.Save();
+        _library.UpdateSettings(s =>
+        {
+            s.Storage.ImageCacheLimitMb = ImageCacheLimitMb;
+            s.Storage.AudioCacheLimitMb = AudioCacheLimitMb;
+        });
         UpdateCacheStats();
     }
 
@@ -570,18 +536,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         if (!string.IsNullOrWhiteSpace(cookies))
         {
-            // 1. Сохраняем куки
             _auth.SaveCookies(cookies.Trim());
 
-            // 2. Получаем инфо об аккаунте
             var (Name, Email, AvatarUrl) = await Program.Services
                 .GetRequiredService<YoutubeUserDataService>()
                 .GetAccountInfoAsync();
 
-            // 3. Сохраняем инфо в AuthState
             _auth.UpdateUserProfile(Name, Email, AvatarUrl);
 
-            // 4. Обновляем UI
             IsAuthenticated = _auth.IsAuthenticated;
             RaiseAccountProperties();
 
@@ -615,14 +577,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (string.IsNullOrEmpty(newPath)) return;
         DownloadPath = newPath;
         _library.DownloadPath = newPath;
-        _library.Save();
     }
 
     private async Task ClearHistoryAsync()
     {
         if (!await _dialog.ConfirmAsync(SL["Dialog_Confirm_Title"], SL["Dialog_ClearHistoryMessage"]))
             return;
-        _library.ClearHistory();
+        await _library.ClearHistoryAsync();
         await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Dialog_HistoryCleared"]);
     }
 
@@ -630,7 +591,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     {
         if (!await _dialog.ConfirmAsync(SL["Dialog_Warning_Title"], SL["Dialog_ResetMessage"]))
             return;
-        _library.Reset();
+        await _library.ResetAsync();
         LoadAllSettings();
         await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Dialog_ResetComplete"]);
     }

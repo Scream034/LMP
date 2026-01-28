@@ -34,7 +34,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
-    
+
     private readonly IDisposable? _librarySub;
     private readonly IDisposable? _downloadProgressSub;
     private readonly IDisposable _nextSub;
@@ -81,9 +81,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public int CurrentTrackIndex { get; private set; }
     [Reactive] public int TotalTracksInQueue { get; private set; }
     [Reactive] public bool HasQueueToShuffle { get; private set; }
-    
-    public string QueuePositionText => TotalTracksInQueue > 0 
-        ? $"{CurrentTrackIndex + 1} / {TotalTracksInQueue}" 
+
+    public string QueuePositionText => TotalTracksInQueue > 0
+        ? $"{CurrentTrackIndex + 1} / {TotalTracksInQueue}"
         : "";
 
     #endregion
@@ -142,7 +142,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public string StreamInfo { get; private set; } = "";
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
-    
+
     public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 
     #endregion
@@ -152,9 +152,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     public string ShuffleTooltip => SL["Player_Shuffle"] ?? "Shuffle";
     public string PreviousTooltip => SL["Player_Previous"] ?? "Previous";
     public string NextTooltip => SL["Player_Next"] ?? "Next";
-    
-    public string PlayPauseTooltip => IsPlaying 
-        ? (SL["Player_Pause"] ?? "Pause") 
+
+    public string PlayPauseTooltip => IsPlaying
+        ? (SL["Player_Pause"] ?? "Pause")
         : (SL["Player_Play"] ?? "Play");
 
     public string RepeatTooltip => RepeatMode switch
@@ -165,14 +165,14 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _ => ""
     };
 
-    public string LikeTooltip => IsLiked 
-        ? (SL["Track_Unlike"] ?? "Remove from Liked") 
+    public string LikeTooltip => IsLiked
+        ? (SL["Track_Unlike"] ?? "Remove from Liked")
         : (SL["Track_Like"] ?? "Add to Liked");
 
     public string CopyTooltip => SL["Track_CopyLink"] ?? "Copy Link";
 
-    public string VolumeTooltip => IsMuted 
-        ? (SL["Player_Unmute"] ?? "Unmute") 
+    public string VolumeTooltip => IsMuted
+        ? (SL["Player_Unmute"] ?? "Unmute")
         : $"{SL["Player_Volume"] ?? "Volume"}: {Volume}%";
 
     #endregion
@@ -210,7 +210,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _musicManager = musicManager; // Assign
 
         // Initialize values
-        MaxVolume = _library.Data.MaxVolumeLimit < 100 ? 100 : _library.Data.MaxVolumeLimit;
+        MaxVolume = _library.Settings.MaxVolumeLimit < 100 ? 100 : _library.Settings.MaxVolumeLimit;
         Volume = (int)_audio.GetVolume();
         ShuffleEnabled = _audio.ShuffleEnabled;
         RepeatMode = _audio.RepeatMode;
@@ -220,7 +220,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         Log.Info($"[PlayerBar] Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
         // Event handlers
-        _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() => 
+        _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() =>
         {
             SyncPlaybackState(isPlaying, isPaused);
             this.RaisePropertyChanged(nameof(PlayPauseTooltip));
@@ -231,17 +231,18 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _streamInfoReadyHandler = () => Dispatcher.UIThread.Post(UpdateStreamInfo);
         _positionChangedHandler = pos =>
         {
-             if (!_isSeeking && !_justFinishedSeeking)
-             {
-                 Dispatcher.UIThread.Post(() => {
-                     Position = pos;
-                     PositionSeconds = pos.TotalSeconds;
-                 });
-             }
-             if (IsSeekBusy && !IsLoading)
-             {
-                 Dispatcher.UIThread.Post(() => IsSeekBusy = false);
-             }
+            if (!_isSeeking && !_justFinishedSeeking)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    Position = pos;
+                    PositionSeconds = pos.TotalSeconds;
+                });
+            }
+            if (IsSeekBusy && !IsLoading)
+            {
+                Dispatcher.UIThread.Post(() => IsSeekBusy = false);
+            }
         };
 
         // Subscribe to AudioEngine events
@@ -333,7 +334,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             });
 
         // Commands
-        var canExecute = this.WhenAnyValue(x => x.HasTrack, x => x.IsLoading, 
+        var canExecute = this.WhenAnyValue(x => x.HasTrack, x => x.IsLoading,
             (hasTrack, loading) => hasTrack && !loading);
         var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
             (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
@@ -367,9 +368,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 _ => RepeatMode.None
             };
             _audio.RepeatMode = RepeatMode;
-            _library.Data.RepeatMode = RepeatMode;
-            _library.Save();
-            
+            _library.UpdateSettings(s => s.RepeatMode = RepeatMode);
+
             ShowRepeatModeHint();
         });
 
@@ -429,7 +429,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             RepeatMode.RepeatOne => SL["Player_Repeat_One"] ?? "Repeat Track",
             _ => ""
         };
-        
+
         IsRepeatHintVisible = true;
         await Task.Delay(HintDisplayDurationMs);
         IsRepeatHintVisible = false;
@@ -437,10 +437,10 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private async void ShowLikeHint()
     {
-        LikeHintText = IsLiked 
-            ? (SL["Track_Added"] ?? "Added to Liked") 
+        LikeHintText = IsLiked
+            ? (SL["Track_Added"] ?? "Added to Liked")
             : (SL["Track_Removed"] ?? "Removed from Liked");
-        
+
         IsLikeHintVisible = true;
         await Task.Delay(HintDisplayDurationMs);
         IsLikeHintVisible = false;
@@ -450,10 +450,10 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     {
         IsCopyHighlighted = true;
         IsCopyHintVisible = true;
-        
+
         await Task.Delay(CopyHighlightDurationMs);
         IsCopyHighlighted = false;
-        
+
         await Task.Delay(HintDisplayDurationMs - CopyHighlightDurationMs);
         IsCopyHintVisible = false;
     }
@@ -516,7 +516,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         var queue = _audio.Queue;
         TotalTracksInQueue = queue.Count;
         HasQueueToShuffle = queue.Count > 1;
-        
+
         if (CurrentTrack != null)
         {
             CurrentTrackIndex = queue.ToList().FindIndex(t => t.Id == CurrentTrack.Id);
@@ -526,7 +526,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         {
             CurrentTrackIndex = 0;
         }
-        
+
         this.RaisePropertyChanged(nameof(QueuePositionText));
     }
 
@@ -580,7 +580,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             StreamInfo = $"{format} • {SL["Stream_LocalFile"] ?? "Local File"}";
         else
             StreamInfo = bitrate > 0 ? $"{format} • {bitrate}kbps" : format;
-        
+
         ShowStreamInfo = true;
     }
 
