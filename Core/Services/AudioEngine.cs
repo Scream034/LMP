@@ -114,8 +114,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         // Без этого YouTube может возвращать 403 Forbidden на запросы скачивания.
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeHttpHandler.UserAgentAndroid);
-        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", YoutubeHttpHandler.GetHl());
-        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br, zstd");
 
         ShuffleEnabled = library.Settings.ShuffleEnabled;
