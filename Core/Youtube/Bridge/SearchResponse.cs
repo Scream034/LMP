@@ -28,7 +28,7 @@ internal partial class SearchResponse
     private static readonly FrozenSet<string> ContainerNames = new[]
     {
         "contents", "items", "primaryContents", "secondaryContents",
-        "twoColumnSearchResultsRenderer", "sectionListRenderer", 
+        "twoColumnSearchResultsRenderer", "sectionListRenderer",
         "itemSectionRenderer", "musicShelfRenderer", "richGridRenderer",
         "shelfRenderer", "tabbedSearchResultsRenderer", "tabRenderer",
         "tabs", "content", "continuations", "onResponseReceivedCommands",
@@ -53,7 +53,7 @@ internal partial class SearchResponse
         {
             // Один проход по свойствам объекта вместо множественных TryGetProperty
             var result = ClassifyAndExtract(item, ref foundToken);
-            
+
             switch (result.Type)
             {
                 case ItemType.Video when result.Video is not null:
@@ -95,15 +95,15 @@ internal partial class SearchResponse
 
                 case "videoRenderer":
                     var videoData = new VideoData(prop.Value, isYtm: false);
-                    return string.IsNullOrEmpty(videoData.Id) 
-                        ? default 
+                    return string.IsNullOrEmpty(videoData.Id)
+                        ? default
                         : new(ItemType.Video, videoData, null, null);
 
                 case "shortsLockupViewModel":
                 case "reelItemRenderer":
                     var shortData = new VideoData(prop.Value, isYtm: false);
-                    return string.IsNullOrEmpty(shortData.Id) 
-                        ? default 
+                    return string.IsNullOrEmpty(shortData.Id)
+                        ? default
                         : new(ItemType.Video, shortData, null, null);
 
                 case "lockupViewModel":
@@ -124,22 +124,22 @@ internal partial class SearchResponse
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsPlaylistId(string id) =>
-        id.StartsWith("PL", StringComparison.Ordinal) || 
-        id.StartsWith("OL", StringComparison.Ordinal) || 
+        id.StartsWith("PL", StringComparison.Ordinal) ||
+        id.StartsWith("OL", StringComparison.Ordinal) ||
         id.StartsWith("RD", StringComparison.Ordinal);
 
     private static ClassificationResult ProcessMusicItem(JsonElement musicItem)
     {
         var data = new VideoData(musicItem, isYtm: true);
-        
+
         if (data.IsPlaylistContext)
             return new(ItemType.Playlist, null, new PlaylistData(musicItem, isYtm: true), null);
-        
+
         if (data.IsArtistContext)
             return new(ItemType.Channel, null, null, new ChannelData(musicItem, isYtm: true));
-        
-        return string.IsNullOrEmpty(data.Id) 
-            ? default 
+
+        return string.IsNullOrEmpty(data.Id)
+            ? default
             : new(ItemType.Video, data, null, null);
     }
 
@@ -163,7 +163,7 @@ internal partial class SearchResponse
                 continue;
             }
 
-            if (current.ValueKind != JsonValueKind.Object) 
+            if (current.ValueKind != JsonValueKind.Object)
                 continue;
 
             // Проверяем является ли это целевым элементом за один проход
@@ -250,17 +250,14 @@ internal partial class SearchResponse
     private enum ItemType { None, Video, Playlist, Channel }
 
     private readonly record struct ClassificationResult(
-        ItemType Type, 
-        VideoData? Video, 
-        PlaylistData? Playlist, 
+        ItemType Type,
+        VideoData? Video,
+        PlaylistData? Playlist,
         ChannelData? Channel);
 
     // VideoData с кэшированием свойств при первом доступе
-    internal sealed class VideoData
+    internal sealed class VideoData(JsonElement content, bool isYtm)
     {
-        private readonly JsonElement _content;
-        private readonly bool _isYtm;
-        
         // Кэшированные значения
         private string? _id;
         private bool _idComputed;
@@ -276,13 +273,7 @@ internal partial class SearchResponse
         private bool? _isPlaylistContext;
         private bool? _isArtistContext;
 
-        public VideoData(JsonElement content, bool isYtm)
-        {
-            _content = content;
-            _isYtm = isYtm;
-        }
-
-        public bool IsMusicItem => _isYtm;
+        public bool IsMusicItem => isYtm;
 
         public string? Id
         {
@@ -298,23 +289,23 @@ internal partial class SearchResponse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private string? ComputeId()
         {
-            if (_isYtm)
+            if (isYtm)
             {
                 // Проверяем наиболее вероятные пути первыми
-                var vid = _content.GetPropertyOrNull("playlistItemData")
+                var vid = content.GetPropertyOrNull("playlistItemData")
                     ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
                 if (!string.IsNullOrEmpty(vid)) return vid;
 
-                var nav = _content.GetPropertyOrNull("playNavigationEndpoint") 
-                    ?? _content.GetPropertyOrNull("navigationEndpoint");
+                var nav = content.GetPropertyOrNull("playNavigationEndpoint")
+                    ?? content.GetPropertyOrNull("navigationEndpoint");
                 return nav?.GetPropertyOrNull("watchEndpoint")
                     ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
             }
 
-            var id = _content.GetPropertyOrNull("videoId")?.GetStringOrNull();
+            var id = content.GetPropertyOrNull("videoId")?.GetStringOrNull();
             if (!string.IsNullOrEmpty(id)) return id;
 
-            return _content.GetPropertyOrNull("onTap")
+            return content.GetPropertyOrNull("onTap")
                 ?.GetPropertyOrNull("innertubeCommand")
                 ?.GetPropertyOrNull("reelWatchEndpoint")
                 ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
@@ -333,9 +324,9 @@ internal partial class SearchResponse
 
         private string? ComputeTitle()
         {
-            if (_isYtm) return GetRunText(_content, 0);
+            if (isYtm) return GetRunText(content, 0);
 
-            var titleProp = _content.GetPropertyOrNull("title");
+            var titleProp = content.GetPropertyOrNull("title");
             if (titleProp.HasValue)
             {
                 var runs = titleProp.Value.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
@@ -344,11 +335,11 @@ internal partial class SearchResponse
                     foreach (var run in runs)
                         return run.GetPropertyOrNull("text")?.GetStringOrNull();
                 }
-                
+
                 return titleProp.Value.GetPropertyOrNull("simpleText")?.GetStringOrNull();
             }
 
-            return _content.GetPropertyOrNull("overlayMetadata")
+            return content.GetPropertyOrNull("overlayMetadata")
                 ?.GetPropertyOrNull("primaryText")
                 ?.GetPropertyOrNull("content")?.GetStringOrNull();
         }
@@ -366,9 +357,9 @@ internal partial class SearchResponse
 
         private string? ComputeAuthor()
         {
-            if (_isYtm)
+            if (isYtm)
             {
-                var runs = GetRuns(_content, 1);
+                var runs = GetRuns(content, 1);
                 if (runs == null) return null;
 
                 foreach (var run in runs)
@@ -382,14 +373,14 @@ internal partial class SearchResponse
                     if (pageType is "MUSIC_PAGE_TYPE_ARTIST" or "MUSIC_PAGE_TYPE_USER_CHANNEL")
                         return run.GetPropertyOrNull("text")?.GetStringOrNull();
                 }
-                
+
                 foreach (var run in runs)
                     return run.GetPropertyOrNull("text")?.GetStringOrNull();
-                
+
                 return null;
             }
 
-            var ownerRuns = _content.GetPropertyOrNull("ownerText")
+            var ownerRuns = content.GetPropertyOrNull("ownerText")
                 ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
             if (ownerRuns != null)
             {
@@ -397,7 +388,7 @@ internal partial class SearchResponse
                     return run.GetPropertyOrNull("text")?.GetStringOrNull();
             }
 
-            var bylineRuns = _content.GetPropertyOrNull("shortBylineText")
+            var bylineRuns = content.GetPropertyOrNull("shortBylineText")
                 ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
             if (bylineRuns != null)
             {
@@ -421,9 +412,9 @@ internal partial class SearchResponse
 
         private string? ComputeChannelId()
         {
-            if (_isYtm)
+            if (isYtm)
             {
-                var runs = GetRuns(_content, 1);
+                var runs = GetRuns(content, 1);
                 if (runs != null)
                 {
                     foreach (var run in runs)
@@ -431,8 +422,8 @@ internal partial class SearchResponse
                         var id = run.GetPropertyOrNull("navigationEndpoint")
                             ?.GetPropertyOrNull("browseEndpoint")
                             ?.GetPropertyOrNull("browseId")?.GetStringOrNull();
-                        
-                        if (id != null && id.StartsWith("UC", StringComparison.Ordinal)) 
+
+                        if (id != null && id.StartsWith("UC", StringComparison.Ordinal))
                             return id;
                     }
                 }
@@ -440,7 +431,7 @@ internal partial class SearchResponse
             }
 
             // Ищем browseId только в известных местах, а не через EnumerateDescendantProperties
-            var browsePath = _content.GetPropertyOrNull("ownerText")
+            var browsePath = content.GetPropertyOrNull("ownerText")
                 ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull();
             if (browsePath != null)
             {
@@ -453,7 +444,7 @@ internal partial class SearchResponse
                 }
             }
 
-            return _content.GetPropertyOrNull("channelThumbnailSupportedRenderers")
+            return content.GetPropertyOrNull("channelThumbnailSupportedRenderers")
                 ?.GetPropertyOrNull("channelThumbnailWithLinkRenderer")
                 ?.GetPropertyOrNull("navigationEndpoint")
                 ?.GetPropertyOrNull("browseEndpoint")
@@ -464,10 +455,10 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_isYtm) return true;
-                
+                if (isYtm) return true;
+
                 // Быстрая проверка без полного обхода
-                var badges = _content.GetPropertyOrNull("ownerBadges")?.EnumerateArrayOrNull();
+                var badges = content.GetPropertyOrNull("ownerBadges")?.EnumerateArrayOrNull();
                 if (badges != null)
                 {
                     foreach (var badge in badges)
@@ -482,9 +473,9 @@ internal partial class SearchResponse
             }
         }
 
-        public bool IsShort => !_isYtm && 
-            (_content.TryGetProperty("shortsLockupViewModel", out _) || 
-             _content.TryGetProperty("reelItemRenderer", out _));
+        public bool IsShort => !isYtm &&
+            (content.TryGetProperty("shortsLockupViewModel", out _) ||
+             content.TryGetProperty("reelItemRenderer", out _));
 
         public TimeSpan? Duration
         {
@@ -499,9 +490,9 @@ internal partial class SearchResponse
 
         private TimeSpan? ComputeDuration()
         {
-            if (_isYtm)
+            if (isYtm)
             {
-                var runs = GetRuns(_content, 1);
+                var runs = GetRuns(content, 1);
                 if (runs != null)
                 {
                     foreach (var run in runs)
@@ -516,9 +507,9 @@ internal partial class SearchResponse
                 return null;
             }
 
-            var textDuration = _content.GetPropertyOrNull("lengthText")
+            var textDuration = content.GetPropertyOrNull("lengthText")
                 ?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
-            
+
             return textDuration != null && TryParseDuration(textDuration, out var d) ? d : null;
         }
 
@@ -534,20 +525,20 @@ internal partial class SearchResponse
 
         private IReadOnlyList<ThumbnailData> ComputeThumbnails()
         {
-            var thumbs = _content.GetPropertyOrNull("thumbnail")
+            var thumbs = content.GetPropertyOrNull("thumbnail")
                 ?.GetPropertyOrNull("musicThumbnailRenderer")
                 ?.GetPropertyOrNull("thumbnail")
                 ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
 
             if (thumbs == null)
             {
-                thumbs = _content.GetPropertyOrNull("thumbnail")
+                thumbs = content.GetPropertyOrNull("thumbnail")
                     ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull();
             }
 
             if (thumbs == null)
             {
-                thumbs = _content.GetPropertyOrNull("thumbnailViewModel")
+                thumbs = content.GetPropertyOrNull("thumbnailViewModel")
                     ?.GetPropertyOrNull("image")
                     ?.GetPropertyOrNull("sources")?.EnumerateArrayOrNull();
             }
@@ -572,9 +563,9 @@ internal partial class SearchResponse
 
         private bool ComputeIsPlaylistContext()
         {
-            if (!_isYtm) return false;
+            if (!isYtm) return false;
 
-            var pageType = _content.GetPropertyOrNull("navigationEndpoint")
+            var pageType = content.GetPropertyOrNull("navigationEndpoint")
                 ?.GetPropertyOrNull("browseEndpoint")
                 ?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
                 ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
@@ -595,9 +586,9 @@ internal partial class SearchResponse
 
         private bool ComputeIsArtistContext()
         {
-            if (!_isYtm) return false;
+            if (!isYtm) return false;
 
-            var pageType = _content.GetPropertyOrNull("navigationEndpoint")
+            var pageType = content.GetPropertyOrNull("navigationEndpoint")
                 ?.GetPropertyOrNull("browseEndpoint")
                 ?.GetPropertyOrNull("browseEndpointContextSupportedConfigs")
                 ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
@@ -655,7 +646,7 @@ internal partial class SearchResponse
         }
 
         // Кэшированные форматы для парсинга
-        private static readonly string[] DurationFormats = 
+        private static readonly string[] DurationFormats =
             { @"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss" };
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
