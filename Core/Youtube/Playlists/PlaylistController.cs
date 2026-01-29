@@ -20,7 +20,8 @@ internal class PlaylistController(HttpClient http)
 
         string browseId = playlistId.Value;
 
-        if (browseId == "LL") browseId = "VLLL";
+        if (browseId == "LL")
+            browseId = "VLLL";
         else if (browseId == "LM") browseId = "VLLM";
         else if (browseId == "WL") browseId = "VLWL";
         else if (!browseId.StartsWith("VL")) browseId = "VL" + browseId;
@@ -40,7 +41,8 @@ internal class PlaylistController(HttpClient http)
                   "gl": {{Json.Serialize(gl)}},
                   "utcOffsetMinutes": 0
                 }
-              }
+              },
+              "params": "wgYCEAE%3D"
             }
             """
         );

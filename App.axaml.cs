@@ -41,7 +41,7 @@ public partial class App : Application
             {
                 DataContext = mainWindowVM
             };
-            
+
             Log.Info("Main window created and shown.");
 
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
@@ -65,6 +65,15 @@ public partial class App : Application
 
 #if DEBUG
             desktop.MainWindow.AttachDevTools();
+    
+            // Debug window
+            desktop.MainWindow.KeyDown += (s, e) =>
+            {
+                if (e.Key == Avalonia.Input.Key.F9)
+                {
+                    new Features.Debug.DebugWindow().Show();
+                }
+            };
 #endif
         }
 
@@ -92,7 +101,7 @@ public partial class App : Application
 
             // Sync liked tracks if authenticated
             var musicLibraryManager = Program.Services.GetRequiredService<MusicLibraryManager>();
-            
+
 #if DEBUG
             var dialogService = Program.Services.GetRequiredService<IDialogService>();
             var canSync = await dialogService.ConfirmAsync("Debug", "Sync liked tracks?", "Yes", "No");
