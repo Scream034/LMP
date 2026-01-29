@@ -44,7 +44,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private DateTime _lastVolumeChange = DateTime.MinValue;
 
     private string _activeCodec = "";
-    private string _activeContainer = "";
     private int _activeBitrate;
 
     private volatile bool _isDisposed;
@@ -609,7 +608,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_session != session) return;
             ct.ThrowIfCancellationRequested();
 
-            SetStreamInfo(stream.Codec, stream.Bitrate, stream.Container);
+            SetStreamInfo(stream.Codec, stream.Bitrate);
 
             bool isManualQualityOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
@@ -935,11 +934,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _currentStream != null ? (long)(_currentStream.DownloadProgress / 100 * _currentStream.Length) : 0;
 
     private void ResetStreamInfo() =>
-        (_activeCodec, _activeBitrate, _activeContainer, _streamInfoReady) = ("", 0, "", false);
+        (_activeCodec, _activeBitrate, _streamInfoReady) = ("", 0, false);
 
-    private void SetStreamInfo(string codec, int bitrate, string container)
+    private void SetStreamInfo(string codec, int bitrate)
     {
-        (_activeCodec, _activeBitrate, _activeContainer, _streamInfoReady) = (codec, bitrate, container, true);
+        (_activeCodec, _activeBitrate, _streamInfoReady) = (codec, bitrate, true);
         RaiseEvent(() => OnStreamInfoReady?.Invoke());
     }
 
