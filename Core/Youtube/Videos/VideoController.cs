@@ -83,11 +83,11 @@ internal class VideoController(HttpClient http)
     }
 
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(
-      VideoId videoId,
-      CancellationToken cancellationToken = default
-  )
+        VideoId videoId,
+        CancellationToken cancellationToken = default)
     {
-        Log.Info($"GetPlayerResponse START: {videoId}");
+        Log.Info($"GetPlayerResponse START ({YoutubeClientUtils.CurrentProfile}): {videoId}");
+
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
         using var request = new HttpRequestMessage(
@@ -95,50 +95,19 @@ internal class VideoController(HttpClient http)
             "https://www.youtube.com/youtubei/v1/player"
         );
 
-        // MARK THIS AS ANDROID CONTEXT
-        // The HttpHandler will see this and NOT send SAPISIDHASH, preventing 400 errors
-        request.Options.Set(YoutubeHttpHandler.IsAndroidContextKey, true);
+        // Ставим флаг для Handler-а
+        request.Options.Set(YoutubeHttpHandler.IsPlayerContext, true);
 
-        var hl = YoutubeHttpHandler.GetHl();
-        var gl = YoutubeHttpHandler.GetGl();
+        // Генерируем JSON на основе текущего статического профиля
+        string jsonBody = YoutubeClientUtils.GeneratePlayerContext(videoId.Value, visitorData);
 
-        request.Content = new StringContent(
-            // lang=json
-            $$"""
-            {
-              "videoId": {{Json.Serialize(videoId)}},
-              "contentCheckOk": true,
-              "context": {
-                "client": {
-                  "clientName": "ANDROID",
-                  "clientVersion": "20.10.38",
-                  "osName": "Android",
-                  "osVersion": "11",
-                  "platform": "MOBILE",
-                  "visitorData": {{Json.Serialize(visitorData)}},
-                  "hl": {{Json.Serialize(hl)}},
-                  "gl": {{Json.Serialize(gl)}},
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """
-        );
-
-        // Required header for Android masquerading
-        request.Headers.Add("User-Agent", YoutubeHttpHandler.UserAgentAndroid);
+        request.Content = new StringContent(jsonBody);
 
         using var response = await Http.SendAsync(request, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        var playerResponse = PlayerResponse.Parse(
-            await response.Content.ReadAsStringAsync(cancellationToken)
-        );
-
-        if (!playerResponse.IsAvailable)
-            throw new VideoUnavailableException($"Video '{videoId}' is not available.");
-
-        return playerResponse;
+        return PlayerResponse.Parse(content);
     }
 
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(

@@ -9,9 +9,7 @@
     x:CompileBindings="True">
 
     <UserControl.Styles>
-        <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- TYPOGRAPHY -->
-        <!-- ═══════════════════════════════════════════════════════════════ -->
         <Style Selector="TextBlock.h1">
             <Setter Property="FontSize" Value="24" />
             <Setter Property="FontWeight" Value="Bold" />
@@ -44,18 +42,14 @@
             <Setter Property="TextAlignment" Value="Right" />
         </Style>
 
-        <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- CARDS -->
-        <!-- ═══════════════════════════════════════════════════════════════ -->
         <Style Selector="Border.card">
             <Setter Property="Background" Value="{DynamicResource BgSecondaryBrush}" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="24" />
         </Style>
 
-        <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- COLOR ROW (для секции Appearance) -->
-        <!-- ═══════════════════════════════════════════════════════════════ -->
         <Style Selector="Grid.color-row">
             <Setter Property="Margin" Value="0,0,0,16" />
         </Style>
@@ -171,6 +165,21 @@
                             Text="{Binding L[Settings_RestartRequired]}"
                             HorizontalAlignment="Center" />
                     </Border>
+
+                    <StackPanel Spacing="20">
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel>
+                                <TextBlock Classes="label" Text="{Binding L[Settings_Client]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_ClientDesc]}" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1"
+                                ItemsSource="{Binding ClientOptions}"
+                                SelectedItem="{Binding SelectedClient}"
+                                DisplayMemberBinding="{Binding Name}"
+                                MinWidth="200" />
+                        </Grid>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

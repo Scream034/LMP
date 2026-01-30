@@ -1,6 +1,14 @@
 // Core/Models/AppSettings.cs
 namespace LMP.Core.Models;
 
+public enum YoutubeClientProfile
+{
+    AndroidVR, // Oculus Quest (Текущий рабочий)
+    TV,        // Smart TV / Console (Резервный)
+    Web,       // Обычный браузер (Требует n-token, но иногда работает)
+    // iOS/Android пока убираем, так как они 100% требуют PO Token
+}
+
 /// <summary>
 /// Application settings. Stored as JSON in Settings table.
 /// </summary>
@@ -18,6 +26,8 @@ public class AppSettings
 
     // === Network ===
     public InternetProfile InternetProfile { get; set; } = InternetProfile.Medium;
+    // Добавляем выбор клиента (по умолчанию VR, так как он сейчас работает)
+    public YoutubeClientProfile YoutubeClient { get; set; } = YoutubeClientProfile.AndroidVR;
     public ProxySettings Proxy { get; set; } = new();
     public StorageSettings Storage { get; set; } = new();
 

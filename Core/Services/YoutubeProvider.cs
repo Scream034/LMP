@@ -107,7 +107,7 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeHttpHandler.UserAgentWeb);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeClientUtils.UaWeb);
 
             if (_cookieAuth != null)
             {

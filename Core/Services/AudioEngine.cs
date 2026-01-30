@@ -3,6 +3,7 @@ using LibVLCSharp.Shared;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
 using LMP.Core.Youtube;
+using LMP.Core.Youtube.Utils;
 using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.Services;
@@ -112,15 +113,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         })
         { Timeout = TimeSpan.FromMinutes(5) };
 
-        // Без этого YouTube может возвращать 403 Forbidden на запросы скачивания.
-        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeHttpHandler.UserAgentAndroid);
-        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate, br, zstd");
+        // Устанавливаем User-Agent от VR-клиента для скачивания потоков
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeClientUtils.UserAgent);
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", YoutubeHttpHandler.GetHl());
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://www.youtube.com/");
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://www.youtube.com/");
 
         ShuffleEnabled = library.Settings.ShuffleEnabled;
         RepeatMode = library.Settings.RepeatMode;
         _volumePercent = NormalizeVolume(library.Settings.Volume);
 
-        // Инициализация профиля
         _currentStreamingConfig = GetConfigForProfile(library.Settings.InternetProfile);
 
         InitializeLibVLC();
@@ -660,7 +663,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             }
             else
             {
-                StartPlayback(new Media(_libVLC!, stream.Url, FromType.FromLocation), null, track);
+                var media = new Media(_libVLC!, stream.Url, FromType.FromLocation);
+
+                // Берем актуальный UA (вдруг пользователь поменял настройку)
+                media.AddOption($":http-user-agent={YoutubeClientUtils.UserAgent}");
+                media.AddOption(":http-referrer=https://www.youtube.com/");
+
+                StartPlayback(media, null, track);
             }
 
             Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");

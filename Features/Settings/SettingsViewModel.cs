@@ -6,6 +6,7 @@ using Avalonia.Media;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
+using LMP.Core.Youtube.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -63,6 +64,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<LocalizedItem<InternetProfile>> InternetProfileOptions { get; } = [];
     [Reactive] public LocalizedItem<InternetProfile>? SelectedInternetProfile { get; set; }
+
+    public ObservableCollection<LocalizedItem<YoutubeClientProfile>> ClientOptions { get; } = [];
+    [Reactive] public LocalizedItem<YoutubeClientProfile>? SelectedClient { get; set; }
+
     [Reactive] public bool ProxyEnabled { get; set; }
     [Reactive] public string ProxyHost { get; set; } = "";
     [Reactive] public int ProxyPort { get; set; } = 8080;
@@ -157,6 +162,22 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ClearAudioCacheCommand = ReactiveCommand.CreateFromTask(ClearAudioCacheAsync);
         ApplyThemeCommand = ReactiveCommand.Create(ApplyTheme);
         ResetThemeCommand = ReactiveCommand.Create(ResetTheme);
+        this.WhenAnyValue(x => x.SelectedClient)
+    .Skip(1).WhereNotNull()
+    .Subscribe(c =>
+    {
+        // 1. Сохраняем в настройки
+        _library.UpdateSettings(s => s.YoutubeClient = c.Value);
+
+        // 2. Обновляем статику (чтобы VideoController и HttpHandler увидели изменения)
+        YoutubeClientUtils.CurrentProfile = c.Value;
+
+        // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
+        _audio.ReinitializeWithProfile(_library.Settings.InternetProfile);
+
+        // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
+        _youtube.ClearCache();
+    });
 
         LoadAllSettings();
         UpdateCacheStats();
@@ -192,6 +213,16 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         if (currentImgPreset != ImageCachePreset.Custom)
             SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == currentImgPreset);
+
+        // Clients
+        var currentClient = SelectedClient?.Value ?? _library.Settings.YoutubeClient;
+        ClientOptions.Clear();
+        ClientOptions.Add(new(YoutubeClientProfile.AndroidVR, SL["Client_AndroidVR"]));
+        ClientOptions.Add(new(YoutubeClientProfile.TV, SL["Client_TV"]));
+        ClientOptions.Add(new(YoutubeClientProfile.Web, SL["Client_Web"]));
+
+        SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == currentClient)
+                         ?? ClientOptions[0];
     }
 
     private void SetupSubscriptions()

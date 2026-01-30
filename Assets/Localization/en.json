@@ -74,6 +74,8 @@
   "Settings_Appearance": "Appearance",
   "Settings_AccentColor": "Accent Color",
   "Settings_AdvancedColors": "Advanced Colors",
+  "Settings_Client": "YouTube Client",
+  "Settings_ClientDesc": "Change if tracks fail to load (403 Error).",
 
   "Settings_ChannelUrl": "Public Channel",
   "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
@@ -96,6 +98,11 @@
   "NetProfile_Medium": "Balanced",
   "NetProfile_High": "High Quality",
   "NetProfile_Ultra": "Lossless / LAN",
+
+  "Client_AndroidVR": "Android VR (Recommended)",
+  "Client_TV": "Smart TV / Console",
+  "Client_Web": "Web Browser",
+
   "Cache_Low": "Economy",
   "Cache_Medium": "Balanced",
   "Cache_High": "Smooth",

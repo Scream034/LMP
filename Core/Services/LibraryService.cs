@@ -6,6 +6,7 @@ using System.Text.Json;
 using LMP.Core.Data;
 using LMP.Core.Data.Repositories;
 using LMP.Core.Models;
+using LMP.Core.Youtube.Utils;
 using Microsoft.EntityFrameworkCore;
 using ReactiveUI;
 
@@ -86,6 +87,8 @@ public sealed class LibraryService : IAsyncDisposable
 
         // Load settings
         _appSettings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
+        // ИНИЦИАЛИЗИРУЕМ СТАТИКУ
+        YoutubeClientUtils.CurrentProfile = _appSettings.YoutubeClient;
 
         // Hydrate cache
         await _registry.HydrateAsync(ct);

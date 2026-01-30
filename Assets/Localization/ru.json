@@ -73,6 +73,8 @@
   "Settings_Appearance": "Внешний вид",
   "Settings_AccentColor": "Акцентный цвет",
   "Settings_AdvancedColors": "Дополнительные цвета",
+  "Settings_Client": "Клиент YouTube",
+  "Settings_ClientDesc": "Измените, если треки не грузятся (Ошибка 403).",
 
   "Settings_ChannelUrl": "Публичный канал",
   "Settings_ChannelUrlDesc": "Синхронизация публичных плейлистов без входа в Google.",
@@ -95,6 +97,11 @@
   "NetProfile_Medium": "Сбалансированный",
   "NetProfile_High": "Высокое качество",
   "NetProfile_Ultra": "Максимальный / LAN",
+
+  "Client_AndroidVR": "Android VR (Рекомендуется)",
+  "Client_TV": "Smart TV / Консоль",
+  "Client_Web": "Веб-браузер",
+
   "Cache_Low": "Эконом",
   "Cache_Medium": "Баланс",
   "Cache_High": "Плавный",
