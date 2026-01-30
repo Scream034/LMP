@@ -316,7 +316,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         if (track != null && LibService.Settings.AutoPlayOnUrlPaste)
         {
-            _ = _audio.PlayTrackAsync(track);
+            _ = Task.Run(async () => await _audio.PlayTrackAsync(track), ct);
         }
 
         HasResults = tracks.Count > 0;
@@ -419,7 +419,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void PlayTrackWithContext(TrackInfo track)
     {
-        _ = _audio.PlayTrackAsync(track);
+        _ = Task.Run(async () => await _audio.PlayTrackAsync(track));
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 

@@ -163,21 +163,22 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ApplyThemeCommand = ReactiveCommand.Create(ApplyTheme);
         ResetThemeCommand = ReactiveCommand.Create(ResetTheme);
         this.WhenAnyValue(x => x.SelectedClient)
-    .Skip(1).WhereNotNull()
-    .Subscribe(c =>
-    {
-        // 1. Сохраняем в настройки
-        _library.UpdateSettings(s => s.YoutubeClient = c.Value);
+                    .Skip(1).WhereNotNull()
+                    .Subscribe(async c => // <--- Добавлено async
+                    {
+                        // 1. Сохраняем в настройки
+                        _library.UpdateSettings(s => s.YoutubeClient = c.Value);
 
-        // 2. Обновляем статику (чтобы VideoController и HttpHandler увидели изменения)
-        YoutubeClientUtils.CurrentProfile = c.Value;
+                        // 2. Обновляем статику (чтобы VideoController и HttpHandler увидели изменения)
+                        YoutubeClientUtils.CurrentProfile = c.Value;
 
-        // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
-        _audio.ReinitializeWithProfile(_library.Settings.InternetProfile);
+                        // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
+                        // ВАЖНО: await, чтобы UI не завис и LibVLC не крашнулся
+                        await _audio.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
 
-        // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
-        _youtube.ClearCache();
-    });
+                        // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
+                        _youtube.ClearCache();
+                    });
 
         LoadAllSettings();
         UpdateCacheStats();

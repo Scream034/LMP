@@ -172,15 +172,30 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 if (_auth.IsAuthenticated)
                 {
-                    SyncStatus = SL["Sync_LikedSongs"];
-                    await _manager.SyncLikedTracksAsync();
-                }
+                    // Спрашиваем пользователя вместо автоматического старта
+                    var confirmSyncLikes = await _dialog.ConfirmAsync(
+                        SL["Sync_ConfirmLikedOnly"] ?? "Playlists Not Found",
+                        SL["Sync_NoPlaylistsFound_AskLiked"] ?? "We couldn't find any public playlists. Do you want to sync your Liked Songs instead?",
+                        SL["Common_Yes"] ?? "Yes",
+                        SL["Common_No"] ?? "No"
+                    );
 
-                if (!_isDisposed)
-                    await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_NoPlaylists"]);
+                    if (confirmSyncLikes)
+                    {
+                        SyncStatus = SL["Sync_LikedSongs"];
+                        await _manager.SyncLikedTracksAsync();
+
+                        // Сообщаем об успехе, так как это была единственная операция
+                        await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Sync_Success_Msg_LikedOnly"] ?? "Liked songs synced successfully.");
+                    }
+                }
+                else
+                {
+                    if (!_isDisposed)
+                        await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_NoPlaylists"]);
+                }
                 return;
             }
-
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.15;
             SyncStatus = SL["Sync_SelectPlaylists"];

@@ -256,7 +256,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         IsShuffleActive = false;
 
         _audio.EnqueueRange(allTracks);
-        _ = _audio.PlayTrackAsync(allTracks[0]);
+        _ = Task.Run(async () => await _audio.PlayTrackAsync(allTracks[0]));
     }
 
     private void ToggleShuffle()

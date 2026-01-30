@@ -182,7 +182,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     private void PlayFromQueue(TrackInfo track)
     {
-        _ = _audio.PlayTrackAsync(track);
+        // Fire-and-forget через Task.Run, чтобы клик по кнопке не фризил UI
+        // пока AudioEngine останавливает предыдущий трек
+        Task.Run(async () => await _audio.PlayTrackAsync(track));
     }
 
     private void UpdateActiveStates()

@@ -242,7 +242,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     private void PlayWithContext(TrackInfo track)
     {
-        _ = _audio.PlayTrackAsync(track);
+        Task.Run(async () => await _audio.PlayTrackAsync(track));
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 

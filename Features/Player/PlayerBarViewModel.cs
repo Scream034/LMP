@@ -606,19 +606,33 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _lastSpeedCheck = now;
     }
 
-    private void FallbackPositionUpdate()
+   private void FallbackPositionUpdate()
     {
+        // Если мы перематываем, не дергаем обновления, чтобы ползунок не скакал
         if (!HasTrack || _isSeeking || _justFinishedSeeking) return;
 
+        // AudioEngine.TotalDuration и Position теперь безопасны (читают из памяти)
         var realDur = _audio.TotalDuration;
+        
+        // Обновляем Duration только если она реально изменилась (оптимизация)
         if (Math.Abs(DurationSeconds - realDur.TotalSeconds) > 1 && realDur.TotalSeconds > 0)
         {
             Duration = realDur;
             DurationSeconds = Duration.TotalSeconds;
         }
+
+        // Буфер
         if (_audio.BufferProgress > 0)
         {
             BufferedSeconds = DurationSeconds * (_audio.BufferProgress / 100.0);
+        }
+        
+        // Позиция
+        if (IsPlaying)
+        {
+             // Читаем безопасное свойство
+             Position = _audio.CurrentPosition;
+             PositionSeconds = Position.TotalSeconds;
         }
     }
 

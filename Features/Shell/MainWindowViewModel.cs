@@ -11,13 +11,13 @@ using LMP.Features.Home;
 using LMP.Features.Library;
 using LMP.Features.Settings;
 using LMP.Features.Playlist;
+using System.Reactive.Concurrency;
 
 namespace LMP.Features.Shell;
 
 public class MainWindowViewModel : ViewModelBase
 {
     private readonly IServiceProvider _services;
-    private readonly LibraryService _library;
 
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
@@ -32,14 +32,24 @@ public class MainWindowViewModel : ViewModelBase
 
     public MainWindowViewModel(
         IServiceProvider services,
-        PlayerBarViewModel playerBar,
-        LibraryService library)
+        PlayerBarViewModel playerBar)
     {
         Log.Info("MainWindowViewModel constructor started.");
 
         _services = services;
-        _library = library;
         PlayerBar = playerBar;
+
+        var audio = services.GetRequiredService<AudioEngine>();
+        var dialog = services.GetRequiredService<IDialogService>();
+
+        audio.OnCriticalError += (title, msg) =>
+        {
+            // Гарантируем, что диалог не заблокирует поток обработки аудио
+            RxApp.MainThreadScheduler.Schedule(async () => 
+            {
+                await dialog.ShowInfoAsync(title, msg);
+            });
+        };
 
         // Навигация возможна только если не заблокирована
         var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
