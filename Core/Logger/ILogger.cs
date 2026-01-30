@@ -1,4 +1,4 @@
-namespace LMP.Logging;
+namespace LMP.Logger;
 
 public interface ILogger
 {

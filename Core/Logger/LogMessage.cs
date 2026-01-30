@@ -1,4 +1,4 @@
-namespace LMP.Logging;
+namespace LMP.Logger;
 
 public readonly struct LogMessage(LogLevel level, string category, string message, Exception? exception = null)
 {

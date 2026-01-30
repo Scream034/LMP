@@ -1,9 +1,9 @@
 using System.Text;
 using System.Threading.Channels;
 
-namespace LMP.Logging;
+namespace LMP.Logger;
 
-public class AsyncLogProcessor : IDisposable, IAsyncDisposable
+public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
 {
     private readonly Channel<LogMessage> _channel;
     private readonly Task _workerTask;
