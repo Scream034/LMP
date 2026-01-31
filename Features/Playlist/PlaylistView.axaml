@@ -26,7 +26,8 @@
     <Grid>
         <Grid.RowDefinitions>
             <!-- 0: Header (resizable) -->
-            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180" MaxHeight="500" />
+            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="220"
+                MaxHeight="340" />
             <!-- 1: Splitter -->
             <RowDefinition Height="Auto" />
             <!-- 2: Compact Filter -->
@@ -39,7 +40,7 @@
         <Border Grid.Row="0"
             BorderBrush="{DynamicResource BgHighlightBrush}"
             BorderThickness="0,0,0,0"
-            Background="{DynamicResource BgBaseBrush}"
+            Background="{DynamicResource BgPrimaryBrush}"
             Padding="24,16">
 
             <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
@@ -56,10 +57,14 @@
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
 
+                                <!-- ★ Используем QualityImage для высокого качества -->
                                 <Image
-                                    asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
+                                    controls:QualityImage.Source="{Binding ThumbnailUrl}"
+                                    controls:QualityImage.Quality="High"
                                     Stretch="UniformToFill"
                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
+
+                                <!-- Для локальных ресурсов -->
                                 <Image
                                     Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
                                     Stretch="UniformToFill"
@@ -137,7 +142,7 @@
         </Border>
 
         <!-- GRIDSPLITTER (Row 1) - для изменения размера шапки -->
-        <GridSplitter Grid.Row="1" 
+        <GridSplitter Grid.Row="1"
             Classes="header-splitter"
             ResizeDirection="Rows"
             ResizeBehavior="PreviousAndNext"
@@ -183,14 +188,12 @@
         </Grid>
 
         <!-- LIST AREA (Row 3) -->
-        <!-- Removed external ScrollViewer to fix virtualization (Enable reordering lag issue) -->
         <controls:TrackListControl
             Grid.Row="3"
             Margin="24,0"
             Items="{Binding Items}"
             IsLoading="{Binding IsLoading}"
             IsLoadingMore="{Binding IsLoadingMore}"
-            IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
             ReachedEnd="{Binding ReachedEnd}"
             LoadMoreCommand="{Binding LoadMoreCommand}"
             UseInternalScroll="True"
@@ -198,6 +201,6 @@
             IsPlaylistContext="{Binding CanEdit}"
             EnableReordering="{Binding CanReorderItems}"
             MoveItemCommand="{Binding MoveItemCommand}" />
-            
+
     </Grid>
 </UserControl>

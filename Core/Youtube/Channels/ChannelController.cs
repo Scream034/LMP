@@ -68,6 +68,9 @@ internal class ChannelController(HttpClient http)
 
         string payload;
 
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
         if (continuationToken == null)
         {
             // Первый запрос: запрашиваем страницу канала с открытой вкладкой Плейлисты
@@ -78,9 +81,9 @@ internal class ChannelController(HttpClient http)
             "context": {
                 "client": {
                     "clientName": "WEB",
-                    "clientVersion": "2.20240101.00.00",
-                    "hl": "en",
-                    "gl": "US"
+                    "clientVersion": {{YoutubeHttpHandler.WebClientVersion}},
+                    "hl": {{Json.Serialize(hl)}},
+                    "gl": {{Json.Serialize(gl)}}
                 }
             }
         }
@@ -95,9 +98,9 @@ internal class ChannelController(HttpClient http)
             "context": {
                 "client": {
                     "clientName": "WEB",
-                    "clientVersion": "2.20240101.00.00",
-                    "hl": "en",
-                    "gl": "US"
+                    "clientVersion": {{YoutubeHttpHandler.WebClientVersion}},
+                    "hl": {{Json.Serialize(hl)}},
+                    "gl": {{Json.Serialize(gl)}}
                 }
             }
         }

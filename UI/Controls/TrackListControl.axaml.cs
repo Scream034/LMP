@@ -19,8 +19,8 @@ public partial class TrackListControl : UserControl
     private const string DragFormatTrackIndex = "application/x-lmp-track-index";
     private const double DragThreshold = 5.0;
     private static readonly DataFormat<string> TrackIndexDataFormat = DataFormat.CreateStringPlatformFormat(DragFormatTrackIndex);
-    
-    // ★ НОВОЕ: Константы для авто-скролла
+
+    // Константы для авто-скролла
     private const int AutoScrollMargin = 50; // Размер "горячей зоны" у краев списка
     private const double AutoScrollAmount = 12.0; // На сколько пикселей скроллить за тик
     #endregion
@@ -34,7 +34,7 @@ public partial class TrackListControl : UserControl
     private ListBoxItem? _lastDragOverItem;
     private bool _isDragging;
 
-    // ★ НОВОЕ: Поля для авто-скролла
+    // Поля для авто-скролла
     private ScrollViewer? _scrollViewer;
     private DispatcherTimer? _autoScrollTimer;
     private double _autoScrollOffset;
@@ -248,7 +248,7 @@ public partial class TrackListControl : UserControl
         UpdateLocalizedTexts();
         _listBox = this.FindControl<ListBox>("MainListBox");
 
-        // ★ НОВОЕ: Находим ScrollViewer и инициализируем таймер
+        // Находим ScrollViewer и инициализируем таймер
         if (_listBox is { IsLoaded: true })
         {
             _scrollViewer = _listBox.FindDescendantOfType<ScrollViewer>();
@@ -266,7 +266,7 @@ public partial class TrackListControl : UserControl
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
         base.OnDetachedFromVisualTree(e);
 
-        // ★ НОВОЕ: Очищаем ресурсы
+        // Очищаем ресурсы
         _autoScrollTimer?.Stop();
         _autoScrollTimer = null;
 
@@ -303,6 +303,29 @@ public partial class TrackListControl : UserControl
                  change.Property == ItemsProperty)
         {
             UpdateItemsContext();
+
+            // При изменении Items проверяем, нужно ли подгрузить ещё
+            if (change.Property == ItemsProperty)
+            {
+                Dispatcher.UIThread.Post(() => CheckInitialLoad(), DispatcherPriority.Background);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, нужно ли сразу загрузить ещё данных (если контент не заполняет viewport)
+    /// </summary>
+    private void CheckInitialLoad()
+    {
+        if (_scrollViewer == null || LoadMoreCommand == null) return;
+
+        // Если контент меньше viewport и команда доступна
+        if (_scrollViewer.Extent.Height <= _scrollViewer.Viewport.Height)
+        {
+            if (LoadMoreCommand.CanExecute(null))
+            {
+                LoadMoreCommand.Execute(null);
+            }
         }
     }
 
@@ -399,20 +422,20 @@ public partial class TrackListControl : UserControl
             overItem.Classes.Add("insert-bottom");
         }
 
-        // ★ НОВОЕ: Запускаем или останавливаем авто-скролл
+        // Запускаем или останавливаем авто-скролл
         HandleAutoScroll(e);
     }
 
     private void OnDragLeave(object? sender, RoutedEventArgs e)
     {
         CleanupDragStyles();
-        _autoScrollTimer?.Stop(); // ★ НОВОЕ: Останавливаем таймер
+        _autoScrollTimer?.Stop(); // Останавливаем таймер
     }
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
         CleanupDragStyles();
-        _autoScrollTimer?.Stop(); // ★ НОВОЕ: Останавливаем таймер
+        _autoScrollTimer?.Stop(); // Останавливаем таймер
 
         if (!EnableReordering || !HasTrackIndexData(e) || _listBox == null) return;
 
@@ -425,8 +448,8 @@ public partial class TrackListControl : UserControl
             MoveItemCommand?.Execute((oldIndex, newIndex));
         }
     }
-    
-    // ★★★ НОВЫЕ МЕТОДЫ ДЛЯ АВТО-СКРОЛЛА ★★★
+
+    // НОВЫЕ МЕТОДЫ ДЛЯ АВТО-СКРОЛЛА
     private void HandleAutoScroll(DragEventArgs e)
     {
         if (_scrollViewer == null) return;
@@ -460,7 +483,7 @@ public partial class TrackListControl : UserControl
         var newOffset = _scrollViewer.Offset + new Vector(0, _autoScrollOffset);
         _scrollViewer.Offset = newOffset;
     }
-    // ★★★ КОНЕЦ НОВЫХ МЕТОДОВ ★★★
+    // КОНЕЦ НОВЫХ МЕТОДОВ
 
     private static bool HasTrackIndexData(DragEventArgs e)
     {
@@ -482,14 +505,14 @@ public partial class TrackListControl : UserControl
             {
                 return dragItem.TrackIndex;
             }
-            
+
             object? rawValue = item.TryGetRaw(TrackIndexDataFormat);
 
             if (rawValue is string strValue && int.TryParse(strValue, out int index))
             {
                 return index;
             }
-            
+
             if (rawValue is int intValue)
             {
                 return intValue;
@@ -551,7 +574,7 @@ public partial class TrackListControl : UserControl
         public DragDataTransferItem(int trackIndex)
         {
             TrackIndex = trackIndex;
-            _formats = new List<DataFormat> { TrackIndexDataFormat };
+            _formats = [TrackIndexDataFormat];
         }
 
         public IReadOnlyList<DataFormat> Formats => _formats;
@@ -565,20 +588,13 @@ public partial class TrackListControl : UserControl
             return null;
         }
     }
-    
-    private sealed class DragDataTransfer : IDataTransfer
-    {
-        private readonly IReadOnlyList<DataFormat> _formats;
-        private readonly IReadOnlyList<IDataTransferItem> _items;
-        private bool _disposed;
-        public int TrackIndex { get; }
 
-        public DragDataTransfer(int trackIndex)
-        {
-            TrackIndex = trackIndex;
-            _formats = new List<DataFormat> { TrackIndexDataFormat };
-            _items = new List<IDataTransferItem> { new DragDataTransferItem(trackIndex) };
-        }
+    private sealed class DragDataTransfer(int trackIndex) : IDataTransfer
+    {
+        private readonly IReadOnlyList<DataFormat> _formats = [TrackIndexDataFormat];
+        private readonly IReadOnlyList<IDataTransferItem> _items = [new DragDataTransferItem(trackIndex)];
+        private bool _disposed;
+        public int TrackIndex { get; } = trackIndex;
 
         public IReadOnlyList<DataFormat> Formats => _formats;
         public IReadOnlyList<IDataTransferItem> Items => _items;

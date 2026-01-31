@@ -140,15 +140,202 @@ public sealed class ThemeManagerService
         SetColor(resources, "TextMuted", theme.TextMuted);
         SetColor(resources, "TextDark", theme.TextDark);
 
-        // System accent compatibility
-        if (TryParseColor(theme.AccentColor, out var accent))
-        {
-            resources["SystemAccentColor"] = accent;
-            if (TryParseColor(theme.AccentHover, out var accentHover))
-                resources["SystemAccentColorLight1"] = accentHover;
-        }
+        // ═══ AVALONIA FLUENT THEME COMPATIBILITY ═══
+        // Переопределяем системные ресурсы для корректной работы стандартных контролов
+        ApplyFluentOverrides(resources, theme);
 
         Log.Info($"Theme '{theme.Name}' applied.");
+    }
+
+    /// <summary>
+    /// Применяет переопределения для Fluent темы Avalonia
+    /// </summary>
+    private static void ApplyFluentOverrides(IResourceDictionary resources, ThemeSettings theme)
+    {
+        _ = TryParseColor(theme.AccentColor, out var accent);
+        _ = TryParseColor(theme.AccentHover, out var accentHover);
+        _ = TryParseColor(theme.TextPrimary, out var textPrimary);
+        _ = TryParseColor(theme.TextDark, out var textDark);
+        _ = TryParseColor(theme.TextSecondary, out var textSecondary);
+        _ = TryParseColor(theme.BgPrimary, out var bgPrimary);
+        _ = TryParseColor(theme.BgSecondary, out var bgSecondary);
+        _ = TryParseColor(theme.BgElevated, out var bgElevated);
+        _ = TryParseColor(theme.BgHighlight, out var bgHighlight);
+        _ = TryParseColor(theme.BgHover, out var bgHover);
+        _ = TryParseColor(theme.TextMuted, out var textMuted);
+
+        // ═══ SYSTEM ACCENT COLORS ═══
+        resources["SystemAccentColor"] = accent;
+        resources["SystemAccentColorDark1"] = accent;
+        resources["SystemAccentColorDark2"] = accent;
+        resources["SystemAccentColorDark3"] = accent;
+        resources["SystemAccentColorLight1"] = accentHover;
+        resources["SystemAccentColorLight2"] = accentHover;
+        resources["SystemAccentColorLight3"] = accentHover;
+
+        // ═══ TEXT ON ACCENT (критично для контраста!) ═══
+        resources["TextOnAccentFillColorPrimary"] = textDark;
+        resources["TextOnAccentFillColorSecondary"] = textDark;
+        resources["TextOnAccentFillColorDisabled"] = textSecondary;
+        resources["TextOnAccentFillColorSelectedText"] = textDark;
+
+        // ═══ GENERAL TEXT ═══
+        resources["TextFillColorPrimary"] = textPrimary;
+        resources["TextFillColorSecondary"] = textSecondary;
+        resources["TextFillColorTertiary"] = textSecondary;
+        resources["TextFillColorDisabled"] = textSecondary;
+
+        // ═══ CONTROL BACKGROUNDS ═══
+        resources["ControlFillColorDefault"] = bgElevated;
+        resources["ControlFillColorSecondary"] = bgElevated;
+        resources["ControlFillColorTertiary"] = bgHighlight;
+        resources["ControlFillColorInputActive"] = bgHover;
+        resources["ControlFillColorDisabled"] = bgHighlight;
+
+        resources["ControlStrokeColorDefault"] = bgHighlight;
+        resources["ControlStrokeColorSecondary"] = bgHighlight;
+        resources["ControlStrongStrokeColorDefault"] = textSecondary;
+        resources["ControlStrongStrokeColorDisabled"] = bgHighlight;
+
+        // ═══ SUBTLE FILLS ═══
+        resources["SubtleFillColorTransparent"] = Colors.Transparent;
+        resources["SubtleFillColorSecondary"] = bgHover;
+        resources["SubtleFillColorTertiary"] = bgHighlight;
+        resources["SubtleFillColorDisabled"] = Colors.Transparent;
+
+        // ═══ ACCENT BUTTON (Button.accent, primary buttons) ═══
+        resources["AccentFillColorDefaultBrush"] = new SolidColorBrush(accent);
+        resources["AccentFillColorSecondary"] = accentHover;
+        resources["AccentFillColorTertiary"] = accent;
+        resources["AccentFillColorDisabled"] = bgHighlight;
+
+        // Текст на акцентных кнопках
+        resources["AccentButtonForeground"] = textDark;
+        resources["AccentButtonForegroundPointerOver"] = textDark;
+        resources["AccentButtonForegroundPressed"] = textDark;
+        resources["AccentButtonForegroundDisabled"] = textSecondary;
+
+        resources["AccentButtonBackground"] = accent;
+        resources["AccentButtonBackgroundPointerOver"] = accentHover;
+        resources["AccentButtonBackgroundPressed"] = accent;
+        resources["AccentButtonBackgroundDisabled"] = bgHighlight;
+
+        // ═══ CHECKBOX ═══
+        resources["CheckGlyphForeground"] = textDark;
+        resources["CheckGlyphForegroundChecked"] = textDark;
+        resources["CheckGlyphForegroundCheckedPointerOver"] = textDark;
+        resources["CheckGlyphForegroundCheckedPressed"] = textDark;
+        resources["CheckGlyphForegroundCheckedDisabled"] = textSecondary;
+        resources["CheckGlyphForegroundIndeterminate"] = textDark;
+
+        // ═══ TOGGLESWITCH ═══
+        // Fill when ON
+        resources["ToggleSwitchFillOn"] = accent;
+        resources["ToggleSwitchFillOnPointerOver"] = accentHover;
+        resources["ToggleSwitchFillOnPressed"] = accent;
+        resources["ToggleSwitchFillOnDisabled"] = bgHighlight;
+
+        // Fill when OFF
+        resources["ToggleSwitchFillOff"] = bgHighlight;
+        resources["ToggleSwitchFillOffPointerOver"] = bgHover;
+        resources["ToggleSwitchFillOffPressed"] = bgHighlight;
+
+        // Knob (круглая ручка)
+        resources["ToggleSwitchKnobFillOn"] = textDark;
+        resources["ToggleSwitchKnobFillOnPointerOver"] = textDark;
+        resources["ToggleSwitchKnobFillOnPressed"] = textDark;
+        resources["ToggleSwitchKnobFillOnDisabled"] = textSecondary;
+
+        resources["ToggleSwitchKnobFillOff"] = textSecondary;
+        resources["ToggleSwitchKnobFillOffPointerOver"] = textPrimary;
+        resources["ToggleSwitchKnobFillOffPressed"] = textSecondary;
+
+        // Stroke
+        resources["ToggleSwitchStrokeOn"] = accent;
+        resources["ToggleSwitchStrokeOnPointerOver"] = accentHover;
+        resources["ToggleSwitchStrokeOff"] = textMuted;
+        resources["ToggleSwitchStrokeOffPointerOver"] = textSecondary;
+
+        // ═══ SLIDER ═══
+        resources["SliderTrackFill"] = bgHighlight;
+        resources["SliderTrackFillPointerOver"] = bgHighlight;
+        resources["SliderTrackFillPressed"] = bgHighlight;
+        resources["SliderTrackFillDisabled"] = bgHighlight;
+
+        resources["SliderTrackValueFill"] = accent;
+        resources["SliderTrackValueFillPointerOver"] = accentHover;
+        resources["SliderTrackValueFillPressed"] = accent;
+        resources["SliderTrackValueFillDisabled"] = bgHighlight;
+
+        resources["SliderThumbBackground"] = textPrimary;
+        resources["SliderThumbBackgroundPointerOver"] = accent;
+        resources["SliderThumbBackgroundPressed"] = accentHover;
+        resources["SliderThumbBackgroundDisabled"] = textSecondary;
+
+        // ═══ COMBOBOX ═══
+        resources["ComboBoxBackground"] = bgElevated;
+        resources["ComboBoxBackgroundPointerOver"] = bgHover;
+        resources["ComboBoxBackgroundPressed"] = bgHighlight;
+        resources["ComboBoxBackgroundDisabled"] = bgHighlight;
+
+        resources["ComboBoxForeground"] = textPrimary;
+        resources["ComboBoxForegroundPointerOver"] = textPrimary;
+        resources["ComboBoxForegroundPressed"] = textPrimary;
+        resources["ComboBoxForegroundDisabled"] = textSecondary;
+
+        resources["ComboBoxDropDownBackground"] = bgElevated;
+        resources["ComboBoxDropDownBorderBrush"] = bgHighlight;
+
+        // ComboBoxItem (элементы списка)
+        resources["ComboBoxItemForeground"] = textPrimary;
+        resources["ComboBoxItemForegroundPointerOver"] = textPrimary;
+        resources["ComboBoxItemForegroundPressed"] = textPrimary;
+        resources["ComboBoxItemForegroundDisabled"] = textSecondary;
+
+        // SELECTED ITEM - критично!
+        resources["ComboBoxItemForegroundSelected"] = textDark;
+        resources["ComboBoxItemForegroundSelectedPointerOver"] = textDark;
+        resources["ComboBoxItemForegroundSelectedPressed"] = textDark;
+        resources["ComboBoxItemForegroundSelectedDisabled"] = textSecondary;
+
+        resources["ComboBoxItemBackgroundSelected"] = accent;
+        resources["ComboBoxItemBackgroundSelectedPointerOver"] = accentHover;
+        resources["ComboBoxItemBackgroundSelectedPressed"] = accent;
+
+        // ═══ LISTBOX ═══
+        resources["ListBoxItemForeground"] = textPrimary;
+        resources["ListBoxItemForegroundSelected"] = textDark;
+        resources["ListBoxItemForegroundSelectedPointerOver"] = textDark;
+        resources["ListBoxItemBackgroundSelected"] = accent;
+        resources["ListBoxItemBackgroundSelectedPointerOver"] = accentHover;
+
+        // ═══ BACKGROUNDS ═══
+        resources["SolidBackgroundFillColorBase"] = bgPrimary;
+        resources["SolidBackgroundFillColorSecondary"] = bgSecondary;
+        resources["SolidBackgroundFillColorTertiary"] = bgElevated;
+        resources["SolidBackgroundFillColorQuarternary"] = bgHighlight;
+
+        resources["LayerFillColorDefault"] = bgElevated;
+        resources["LayerFillColorAlt"] = bgSecondary;
+        resources["LayerOnMicaBaseAltFillColorDefault"] = bgPrimary;
+
+        resources["CardBackgroundFillColorDefault"] = bgElevated;
+        resources["CardBackgroundFillColorSecondary"] = bgSecondary;
+        resources["CardStrokeColorDefault"] = bgHighlight;
+
+        resources["DividerStrokeColorDefault"] = bgHighlight;
+
+        // ═══ FLYOUT / POPUP ═══
+        resources["FlyoutBackground"] = bgElevated;
+        resources["FlyoutBorderThemeBrush"] = new SolidColorBrush(bgHighlight);
+
+        // ═══ MENU ═══
+        resources["MenuFlyoutPresenterBackground"] = bgElevated;
+        resources["MenuFlyoutPresenterBorderBrush"] = new SolidColorBrush(bgHighlight);
+        resources["MenuFlyoutItemBackground"] = Colors.Transparent;
+        resources["MenuFlyoutItemBackgroundPointerOver"] = bgHighlight;
+        resources["MenuFlyoutItemForeground"] = textPrimary;
+        resources["MenuFlyoutItemForegroundPointerOver"] = textPrimary;
     }
 
     /// <summary>
@@ -225,7 +412,7 @@ public sealed class ThemeManagerService
             TextPrimary = "#FFFFFF",
             TextSecondary = "#B3B3B3",
             TextMuted = "#888888",
-            TextDark = "#000000"
+            TextDark = "#000000"  // Черный для контраста на зеленом
         },
 
         // ═══ 3. OCEAN DEEP ═══
@@ -267,7 +454,7 @@ public sealed class ThemeManagerService
             TextPrimary = "#FFFFFF",
             TextSecondary = "#A0A0A0",
             TextMuted = "#606060",
-            TextDark = "#000000"
+            TextDark = "#000000"  // Черный текст на белом акценте
         },
 
         // ═══ 5. WARM SUNSET ═══

@@ -1,14 +1,17 @@
-﻿// === ФАЙЛ: Core/Services/AudioEngine.cs ===
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using LibVLCSharp.Shared;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
+using LMP.Core.Youtube;
+using LMP.Core.Youtube.Utils;
+using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.Services;
 
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {
+    private const int MaxConsecutiveErrors = 3; // Порог ошибок подряд
     private const int ApiCooldownMs = 200;
     private const int QualitySwitchTimeoutSec = 8;
     private const int MaxHistorySize = 100;
@@ -20,7 +23,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private readonly HttpClient _httpClient;
 
     // LibVLC теперь не readonly, так как мы его пересоздаем при смене профиля
-    private LibVLC _libVLC = null!;
+    private LibVLC? _libVLC;
 
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private readonly SemaphoreSlim _commandLock = new(1, 1);
@@ -29,6 +32,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private readonly List<TrackInfo> _queue = [];
     private int _currentIndex = -1;
+    private int _consecutiveErrors = 0; // Счетчик ошибок
+    private long _cachedTime = 0;
+    private long _cachedLength = 0;
 
     private readonly List<TrackInfo> _history = [];
 
@@ -44,7 +50,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private DateTime _lastVolumeChange = DateTime.MinValue;
 
     private string _activeCodec = "";
-    private string _activeContainer = "";
     private int _activeBitrate;
 
     private volatile bool _isDisposed;
@@ -64,11 +69,29 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     [Reactive] public bool IsPaused { get; private set; }
     [Reactive] public bool IsLoading { get; private set; }
 
+    // Events
+
+    public event Action<string, string>? OnCriticalError;
+
+    // Вместо копирования каждый раз, используем snapshot только когда нужно
+    private List<TrackInfo> _queueSnapshot = [];
+    private int _queueVersion = 0;
+    private int _snapshotVersion = -1;
+
     public IReadOnlyList<TrackInfo> Queue
     {
         get
         {
-            lock (_queue) return _queue.ToList();
+            lock (_queue)
+            {
+                // Возвращаем кэшированный snapshot, если очередь не изменилась
+                if (_snapshotVersion == _queueVersion)
+                    return _queueSnapshot;
+
+                _queueSnapshot = [.. _queue];
+                _snapshotVersion = _queueVersion;
+                return _queueSnapshot;
+            }
         }
     }
 
@@ -79,13 +102,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public bool ShuffleEnabled { get; set; }
     public RepeatMode RepeatMode { get; set; }
 
-    public TimeSpan CurrentPosition => TryGet(() =>
-        _player?.Time is >= 0 and var t ? TimeSpan.FromMilliseconds(t) : TimeSpan.Zero);
+    // Это предотвращает блокировку UI, если плеер "задумался"
+    public TimeSpan CurrentPosition => TimeSpan.FromMilliseconds(Volatile.Read(ref _cachedTime));
 
-    public TimeSpan TotalDuration => TryGet(() =>
-        _player?.Length is > 0 and var len
-            ? TimeSpan.FromMilliseconds(len)
-            : CurrentTrack?.Duration ?? TimeSpan.Zero);
+    public TimeSpan TotalDuration
+    {
+        get
+        {
+            long len = Volatile.Read(ref _cachedLength);
+            return len > 0 ? TimeSpan.FromMilliseconds(len) : (CurrentTrack?.Duration ?? TimeSpan.Zero);
+        }
+    }
 
     // === Events ===
 
@@ -113,26 +140,29 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         })
         { Timeout = TimeSpan.FromMinutes(5) };
 
-        ShuffleEnabled = library.Data.ShuffleEnabled;
-        RepeatMode = library.Data.RepeatMode;
-        _volumePercent = NormalizeVolume(library.Data.Volume);
+        // Устанавливаем User-Agent от VR-клиента для скачивания потоков
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeClientUtils.UserAgent);
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", YoutubeHttpHandler.GetHl());
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://www.youtube.com/");
+        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://www.youtube.com/");
 
-        // Инициализация профиля
-        _currentStreamingConfig = GetConfigForProfile(library.Data.InternetProfile);
+        ShuffleEnabled = library.Settings.ShuffleEnabled;
+        RepeatMode = library.Settings.RepeatMode;
+        _volumePercent = NormalizeVolume(library.Settings.Volume);
+
+        _currentStreamingConfig = GetConfigForProfile(library.Settings.InternetProfile);
 
         InitializeLibVLC();
         InitializePlayer();
 
         _ = VolumeSaveLoopAsync();
-        Log.Info($"[AudioEngine] Initialized. Volume: {_volumePercent}%, Profile: {library.Data.InternetProfile}");
+        Log.Info($"[AudioEngine] Initialized. Volume: {_volumePercent}%, Profile: {library.Settings.InternetProfile}");
     }
 
     private void InitializeLibVLC()
     {
-        if (_libVLC != null)
-        {
-            _libVLC.Dispose();
-        }
+        _libVLC?.Dispose();
 
         LibVLCSharp.Shared.Core.Initialize();
 
@@ -153,32 +183,68 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private void InitializePlayer()
     {
-        if (_player != null)
-        {
-            _player.Dispose();
-        }
+        _player?.Dispose();
 
-        _player = new MediaPlayer(_libVLC);
-        _player.Playing += (_, _) => OnVlcPlaying();
-        _player.Paused += OnVlcPaused;
-        _player.Stopped += OnVlcStopped;
-        _player.EndReached += (_, _) => OnVlcEndReached();
-        _player.EncounteredError += (_, _) => OnVlcError();
-        _player.TimeChanged += (_, e) => OnVlcTimeChanged(e.Time);
-        ApplyVolume();
+        if (_libVLC != null)
+        {
+            _player = new MediaPlayer(_libVLC);
+            _player.Playing += (_, _) => OnVlcPlaying();
+            _player.Paused += OnVlcPaused;
+            _player.Stopped += OnVlcStopped;
+            _player.EndReached += (_, _) => OnVlcEndReached();
+            _player.EncounteredError += (_, _) => OnVlcError();
+            _player.TimeChanged += (_, e) =>
+            {
+                // Обновляем кэш при событии от плеера
+                Volatile.Write(ref _cachedTime, e.Time);
+                OnVlcTimeChanged(e.Time);
+            };
+            _player.LengthChanged += (_, e) =>
+            {
+                Volatile.Write(ref _cachedLength, e.Length);
+                RaiseEvent(() => this.RaisePropertyChanged(nameof(TotalDuration)));
+            };
+            ApplyVolume();
+        }
     }
 
-    public void ReinitializeWithProfile(InternetProfile profile)
+    public async Task ReinitializeWithProfileAsync(InternetProfile profile)
     {
         Log.Info($"[AudioEngine] Switching profile to {profile}...");
 
-        // 1. Stop gracefully
-        Stop();
+        // 1. Stop gracefully AND WAIT
+        // Повторяем логику Stop(), но с await
+        _suppressAutoNext = true;
+        Interlocked.Increment(ref _session);
+        Try(() => _cts?.Cancel());
 
-        // 2. Update config
+        // ВАЖНО: Ждем завершения работы с медиа
+        await StopPlaybackAsync();
+
+        ResetStreamInfo();
+        CurrentTrack = null;
+        IsLoading = false;
+        IsPlaying = false;
+        IsPaused = false;
+
+        // События
+        RaiseEvent(() => OnTrackChanged?.Invoke(null));
+        RaiseEvent(() => OnPlaybackStopped?.Invoke());
+        // NotifyPlaybackState вызывает RaiseEvent, можно вызвать напрямую
+        RaiseEvent(() => OnPlaybackStateChanged?.Invoke(false, false));
+
+        // 2. Explicitly dispose player FIRST
+        // Уничтожаем плеер до того, как уничтожим _libVLC
+        if (_player != null)
+        {
+            _player.Dispose();
+            _player = null;
+        }
+
+        // 3. Update config
         _currentStreamingConfig = GetConfigForProfile(profile);
 
-        // 3. Re-init engine (requires UI thread usually for cleanup, but LibVLC handles it)
+        // 4. Re-init engine (теперь безопасно делать Dispose старого _libVLC)
         InitializeLibVLC();
         InitializePlayer();
 
@@ -221,10 +287,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 VlcNetworkCachingMs = 500,
                 MaxRamChunks = 60 // ~30 MB
             },
-            _ => new StreamingConfig 
-            { 
-                ChunkSize = 128 * 1024, 
-                MaxRamChunks = 100 
+            _ => new StreamingConfig
+            {
+                ChunkSize = 128 * 1024,
+                MaxRamChunks = 100
             }
         };
     }
@@ -235,12 +301,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_volumePercent > 0)
         {
-            _library.Data.LastVolume = _volumePercent;
+            _library.UpdateSettings(s => s.LastVolume = _volumePercent);
             SetVolumeInstant(0);
         }
         else
         {
-            int restoreVol = _library.Data.LastVolume > 0 ? _library.Data.LastVolume : 50;
+            int restoreVol = _library.Settings.LastVolume > 0 ? _library.Settings.LastVolume : 50;
             SetVolumeInstant(restoreVol);
         }
     }
@@ -250,7 +316,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public void SetVolumeInstant(float value)
     {
         _volumePercent = Math.Clamp((int)Math.Round(value), 0, 500);
-        _library.Data.Volume = _volumePercent;
+        _library.UpdateSettings(s => s.LastVolume = _volumePercent);
         _lastVolumeChange = DateTime.UtcNow;
         _volumeSavePending = true;
         Task.Run(ApplyVolume);
@@ -258,7 +324,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void UpdateAudioSettings()
     {
-        RaiseEvent(() => OnMaxVolumeChanged?.Invoke(_library.Data.MaxVolumeLimit));
+        RaiseEvent(() => OnMaxVolumeChanged?.Invoke(_library.Settings.MaxVolumeLimit));
         Task.Run(ApplyVolume);
     }
 
@@ -266,7 +332,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (!_volumeSavePending) return;
         _volumeSavePending = false;
-        _library.Save();
+        _library.UpdateSettings(s => s.Volume = _volumePercent);
     }
 
     private void ApplyVolume()
@@ -274,13 +340,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_player == null || _isDisposed) return;
         Try(() =>
         {
-            float gain = MathF.Pow(10f, Math.Clamp(_library.Data.TargetGainDb, -20f, 20f) / 20f);
+            float gain = MathF.Pow(10f, Math.Clamp(_library.Settings.TargetGainDb, -20f, 20f) / 20f);
             int finalVolume = Math.Clamp((int)Math.Round(_volumePercent * gain), 0, 500);
 
-            // Проверка на случай рассинхрона (диагностика)
             if (_player.Volume != finalVolume)
             {
-                // Log.Debug($"[AudioEngine] Enforcing volume: {finalVolume} (was {_player.Volume})");
                 _player.Volume = finalVolume;
             }
         });
@@ -421,7 +485,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         try
         {
-            SyncTrackPreferences(trackToPlay);
+            // Identity Map Refactoring:
+            // Нам не нужно загружать из словаря, т.к. trackToPlay - это и есть живой объект из Registry.
+            // Но мы можем убедиться, что если это новый трек, он будет корректно зарегистрирован в персистентности при изменении.
+            // SyncTrackPreferences был удален как устаревший, так как мы работаем с Identity Map.
 
             _suppressAutoNext = true;
 
@@ -545,14 +612,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var position = CurrentPosition;
         var track = CurrentTrack;
 
+        // Обновляем состояние текущего объекта (Identity Map)
         track.TransientContainer = container;
         track.TransientBitrate = targetBitrate;
 
-        if (_library.Data.RememberTrackFormat)
+        if (_library.Settings.RememberTrackFormat)
         {
             track.PreferredContainer = container;
             track.PreferredBitrate = targetBitrate;
-            SaveTrackPreference(track);
+
+            // Сохраняем изменения. Так как объект canonical, просто говорим библиотеке обновить его статус.
+            _ = _library.AddOrUpdateTrackAsync(track);
         }
 
         track.StreamUrl = string.Empty;
@@ -587,10 +657,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             ct.ThrowIfCancellationRequested();
 
             StreamDetails? stream = null;
-            try 
-            { 
-                // ИЗМЕНЕНИЕ: Передаем forceRefresh: false для первого запуска
-                stream = await GetOrRefreshStreamAsync(track, forceRefresh: false, ct); 
+            try
+            {
+                stream = await GetOrRefreshStreamAsync(track, forceRefresh: false, ct);
             }
             catch (OperationCanceledException) { return; }
 
@@ -603,7 +672,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_session != session) return;
             ct.ThrowIfCancellationRequested();
 
-            SetStreamInfo(stream.Codec, stream.Bitrate, stream.Container);
+            SetStreamInfo(stream.Codec, stream.Bitrate);
 
             bool isManualQualityOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
@@ -621,7 +690,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     ? $"{track.Id}_{stream.Container}_{stream.Bitrate}"
                     : track.Id;
 
-                // ИЗМЕНЕНИЕ: Передаем функцию рефреша (urlRefresher)
                 cacheStream = new MemoryFirstCachingStream(
                     cacheId,
                     stream.Url,
@@ -629,10 +697,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     _httpClient,
                     _cacheManager,
                     _currentStreamingConfig,
-                    // Лямбда для обновления ссылки при 403 ошибке:
                     urlRefresher: async (token) =>
                     {
-                        // При 403 ошибке мы ОБЯЗАНЫ запросить свежую ссылку в обход кэша
                         var newStream = await GetOrRefreshStreamAsync(track, forceRefresh: true, token);
                         return newStream?.Url;
                     }
@@ -655,12 +721,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (cacheStream != null)
             {
-                StartPlayback(new Media(_libVLC, new StreamMediaInput(cacheStream)), cacheStream, track);
+                StartPlayback(new Media(_libVLC!, new StreamMediaInput(cacheStream)), cacheStream, track);
                 cacheStream = null;
             }
             else
             {
-                StartPlayback(new Media(_libVLC, stream.Url, FromType.FromLocation), null, track);
+                var media = new Media(_libVLC!, stream.Url, FromType.FromLocation);
+
+                // Берем актуальный UA (вдруг пользователь поменял настройку)
+                media.AddOption($":http-user-agent={YoutubeClientUtils.UserAgent}");
+                media.AddOption(":http-referrer=https://www.youtube.com/");
+
+                StartPlayback(media, null, track);
             }
 
             Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");
@@ -673,6 +745,28 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             {
                 Log.Error($"[AudioEngine] Error: {ex.Message}");
                 RaiseEvent(() => OnError?.Invoke(ex.Message));
+
+                // --- ЛОГИКА ОБРАБОТКИ ОШИБОК 403 / ПОТОКА ---
+                _consecutiveErrors++;
+
+                if (_consecutiveErrors >= MaxConsecutiveErrors)
+                {
+                    Log.Error($"[AudioEngine] Critical error threshold reached ({_consecutiveErrors}). Stopping playback.");
+                    Stop(); // Полная остановка, чтобы не спамить запросами
+
+                    RaiseEvent(() => OnCriticalError?.Invoke(
+                        SL["Player_Error_403_Title"] ?? "Playback Error",
+                        SL["Player_Error_403_Msg"] ?? "Too many playback errors. Please try changing the 'YouTube Client' in Settings -> Network."
+                    ));
+
+                    _consecutiveErrors = 0;
+                    return; // Прерываем цепочку
+                }
+
+                // Если ошибка не критическая, пробуем следующий трек (стандартное поведение)
+                // Но с небольшой задержкой, чтобы не ддосить сервер
+                await Task.Delay(1000, CancellationToken.None);
+                _ = PlayNextAsync();
             }
         }
         finally { IsLoading = false; }
@@ -688,8 +782,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_player == null) return;
         _player.Media = media;
 
-        // Тут ApplyVolume полезен, чтобы начальный буфер (pre-buffer) не "ревел" на 100% 
-        // до срабатывания OnVlcPlaying, но он может быть проигнорирован VLC.
         ApplyVolume();
 
         _player.Play();
@@ -734,8 +826,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public async Task SeekAsync(TimeSpan position)
     {
         if (_player == null || !_isPlayerReady || _isDisposed) return;
+
+        // Сразу обновляем кэш, чтобы UI отреагировал мгновенно
+        long ms = (long)Math.Clamp(position.TotalMilliseconds, 0, TotalDuration.TotalMilliseconds);
+        Volatile.Write(ref _cachedTime, ms);
+
         await WithLock(_commandLock, () => Task.Run(() =>
-            _player.Time = (long)Math.Clamp(position.TotalMilliseconds, 0, _player.Length)));
+        {
+            // Сама перемотка происходит в фоне
+            _player.Time = ms;
+        }));
     }
 
     public void Stop()
@@ -759,6 +859,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     // === Navigation / Queue Management ===
 
+    /// <summary>
+    /// Заменяет очередь новым списком треков и начинает воспроизведение с указанного.
+    /// </summary>
     public async Task StartQueueAsync(IEnumerable<TrackInfo> tracks, TrackInfo startTrack)
     {
         if (_isDisposed) return;
@@ -766,9 +869,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         lock (_queue)
         {
             _queue.Clear();
-            _queue.AddRange(tracks);
+
+            // Добавляем без лишних копий
+            foreach (var track in tracks)
+            {
+                _queue.Add(track);
+            }
+
             _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
-            if (_currentIndex == -1 && _queue.Count > 0) _currentIndex = 0;
+            if (_currentIndex == -1 && _queue.Count > 0)
+                _currentIndex = 0;
+
+            InvalidateQueueSnapshot();
         }
 
         RaiseEvent(() => OnQueueChanged?.Invoke());
@@ -796,12 +908,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         else if (_isPlayerReady && _player != null) _player.Time = 0;
     }
 
+    /// <summary>
+    /// Инвалидация при изменении очереди
+    /// </summary>
+    private void InvalidateQueueSnapshot()
+    {
+        _queueVersion++;
+    }
+
     public void Enqueue(TrackInfo track)
     {
         lock (_queue)
         {
             if (_queue.Any(t => t.Id == track.Id)) return;
             _queue.Add(track);
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
 
@@ -814,15 +935,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void EnqueueRange(IEnumerable<TrackInfo> tracks)
     {
-        var list = tracks.ToList();
-        if (list.Count == 0) return;
-
         lock (_queue)
         {
             var existingIds = _queue.Select(t => t.Id).ToHashSet();
-            var newTracks = list.Where(t => !existingIds.Contains(t.Id)).ToList();
-            if (newTracks.Count == 0) return;
-            _queue.AddRange(newTracks);
+            int addedCount = 0;
+
+            foreach (var track in tracks)  // ← Без .ToList()!
+            {
+                if (!existingIds.Contains(track.Id))
+                {
+                    _queue.Add(track);
+                    existingIds.Add(track.Id);  // Для дедупликации внутри batch
+                    addedCount++;
+                }
+            }
+
+            if (addedCount == 0) return;
+            InvalidateQueueSnapshot();
         }
 
         RaiseEvent(() => OnQueueChanged?.Invoke());
@@ -840,6 +969,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 _queue.Add(CurrentTrack);
                 _currentIndex = 0;
             }
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }
@@ -869,6 +999,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     _queue.Insert(0, current);
                 }
             }
+
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }
@@ -891,6 +1023,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             else if (index < _currentIndex) _currentIndex--;
 
             _queue.RemoveAt(index);
+            InvalidateQueueSnapshot();
             changed = true;
         }
 
@@ -912,6 +1045,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_currentIndex == oldIndex) _currentIndex = newIndex;
             else if (oldIndex < _currentIndex && newIndex >= _currentIndex) _currentIndex--;
             else if (oldIndex > _currentIndex && newIndex <= _currentIndex) _currentIndex++;
+
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }
@@ -933,22 +1068,26 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public long GetDownloadedBytes() =>
         _currentStream != null ? (long)(_currentStream.DownloadProgress / 100 * _currentStream.Length) : 0;
 
-    private void ResetStreamInfo() =>
-        (_activeCodec, _activeBitrate, _activeContainer, _streamInfoReady) = ("", 0, "", false);
-
-    private void SetStreamInfo(string codec, int bitrate, string container)
+    private void ResetStreamInfo()
     {
-        (_activeCodec, _activeBitrate, _activeContainer, _streamInfoReady) = (codec, bitrate, container, true);
+        (_activeCodec, _activeBitrate, _streamInfoReady) = ("", 0, false);
+        Volatile.Write(ref _cachedTime, 0);
+        Volatile.Write(ref _cachedLength, 0);
+    }
+
+    private void SetStreamInfo(string codec, int bitrate)
+    {
+        (_activeCodec, _activeBitrate, _streamInfoReady) = (codec, bitrate, true);
         RaiseEvent(() => OnStreamInfoReady?.Invoke());
     }
 
     private record StreamDetails(string Url, long Size, int Bitrate, string Codec, string Container);
 
-      private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, bool forceRefresh, CancellationToken ct)
+    private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, bool forceRefresh, CancellationToken ct)
     {
         bool hasUserOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
-        // ИЗМЕНЕНИЕ: Если forceRefresh, мы не доверяем локальному кэшу (метаданным), так как ссылка там старая
+        // Используем кэшированные метаданные, если трек есть на диске
         if (!forceRefresh && !hasUserOverride && _cacheManager.IsFullyCached(track.Id))
         {
             var meta = _cacheManager.TryGetMetadata(track.Id);
@@ -973,7 +1112,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(RefreshTimeoutS));
 
-            // ИЗМЕНЕНИЕ: Передаем forceRefresh в YoutubeProvider
             var result = await _youtube.RefreshStreamUrlAsync(track, forceRefresh, cts.Token);
             _lastApiCall = DateTime.UtcNow;
 
@@ -1000,6 +1138,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(1500);
             using var req = new HttpRequestMessage(HttpMethod.Head, url);
+            // Добавляем UA и здесь, на всякий случай, хотя _httpClient уже настроен
+            // Но HeadAsync может использовать внутренний клиент, если это Extension метод на HttpClient
+            // В данном случае мы используем _httpClient.SendAsync
             using var resp = await _httpClient.SendAsync(req, cts.Token);
             return resp.Content.Headers.ContentLength ?? -1;
         }
@@ -1011,40 +1152,35 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void OnVlcPlaying()
     {
         if (_isDisposed) return;
+
+        _consecutiveErrors = 0; // <--- СБРОС СЧЕТЧИКА ПРИ УСПЕХЕ
+
         _suppressAutoNext = false;
         _isPlayerReady = true;
         IsLoading = false;
         IsPlaying = true;
         IsPaused = false;
 
-        // 1. Применяем громкость немедленно (на случай, если Aout уже готов)
         ApplyVolume();
 
-        // 2. ВАЖНОЕ ИСПРАВЛЕНИЕ:
-        // Запускаем отложенную задачу для повторного применения громкости.
-        // VLC (особенно с WASAPI) может сбросить громкость на 100% или системный уровень
-        // в первые миллисекунды инициализации аудиопотока.
+        // Workaround for VLC resetting volume on start
         Task.Run(async () =>
         {
             try
             {
-                // Ждем 250мс - этого достаточно для инициализации аудио-выхода, 
-                // но незаметно для уха пользователя, если произойдет коррекция.
                 await Task.Delay(250);
-
                 if (!_isDisposed && IsPlaying && _player != null)
                 {
-                    // Повторное применение берет актуальный _volumePercent,
-                    // так что если пользователь крутил ручку во время задержки, все будет ок.
                     ApplyVolume();
                 }
             }
-            catch { /* игнорируем ошибки таска */ }
+            catch { }
         });
 
         NotifyPlaybackState();
         _playbackStartedTcs?.TrySetResult(true);
     }
+
     private void OnVlcPaused(object? sender, EventArgs e)
     {
         if (_isDisposed) return;
@@ -1109,27 +1245,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     // === Helpers ===
 
-    private void SyncTrackPreferences(TrackInfo track)
-    {
-        if (!_library.Data.Tracks.TryGetValue(track.Id, out var saved)) return;
-        if (string.IsNullOrEmpty(track.PreferredContainer) && !string.IsNullOrEmpty(saved.PreferredContainer))
-        {
-            track.PreferredContainer = saved.PreferredContainer;
-            track.PreferredBitrate = saved.PreferredBitrate;
-        }
-    }
-
-    private void SaveTrackPreference(TrackInfo track)
-    {
-        if (_library.Data.Tracks.TryGetValue(track.Id, out var saved))
-        {
-            saved.PreferredContainer = track.PreferredContainer;
-            saved.PreferredBitrate = track.PreferredBitrate;
-        }
-        else _library.Data.Tracks[track.Id] = track.Clone();
-        _library.Save();
-    }
-
     private static void RaiseEvent(Action action)
     {
         try
@@ -1172,7 +1287,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Try(_player.Dispose);
         }
 
-        Try(_libVLC.Dispose);
+        Try(_libVLC!.Dispose);
         Try(_loadLock.Dispose);
         Try(_commandLock.Dispose);
         Try(_navigationLock.Dispose);

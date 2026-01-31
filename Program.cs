@@ -1,4 +1,5 @@
-﻿
+﻿using LMP.Core.Data;
+using LMP.Core.Data.Repositories;
 using LMP.Core.Services;
 using LMP.Features.Home;
 using LMP.Features.Library;
@@ -9,7 +10,9 @@ using LMP.Features.Settings;
 using LMP.Features.Shell;
 using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Avalonia;
+using AsyncImageLoader;
 
 namespace LMP;
 
@@ -45,17 +48,47 @@ class Program
     }
 
     public static AppBuilder BuildAvaloniaApp()
-            => AppBuilder.Configure<App>()
-                .UsePlatformDetect()
-                .WithInterFont()
-                .LogToTrace()
-                .UseReactiveUI();
+        => AppBuilder.Configure<App>()
+            .UsePlatformDetect()
+            .WithInterFont()
+            .LogToTrace()
+            .UseReactiveUI();
 
     private static void ConfigureServices(IServiceCollection services)
     {
         Log.Info("Configuring services...");
 
-        // --- Core Services ---
+        // === Database ===
+        // Configure DbContext with connection string here, not in DbContext
+        var dbPath = G.File.Database;
+
+        services.AddDbContextFactory<LibraryDbContext>(options =>
+        {
+            options.UseSqlite($"Data Source={dbPath};Cache=Shared");
+            options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+#if DEBUG
+            options.EnableSensitiveDataLogging();
+            options.EnableDetailedErrors();
+#endif
+        });
+
+        // === Repositories ===
+        services.AddSingleton<ITrackRepository, TrackRepository>();
+        services.AddSingleton<IPlaylistRepository, PlaylistRepository>();
+        services.AddSingleton<ISettingsRepository, SettingsRepository>();
+
+        // === Core Services ===
+        services.AddSingleton(sp =>
+        {
+            var trackRepo = sp.GetRequiredService<ITrackRepository>();
+            var playlistRepo = sp.GetRequiredService<IPlaylistRepository>();
+            return new TrackRegistry(trackRepo, playlistRepo);
+        });
+
+        // Для обложек треков (маленькие)
+        services.AddSingleton<IAsyncImageLoader>(sp =>
+            new CachedImageLoader(sp.GetRequiredService<ImageCacheService>(), ImageQuality.Low));
+
         services.AddSingleton<LibraryService>();
         services.AddSingleton<ThemeManagerService>();
         services.AddSingleton<CookieAuthService>();
@@ -65,17 +98,17 @@ class Program
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
 
-        // --- Caching ---
+        // === Caching ===
         services.AddSingleton<StreamCacheManager>();
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
         services.AddSingleton<MemoryMonitor>();
 
-        // --- Audio & Downloads ---
+        // === Audio & Downloads ===
         services.AddSingleton<AudioEngine>();
         services.AddSingleton<DownloadService>();
 
-        // --- ViewModels ---
+        // === ViewModels ===
         services.AddTransient<HomeViewModel>();
         services.AddTransient<SearchViewModel>();
         services.AddTransient<LibraryViewModel>();
@@ -92,5 +125,3 @@ class Program
         Log.Info("Services registered successfully.");
     }
 }
-
-

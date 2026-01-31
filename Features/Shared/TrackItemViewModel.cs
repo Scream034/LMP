@@ -34,6 +34,12 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #region Properties
 
+    /// <summary>
+    /// Контекст источника (ID плейлиста или "search", "home", etc.)
+    /// Используется для определения, нужно ли заменять очередь.
+    /// </summary>
+    public string? SourceContextId { get; set; }
+
     public bool IsSelected
     {
         get => _isSelected;
@@ -261,7 +267,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             if (_onPlay != null)
                 _onPlay(Track);
             else
-                await _audio.PlayTrackAsync(Track);
+                _ = Task.Run(async () => await _audio.PlayTrackAsync(Track));
         }
     }
 

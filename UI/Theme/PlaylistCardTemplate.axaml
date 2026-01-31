@@ -2,7 +2,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Library"
     xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:asyncImage="using:AsyncImageLoader">
+    xmlns:controls="using:LMP.UI.Controls">
 
     <Style Selector="ContentControl.playlist-card">
         <Setter Property="ContentTemplate">
@@ -30,39 +30,51 @@
                                     <Border Width="136" Height="136" CornerRadius="4"
                                         ClipToBounds="True"
                                         Margin="0,0,0,12">
-                                        <Panel Background="{DynamicResource BgBaseBrush}">
+                                        <Panel Background="{DynamicResource BgPrimaryBrush}">
                                             <!-- Liked Icon -->
                                             <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
                                                 Foreground="{DynamicResource AccentBrush}"
-                                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
                                                 IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
 
-                                            <!-- Music Note Placeholder -->
-                                            <mi:MaterialIcon Kind="MusicNote" Width="64" Height="64"
+                                            <!-- Playlist Music Icon (для локальных плейлистов) -->
+                                            <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
+                                                Height="64"
                                                 Foreground="{DynamicResource TextMutedBrush}"
-                                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center">
                                                 <mi:MaterialIcon.IsVisible>
-                                                    <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                                        <Binding Path="ThumbnailUrl" Converter="{StaticResource NullToVisible}" ConverterParameter="invert" />
-                                                        <Binding Path="Id" Converter="{StaticResource StringStartsWithConverter}" ConverterParameter="yt_" />
+                                                    <MultiBinding
+                                                        Converter="{x:Static BoolConverters.And}">
+                                                        <Binding Path="ThumbnailUrl"
+                                                            Converter="{StaticResource NullToVisible}"
+                                                            ConverterParameter="invert" />
+                                                        <Binding Path="Id"
+                                                            Converter="{StaticResource StringStartsWithConverter}"
+                                                            ConverterParameter="yt_" />
                                                     </MultiBinding>
                                                 </mi:MaterialIcon.IsVisible>
                                             </mi:MaterialIcon>
 
-                                            <!-- Web Image -->
-                                            <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl, Converter={StaticResource WebUrlConverter}}"
+                                            <!-- High Quality Web Image (400px decode) -->
+                                            <Image
+                                                controls:QualityImage.Source="{Binding ThumbnailUrl}"
+                                                controls:QualityImage.Quality="High"
                                                 Stretch="UniformToFill"
                                                 IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
 
                                             <!-- Asset Image -->
-                                            <Image Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
+                                            <Image
+                                                Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
                                                 Stretch="UniformToFill"
                                                 IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
                                         </Panel>
                                     </Border>
 
                                     <!-- Title & Track Count -->
-                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                        FontSize="13"
                                         TextTrimming="CharacterEllipsis" MaxLines="1"
                                         Foreground="{DynamicResource TextPrimaryBrush}" />
                                     <TextBlock Text="{Binding FormattedTrackCount}" FontSize="11"
@@ -76,9 +88,9 @@
                                 Margin="8,0,8,8"
                                 Height="36"
                                 IsVisible="{Binding IsPointerOver, ElementName=CardBorder}">
-                                
+
                                 <UniformGrid Rows="1" HorizontalAlignment="Stretch">
-                                    
+
                                     <!-- Add to Queue -->
                                     <Button Command="{Binding AddToQueueCommand}"
                                         Classes="card-action-btn"
@@ -93,7 +105,7 @@
                                         ToolTip.Tip="{Binding L[Button_Delete]}">
                                         <mi:MaterialIcon Kind="DeleteOutline" Width="20" Height="20" />
                                     </Button>
-                                    
+
                                 </UniformGrid>
                             </Panel>
                         </Grid>
@@ -115,7 +127,7 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="Cursor" Value="Hand" />
     </Style>
-    
+
     <Style Selector="Button.card-action-btn mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
         <Setter Property="Transitions">
@@ -125,12 +137,12 @@
             </Transitions>
         </Setter>
     </Style>
-    
+
     <Style Selector="Button.card-action-btn:pointerover mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="RenderTransform" Value="scale(1.15)" />
     </Style>
-    
+
     <Style Selector="Button.card-action-btn:pressed mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         <Setter Property="RenderTransform" Value="scale(0.95)" />

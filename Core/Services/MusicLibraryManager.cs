@@ -1,20 +1,27 @@
-﻿using LMP.Core.Models;
+﻿// Core/Services/MusicLibraryManager.cs
+using LMP.Core.Models;
 using ReactiveUI;
 
 namespace LMP.Core.Services;
 
-public class MusicLibraryManager(
-    LibraryService library,
-    YoutubeUserDataService ytUser,
-    CookieAuthService auth) : ReactiveObject
+public class MusicLibraryManager : ReactiveObject
 {
-    private readonly LibraryService _library = library;
-    private readonly YoutubeUserDataService _ytUser = ytUser;
-    private readonly CookieAuthService _auth = auth;
+    private readonly LibraryService _library;
+    private readonly YoutubeUserDataService _ytUser;
+    private readonly CookieAuthService _auth;
 
-    public async Task ToggleLikeAsync(TrackInfo track)
+    public MusicLibraryManager(
+        LibraryService library,
+        YoutubeUserDataService ytUser,
+        CookieAuthService auth)
     {
-        // Сначала пытаемся отправить запрос, и только при успехе меняем локальный статус
+        _library = library;
+        _ytUser = ytUser;
+        _auth = auth;
+    }
+
+    public async Task ToggleLikeAsync(TrackInfo track, CancellationToken ct = default)
+    {
         if (_auth.IsAuthenticated)
         {
             try
@@ -23,67 +30,60 @@ public class MusicLibraryManager(
                 string rating = newStatus ? "like" : "none";
 
                 await _ytUser.RateVideoAsync(track.Id, rating);
-                
-                // Только если не вылетело исключение:
-                _library.ToggleLike(track);
-                
+                await _library.ToggleLikeAsync(track, ct);
+
                 Log.Info($"[Sync] Track {track.Id} rated '{rating}' on YouTube.");
             }
             catch (Exception ex)
             {
                 Log.Error($"[Sync] Failed to sync like: {ex.Message}");
-                // Можно добавить уведомление пользователю через событие или DialogService
             }
         }
         else
         {
-            // Если оффлайн, просто меняем локально
-            _library.ToggleLike(track);
+            await _library.ToggleLikeAsync(track, ct);
         }
     }
 
-    public async Task SyncLikedTracksAsync()
+    public async Task SyncLikedTracksAsync(CancellationToken ct = default)
     {
-        if (!_auth.IsAuthenticated) return;
+        if (!_auth.IsAuthenticated)
+        {
+            Log.Info("[Sync] Not authenticated. Skipping liked videos sync.");
+            return;
+        }
 
         try
         {
             Log.Info("[Sync] Starting liked videos sync from YouTube...");
             var likedTracks = await _ytUser.GetLikedTracksAsync();
-            var localLiked = _library.GetLikedPlaylist();
+            var localLiked = await _library.GetLikedPlaylistAsync(ct);
             int addedCount = 0;
 
-            // Важный момент с порядком! 
-            // likedTracks[0] - это самый последний лайкнутый (Newest).
-            // Мы вставляем в начало списка (Insert 0).
-            // Чтобы сохранить порядок [Newest, Old1, Old2...], нужно вставлять с конца.
-            // Иначе получится [Old2, Old1, Newest].
-            
-            // Если likedTracks пуст или null, метод вернет управление без ошибок
             if (likedTracks == null || likedTracks.Count == 0) return;
 
-            // Переворачиваем список для вставки
+            var existingIds = new HashSet<string>(localLiked.TrackIds);
             var tracksToProcess = ((IEnumerable<TrackInfo>)likedTracks).Reverse();
 
             foreach (var track in tracksToProcess)
             {
-                track.IsLiked = true;
-                _library.AddOrUpdateTrack(track);
+                if (ct.IsCancellationRequested) break;
 
-                if (!localLiked.TrackIds.Contains(track.Id))
+                track.IsLiked = true;
+                await _library.AddOrUpdateTrackAsync(track, ct);
+
+                if (!existingIds.Contains(track.Id))
                 {
-                    localLiked.TrackIds.Insert(0, track.Id);
-                    track.InPlaylists.Add("liked");
+                    await _library.AddTrackToPlaylistAsync(track, LibraryService.LikedPlaylistId, ct);
                     addedCount++;
                 }
             }
 
             if (addedCount > 0)
             {
-                localLiked.UpdatedAt = DateTime.Now;
-                _library.AddOrUpdatePlaylist(localLiked);
                 Log.Info($"[Sync] Successfully added {addedCount} new liked tracks.");
-            } else
+            }
+            else
             {
                 Log.Info("[Sync] No new liked tracks found.");
             }
@@ -94,9 +94,9 @@ public class MusicLibraryManager(
         }
     }
 
-    public async Task CreatePlaylistAsync(string name, PlaylistSyncMode mode)
+    public async Task CreatePlaylistAsync(string name, PlaylistSyncMode mode, CancellationToken ct = default)
     {
-        var newPlaylist = _library.CreatePlaylist(name);
+        var newPlaylist = await _library.CreatePlaylistAsync(name, ct);
         newPlaylist.SyncMode = mode;
 
         if (mode == PlaylistSyncMode.TwoWaySync && _auth.IsAuthenticated)
@@ -108,19 +108,20 @@ public class MusicLibraryManager(
             }
             catch (Exception ex)
             {
-                Log.Error($"[Sync] Failed to create remote playlist. {ex.Message}");
+                Log.Error($"[Sync] Failed to create remote playlist: {ex.Message}");
                 newPlaylist.SyncMode = PlaylistSyncMode.LocalOnly;
             }
         }
-        _library.AddOrUpdatePlaylist(newPlaylist);
+
+        await _library.AddOrUpdatePlaylistAsync(newPlaylist, ct);
     }
 
-    public async Task DeletePlaylistAsync(string playlistId)
+    public async Task DeletePlaylistAsync(string playlistId, CancellationToken ct = default)
     {
-        var playlist = _library.GetPlaylist(playlistId);
+        var playlist = await _library.GetPlaylistAsync(playlistId, ct);
         if (playlist == null) return;
 
-        _library.RemovePlaylist(playlistId);
+        await _library.DeletePlaylistAsync(playlistId, ct);
 
         if (playlist.SyncMode == PlaylistSyncMode.TwoWaySync &&
             !string.IsNullOrEmpty(playlist.YoutubeId) &&
@@ -137,10 +138,11 @@ public class MusicLibraryManager(
         }
     }
 
-    public async Task UploadPlaylistToAccountAsync(string localPlaylistId)
+    public async Task UploadPlaylistToAccountAsync(string localPlaylistId, CancellationToken ct = default)
     {
         if (!_auth.IsAuthenticated) return;
-        var localPl = _library.GetPlaylist(localPlaylistId);
+
+        var localPl = await _library.GetPlaylistAsync(localPlaylistId, ct);
         if (localPl == null || localPl.SyncMode != PlaylistSyncMode.LocalOnly) return;
 
         try
@@ -148,8 +150,9 @@ public class MusicLibraryManager(
             var ytId = await _ytUser.CreatePlaylistAsync(localPl.Name, $"Uploaded from {G.AppName}");
             localPl.YoutubeId = ytId;
             localPl.SyncMode = PlaylistSyncMode.TwoWaySync;
-            _library.AddOrUpdatePlaylist(localPl);
+            await _library.AddOrUpdatePlaylistAsync(localPl, ct);
 
+            // Background upload tracks
             _ = Task.Run(async () =>
             {
                 foreach (var trackId in localPl.TrackIds)
@@ -168,19 +171,16 @@ public class MusicLibraryManager(
         }
     }
 
-    public async Task AddTrackToPlaylistAsync(string playlistId, TrackInfo track)
+    public async Task AddTrackToPlaylistAsync(string playlistId, TrackInfo track, CancellationToken ct = default)
     {
-        var playlist = _library.GetPlaylist(playlistId);
+        var playlist = await _library.GetPlaylistAsync(playlistId, ct);
         if (playlist == null) return;
 
-        _library.AddOrUpdateTrack(track);
+        await _library.AddOrUpdateTrackAsync(track, ct);
 
         if (!playlist.TrackIds.Contains(track.Id))
         {
-            playlist.TrackIds.Add(track.Id);
-            playlist.UpdatedAt = DateTime.Now;
-            _library.AddOrUpdatePlaylist(playlist);
-            track.InPlaylists.Add(playlistId);
+            await _library.AddTrackToPlaylistAsync(track, playlistId, ct);
         }
 
         if (playlist.SyncMode == PlaylistSyncMode.TwoWaySync &&
@@ -198,36 +198,21 @@ public class MusicLibraryManager(
         }
     }
 
-    public async Task RemoveTrackFromPlaylistAsync(string playlistId, string trackId)
+    public async Task RemoveTrackFromPlaylistAsync(string playlistId, string trackId, CancellationToken ct = default)
     {
-        var playlist = _library.GetPlaylist(playlistId);
-        if (playlist == null) return;
-
-        if (playlist.TrackIds.Remove(trackId))
-        {
-            playlist.UpdatedAt = DateTime.Now;
-            _library.AddOrUpdatePlaylist(playlist);
-            
-            var t = _library.GetTrack(trackId);
-            t?.InPlaylists.Remove(playlistId);
-        }
-        // Removal from YouTube via InnerTube needs extra logic (setVideoId), skipped for now
-    }
-    
-    // NEW: Method for reordering tracks
-    public Task MovePlaylistTrackAsync(string playlistId, int oldIndex, int newIndex)
-    {
-        _library.MoveTrackInPlaylist(playlistId, oldIndex, newIndex);
-        
-        // Remote reordering on YouTube is skipped because it requires specific PlaylistItem IDs
-        // which are not currently mapped/tracked in the local library.
-        
-        return Task.CompletedTask;
+        await _library.RemoveTrackFromPlaylistAsync(trackId, playlistId, ct);
+        // Remote removal via InnerTube requires setVideoId, skipped for now
     }
 
-    public void ConvertToLocal(string playlistId)
+    public async Task MovePlaylistTrackAsync(string playlistId, int oldIndex, int newIndex, CancellationToken ct = default)
     {
-        var pl = _library.GetPlaylist(playlistId);
+        await _library.MoveTrackInPlaylistAsync(playlistId, oldIndex, newIndex, ct);
+        // Remote reordering requires PlaylistItem IDs, not implemented
+    }
+
+    public async Task ConvertToLocalAsync(string playlistId, CancellationToken ct = default)
+    {
+        var pl = await _library.GetPlaylistAsync(playlistId, ct);
         if (pl == null) return;
 
         var copy = new Playlist
@@ -238,6 +223,35 @@ public class MusicLibraryManager(
             ThumbnailUrl = pl.ThumbnailUrl,
             Author = "Me"
         };
-        _library.AddOrUpdatePlaylist(copy);
+
+        await _library.AddOrUpdatePlaylistAsync(copy, ct);
+    }
+
+    public async Task<bool> MergePlaylistsAsync(string sourceId, string targetId, CancellationToken ct = default)
+    {
+        var source = await _library.GetPlaylistAsync(sourceId, ct);
+        var target = await _library.GetPlaylistAsync(targetId, ct);
+
+        if (source == null || target == null || !target.IsLocal) return false;
+
+        var existing = new HashSet<string>(target.TrackIds);
+        int added = 0;
+
+        foreach (var trackId in source.TrackIds)
+        {
+            if (!existing.Contains(trackId))
+            {
+                var track = await _library.GetTrackAsync(trackId, ct);
+                if (track != null)
+                {
+                    await _library.AddTrackToPlaylistAsync(track, targetId, ct);
+                    added++;
+                }
+            }
+        }
+
+        Log.Info($"[Merge] Added {added} tracks from '{source.Name}' to '{target.Name}'");
+
+        return true;
     }
 }

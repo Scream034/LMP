@@ -1,5 +1,7 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using LMP.Core.Models;
 
 namespace LMP.Core.Services;
 
@@ -9,11 +11,10 @@ public partial class CookieAuthService
     private readonly Dictionary<string, string> _cookieMap = [];
     private string _cachedHeaderString = "";
 
-    // Список критически важных кук для сессии.
-    private static readonly HashSet<string> CriticalCookieKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "__Secure-1PSIDTS", "__Secure-3PSIDTS", "SIDCC", "SAPISID"
-    };
+    // Файл для хранения метаданных профиля (имя, аватар)
+    private readonly string _authDataPath = Path.Combine(AppContext.BaseDirectory, "auth.json");
+
+    public AuthState State { get; private set; } = new();
 
     public bool IsAuthenticated
     {
@@ -25,9 +26,73 @@ public partial class CookieAuthService
 
     public event Action? OnAuthStateChanged;
 
-    public CookieAuthService() => Load();
+    public CookieAuthService()
+    {
+        LoadCookies();
+        LoadAuthData();
+        UpdateStateAuthStatus();
+    }
 
-    private void Load()
+    // --- Profile Management ---
+
+    public void UpdateUserProfile(string name, string email, string avatarUrl)
+    {
+        State.UserName = name;
+        State.UserEmail = email;
+        State.AvatarUrl = avatarUrl;
+        State.LastUpdated = DateTime.UtcNow;
+        State.IsAuthenticated = IsAuthenticated;
+
+        SaveAuthData();
+        OnAuthStateChanged?.Invoke();
+    }
+
+    private void LoadAuthData()
+    {
+        try
+        {
+            if (File.Exists(_authDataPath))
+            {
+                var json = File.ReadAllText(_authDataPath);
+                var loadedState = JsonSerializer.Deserialize<AuthState>(json);
+                if (loadedState != null)
+                {
+                    State = loadedState;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to load auth data: {ex.Message}");
+        }
+    }
+
+    private void SaveAuthData()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(State, G.Json.Beautiful);
+            File.WriteAllText(_authDataPath, json);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Failed to save auth data: {ex.Message}");
+        }
+    }
+
+    private void UpdateStateAuthStatus()
+    {
+        bool currentAuth = IsAuthenticated;
+        if (State.IsAuthenticated != currentAuth)
+        {
+            State.IsAuthenticated = currentAuth;
+            SaveAuthData();
+        }
+    }
+
+    // --- Cookie Management ---
+
+    private void LoadCookies()
     {
         if (File.Exists(G.File.Cookie))
         {
@@ -86,10 +151,12 @@ public partial class CookieAuthService
         }
 
         ParseAndSetCookies(clean);
-        SaveToFile();
+        SaveCookiesToFile();
+
+        UpdateStateAuthStatus();
+        OnAuthStateChanged?.Invoke();
 
         Log.Info($"[Auth] Cookies saved manually. Total keys: {_cookieMap.Count}");
-        OnAuthStateChanged?.Invoke();
     }
 
     public bool UpdateCookies(IEnumerable<string> setCookieHeaders)
@@ -133,7 +200,11 @@ public partial class CookieAuthService
             if (criticalCookieUpdated || _cookieMap.Count > 0) RebuildHeaderString();
         }
 
-        if (criticalCookieUpdated) SaveToFile();
+        if (criticalCookieUpdated)
+        {
+            SaveCookiesToFile();
+            UpdateStateAuthStatus();
+        }
 
         return criticalCookieUpdated;
     }
@@ -146,6 +217,11 @@ public partial class CookieAuthService
             _cachedHeaderString = "";
         }
         if (File.Exists(G.File.Cookie)) File.Delete(G.File.Cookie);
+
+        // Сброс данных профиля
+        State = new AuthState();
+        if (File.Exists(_authDataPath)) File.Delete(_authDataPath);
+
         OnAuthStateChanged?.Invoke();
     }
 
@@ -181,7 +257,7 @@ public partial class CookieAuthService
         _cachedHeaderString = sb.ToString();
     }
 
-    private void SaveToFile()
+    private void SaveCookiesToFile()
     {
         lock (_lock)
         {

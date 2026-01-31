@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using LMP.Core.Services;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Utils;
 
@@ -6,16 +7,22 @@ namespace LMP.Core.Youtube.Search;
 
 internal class SearchController(HttpClient http)
 {
-  private JsonElement GetMusicContext()
+  private const string FilterSong = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
+  private const string FilterVideo = "EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D";
+  private const string FilterAlbum = "EgWKAQIYAWoKEAkQChAFEAMQBA%3D%3D";
+  private const string FilterArtist = "EgWKAQIgAWoKEAkQChAFEAMQBA%3D%3D";
+  private const string FilterCommunityPlaylist = "EgeKAQQoAEABagoQAxAEEAoQCRAF";
+
+  private static JsonElement GetMusicContext()
   {
     var json = $$"""
         {
             "context": {
                 "client": {
                     "clientName": "WEB_REMIX",
-                    "clientVersion": {{YoutubeHttpHandler.MusicClientVersion}},
-                    "hl": "ru",
-                    "gl": "RU"
+                    "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
+                    "hl": "{{YoutubeHttpHandler.GetHl()}}",
+                    "gl": "{{YoutubeHttpHandler.GetGl()}}"
                 },
                 "user": {}
             }
@@ -24,16 +31,16 @@ internal class SearchController(HttpClient http)
     return Json.Parse(json);
   }
 
-  private JsonElement GetWebContext()
+  private static JsonElement GetWebContext()
   {
-    var json = """
+    var json = $$"""
         {
             "context": {
                 "client": {
                   "clientName": "WEB",
-                  "clientVersion": "2.20250331.09.00",
-                  "hl": "en",
-                  "gl": "US"
+                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                  "hl": "{{YoutubeHttpHandler.GetHl()}}",
+                  "gl": "{{YoutubeHttpHandler.GetGl()}}"
                 }
             }
         }
@@ -48,12 +55,27 @@ internal class SearchController(HttpClient http)
       CancellationToken cancellationToken = default
   )
   {
-    var isMusicContext = searchFilter == SearchFilter.Music;
+    bool isMusicContext = searchFilter is SearchFilter.Music
+                                       or SearchFilter.MusicSong
+                                       or SearchFilter.MusicVideo
+                                       or SearchFilter.MusicAlbum
+                                       or SearchFilter.MusicArtist
+                                       or SearchFilter.MusicPlaylist;
+
     string? searchParams = null;
 
     if (isMusicContext)
     {
-      searchParams = "EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D";
+      searchParams = searchFilter switch
+      {
+        SearchFilter.Music => FilterSong,
+        SearchFilter.MusicSong => FilterSong,
+        SearchFilter.MusicVideo => FilterVideo,
+        SearchFilter.MusicAlbum => FilterAlbum,
+        SearchFilter.MusicArtist => FilterArtist,
+        SearchFilter.MusicPlaylist => FilterCommunityPlaylist,
+        _ => null
+      };
     }
     else
     {
@@ -66,18 +88,25 @@ internal class SearchController(HttpClient http)
       };
     }
 
-    using var request = new HttpRequestMessage(
-           HttpMethod.Post,
-           isMusicContext ? "https://music.youtube.com/youtubei/v1/search" : "https://www.youtube.com/youtubei/v1/search"
-       );
+    if (continuationToken != null) searchParams = null;
 
-    // Формируем тело запроса через Utf8JsonWriter
+    var url = isMusicContext
+        ? "https://music.youtube.com/youtubei/v1/search"
+        : "https://www.youtube.com/youtubei/v1/search";
+
+    using var request = new HttpRequestMessage(HttpMethod.Post, url);
+
     using var ms = new MemoryStream();
     using (var writer = new Utf8JsonWriter(ms))
     {
       writer.WriteStartObject();
       writer.WriteString("query", searchQuery);
-      if (continuationToken != null) writer.WriteString("continuation", continuationToken);
+
+      if (continuationToken != null)
+        writer.WriteString("continuation", continuationToken);
+
+      if (searchParams != null)
+        writer.WriteString("params", searchParams);
 
       var context = isMusicContext ? GetMusicContext() : GetWebContext();
       foreach (var prop in context.EnumerateObject()) prop.WriteTo(writer);

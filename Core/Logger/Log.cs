@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace LMP.Logging;
+namespace LMP.Logger;
 
 /// <summary>
 /// Глобальная статическая точка доступа к логгеру.

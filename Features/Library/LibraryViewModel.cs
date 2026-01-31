@@ -1,4 +1,5 @@
-﻿using LMP.Core.Models;
+﻿// Features/Library/LibraryViewModel.cs
+using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Features.Shell;
@@ -16,13 +17,13 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
     private readonly YoutubeProvider _youtube;
-    private readonly CookieAuthService _auth; // Changed
+    private readonly CookieAuthService _auth;
     private readonly IDialogService _dialog;
     private readonly MainWindowViewModel _mainWindow;
     private readonly MusicLibraryManager _manager;
 
     private CancellationTokenSource? _syncCts;
-    private IDisposable? _librarySubscription;
+    private readonly IDisposable? _librarySubscription;
     private bool _isDisposed;
 
     [Reactive] public bool IsLoading { get; private set; }
@@ -45,7 +46,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     public LibraryViewModel(
         LibraryService library,
         YoutubeProvider youtube,
-        CookieAuthService auth, // Changed
+        CookieAuthService auth,
         MainWindowViewModel mainWindow,
         IDialogService dialog,
         MusicLibraryManager manager,
@@ -66,15 +67,15 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         CancelCreateCommand = ReactiveCommand.Create(() => { IsCreatingPlaylist = false; NewPlaylistName = ""; });
 
         var canSave = this.WhenAnyValue(x => x.NewPlaylistName, n => !string.IsNullOrWhiteSpace(n));
-        SavePlaylistCommand = ReactiveCommand.Create(() =>
+        // Changed: Use async command
+        SavePlaylistCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            var playlist = _library.CreatePlaylist(NewPlaylistName.Trim());
-            // Cookies support playlists, so TwoWaySync is possible
-            playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly; 
-            _library.AddOrUpdatePlaylist(playlist);
+            var playlist = await _library.CreatePlaylistAsync(NewPlaylistName.Trim());
+            playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly;
+            await _library.AddOrUpdatePlaylistAsync(playlist);
             IsCreatingPlaylist = false;
             NewPlaylistName = string.Empty;
-            LoadPlaylists();
+            await LoadPlaylistsAsync();
         }, canSave);
 
         var canSync = this.WhenAnyValue(x => x.IsSyncing, syncing => !syncing);
@@ -86,7 +87,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             SyncStatus = SL["Sync_Cancelling"];
         });
 
-        RefreshCommand = ReactiveCommand.Create(LoadPlaylists);
+        RefreshCommand = ReactiveCommand.CreateFromTask(LoadPlaylistsAsync);
 
         _librarySubscription = Observable.FromEvent(
                 h => _library.OnDataChanged += h,
@@ -94,9 +95,9 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
-            .Subscribe(_ => LoadPlaylists());
+            .Subscribe(async _ => await LoadPlaylistsAsync());
 
-        LoadPlaylists();
+        _ = LoadPlaylistsAsync();
     }
 
     private void OnAuthChanged()
@@ -127,19 +128,22 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 try
                 {
-                    // Получаем плейлисты пользователя через InnerTube (пока заглушка в Provider, но вызов верный)
                     var ytPlaylists = await YoutubeProvider.GetUserPlaylistsByAuthAsync();
                     ct.ThrowIfCancellationRequested();
                     SyncProgress = 0.1;
 
-                    playlistsToImport = [.. ytPlaylists.Select(p =>
-                    {
-                        var pid = !string.IsNullOrEmpty(p.YoutubeId)
-                            ? new Core.Youtube.Playlists.PlaylistId(p.YoutubeId)
-                            : new Core.Youtube.Playlists.PlaylistId("PL0000000000000000");
-
-                        return new PlaylistSearchResult(pid, p.Name, null, []);
-                    })];
+                    playlistsToImport = [.. ytPlaylists
+                        .Where(p =>
+                            !string.IsNullOrEmpty(p.YoutubeId) &&
+                            p.YoutubeId != "LM" &&
+                            p.YoutubeId != "VLLM" &&
+                            !p.YoutubeId.StartsWith("RD")
+                        )
+                        .Select(p =>
+                        {
+                            var pid = new Core.Youtube.Playlists.PlaylistId(p.YoutubeId!);
+                            return new PlaylistSearchResult(pid, p.Name, null, []);
+                        })];
                 }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex)
@@ -149,9 +153,10 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     return;
                 }
             }
-            else if (_library.HasFakeAccount && !string.IsNullOrEmpty(_library.Data.FakeAccountChannelUrl))
+            // Changed: Use Settings property
+            else if (_library.HasFakeAccount && !string.IsNullOrEmpty(_library.Settings.FakeAccountChannelUrl))
             {
-                var result = await _youtube.GetChannelPlaylistsForSyncAsync(_library.Data.FakeAccountChannelUrl, ct);
+                var result = await _youtube.GetChannelPlaylistsForSyncAsync(_library.Settings.FakeAccountChannelUrl, ct);
                 ct.ThrowIfCancellationRequested();
                 SyncProgress = 0.1;
                 if (result != null) playlistsToImport = result.Value.Playlists;
@@ -165,11 +170,32 @@ public class LibraryViewModel : ViewModelBase, IDisposable
 
             if (playlistsToImport.Count == 0)
             {
-                if (!_isDisposed)
-                    await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_NoPlaylists"]);
+                if (_auth.IsAuthenticated)
+                {
+                    // Спрашиваем пользователя вместо автоматического старта
+                    var confirmSyncLikes = await _dialog.ConfirmAsync(
+                        SL["Sync_ConfirmLikedOnly"] ?? "Playlists Not Found",
+                        SL["Sync_NoPlaylistsFound_AskLiked"] ?? "We couldn't find any public playlists. Do you want to sync your Liked Songs instead?",
+                        SL["Common_Yes"] ?? "Yes",
+                        SL["Common_No"] ?? "No"
+                    );
+
+                    if (confirmSyncLikes)
+                    {
+                        SyncStatus = SL["Sync_LikedSongs"];
+                        await _manager.SyncLikedTracksAsync();
+
+                        // Сообщаем об успехе, так как это была единственная операция
+                        await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Sync_Success_Msg_LikedOnly"] ?? "Liked songs synced successfully.");
+                    }
+                }
+                else
+                {
+                    if (!_isDisposed)
+                        await _dialog.ShowInfoAsync(SL["Library_SyncYoutube"], SL["Sync_NoPlaylists"]);
+                }
                 return;
             }
-
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.15;
             SyncStatus = SL["Sync_SelectPlaylists"];
@@ -180,7 +206,26 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
 
-            var existingLocalPlaylists = _library.GetAllPlaylists()
+            Task? likedSongsSyncTask = null;
+            if (_auth.IsAuthenticated)
+            {
+                Log.Info("[Sync] Starting background Liked Songs sync...");
+                likedSongsSyncTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _manager.SyncLikedTracksAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"[Sync] Background liked songs sync failed: {ex.Message}");
+                    }
+                }, ct);
+            }
+
+            // Changed: Use async method
+            var allPlaylists = await _library.GetAllPlaylistsAsync(ct);
+            var existingLocalPlaylists = allPlaylists
                 .Where(p => p.IsLocal)
                 .ToDictionary(p => p.Name, p => p);
 
@@ -253,37 +298,47 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                             changed = true;
                         }
 
-                        var t = _library.GetTrack(trackId);
+                        // Changed: Use async method
+                        var t = await _library.GetTrackAsync(trackId, ct);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
                         {
                             t.InPlaylists.Add(existing.Id);
-                            _library.AddOrUpdateTrack(t);
+                            await _library.AddOrUpdateTrackAsync(t, ct);
                         }
                     }
 
                     if (changed)
                     {
                         existing.UpdatedAt = DateTime.Now;
-                        _library.AddOrUpdatePlaylist(existing);
+                        await _library.AddOrUpdatePlaylistAsync(existing, ct);
                     }
                     mergedCount++;
                 }
                 else
                 {
                     if (decision == MergeAction.Duplicate && existing != null)
-                        fullPlaylist.Name = $"{candidate.Title} (Imported)";
+                        fullPlaylist.Name = $"{candidate.Title} ({SL["Sync_DuplicateName"]})";
 
                     if (_auth.IsAuthenticated)
                     {
                         fullPlaylist.SyncMode = PlaylistSyncMode.TwoWaySync;
                         fullPlaylist.YoutubeId = candidate.Id.Value;
                     }
-                    _library.AddOrUpdatePlaylist(fullPlaylist);
+                    await _library.AddOrUpdatePlaylistAsync(fullPlaylist, ct);
                     importedCount++;
                 }
 
                 processed++;
                 SyncProgress = 0.25 + (0.75 * processed / totalToProcess);
+            }
+
+            if (likedSongsSyncTask != null)
+            {
+                if (!likedSongsSyncTask.IsCompleted)
+                {
+                    SyncStatus = SL["Sync_FinalizingLikedSongs"];
+                }
+                await likedSongsSyncTask;
             }
 
             SyncProgress = 1.0;
@@ -313,27 +368,36 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 IsSyncing = false;
                 SyncProgress = 0;
                 SyncStatus = "";
-                LoadPlaylists();
+                await LoadPlaylistsAsync();
             }
         }
     }
 
-    private void LoadPlaylists()
+    private async Task LoadPlaylistsAsync()
     {
         if (_isDisposed) return;
 
+        // Dispose old ViewModels
+        foreach (var vm in Playlists) vm.Dispose();
         Playlists.Clear();
-        var allPlaylists = _library.GetAllPlaylists();
-        var sorted = allPlaylists.OrderByDescending(p => p.IsLocal).ThenBy(p => p.Name);
+
+        // GetAllPlaylistsAsync now returns playlists with TrackCount populated
+        var allPlaylists = await _library.GetAllPlaylistsAsync();
+
+        // Sort: Liked first, then local, then by name
+        var sorted = allPlaylists
+            .OrderByDescending(p => p.Id == LibraryService.LikedPlaylistId)
+            .ThenByDescending(p => p.IsLocal)
+            .ThenBy(p => p.Name);
 
         foreach (var playlist in sorted)
         {
             Playlists.Add(new PlaylistCardViewModel(
                 playlist,
                 _mainWindow.NavigateToPlaylist,
-                (p) => 
+                async (p) =>
                 {
-                    var tracks = _library.GetPlaylistTracks(p.Id);
+                    var tracks = await _library.GetPlaylistTracksAsync(p.Id);
                     _audio.EnqueueRange(tracks);
                 },
                 DeletePlaylistAsync));
@@ -344,7 +408,8 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
 
-        var playlist = _library.GetPlaylist(playlistId);
+        // Changed: Use async method
+        var playlist = await _library.GetPlaylistAsync(playlistId);
         if (playlist == null) return;
 
         if (playlistId == "liked")
@@ -366,7 +431,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         try
         {
             await _manager.DeletePlaylistAsync(playlistId);
-            LoadPlaylists();
+            await LoadPlaylistsAsync();
         }
         finally
         {
@@ -378,6 +443,9 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
+
+        foreach (var vm in Playlists) vm.Dispose();
+        Playlists.Clear();
 
         _auth.OnAuthStateChanged -= OnAuthChanged;
         _syncCts?.Cancel();

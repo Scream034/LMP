@@ -1,0 +1,55 @@
+<Window xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.Features.Debug"
+    x:Class="LMP.Features.Debug.DebugWindow"
+    x:DataType="vm:DebugViewModel"
+    Title="Query Debugger" Width="700" Height="600"
+    Background="{DynamicResource BgPrimaryBrush}"
+    WindowStartupLocation="CenterScreen">
+
+    <Grid RowDefinitions="Auto, Auto, *">
+        <!-- 1. Toolbar -->
+        <Border Grid.Row="0" Background="{DynamicResource BgSecondaryBrush}" Padding="10">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <TextBlock Text="Search Term:" VerticalAlignment="Center" />
+                <TextBox Text="{Binding SearchQuery}" Width="200" VerticalAlignment="Center" />
+                <Button Content="Clear Log" Command="{Binding ClearLogCommand}" Classes="accent" />
+                <ProgressBar IsIndeterminate="True" Width="100" IsVisible="{Binding IsBusy}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 2. Action Buttons (Scrollable) -->
+        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto"
+            VerticalScrollBarVisibility="Disabled">
+            <StackPanel Orientation="Horizontal" Margin="10" Spacing="8">
+                <Button Content="1. YT Liked (Videos)"
+                    Command="{Binding GetLikedVideosCommand}"
+                    Background="#FF4444" Foreground="White" Padding="12,8" />
+
+                <Button Content="2. YTM Liked (Tracks)"
+                    Command="{Binding GetLikedMusicCommand}"
+                    Background="#AA0000" Foreground="White" Padding="12,8" />
+
+                <Button Content="3. YT Search 10 Videos"
+                    Command="{Binding SearchVideosCommand}"
+                    Background="#4444FF" Foreground="White" Padding="12,8" />
+
+                <Button Content="4. YTM Search 10 Tracks"
+                    Command="{Binding SearchMusicCommand}"
+                    Background="#00AAAA" Foreground="White" Padding="12,8" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 3. Output Log -->
+        <Border Grid.Row="2" Margin="10"
+            BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="1" CornerRadius="4">
+            <ScrollViewer x:Name="LogScroller">
+                <SelectableTextBlock Text="{Binding LogOutput}"
+                    Margin="10"
+                    FontFamily="Consolas, monospace"
+                    FontSize="12"
+                    TextWrapping="Wrap" />
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

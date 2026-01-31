@@ -71,7 +71,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         }
     }
 
-    private IEnumerable<Playlist> ParseSectionList(JsonElement sectionList)
+    private static IEnumerable<Playlist> ParseSectionList(JsonElement sectionList)
     {
         var contents = sectionList.GetPropertyOrNull("contents");
         if (contents == null) yield break;
@@ -120,7 +120,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         }
     }
 
-    private Playlist? ParseItem(JsonElement item)
+    private static Playlist? ParseItem(JsonElement item)
     {
         if (item.TryGetProperty("gridPlaylistRenderer", out var grid))
             return ParseGridPlaylist(grid);
@@ -134,7 +134,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         return null;
     }
 
-    private Playlist? ParseGridPlaylist(JsonElement json)
+    private static Playlist? ParseGridPlaylist(JsonElement json)
     {
         var id = json.GetPropertyOrNull("playlistId")?.GetStringOrNull();
         if (string.IsNullOrEmpty(id)) return null;
@@ -143,12 +143,12 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             .EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull()
             ?? json.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
 
-        var countText = json.GetPropertyOrNull("videoCountText")?.GetPropertyOrNull("runs")?
-            .EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull();
+        // var countText = json.GetPropertyOrNull("videoCountText")?.GetPropertyOrNull("runs")?
+        //     .EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull();
 
-        int? count = null;
-        if (countText != null && int.TryParse(countText.Replace(",", "").Replace(" ", ""), out var c))
-            count = c;
+        // int? count = null;
+        // if (countText != null && int.TryParse(countText.Replace(",", "").Replace(" ", ""), out var c))
+        //     count = c;
 
         var thumb = json.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?
             .EnumerateArrayOrNull()?.LastOrDefault().GetPropertyOrNull("url")?.GetStringOrNull();
@@ -159,13 +159,13 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             Id = id,
             YoutubeId = id,
             StoredName = title ?? "Unknown",
-            RemoteCount = count,
+            // RemoteCount = count,
             ThumbnailUrl = thumb,
             SyncMode = PlaylistSyncMode.CloudPublic
         };
     }
 
-    private Playlist? ParseLockupViewModel(JsonElement json)
+    private static Playlist? ParseLockupViewModel(JsonElement json)
     {
         var id = json.GetPropertyOrNull("contentId")?.GetStringOrNull();
         if (string.IsNullOrEmpty(id) || !id.StartsWith("PL")) return null;

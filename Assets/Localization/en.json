@@ -14,6 +14,11 @@
   "Common_Minutes": "min",
   "Common_Files": "files",
 
+  "Window_Minimize": "Minimize",
+  "Window_Maximize": "Maximize",
+  "Window_Restore": "Restore",
+  "Window_Close": "Close",
+
   "Nav_Home": "Home",
   "Nav_Search": "Search",
   "Nav_Library": "Library",
@@ -74,6 +79,8 @@
   "Settings_Appearance": "Appearance",
   "Settings_AccentColor": "Accent Color",
   "Settings_AdvancedColors": "Advanced Colors",
+  "Settings_Client": "YouTube Client",
+  "Settings_ClientDesc": "Change if tracks fail to load (403 Error).",
 
   "Settings_ChannelUrl": "Public Channel",
   "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
@@ -87,8 +94,23 @@
   "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
   "Settings_UserAgentDesc": "Insert the User-Agent from your browser to prevent cookie expiration.",
   "Settings_UserAgentSave": "Save",
+  "Settings_RamCache": "RAM Image Cache",
+  "Settings_RamCacheDesc": "Max number of images in memory. Lower = less RAM, more disk reads.",
 
   "Settings_General": "General",
+
+  "NetProfile_Low": "Data Saver",
+  "NetProfile_Medium": "Balanced",
+  "NetProfile_High": "High Quality",
+  "NetProfile_Ultra": "Lossless / LAN",
+
+  "Client_AndroidVR": "Android VR (Recommended)",
+  "Client_TV": "Smart TV / Console",
+  "Client_Web": "Web Browser",
+
+  "Cache_Low": "Economy",
+  "Cache_Medium": "Balanced",
+  "Cache_High": "Smooth",
 
   "Theme_Custom": "Custom",
   "Theme_Presets": "Theme Presets",
@@ -113,6 +135,7 @@
 
   "Auth_NotSignedIn": "Not signed in",
   "Auth_LoggedIn": "Signed in",
+  "Auth_LoggedInAs": "Signed in: {0}",
   "Auth_Guest": "Guest Mode",
   "Auth_Login": "Sign In",
   "Auth_Logout": "Sign Out",
@@ -153,7 +176,10 @@
   "Queue_NowPlaying": "Now Playing",
 
   "Playlist_Type": "PLAYLIST",
-  "Playlist_TracksCount": "track|tracks",
+  "Playlist_Empty": "Empty",
+  "Playlist_TracksCount_0": "Empty",
+  "Playlist_TracksCount_1": "{0} track",
+  "Playlist_TracksCount_other": "{0} tracks",
   "Playlist_PlayAll": "Play All",
   "Playlist_ShufflePlay": "Shuffle",
   "Playlist_DownloadAll": "Download All",
@@ -174,6 +200,8 @@
   "Player_Unmute": "Unmute",
   "Player_Volume": "Volume",
   "Player_Shuffle": "Shuffle",
+  "Player_Error_403_Title": "Playback Issue",
+  "Player_Error_403_Msg": "Multiple playback errors occurred. This usually means YouTube is blocking the current client.\n\nPlease go to Settings -> Network and change 'YouTube Client' (e.g. to TV or Web).",
 
   "Track_Like": "Add to Liked",
   "Track_Unlike": "Remove from Liked",
@@ -184,6 +212,7 @@
   "Track_Download": "Download",
   "Track_Downloaded": "Downloaded",
   "Track_StartRadio": "Start Radio",
+  "Track_MoreOptions": "More options",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
@@ -191,6 +220,7 @@
   "Dialog_Input_Title": "Input",
   "Dialog_Warning_Title": "Warning",
   "Dialog_Done_Title": "Done",
+  "Dialog_Login_Title": "Login",
   "Dialog_SelectDownloadFolder_Title": "Select Folder",
   "Dialog_Success": "Success",
 
@@ -199,6 +229,7 @@
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
+  "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (XHR requests) -> Copy 'Cookie' header\n3. Paste here:",
 
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",
@@ -209,6 +240,7 @@
   "Input_PasteHere": "Paste here...",
 
   "Sync_Action": "Import",
+  "Sync_DuplicateName": "Imported",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",
   "Sync_Success_Msg": "Imported: {0}, Merged: {1}",
   "Sync_Title": "Select Playlists",
@@ -223,6 +255,11 @@
   "Sync_NoPlaylists": "No playlists found",
   "Sync_Error_API": "API Error",
   "Sync_InProgress": "Syncing...",
+  "Sync_LikedSongs": "Syncing Liked Songs...",
+  "Sync_FinalizingLikedSongs": "Finalizing Liked Songs...",
+  "Sync_ConfirmLikedOnly": "No Playlists Found",
+  "Sync_NoPlaylistsFound_AskLiked": "We couldn't find any public playlists on your channel. Do you want to sync your 'Liked Songs' instead?",
+  "Sync_Success_Msg_LikedOnly": "Liked songs synchronized successfully.",
 
   "Conflict_Title": "Conflict",
   "Conflict_Header": "Playlist exists",

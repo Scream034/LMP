@@ -1,5 +1,5 @@
 {
-  "Common_AppName": "Lite Player",
+  "Common_AppName": "Легковесный плеер",
   "Common_Cancel": "Отмена",
   "Common_Confirm": "Продолжить",
   "Common_OK": "ОК",
@@ -12,6 +12,11 @@
   "Common_Search": "Поиск",
   "Common_Minutes": "мин",
   "Common_Files": "файлов",
+
+  "Window_Minimize": "Свернуть",
+  "Window_Maximize": "Развернуть",
+  "Window_Restore": "Восстановить",
+  "Window_Close": "Закрыть",
 
   "Nav_Home": "Главная",
   "Nav_Search": "Поиск",
@@ -73,6 +78,8 @@
   "Settings_Appearance": "Внешний вид",
   "Settings_AccentColor": "Акцентный цвет",
   "Settings_AdvancedColors": "Дополнительные цвета",
+  "Settings_Client": "Клиент YouTube",
+  "Settings_ClientDesc": "Измените, если треки не грузятся (Ошибка 403).",
 
   "Settings_ChannelUrl": "Публичный канал",
   "Settings_ChannelUrlDesc": "Синхронизация публичных плейлистов без входа в Google.",
@@ -86,8 +93,23 @@
   "Settings_SearchBatchSizeDesc": "Количество треков для загрузки при прокрутке результатов поиска",
   "Settings_UserAgentDesc": "Вставьте User-Agent из вашего браузера, чтобы предотвратить истечение срока действия файлов cookie.",
   "Settings_UserAgentSave": "Сохранить",
+  "Settings_RamCache": "Кэш картинок в ОЗУ",
+  "Settings_RamCacheDesc": "Макс. число картинок в памяти. Меньше = экономия ОЗУ, больше чтения с диска.",
 
   "Settings_General": "Общее",
+  
+  "NetProfile_Low": "Экономия трафика",
+  "NetProfile_Medium": "Сбалансированный",
+  "NetProfile_High": "Высокое качество",
+  "NetProfile_Ultra": "Максимальный / LAN",
+
+  "Client_AndroidVR": "Android VR (Рекомендуется)",
+  "Client_TV": "Smart TV / Консоль",
+  "Client_Web": "Веб-браузер",
+
+  "Cache_Low": "Эконом",
+  "Cache_Medium": "Баланс",
+  "Cache_High": "Плавный",
 
   "Theme_Custom": "Своя тема",
   "Theme_Presets": "Пресеты тем",
@@ -112,6 +134,7 @@
 
   "Auth_NotSignedIn": "Вход не выполнен",
   "Auth_LoggedIn": "Вход выполнен",
+  "Auth_LoggedInAs": "Вход выполнен: {0}",
   "Auth_Guest": "Гостевой режим",
   "Auth_Login": "Войти",
   "Auth_Logout": "Выйти",
@@ -152,7 +175,12 @@
   "Queue_NowPlaying": "Сейчас играет",
 
   "Playlist_Type": "ПЛЕЙЛИСТ",
-  "Playlist_TracksCount": "трек|трека|треков",
+  "Playlist_Empty": "Пусто",
+  "Playlist_TracksCount_0": "Пусто",
+  "Playlist_TracksCount_1": "{0} трек",
+  "Playlist_TracksCount_2": "{0} трека",
+  "Playlist_TracksCount_5": "{0} треков",
+  "Playlist_TracksCount_other": "{0} треков",
   "Playlist_PlayAll": "Слушать всё",
   "Playlist_ShufflePlay": "Перемешать",
   "Playlist_DownloadAll": "Скачать всё",
@@ -173,6 +201,8 @@
   "Player_Mute": "Звук",
   "Player_Unmute": "Включить звук",
   "Player_Volume": "Громкость",
+  "Player_Error_403_Title": "Ошибка воспроизведения",
+  "Player_Error_403_Msg": "Множественные ошибки при воспроизведении. Обычно это значит, что YouTube блокирует текущий клиент.\n\nПожалуйста, перейдите в Настройки -> Сеть и измените 'Клиент YouTube' (например, на TV или Web).",
 
   "Track_Like": "Добавить в любимое",
   "Track_Unlike": "Убрать из любимого",
@@ -183,6 +213,7 @@
   "Track_Download": "Скачать",
   "Track_Downloaded": "Скачано",
   "Track_StartRadio": "Запустить радио",
+  "Track_MoreOptions": "Больше опций",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",
@@ -190,6 +221,7 @@
   "Dialog_Input_Title": "Поле ввода",
   "Dialog_Warning_Title": "Внимание",
   "Dialog_Done_Title": "Готово",
+  "Dialog_Login_Title": "Логин",
   "Dialog_SelectDownloadFolder_Title": "Выберите папку для загрузок",
   "Dialog_Success": "Успешно",
   
@@ -198,6 +230,7 @@
   "Dialog_ResetMessage": "Сбросить настройки? Ваша музыка останется.",
   "Dialog_ResetComplete": "Настройки сброшены.",
   "Dialog_LogoutMessage": "Вы уверены, что хотите выйти из аккаунта?",
+  "Dialog_LoginMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые XHR запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
   
   "Dialog_Merge_NoTarget_Title": "Нечего объединять",
   "Dialog_Merge_NoTarget_Msg": "Нет других локальных плейлистов для объединения.",
@@ -208,6 +241,7 @@
   "Input_PasteHere": "Вставьте сюда...",
 
   "Sync_Action": "Импорт",
+  "Sync_DuplicateName": "Импортировано",
   "Sync_ConfigureUrlFirst": "Сначала укажите ссылку на канал в настройках.",
   "Sync_Success_Msg": "Импортировано: {0}, объединено: {1}",
   "Sync_Title": "Выбор плейлистов",
@@ -222,6 +256,11 @@
   "Sync_NoPlaylists": "Плейлисты не найдены",
   "Sync_Error_API": "Ошибка API",
   "Sync_InProgress": "Синхронизация...",
+  "Sync_LikedSongs": "Синхронизация понравившихся песен...",
+  "Sync_FinalizingLikedSongs": "Завершение синхронизации понравившихся песен...",
+  "Sync_ConfirmLikedOnly": "Плейлисты не найдены",
+  "Sync_NoPlaylistsFound_AskLiked": "Мы не нашли публичных плейлистов на вашем канале. Хотите синхронизировать список 'Понравившееся'?",
+  "Sync_Success_Msg_LikedOnly": "Понравившиеся треки успешно синхронизированы.",
 
   "Conflict_Title": "Конфликт",
   "Conflict_Header": "Плейлист уже есть",

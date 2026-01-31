@@ -1,4 +1,5 @@
-﻿using LMP.Core.Youtube.Bridge;
+﻿using System.Net.Http.Headers;
+using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Videos;
@@ -7,7 +8,6 @@ namespace LMP.Core.Youtube.Playlists;
 
 internal class PlaylistController(HttpClient http)
 {
-    // Works only with user-made playlists
     public async ValueTask<PlaylistBrowseResponse> GetPlaylistBrowseResponseAsync(
         PlaylistId playlistId,
         CancellationToken cancellationToken = default
@@ -18,18 +18,83 @@ internal class PlaylistController(HttpClient http)
             "https://www.youtube.com/youtubei/v1/browse"
         );
 
+        string browseId = playlistId.Value;
+
+        if (browseId == "LL")
+            browseId = "VLLL";
+        else if (browseId == "LM") browseId = "VLLM";
+        else if (browseId == "WL") browseId = "VLWL";
+        else if (!browseId.StartsWith("VL")) browseId = "VL" + browseId;
+
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
         request.Content = new StringContent(
-            // lang=json
             $$"""
             {
-              "browseId": {{Json.Serialize("VL" + playlistId)}},
+              "browseId": {{Json.Serialize(browseId)}},
               "context": {
                 "client": {
                   "clientName": "WEB",
-                  "clientVersion": "2.20210408.08.00",
-                  "hl": "en",
-                  "gl": "US",
+                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                  "hl": {{Json.Serialize(hl)}},
+                  "gl": {{Json.Serialize(gl)}},
                   "utcOffsetMinutes": 0
+                }
+              },
+              "params": "wgYCEAE%3D"
+            }
+            """
+        );
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+        using var response = await http.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var playlistResponse = PlaylistBrowseResponse.Parse(
+            await response.Content.ReadAsStringAsync(cancellationToken)
+        );
+
+        if (!playlistResponse.IsAvailable && browseId != "VLLL")
+            throw new PlaylistUnavailableException($"Плейлист '{playlistId}' недоступен.");
+
+        return playlistResponse;
+    }
+
+    /// <summary>
+    /// Получает следующую страницу видео плейлиста через continuation token
+    /// </summary>
+    public async ValueTask<PlaylistContinuationResponse> GetPlaylistContinuationAsync(
+        string continuationToken,
+        string? visitorData = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "https://www.youtube.com/youtubei/v1/browse"
+        );
+
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
+        if (!string.IsNullOrEmpty(visitorData))
+        {
+            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
+        }
+
+        request.Content = new StringContent(
+            $$"""
+            {
+              "continuation": {{Json.Serialize(continuationToken)}},
+              "context": {
+                "client": {
+                  "clientName": "WEB",
+                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                  "hl": {{Json.Serialize(hl)}},
+                  "gl": {{Json.Serialize(gl)}},
+                  "utcOffsetMinutes": 0,
+                  "visitorData": {{Json.Serialize(visitorData)}}
                 }
               }
             }
@@ -39,17 +104,11 @@ internal class PlaylistController(HttpClient http)
         using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        var playlistResponse = PlaylistBrowseResponse.Parse(
+        return PlaylistContinuationResponse.Parse(
             await response.Content.ReadAsStringAsync(cancellationToken)
         );
-
-        if (!playlistResponse.IsAvailable)
-            throw new PlaylistUnavailableException($"Playlist '{playlistId}' is not available.");
-
-        return playlistResponse;
     }
 
-    // Works on all playlists, but contains limited metadata
     public async ValueTask<PlaylistNextResponse> GetPlaylistNextResponseAsync(
         PlaylistId playlistId,
         VideoId? videoId = null,
@@ -58,7 +117,10 @@ internal class PlaylistController(HttpClient http)
         CancellationToken cancellationToken = default
     )
     {
-        const int retriesCount = 5;
+        var hl = YoutubeHttpHandler.GetHl();
+        var gl = YoutubeHttpHandler.GetGl();
+
+        const int retriesCount = 3;
         for (var retriesRemaining = retriesCount; ; retriesRemaining--)
         {
             using var request = new HttpRequestMessage(
@@ -66,8 +128,12 @@ internal class PlaylistController(HttpClient http)
                 "https://www.youtube.com/youtubei/v1/next"
             );
 
+            if (!string.IsNullOrEmpty(visitorData))
+            {
+                request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
+            }
+
             request.Content = new StringContent(
-                // lang=json
                 $$"""
                 {
                   "playlistId": {{Json.Serialize(playlistId)}},
@@ -76,9 +142,9 @@ internal class PlaylistController(HttpClient http)
                   "context": {
                     "client": {
                       "clientName": "WEB",
-                      "clientVersion": "2.20210408.08.00",
-                      "hl": "en",
-                      "gl": "US",
+                      "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                      "hl": {{Json.Serialize(hl)}},
+                      "gl": {{Json.Serialize(gl)}},
                       "utcOffsetMinutes": 0,
                       "visitorData": {{Json.Serialize(visitorData)}}
                     }
@@ -96,36 +162,8 @@ internal class PlaylistController(HttpClient http)
 
             if (!playlistResponse.IsAvailable)
             {
-                // Retry if this is not the first request, meaning that the previous requests were successful,
-                // indicating that it's most likely a transient error.
-                if (index > 0 && !string.IsNullOrWhiteSpace(visitorData) && retriesRemaining > 0)
-                    continue;
-
-                // Some system playlists are unavailable through this endpoint until their page is opened by
-                // at least one user. If this is the first request, and we haven't retried yet, attempt to
-                // warm up the playlist by opening its page, and then retry.
-                if (
-                    index <= 0
-                    && string.IsNullOrWhiteSpace(visitorData)
-                    && retriesRemaining >= retriesCount
-                )
-                {
-                    using (
-                        await http.GetAsync(
-                            $"https://youtube.com/playlist?list={playlistId}",
-                            cancellationToken
-                        )
-                    )
-                    {
-                        // We don't actually care about the outcome of this request
-                    }
-
-                    continue;
-                }
-
-                throw new PlaylistUnavailableException(
-                    $"Playlist '{playlistId}' is not available."
-                );
+                if (retriesRemaining > 0) continue;
+                throw new PlaylistUnavailableException($"Плейлист '{playlistId}' недоступен.");
             }
 
             return playlistResponse;

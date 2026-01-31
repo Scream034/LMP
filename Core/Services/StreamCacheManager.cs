@@ -169,7 +169,7 @@ public class StreamCacheManager : IDisposable
                 .ToList();
 
             long totalSize = files.Sum(static f => f.Length);
-            long maxCacheBytes = (long)_library.Data.Storage.AudioCacheLimitMb * 1024 * 1024;
+            long maxCacheBytes = (long)_library.Settings.Storage.AudioCacheLimitMb * 1024 * 1024;
 
             if (totalSize <= maxCacheBytes) return;
 

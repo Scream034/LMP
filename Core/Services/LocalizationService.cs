@@ -22,6 +22,11 @@ public sealed class LocalizationService : INotifyPropertyChanged
         new() { Code = "ru", Name = "Русский" }
     ];
 
+    /// <summary>
+    /// Публичное свойство для доступа к коду языка (hl)
+    /// </summary>
+    public string CurrentLanguageCode => _currentLanguage;
+
     public string CurrentLanguage
     {
         get => _currentLanguage;
@@ -137,35 +142,57 @@ public sealed class LocalizationService : INotifyPropertyChanged
 
     public string RawGet(string key) => _resources[key];
 
-    public string GetPlural(string key, int number)
+    /// <summary>
+    /// Gets pluralized string based on count.
+    /// Looks for keys like "Key_0", "Key_1", "Key_2", "Key_5", "Key_other"
+    /// </summary>
+    public string GetPlural(string key, int count)
     {
-        if (!_resources.TryGetValue(key, out var val)) return key;
+        // Russian pluralization rules
+        var absCount = Math.Abs(count);
+        var lastTwo = absCount % 100;
+        var lastOne = absCount % 10;
 
-        var forms = val.Split('|', StringSplitOptions.RemoveEmptyEntries);
-        int n = Math.Abs(number);
+        string suffix;
 
-        // Логика для Русского (3 формы: 1 трек, 2 трека, 5 треков)
-        if (_currentLanguage == "ru")
+        if (count == 0)
         {
-            if (forms.Length < 3) return $"{number} {forms[0]}";
-
-            int n100 = n % 100;
-            int n10 = n % 10;
-
-            if (n100 > 10 && n100 < 20) return $"{number} {forms[2]}";
-            if (n10 > 1 && n10 < 5) return $"{number} {forms[1]}";
-            if (n10 == 1) return $"{number} {forms[0]}";
-            return $"{number} {forms[2]}";
+            suffix = "_0";
+        }
+        else if (lastTwo >= 11 && lastTwo <= 19)
+        {
+            // 11-19 always use "_5" form in Russian
+            suffix = "_5";
+        }
+        else if (lastOne == 1)
+        {
+            suffix = "_1";
+        }
+        else if (lastOne >= 2 && lastOne <= 4)
+        {
+            suffix = "_2";
+        }
+        else
+        {
+            suffix = "_5";
         }
 
-        // Логика для Английского (2 формы: 1 track, 2 tracks)
-        // И общий фоллбек
-        if (forms.Length >= 2)
+        // Try specific form first
+        var specificKey = key + suffix;
+        if (_resources.TryGetValue(specificKey, out var specific))
         {
-            return n == 1 ? $"{number} {forms[0]}" : $"{number} {forms[1]}";
+            return string.Format(specific, count);
         }
 
-        return $"{number} {forms[0]}";
+        // Fall back to "_other"
+        var otherKey = key + "_other";
+        if (_resources.TryGetValue(otherKey, out var other))
+        {
+            return string.Format(other, count);
+        }
+
+        // Final fallback
+        return $"{count}";
     }
 }
 

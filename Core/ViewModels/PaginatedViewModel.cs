@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+﻿// Core/ViewModels/PaginatedViewModel.cs
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -12,29 +13,25 @@ using ReactiveUI.Fody.Helpers;
 namespace LMP.Core.ViewModels;
 
 public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IDisposable, IFilterable
-    where TViewModel : class
+    where TViewModel : IDisposable
     where TSource : notnull
 {
     #region Fields
 
     protected readonly LibraryService LibService;
 
-    // DynamicData Source
     private readonly SourceList<TSource> _sourceList = new();
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
-    private readonly CompositeDisposable _cleanUp = new();
+    private readonly CompositeDisposable _cleanUp = [];
 
-    // Loop protection
     private int _consecutiveEmptyLoads = 0;
     private const int MaxConsecutiveEmptyLoads = 5;
 
-    // State
     private CancellationTokenSource? _loadCts;
     private bool _canFetchMore;
     private bool _isDisposed;
     private int _totalSourceCount;
 
-    // Backing fields для ручной реализации (чтобы избежать ошибки Fody)
     private string _filterQuery = string.Empty;
     private ContentFilterType _filterType = ContentFilterType.All;
 
@@ -42,7 +39,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Properties
 
-    protected virtual int BatchSize => LibService.Data.LoadBatchSize > 0 ? LibService.Data.LoadBatchSize : 20;
+    // Changed: Access Settings property instead of Data
+    protected virtual int BatchSize => LibService.Settings.LoadBatchSize > 0
+        ? LibService.Settings.LoadBatchSize
+        : 20;
     protected virtual int PrefetchThreshold => 10;
 
     [Reactive] public bool IsLoading { get; protected set; }
@@ -52,7 +52,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     [Reactive] public bool ReachedEnd { get; protected set; }
     [Reactive] public bool EnableSmoothLoading { get; set; }
 
-    // --- FIX: Ручная реализация свойств для устранения краша Fody ---
     public string FilterQuery
     {
         get => _filterQuery;
@@ -64,7 +63,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         get => _filterType;
         set => this.RaiseAndSetIfChanged(ref _filterType, value);
     }
-    // ---------------------------------------------------------------
 
     public ReadOnlyObservableCollection<TViewModel> Items => _items;
     protected int TotalCount => _totalSourceCount;
@@ -79,9 +77,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     protected PaginatedViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
-        EnableSmoothLoading = LibService.Data.EnableSmoothLoading;
+        // Changed: Access Settings property
+        EnableSmoothLoading = LibService.Settings.EnableSmoothLoading;
 
-        // Команда переключения фильтра
         SetFilterTypeCommand = ReactiveCommand.Create<string>(typeStr =>
         {
             if (Enum.TryParse<ContentFilterType>(typeStr, true, out var result))
@@ -90,16 +88,16 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             }
         });
 
-        // Предикат фильтрации
         var filterPredicate = this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
-            .Throttle(TimeSpan.FromMilliseconds(250))
+            .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.TaskpoolScheduler)
-            .Select(BuildFilter);
+            .Select(tuple => BuildFilterPredicate(tuple.Item1, tuple.Item2))
+            .StartWith(BuildFilterPredicate(_filterQuery, _filterType));
 
-        // DynamicData pipeline
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Transform(CreateItemViewModel)
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out _items)
             .DisposeMany()
             .Subscribe()
@@ -114,18 +112,19 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
         LoadMoreCommand = ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore);
 
-        // Smart Auto-Load
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Count()
-            .Throttle(TimeSpan.FromMilliseconds(200))
+            .Throttle(TimeSpan.FromMilliseconds(100))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(visibleCount =>
             {
-                if (visibleCount < PrefetchThreshold && HasMoreItems && !IsLoading && !IsLoadingMore)
+                // Если после фильтрации осталось мало элементов и есть ещё данные
+                if (visibleCount < PrefetchThreshold && HasMoreItems && !IsLoading && !IsLoadingMore && !IsFetchingFromNetwork)
                 {
                     if (_consecutiveEmptyLoads < MaxConsecutiveEmptyLoads)
                     {
+                        Log.Debug($"[Paginated] Auto-loading more (visible: {visibleCount}, threshold: {PrefetchThreshold})");
                         _ = LoadNextBatchAsync();
                     }
                 }
@@ -142,8 +141,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     #region Abstract Methods
 
     protected abstract TViewModel CreateItemViewModel(TSource item);
-    protected abstract bool FilterItem(TSource item);
-
+    protected abstract bool FilterItem(TSource item, string query, ContentFilterType filterType);
     protected virtual string GetItemId(TSource item) => item?.GetHashCode().ToString() ?? "";
 
     protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct)
@@ -153,9 +151,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Private Helpers
 
-    private Func<TSource, bool> BuildFilter((string Query, ContentFilterType Type) tuple)
+    private Func<TSource, bool> BuildFilterPredicate(string query, ContentFilterType filterType)
     {
-        return FilterItem;
+        return item => FilterItem(item, query, filterType);
     }
 
     #endregion
@@ -183,13 +181,12 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         _canFetchMore = canFetchMore;
         _consecutiveEmptyLoads = 0;
 
-        await Task.Run(() =>
+        var itemsList = items?.ToList() ?? [];
+
+        _sourceList.Edit(innerList =>
         {
-            _sourceList.Edit(innerList =>
-            {
-                innerList.Clear();
-                if (items != null) innerList.AddRange(items);
-            });
+            innerList.Clear();
+            innerList.AddRange(itemsList);
         });
 
         _totalSourceCount = _sourceList.Count;
@@ -209,8 +206,8 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         UpdateState();
     }
 
-    protected List<TSource> GetItemsSnapshot() => _sourceList.Items.ToList();
-    protected List<string> GetLoadedItemsIds() => _sourceList.Items.Select(GetItemId).ToList();
+    protected List<TSource> GetItemsSnapshot() => [.. _sourceList.Items];
+    protected List<string> GetLoadedItemsIds() => [.. _sourceList.Items.Select(GetItemId)];
 
     #endregion
 

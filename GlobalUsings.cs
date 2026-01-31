@@ -1,2 +1,2 @@
-global using Log = LMP.Logging.Log;
+global using Log = LMP.Logger.Log;
 global using G = LMP.Globals;

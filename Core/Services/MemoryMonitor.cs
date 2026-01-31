@@ -24,7 +24,7 @@ public class MemoryMonitor
     public MemoryStats CurrentStats => _lastStats;
 
     // Пороги предупреждений
-    public long WarningThresholdMb { get; set; } = 350;
+    public long WarningThresholdMb { get; set; } = 400;
     public long CriticalThresholdMb { get; set; } = 500;
 
     public MemoryMonitor(TimeSpan? interval = null)

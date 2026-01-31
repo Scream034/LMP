@@ -1,22 +1,38 @@
-﻿using System.Reactive;
+﻿// Core/Services/LibraryService.cs
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using LMP.Core.Data;
+using LMP.Core.Data.Repositories;
 using LMP.Core.Models;
+using LMP.Core.Youtube.Utils;
+using Microsoft.EntityFrameworkCore;
 using ReactiveUI;
 
 namespace LMP.Core.Services;
 
-public class LibraryService : IDisposable
+/// <summary>
+/// Main library service with SQLite persistence.
+/// Uses repositories for data access and TrackRegistry as L1 cache.
+/// </summary>
+public sealed class LibraryService : IAsyncDisposable
 {
     public const string LikedPlaylistId = "liked";
 
-    private readonly Subject<Unit> _saveSignal = new();
+    private readonly TrackRegistry _registry;
+    private readonly ITrackRepository _tracks;
+    private readonly IPlaylistRepository _playlists;
+    private readonly ISettingsRepository _settings;
+    private readonly IDbContextFactory<LibraryDbContext> _dbFactory;
+
+    private readonly Subject<Unit> _saveSettingsSignal = new();
     private readonly IDisposable _saveSubscription;
 
-    public LibraryData Data { get; private set; } = new();
+    private AppSettings _appSettings = new();
+    public AppSettings Settings => _appSettings;
 
-    // --- Fake Account кэш (в памяти, не сохраняется) ---
+    // Fake Account cache
     private string? _fakeAccountName;
     private string? _fakeAccountAvatarUrl;
 
@@ -24,454 +40,603 @@ public class LibraryService : IDisposable
     public event Action? OnFakeAccountChanged;
     public event Action<TrackInfo>? OnTrackUpdated;
 
-    public LibraryService()
+    public LibraryService(
+        TrackRegistry registry,
+        ITrackRepository tracks,
+        IPlaylistRepository playlists,
+        ISettingsRepository settings,
+        IDbContextFactory<LibraryDbContext> dbFactory)
     {
-        LocalizationService.Instance.LanguageChanged += (_, _) => OnLanguageChanged();
+        _registry = registry;
+        _tracks = tracks;
+        _playlists = playlists;
+        _settings = settings;
+        _dbFactory = dbFactory;
 
-        _saveSubscription = _saveSignal
-            .Throttle(TimeSpan.FromSeconds(2))
+        LocalizationService.Instance.LanguageChanged += (_, _) => OnDataChanged?.Invoke();
+
+        // Throttled settings save
+        _saveSubscription = _saveSettingsSignal
+            .Throttle(TimeSpan.FromSeconds(1))
             .ObserveOn(RxApp.TaskpoolScheduler)
-            .Subscribe(async _ => await SaveInternalAsync());
-
-        Load();
+            .Subscribe(async _ =>
+            {
+                try { await _settings.SetAsync("AppSettings", _appSettings); }
+                catch (Exception ex) { Log.Error($"[LibraryService] Settings save failed: {ex.Message}"); }
+            });
     }
 
-    public string DownloadPath
+    #region Initialization
+
+    public async Task InitializeAsync(CancellationToken ct = default)
     {
-        get => string.IsNullOrEmpty(Data.DownloadPath)
-            ? G.Folder.Downloads
-            : Data.DownloadPath;
-        set
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        // Create/migrate database
+        await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
+        await ctx.Database.EnsureCreatedAsync(ct);
+        await ctx.OptimizeAsync(ct);
+        await ctx.EnsureFtsTablesAsync(ct);
+
+        // Migrate from JSON if exists
+        var jsonPath = G.File.Library;
+        if (File.Exists(jsonPath))
         {
-            Data.DownloadPath = value;
-            Save();
+            await MigrateFromJsonAsync(jsonPath, ct);
         }
+
+        // Load settings
+        _appSettings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
+        // ИНИЦИАЛИЗИРУЕМ СТАТИКУ
+        YoutubeClientUtils.CurrentProfile = _appSettings.YoutubeClient;
+
+        // Hydrate cache
+        await _registry.HydrateAsync(ct);
+
+        // Ensure liked playlist
+        await EnsureLikedPlaylistAsync(ct);
+
+        sw.Stop();
+        Log.Info($"[LibraryService] Initialized in {sw.ElapsedMilliseconds}ms");
     }
 
-    // --- Fake Account API ---
-
-    public bool HasFakeAccount => !string.IsNullOrEmpty(Data.FakeAccountChannelUrl);
-    public string? FakeAccountUrl => Data.FakeAccountChannelUrl;
-    public string? FakeAccountName => _fakeAccountName;
-    public string? FakeAccountAvatarUrl => _fakeAccountAvatarUrl;
-
-    /// <summary>
-    /// Устанавливает Fake Account (только URL сохраняется, остальное в кэше)
-    /// </summary>
-    public void SetFakeAccount(string channelUrl, string name, string avatarUrl)
-    {
-        Data.FakeAccountChannelUrl = channelUrl;
-        _fakeAccountName = name;
-        _fakeAccountAvatarUrl = avatarUrl;
-        Save();
-        OnFakeAccountChanged?.Invoke();
-        OnDataChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// Обновляет кэш Fake Account (без сохранения URL)
-    /// </summary>
-    public void UpdateFakeAccountCache(string name, string avatarUrl)
-    {
-        _fakeAccountName = name;
-        _fakeAccountAvatarUrl = avatarUrl;
-        OnFakeAccountChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// Очищает Fake Account
-    /// </summary>
-    public void ClearFakeAccount()
-    {
-        Data.FakeAccountChannelUrl = null;
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
-        Save();
-        OnFakeAccountChanged?.Invoke();
-        OnDataChanged?.Invoke();
-    }
-
-    // --- Загрузка/Сохранение ---
-
-    public void Load()
+    private async Task MigrateFromJsonAsync(string path, CancellationToken ct)
     {
         try
         {
-            if (File.Exists(G.File.Library))
+            Log.Info("[Migration] Starting JSON -> SQLite migration...");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            var json = await File.ReadAllTextAsync(path, ct);
+            var legacy = JsonSerializer.Deserialize<LegacyLibraryData>(json);
+            if (legacy == null)
             {
-                using var fs = new FileStream(G.File.Library, FileMode.Open, FileAccess.Read, FileShare.Read);
-                Data = JsonSerializer.Deserialize<LibraryData>(fs) ?? new LibraryData();
+                Log.Warn("[Migration] Could not deserialize legacy data");
+                return;
             }
+
+            // Step 1: Migrate all tracks first
+            var migratedTrackIds = new HashSet<string>();
+
+            if (legacy.Tracks?.Count > 0)
+            {
+                int migrated = 0;
+                int failed = 0;
+
+                foreach (var track in legacy.Tracks.Values)
+                {
+                    try
+                    {
+                        if (string.IsNullOrEmpty(track.Id)) continue;
+                        await _tracks.UpsertAsync(track, ct);
+                        migratedTrackIds.Add(track.Id);
+                        migrated++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Log.Warn($"[Migration] Failed to migrate track {track.Id}: {ex.Message}");
+                    }
+                }
+                Log.Info($"[Migration] Migrated {migrated} tracks ({failed} failed)");
+            }
+
+            // Step 2: Migrate playlists (create playlist entries first, then add tracks)
+            if (legacy.Playlists?.Count > 0)
+            {
+                int playlistsMigrated = 0;
+                int totalTracksAdded = 0;
+                int totalTracksMissing = 0;
+
+                foreach (var pl in legacy.Playlists.Values)
+                {
+                    try
+                    {
+                        // First, create the playlist itself
+                        await _playlists.UpsertAsync(pl, ct);
+                        playlistsMigrated++;
+
+                        // Then, add only tracks that exist in the database
+                        var validTrackIds = pl.TrackIds
+                            .Where(id => migratedTrackIds.Contains(id))
+                            .ToList();
+
+                        var missingCount = pl.TrackIds.Count - validTrackIds.Count;
+                        if (missingCount > 0)
+                        {
+                            totalTracksMissing += missingCount;
+                            Log.Warn($"[Migration] Playlist '{pl.Name}': {missingCount} tracks not found in library");
+                        }
+
+                        // Use batch add for efficiency
+                        var added = await _playlists.AddTracksAsync(pl.Id, validTrackIds, ct);
+                        totalTracksAdded += added;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[Migration] Failed to migrate playlist {pl.Name}: {ex.Message}");
+                    }
+                }
+
+                Log.Info($"[Migration] Migrated {playlistsMigrated} playlists, added {totalTracksAdded} track links ({totalTracksMissing} tracks were missing)");
+            }
+
+            // Step 3: Migrate recently played (only for existing tracks)
+            if (legacy.RecentlyPlayedIds?.Count > 0)
+            {
+                int historyAdded = 0;
+                foreach (var id in legacy.RecentlyPlayedIds.AsEnumerable().Reverse().Take(100))
+                {
+                    try
+                    {
+                        if (migratedTrackIds.Contains(id))
+                        {
+                            await _tracks.AddToHistoryAsync(id, ct);
+                            historyAdded++;
+                        }
+                    }
+                    catch { }
+                }
+                Log.Info($"[Migration] Added {historyAdded} history entries");
+            }
+
+            // Step 4: Migrate settings
+            _appSettings = MapLegacySettings(legacy);
+            await _settings.SetAsync("AppSettings", _appSettings, ct);
+
+            // Backup old file
+            var backup = path + $".migrated.{DateTime.Now:yyyyMMddHHmmss}";
+            File.Move(path, backup);
+
+            sw.Stop();
+            Log.Info($"[Migration] Complete in {sw.ElapsedMilliseconds}ms. Backup: {backup}");
         }
         catch (Exception ex)
         {
-            Log.Error($"Failed to load library: {ex.Message}");
-            Data = new LibraryData();
+            Log.Error($"[Migration] Failed: {ex.Message}");
         }
-        EnsureLikedPlaylist();
     }
 
-    public void Save()
+    private static AppSettings MapLegacySettings(LegacyLibraryData d) => new()
     {
-        _saveSignal.OnNext(Unit.Default);
+        Volume = d.Volume,
+        LastVolume = d.LastVolume,
+        ShuffleEnabled = d.ShuffleEnabled,
+        RepeatMode = d.RepeatMode,
+        MaxVolumeLimit = d.MaxVolumeLimit,
+        TargetGainDb = d.TargetGainDb,
+        QualityPreference = d.QualityPreference,
+        RememberTrackFormat = d.RememberTrackFormat,
+        InternetProfile = d.InternetProfile,
+        LanguageCode = d.LanguageCode,
+        DownloadPath = d.DownloadPath,
+        DiscordRpcEnabled = d.DiscordRpcEnabled,
+        AutoPlayOnUrlPaste = d.AutoPlayOnUrlPaste,
+        LoadBatchSize = d.LoadBatchSize,
+        SearchBatchSize = d.SearchBatchSize,
+        EnableSearchCache = d.EnableSearchCache,
+        SearchCacheTtlMinutes = d.SearchCacheTtlMinutes,
+        EnableSmoothLoading = d.EnableSmoothLoading,
+        PlaylistHeaderHeight = d.PlaylistHeaderHeight,
+        FakeAccountChannelUrl = d.FakeAccountChannelUrl,
+        LastSearchQuery = d.LastSearchQuery,
+        SearchHistory = d.SearchHistory ?? []
+    };
+
+    #endregion
+
+    #region Tracks
+
+    public async Task AddOrUpdateTrackAsync(TrackInfo track, CancellationToken ct = default)
+    {
+        track.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(track.Id, ct);
+        var canonical = _registry.RegisterOrUpdate(track);
+        await _tracks.UpsertAsync(canonical, ct);
+        OnTrackUpdated?.Invoke(canonical);
     }
 
-    private async Task SaveInternalAsync()
+    public TrackInfo? GetTrack(string id) => _registry.TryGet(id);
+
+    public async Task<TrackInfo?> GetTrackAsync(string id, CancellationToken ct = default)
     {
-        try
+        return await _registry.GetOrLoadAsync(id, ct);
+    }
+
+    public bool HasTrack(string id) => _registry.TryGet(id) != null;
+
+    /// <summary>
+    /// Full-text search in database.
+    /// </summary>
+    public async Task<List<TrackInfo>> SearchTracksAsync(
+        string query, int limit = 50, int offset = 0, CancellationToken ct = default)
+    {
+        var tracks = await _tracks.SearchAsync(query, limit, offset, ct);
+        foreach (var t in tracks)
         {
-            var tempFile = G.File.Library + ".tmp";
-            await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true))
-            {
-                await JsonSerializer.SerializeAsync(fs, Data, G.Json.Beautiful);
-            }
-            File.Move(tempFile, G.File.Library, true);
+            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            _registry.RegisterOrUpdate(t);
         }
-        catch (Exception ex)
-        {
-            Log.Error($"[LibraryService] Async save failed: {ex.Message}");
-        }
+        return tracks;
     }
 
-    public void Reset()
+    /// <summary>
+    /// Gets total duration of all tracks in playlist.
+    /// </summary>
+    public async Task<TimeSpan> GetPlaylistTotalDurationAsync(string playlistId, CancellationToken ct = default)
     {
-        Data = new LibraryData();
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
-        EnsureLikedPlaylist();
-        Save();
+        var totalTicks = await _playlists.GetTotalDurationTicksAsync(playlistId, ct);
+        return TimeSpan.FromTicks(totalTicks);
+    }
+
+    #endregion
+
+    #region History
+
+    public async Task AddToRecentlyPlayedAsync(TrackInfo track, CancellationToken ct = default)
+    {
+        await AddOrUpdateTrackAsync(track, ct);
+        await _tracks.AddToHistoryAsync(track.Id, ct);
+    }
+
+    public async Task<List<TrackInfo>> GetRecentlyPlayedAsync(int count = 20, CancellationToken ct = default)
+    {
+        var tracks = await _tracks.GetRecentlyPlayedAsync(count, ct);
+        foreach (var t in tracks) _registry.RegisterOrUpdate(t);
+        return tracks;
+    }
+
+    public async Task ClearHistoryAsync(CancellationToken ct = default)
+    {
+        await _tracks.ClearHistoryAsync(ct);
         OnDataChanged?.Invoke();
     }
 
-    private void OnLanguageChanged()
+    #endregion
+
+    #region Likes
+
+    public async Task ToggleLikeAsync(TrackInfo track, CancellationToken ct = default)
     {
+        track.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(track.Id, ct);
+        var canonical = _registry.RegisterOrUpdate(track);
+
+        canonical.IsLiked = !canonical.IsLiked;
+        if (canonical.IsLiked) canonical.IsDisliked = false;
+
+        if (canonical.IsLiked)
+        {
+            await _playlists.AddTrackAsync(LikedPlaylistId, canonical.Id, 0, ct);
+            canonical.InPlaylists.Add(LikedPlaylistId);
+        }
+        else
+        {
+            await _playlists.RemoveTrackAsync(LikedPlaylistId, canonical.Id, ct);
+            canonical.InPlaylists.Remove(LikedPlaylistId);
+        }
+
+        await _tracks.SetLikedAsync(canonical.Id, canonical.IsLiked, ct);
+        _registry.UpdatePinStatus(canonical);
+
         OnDataChanged?.Invoke();
+        OnTrackUpdated?.Invoke(canonical);
     }
 
-    private void EnsureLikedPlaylist()
+    public async Task ToggleDislikeAsync(TrackInfo track, CancellationToken ct = default)
     {
-        if (!Data.Playlists.TryGetValue(LikedPlaylistId, out Playlist? value))
+        var canonical = _registry.RegisterOrUpdate(track);
+        canonical.IsDisliked = !canonical.IsDisliked;
+
+        if (canonical.IsDisliked)
         {
-            Data.Playlists[LikedPlaylistId] = new Playlist
+            canonical.IsLiked = false;
+            await _playlists.RemoveTrackAsync(LikedPlaylistId, canonical.Id, ct);
+            canonical.InPlaylists.Remove(LikedPlaylistId);
+        }
+
+        await _tracks.UpsertAsync(canonical, ct);
+        _registry.UpdatePinStatus(canonical);
+
+        OnDataChanged?.Invoke();
+        OnTrackUpdated?.Invoke(canonical);
+    }
+
+    public async Task<List<TrackInfo>> GetLikedTracksAsync(
+        int limit = 100, int offset = 0, CancellationToken ct = default)
+    {
+        var tracks = await _tracks.GetLikedAsync(limit, offset, ct);
+        foreach (var t in tracks)
+        {
+            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            _registry.RegisterOrUpdate(t);
+        }
+        return tracks;
+    }
+
+    public async Task<int> GetLikedCountAsync(CancellationToken ct = default)
+    {
+        return await _tracks.CountLikedAsync(ct);
+    }
+
+    #endregion
+
+    #region Playlists
+
+    public async Task<List<string>> GetPlaylistTrackIdsAsync(string playlistId, CancellationToken ct = default)
+    {
+        return await _playlists.GetTrackIdsAsync(playlistId, ct);
+    }
+
+    private async Task EnsureLikedPlaylistAsync(CancellationToken ct = default)
+    {
+        var liked = await _playlists.GetByIdAsync(LikedPlaylistId, ct);
+        if (liked == null)
+        {
+            await _playlists.UpsertAsync(new Playlist
             {
                 Id = LikedPlaylistId,
                 Name = LocalizationService.Instance["Playlist_Liked"],
-                SyncMode = PlaylistSyncMode.LocalOnly,
-                ThumbnailUrl = null
-            };
-        }
-        else
-        {
-            value.Name = LocalizationService.Instance["Playlist_Liked"];
+                SyncMode = PlaylistSyncMode.LocalOnly
+            }, ct);
         }
     }
 
-    public Playlist GetLikedPlaylist()
+    /// <summary>
+    /// Gets all playlists with their track counts.
+    /// </summary>
+    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllPlaylistsWithCountsAsync(CancellationToken ct = default)
     {
-        EnsureLikedPlaylist();
-        return Data.Playlists[LikedPlaylistId];
-    }
+        var results = await _playlists.GetAllWithCountsAsync(ct);
 
-    public static bool IsSystemPlaylist(string playlistId)
-    {
-        return playlistId == LikedPlaylistId;
-    }
-
-    public void AddOrUpdateTrack(TrackInfo track)
-    {
-        if (string.IsNullOrEmpty(track.Id))
-            track.Id = GenerateTrackId(track);
-
-        if (Data.Tracks.TryGetValue(track.Id, out var existing))
+        // Update "Liked" playlist name
+        for (int i = 0; i < results.Count; i++)
         {
-            track.IsLiked = existing.IsLiked;
-            track.IsDisliked = existing.IsDisliked;
-            track.IsDownloaded = existing.IsDownloaded || track.IsDownloaded;
-            track.LocalPath = existing.LocalPath ?? track.LocalPath;
-            track.InPlaylists = existing.InPlaylists;
-        }
-        Data.Tracks[track.Id] = track;
-        Save();
-    }
-
-    public void AddOrUpdatePlaylist(Playlist playlist)
-    {
-        if (playlist.Id == LikedPlaylistId)
-        {
-            if (Data.Playlists.TryGetValue(LikedPlaylistId, out var existing))
+            if (results[i].Playlist.Id == LikedPlaylistId)
             {
-                existing.TrackIds = playlist.TrackIds;
-                existing.UpdatedAt = DateTime.Now;
-            }
-            Save();
-            OnDataChanged?.Invoke();
-            return;
-        }
-
-        if (Data.Playlists.TryGetValue(playlist.Id, out var existingPlaylist))
-        {
-            existingPlaylist.Name = playlist.Name;
-            existingPlaylist.ThumbnailUrl = playlist.ThumbnailUrl;
-            existingPlaylist.TrackIds = playlist.TrackIds;
-            existingPlaylist.YoutubeId = playlist.YoutubeId;
-            existingPlaylist.SyncMode = playlist.SyncMode;
-            existingPlaylist.UpdatedAt = DateTime.Now;
-        }
-        else
-        {
-            Data.Playlists[playlist.Id] = playlist;
-        }
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
-    public bool MergePlaylists(string sourceId, string targetId)
-    {
-        if (!Data.Playlists.TryGetValue(sourceId, out var sourcePlaylist) ||
-            !Data.Playlists.TryGetValue(targetId, out var targetPlaylist))
-        {
-            return false;
-        }
-
-        if (!targetPlaylist.IsLocal) return false;
-
-        var targetTrackIds = new HashSet<string>(targetPlaylist.TrackIds);
-        int newTracksCount = 0;
-
-        foreach (var trackId in sourcePlaylist.TrackIds)
-        {
-            if (targetTrackIds.Add(trackId))
-            {
-                newTracksCount++;
-                if (Data.Tracks.TryGetValue(trackId, out var track))
-                {
-                    track.InPlaylists.Add(targetId);
-                }
+                var pl = results[i].Playlist;
+                pl.Name = LocalizationService.Instance["Playlist_Liked"];
+                results[i] = (pl, results[i].TrackCount);
             }
         }
 
-        if (newTracksCount > 0)
+        return results;
+    }
+
+    public async Task<Playlist?> GetPlaylistAsync(string id, CancellationToken ct = default)
+    {
+        var pl = await _playlists.GetByIdAsync(id, ct);
+        if (pl != null && id == LikedPlaylistId)
         {
-            targetPlaylist.TrackIds = [.. targetTrackIds];
-            targetPlaylist.UpdatedAt = DateTime.Now;
-            Save();
-            OnDataChanged?.Invoke();
+            pl.Name = LocalizationService.Instance["Playlist_Liked"];
         }
-
-        return true;
+        return pl;
     }
 
-    public TrackInfo? GetTrack(string id) => Data.Tracks.TryGetValue(id, out var track) ? track : null;
-    public bool HasTrack(string id) => Data.Tracks.ContainsKey(id);
-
-    public void AddToRecentlyPlayed(TrackInfo track)
+    public async Task<Playlist> GetLikedPlaylistAsync(CancellationToken ct = default)
     {
-        AddOrUpdateTrack(track);
-        Data.RecentlyPlayedIds.Remove(track.Id);
-        Data.RecentlyPlayedIds.Insert(0, track.Id);
-        if (Data.RecentlyPlayedIds.Count > 100)
-            Data.RecentlyPlayedIds.RemoveRange(100, Data.RecentlyPlayedIds.Count - 100);
-        Save();
+        await EnsureLikedPlaylistAsync(ct);
+        return (await _playlists.GetByIdAsync(LikedPlaylistId, ct))!;
     }
 
-    public List<TrackInfo> GetRecentlyPlayed(int count = 20)
+    public async Task<List<Playlist>> GetAllPlaylistsAsync(CancellationToken ct = default)
     {
-        return [.. Data.RecentlyPlayedIds
-            .Take(count)
-            .Select(GetTrack)
-            .Where(static t => t != null)
-            .Cast<TrackInfo>()];
-    }
-
-    public void ClearHistory()
-    {
-        Data.RecentlyPlayedIds.Clear();
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
-    public void ToggleLike(TrackInfo track)
-    {
-        AddOrUpdateTrack(track);
-        track.IsLiked = !track.IsLiked;
-        track.IsDisliked = false;
-
-        var likedPlaylist = Data.Playlists[LikedPlaylistId];
-        if (track.IsLiked)
+        var all = await _playlists.GetAllAsync(ct);
+        var liked = all.FirstOrDefault(p => p.Id == LikedPlaylistId);
+        if (liked != null)
         {
-            if (!likedPlaylist.TrackIds.Contains(track.Id))
-            {
-                likedPlaylist.TrackIds.Insert(0, track.Id);
-                likedPlaylist.UpdatedAt = DateTime.Now;
-            }
-            track.InPlaylists.Add(LikedPlaylistId);
+            liked.Name = LocalizationService.Instance["Playlist_Liked"];
         }
-        else
-        {
-            likedPlaylist.TrackIds.Remove(track.Id);
-            likedPlaylist.UpdatedAt = DateTime.Now;
-            track.InPlaylists.Remove(LikedPlaylistId);
-        }
-
-        Data.Tracks[track.Id] = track;
-        Save();
-        OnDataChanged?.Invoke();
-        OnTrackUpdated?.Invoke(track);
+        return all;
     }
 
-    public void ToggleDislike(TrackInfo track)
+    /// <summary>
+    /// Gets playlist tracks with pagination support.
+    /// </summary>
+    public async Task<List<TrackInfo>> GetPlaylistTracksAsync(
+        string playlistId, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
-        AddOrUpdateTrack(track);
-        track.IsDisliked = !track.IsDisliked;
-        if (track.IsDisliked)
+        var trackIds = await _playlists.GetTrackIdsAsync(playlistId, ct);
+        var pageIds = trackIds.Skip(offset).Take(limit).ToList();
+
+        await _registry.PreloadAsync(pageIds, ct);
+
+        var tracks = new List<TrackInfo>(pageIds.Count);
+        foreach (var id in pageIds)
         {
-            track.IsLiked = false;
-            Data.Playlists[LikedPlaylistId].TrackIds.Remove(track.Id);
-            track.InPlaylists.Remove(LikedPlaylistId);
+            var track = await _registry.GetOrLoadAsync(id, ct);
+            if (track != null) tracks.Add(track);
         }
-        Data.Tracks[track.Id] = track;
-        Save();
-        OnDataChanged?.Invoke();
-        OnTrackUpdated?.Invoke(track);
+        return tracks;
     }
 
-    public Playlist CreatePlaylist(string name)
+    public async Task<Playlist> CreatePlaylistAsync(string name, CancellationToken ct = default)
     {
         var playlist = new Playlist { Name = name, SyncMode = PlaylistSyncMode.LocalOnly };
-        Data.Playlists[playlist.Id] = playlist;
-        Save();
+        await _playlists.UpsertAsync(playlist, ct);
         OnDataChanged?.Invoke();
         return playlist;
     }
 
-    public void RemovePlaylist(string playlistId)
+    public async Task AddOrUpdatePlaylistAsync(Playlist playlist, CancellationToken ct = default)
     {
-        if (IsSystemPlaylist(playlistId)) return;
-        if (Data.Playlists.Remove(playlistId))
+        await _playlists.UpsertAsync(playlist, ct);
+
+        // Если плейлист содержит TrackIds, синхронизируем связи
+        if (playlist.TrackIds.Count > 0)
         {
-            Save();
-            OnDataChanged?.Invoke();
-        }
-    }
+            // Получаем текущие треки плейлиста из БД
+            var existingTrackIds = await _playlists.GetTrackIdsAsync(playlist.Id, ct);
+            var existingSet = new HashSet<string>(existingTrackIds);
 
-    public void RenamePlaylist(string playlistId, string newName)
-    {
-        if (IsSystemPlaylist(playlistId)) return;
-        if (Data.Playlists.TryGetValue(playlistId, out var playlist))
-        {
-            playlist.Name = newName;
-            playlist.UpdatedAt = DateTime.Now;
-            Save();
-            OnDataChanged?.Invoke();
-        }
-    }
-
-    public void DeletePlaylist(string playlistId)
-    {
-        if (IsSystemPlaylist(playlistId)) return;
-        if (Data.Playlists.Remove(playlistId))
-        {
-            foreach (var track in Data.Tracks.Values)
-                track.InPlaylists.Remove(playlistId);
-            Save();
-            OnDataChanged?.Invoke();
-        }
-    }
-
-    public void AddTrackToPlaylist(TrackInfo track, string playlistId)
-    {
-        AddOrUpdateTrack(track);
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return;
-        if (!playlist.TrackIds.Contains(track.Id))
-        {
-            playlist.TrackIds.Add(track.Id);
-            track.InPlaylists.Add(playlistId);
-            playlist.UpdatedAt = DateTime.Now;
-            Data.Tracks[track.Id] = track;
-            Save();
-            OnDataChanged?.Invoke();
-        }
-    }
-
-    public void RemoveTrackFromPlaylist(TrackInfo track, string playlistId)
-    {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return;
-        playlist.TrackIds.Remove(track.Id);
-        track.InPlaylists.Remove(playlistId);
-        playlist.UpdatedAt = DateTime.Now;
-        if (Data.Tracks.ContainsKey(track.Id)) Data.Tracks[track.Id] = track;
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
-    public void MoveTrackInPlaylist(string playlistId, int oldIndex, int newIndex)
-    {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return;
-
-        if (oldIndex < 0 || oldIndex >= playlist.TrackIds.Count ||
-            newIndex < 0 || newIndex >= playlist.TrackIds.Count ||
-            oldIndex == newIndex) return;
-
-        var trackId = playlist.TrackIds[oldIndex];
-        playlist.TrackIds.RemoveAt(oldIndex);
-        playlist.TrackIds.Insert(newIndex, trackId);
-
-        playlist.UpdatedAt = DateTime.Now;
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
-    public bool IsTrackInPlaylist(string trackId, string playlistId)
-    {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return false;
-        return playlist.TrackIds.Contains(trackId);
-    }
-
-    public List<TrackInfo> GetPlaylistTracks(string playlistId)
-    {
-        if (!Data.Playlists.TryGetValue(playlistId, out var playlist)) return [];
-        return [.. playlist.TrackIds.Select(GetTrack).Where(static t => t != null).Cast<TrackInfo>()];
-    }
-
-    public IEnumerable<Playlist> GetAllPlaylists() => Data.Playlists.Values;
-    public Playlist? GetPlaylist(string playlistId) => Data.Playlists.TryGetValue(playlistId, out var playlist) ? playlist : null;
-
-    public void MergeAccountPlaylists(IEnumerable<Playlist> accountPlaylists)
-    {
-        foreach (var playlist in accountPlaylists)
-            if (!Data.Playlists.ContainsKey(playlist.Id)) Data.Playlists[playlist.Id] = playlist;
-        Save();
-        OnDataChanged?.Invoke();
-    }
-
-    private static string GenerateTrackId(TrackInfo track)
-    {
-        if (!string.IsNullOrEmpty(track.Url))
-        {
-            try
+            // Добавляем только новые треки
+            var newTrackIds = playlist.TrackIds.Where(id => !existingSet.Contains(id)).ToList();
+            if (newTrackIds.Count > 0)
             {
-                var videoId = Youtube.Videos.VideoId.TryParse(track.Url);
-                if (videoId.HasValue)
-                {
-                    return $"yt_{videoId.Value.Value}";
-                }
+                await _playlists.AddTracksAsync(playlist.Id, newTrackIds, ct);
+                Log.Debug($"[LibraryService] Added {newTrackIds.Count} tracks to playlist '{playlist.Name}'");
             }
-            catch { }
         }
-        return $"local_{Guid.NewGuid():N}";
+
+        OnDataChanged?.Invoke();
     }
 
-    public void Dispose()
+    public async Task AddTrackToPlaylistAsync(TrackInfo track, string playlistId, CancellationToken ct = default)
+    {
+        await AddOrUpdateTrackAsync(track, ct);
+        await _playlists.AddTrackAsync(playlistId, track.Id, null, ct);
+        track.InPlaylists.Add(playlistId);
+        _registry.UpdatePinStatus(track);
+        OnDataChanged?.Invoke();
+    }
+
+    public async Task RemoveTrackFromPlaylistAsync(string trackId, string playlistId, CancellationToken ct = default)
+    {
+        await _playlists.RemoveTrackAsync(playlistId, trackId, ct);
+        var track = _registry.TryGet(trackId);
+        if (track != null)
+        {
+            track.InPlaylists.Remove(playlistId);
+            _registry.UpdatePinStatus(track);
+        }
+        OnDataChanged?.Invoke();
+    }
+
+    public async Task MoveTrackInPlaylistAsync(string playlistId, int oldIndex, int newIndex, CancellationToken ct = default)
+    {
+        await _playlists.MoveTrackAsync(playlistId, oldIndex, newIndex, ct);
+        OnDataChanged?.Invoke();
+    }
+
+    public async Task RenamePlaylistAsync(string playlistId, string newName, CancellationToken ct = default)
+    {
+        if (IsSystemPlaylist(playlistId)) return;
+        await _playlists.RenameAsync(playlistId, newName, ct);
+        OnDataChanged?.Invoke();
+    }
+
+    public async Task DeletePlaylistAsync(string playlistId, CancellationToken ct = default)
+    {
+        if (IsSystemPlaylist(playlistId)) return;
+
+        foreach (var track in _registry.GetPinnedTracks())
+            track.InPlaylists.Remove(playlistId);
+
+        await _playlists.DeleteAsync(playlistId, ct);
+        OnDataChanged?.Invoke();
+    }
+
+    public async Task<bool> IsTrackInPlaylistAsync(string trackId, string playlistId, CancellationToken ct = default)
+    {
+        return await _playlists.ContainsTrackAsync(playlistId, trackId, ct);
+    }
+
+    public static bool IsSystemPlaylist(string id) => id == LikedPlaylistId;
+
+    #endregion
+
+    #region Settings
+
+    public string DownloadPath
+    {
+        get => string.IsNullOrEmpty(_appSettings.DownloadPath) ? G.Folder.Downloads : _appSettings.DownloadPath;
+        set { _appSettings.DownloadPath = value; SaveSettings(); }
+    }
+
+    public void UpdateSettings(Action<AppSettings> update)
+    {
+        update(_appSettings);
+        SaveSettings();
+    }
+
+    private void SaveSettings() => _saveSettingsSignal.OnNext(Unit.Default);
+
+    #endregion
+
+    #region Fake Account
+
+    public bool HasFakeAccount => !string.IsNullOrEmpty(_appSettings.FakeAccountChannelUrl);
+    public string? FakeAccountUrl => _appSettings.FakeAccountChannelUrl;
+    public string? FakeAccountName => _fakeAccountName;
+    public string? FakeAccountAvatarUrl => _fakeAccountAvatarUrl;
+
+    public void SetFakeAccount(string url, string name, string avatar)
+    {
+        _appSettings.FakeAccountChannelUrl = url;
+        _fakeAccountName = name;
+        _fakeAccountAvatarUrl = avatar;
+        SaveSettings();
+        OnFakeAccountChanged?.Invoke();
+        OnDataChanged?.Invoke();
+    }
+
+    public void UpdateFakeAccountCache(string name, string avatar)
+    {
+        _fakeAccountName = name;
+        _fakeAccountAvatarUrl = avatar;
+        OnFakeAccountChanged?.Invoke();
+    }
+
+    public void ClearFakeAccount()
+    {
+        _appSettings.FakeAccountChannelUrl = null;
+        _fakeAccountName = null;
+        _fakeAccountAvatarUrl = null;
+        SaveSettings();
+        OnFakeAccountChanged?.Invoke();
+        OnDataChanged?.Invoke();
+    }
+
+    #endregion
+
+    #region Cleanup
+
+    public async Task ResetAsync(CancellationToken ct = default)
+    {
+        _registry.Clear();
+        _fakeAccountName = null;
+        _fakeAccountAvatarUrl = null;
+
+        await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
+        await ctx.Database.EnsureDeletedAsync(ct);
+        await ctx.Database.EnsureCreatedAsync(ct);
+        await ctx.OptimizeAsync(ct);
+        await ctx.EnsureFtsTablesAsync(ct);
+
+        _appSettings = new AppSettings();
+        await EnsureLikedPlaylistAsync(ct);
+        OnDataChanged?.Invoke();
+    }
+
+    public async ValueTask DisposeAsync()
     {
         _saveSubscription.Dispose();
-        _saveSignal.Dispose();
-        try
-        {
-            var options = G.Json.Beautiful;
-            string json = JsonSerializer.Serialize(Data, options);
-            File.WriteAllText(G.File.Library, json);
-        }
-        catch { }
+        _saveSettingsSignal.Dispose();
+
+        // Final flush
+        await _registry.FlushAsync();
+        await _settings.SetAsync("AppSettings", _appSettings);
+
         GC.SuppressFinalize(this);
     }
+
+    #endregion
 }
