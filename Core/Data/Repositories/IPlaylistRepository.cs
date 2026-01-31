@@ -23,4 +23,8 @@ public interface IPlaylistRepository
     /// Gets all playlists with their track counts (more efficient than loading all track IDs).
     /// </summary>
     Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Gets total duration of all tracks in playlist (in ticks).
+    /// </summary>
+    Task<long> GetTotalDurationTicksAsync(string playlistId, CancellationToken ct = default);
 }

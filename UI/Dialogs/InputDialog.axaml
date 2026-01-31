@@ -14,13 +14,13 @@
         CanResize="False"
         ShowInTaskbar="False"
         SystemDecorations="BorderOnly"
-        Background="{DynamicResource BgBaseBrush}">
+        Background="{DynamicResource BgPrimaryBrush}">
 
     <Border BorderBrush="{DynamicResource BgHighlightBrush}" 
             BorderThickness="1" 
             CornerRadius="8" 
             Padding="24"
-            Background="{DynamicResource BgElevatedBrush}">
+            Background="{DynamicResource BgSecondaryBrush}">
         
         <StackPanel Spacing="16">
             <!-- Title -->
@@ -35,7 +35,7 @@
                        TextWrapping="Wrap"
                        IsVisible="{Binding PromptMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
             
-            <!-- Input -->
+            <!-- Input - убран несуществующий класс input-box -->
             <TextBox Text="{Binding InputValue}" 
                      MinHeight="80"
                      MaxHeight="150"
@@ -43,20 +43,17 @@
                      TextWrapping="Wrap"
                      Watermark="{Binding Watermark}"
                      VerticalContentAlignment="Top"
-                     Padding="12"
-                     Classes="input-box"/>
+                     Padding="12"/>
 
             <!-- Buttons -->
             <StackPanel Orientation="Horizontal" 
                         HorizontalAlignment="Right" 
                         Spacing="12"
                         Margin="0,8,0,0">
+                <!-- Стандартная кнопка без явного указания цветов - стили подхватятся из Theme.axaml -->
                 <Button Content="{Binding CancelText}" 
                         Click="OnCancelClick"
-                        MinWidth="90"
-                        Background="Transparent"
-                        BorderBrush="{DynamicResource BgHighlightBrush}"
-                        BorderThickness="1"/>
+                        MinWidth="90"/>
                 
                 <Button Content="{Binding ConfirmText}" 
                         Click="OnConfirmClick"

@@ -161,7 +161,8 @@
                     <Border Background="{DynamicResource SystemWarnOrangeBrush}" CornerRadius="4"
                         Padding="12"
                         IsVisible="{Binding NetworkRestartRequired}">
-                        <TextBlock Foreground="Black" FontWeight="Bold"
+                        <!-- ИСПРАВЛЕНО: используем TextDarkBrush вместо Black -->
+                        <TextBlock Foreground="{DynamicResource TextDarkBrush}" FontWeight="Bold"
                             Text="{Binding L[Settings_RestartRequired]}"
                             HorizontalAlignment="Center" />
                     </Border>

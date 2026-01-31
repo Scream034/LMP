@@ -40,8 +40,8 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     #region Properties
 
     // Changed: Access Settings property instead of Data
-    protected virtual int BatchSize => LibService.Settings.LoadBatchSize > 0 
-        ? LibService.Settings.LoadBatchSize 
+    protected virtual int BatchSize => LibService.Settings.LoadBatchSize > 0
+        ? LibService.Settings.LoadBatchSize
         : 20;
     protected virtual int PrefetchThreshold => 10;
 
@@ -115,14 +115,16 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Count()
-            .Throttle(TimeSpan.FromMilliseconds(200))
+            .Throttle(TimeSpan.FromMilliseconds(100))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(visibleCount =>
             {
-                if (visibleCount < PrefetchThreshold && HasMoreItems && !IsLoading && !IsLoadingMore)
+                // Если после фильтрации осталось мало элементов и есть ещё данные
+                if (visibleCount < PrefetchThreshold && HasMoreItems && !IsLoading && !IsLoadingMore && !IsFetchingFromNetwork)
                 {
                     if (_consecutiveEmptyLoads < MaxConsecutiveEmptyLoads)
                     {
+                        Log.Debug($"[Paginated] Auto-loading more (visible: {visibleCount}, threshold: {PrefetchThreshold})");
                         _ = LoadNextBatchAsync();
                     }
                 }

@@ -279,6 +279,15 @@ public sealed class LibraryService : IAsyncDisposable
         return tracks;
     }
 
+    /// <summary>
+    /// Gets total duration of all tracks in playlist.
+    /// </summary>
+    public async Task<TimeSpan> GetPlaylistTotalDurationAsync(string playlistId, CancellationToken ct = default)
+    {
+        var totalTicks = await _playlists.GetTotalDurationTicksAsync(playlistId, ct);
+        return TimeSpan.FromTicks(totalTicks);
+    }
+
     #endregion
 
     #region History
@@ -371,6 +380,11 @@ public sealed class LibraryService : IAsyncDisposable
     #endregion
 
     #region Playlists
+
+    public async Task<List<string>> GetPlaylistTrackIdsAsync(string playlistId, CancellationToken ct = default)
+    {
+        return await _playlists.GetTrackIdsAsync(playlistId, ct);
+    }
 
     private async Task EnsureLikedPlaylistAsync(CancellationToken ct = default)
     {

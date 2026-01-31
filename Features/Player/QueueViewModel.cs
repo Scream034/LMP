@@ -20,6 +20,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private readonly IDisposable? _trackSub;
     private bool _isMovingInternally; // Флаг для подавления обновления
 
+    private readonly Dictionary<string, TrackItemViewModel> _vmCache = [];
+
     [Reactive] public bool IsEmpty { get; private set; } = true;
     [Reactive] public bool CanReorderItems { get; private set; }
 
@@ -136,25 +138,54 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     private void RefreshQueue()
     {
-        var allQueue = _audio.Queue;
+        var allQueue = _audio.Queue;  // Теперь это кэшированный snapshot
         var currentId = _audio.CurrentTrack?.Id;
 
         // Применяем фильтр
         var filteredTracks = allQueue.Where(FilterItem).ToList();
+        var filteredIds = filteredTracks.Select(t => t.Id).ToHashSet();
 
-        // Полная очистка только если структура изменилась
-        // Для производительности при больших списках лучше было бы использовать DynamicData,
-        // но для очереди плеера (обычно < 1000 элементов) полная замена приемлема,
-        // если это происходит не часто (не при перемещении).
+        // 1. Удаляем VM для треков, которых больше нет
+        var toRemove = QueueItems
+            .Where(vm => !filteredIds.Contains(vm.Id))
+            .ToList();
 
-        foreach (var item in QueueItems) item.Cleanup();
-        QueueItems.Clear();
-
-        foreach (var track in filteredTracks)
+        foreach (var vm in toRemove)
         {
-            var vm = _vmFactory.CreateForQueue(track, PlayFromQueue);
+            QueueItems.Remove(vm);
+            _vmCache.Remove(vm.Id);
+            vm.Dispose();
+        }
+
+        // 2. Добавляем новые VM / обновляем порядок
+        for (int i = 0; i < filteredTracks.Count; i++)
+        {
+            var track = filteredTracks[i];
+
+            if (!_vmCache.TryGetValue(track.Id, out var vm))
+            {
+                // Создаём новую VM только для новых треков
+                vm = _vmFactory.CreateForQueue(track, PlayFromQueue);
+                _vmCache[track.Id] = vm;
+            }
+
             vm.SetActive(track.Id == currentId);
-            QueueItems.Add(vm);
+
+            // Синхронизируем позицию
+            int currentIndex = QueueItems.IndexOf(vm);
+            if (currentIndex == -1)
+            {
+                // Новый элемент
+                if (i < QueueItems.Count)
+                    QueueItems.Insert(i, vm);
+                else
+                    QueueItems.Add(vm);
+            }
+            else if (currentIndex != i)
+            {
+                // Переместить на правильную позицию
+                QueueItems.Move(currentIndex, i);
+            }
         }
 
         IsEmpty = QueueItems.Count == 0;
@@ -201,12 +232,13 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         _queueSub?.Dispose();
         _trackSub?.Dispose();
 
-        foreach (var item in QueueItems)
+        foreach (var vm in _vmCache.Values)
         {
-            item.Dispose(); // Важно вызвать Dispose, а не просто Cleanup (если они отличаются)
+            vm.Dispose();
         }
-
+        _vmCache.Clear();
         QueueItems.Clear();
+
         GC.SuppressFinalize(this);
     }
 }

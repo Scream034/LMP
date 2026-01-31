@@ -73,11 +73,25 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public event Action<string, string>? OnCriticalError;
 
+    // Вместо копирования каждый раз, используем snapshot только когда нужно
+    private List<TrackInfo> _queueSnapshot = [];
+    private int _queueVersion = 0;
+    private int _snapshotVersion = -1;
+
     public IReadOnlyList<TrackInfo> Queue
     {
         get
         {
-            lock (_queue) return _queue.ToList();
+            lock (_queue)
+            {
+                // Возвращаем кэшированный snapshot, если очередь не изменилась
+                if (_snapshotVersion == _queueVersion)
+                    return _queueSnapshot;
+
+                _queueSnapshot = [.. _queue];
+                _snapshotVersion = _queueVersion;
+                return _queueSnapshot;
+            }
         }
     }
 
@@ -812,11 +826,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public async Task SeekAsync(TimeSpan position)
     {
         if (_player == null || !_isPlayerReady || _isDisposed) return;
-        
+
         // Сразу обновляем кэш, чтобы UI отреагировал мгновенно
         long ms = (long)Math.Clamp(position.TotalMilliseconds, 0, TotalDuration.TotalMilliseconds);
         Volatile.Write(ref _cachedTime, ms);
-        
+
         await WithLock(_commandLock, () => Task.Run(() =>
         {
             // Сама перемотка происходит в фоне
@@ -845,6 +859,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     // === Navigation / Queue Management ===
 
+    /// <summary>
+    /// Заменяет очередь новым списком треков и начинает воспроизведение с указанного.
+    /// </summary>
     public async Task StartQueueAsync(IEnumerable<TrackInfo> tracks, TrackInfo startTrack)
     {
         if (_isDisposed) return;
@@ -852,9 +869,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         lock (_queue)
         {
             _queue.Clear();
-            _queue.AddRange(tracks);
+
+            // Добавляем без лишних копий
+            foreach (var track in tracks)
+            {
+                _queue.Add(track);
+            }
+
             _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
-            if (_currentIndex == -1 && _queue.Count > 0) _currentIndex = 0;
+            if (_currentIndex == -1 && _queue.Count > 0)
+                _currentIndex = 0;
+
+            InvalidateQueueSnapshot();
         }
 
         RaiseEvent(() => OnQueueChanged?.Invoke());
@@ -882,12 +908,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         else if (_isPlayerReady && _player != null) _player.Time = 0;
     }
 
+    /// <summary>
+    /// Инвалидация при изменении очереди
+    /// </summary>
+    private void InvalidateQueueSnapshot()
+    {
+        _queueVersion++;
+    }
+
     public void Enqueue(TrackInfo track)
     {
         lock (_queue)
         {
             if (_queue.Any(t => t.Id == track.Id)) return;
             _queue.Add(track);
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
 
@@ -900,15 +935,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void EnqueueRange(IEnumerable<TrackInfo> tracks)
     {
-        var list = tracks.ToList();
-        if (list.Count == 0) return;
-
         lock (_queue)
         {
             var existingIds = _queue.Select(t => t.Id).ToHashSet();
-            var newTracks = list.Where(t => !existingIds.Contains(t.Id)).ToList();
-            if (newTracks.Count == 0) return;
-            _queue.AddRange(newTracks);
+            int addedCount = 0;
+
+            foreach (var track in tracks)  // ← Без .ToList()!
+            {
+                if (!existingIds.Contains(track.Id))
+                {
+                    _queue.Add(track);
+                    existingIds.Add(track.Id);  // Для дедупликации внутри batch
+                    addedCount++;
+                }
+            }
+
+            if (addedCount == 0) return;
+            InvalidateQueueSnapshot();
         }
 
         RaiseEvent(() => OnQueueChanged?.Invoke());
@@ -926,6 +969,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 _queue.Add(CurrentTrack);
                 _currentIndex = 0;
             }
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }
@@ -955,6 +999,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     _queue.Insert(0, current);
                 }
             }
+
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }
@@ -977,6 +1023,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             else if (index < _currentIndex) _currentIndex--;
 
             _queue.RemoveAt(index);
+            InvalidateQueueSnapshot();
             changed = true;
         }
 
@@ -998,6 +1045,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_currentIndex == oldIndex) _currentIndex = newIndex;
             else if (oldIndex < _currentIndex && newIndex >= _currentIndex) _currentIndex--;
             else if (oldIndex > _currentIndex && newIndex <= _currentIndex) _currentIndex++;
+
+            InvalidateQueueSnapshot();
         }
         RaiseEvent(() => OnQueueChanged?.Invoke());
     }

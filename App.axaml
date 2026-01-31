@@ -14,11 +14,14 @@
     </Application.Resources>
 
     <Application.Styles>
-        <FluentTheme />
+        <FluentTheme /> <!-- Сначала системная тема -->
         <materialIcons:MaterialIconStyles />
-        
+
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
-        <StyleInclude Source="/UI/Theme/Theme.axaml" />
+
+        <!-- Наши переопределения -->
+        <StyleInclude Source="/UI/Theme/ToolTipTheme.axaml" /> <!-- Тултипы здесь -->
+        <StyleInclude Source="/UI/Theme/Theme.axaml" />        <!-- Основная тема -->
         <StyleInclude Source="/UI/Theme/LoadingSkeletons.axaml" />
         <StyleInclude Source="/UI/Theme/PlaylistCardTemplate.axaml" />
         <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />

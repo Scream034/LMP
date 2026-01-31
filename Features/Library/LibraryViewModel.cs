@@ -23,7 +23,7 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private readonly MusicLibraryManager _manager;
 
     private CancellationTokenSource? _syncCts;
-    private IDisposable? _librarySubscription;
+    private readonly IDisposable? _librarySubscription;
     private bool _isDisposed;
 
     [Reactive] public bool IsLoading { get; private set; }

@@ -1,5 +1,5 @@
 {
-  "Common_AppName": "Lite Player",
+  "Common_AppName": "Легковесный плеер",
   "Common_Cancel": "Отмена",
   "Common_Confirm": "Продолжить",
   "Common_OK": "ОК",
@@ -12,6 +12,11 @@
   "Common_Search": "Поиск",
   "Common_Minutes": "мин",
   "Common_Files": "файлов",
+
+  "Window_Minimize": "Свернуть",
+  "Window_Maximize": "Развернуть",
+  "Window_Restore": "Восстановить",
+  "Window_Close": "Закрыть",
 
   "Nav_Home": "Главная",
   "Nav_Search": "Поиск",
@@ -208,6 +213,7 @@
   "Track_Download": "Скачать",
   "Track_Downloaded": "Скачано",
   "Track_StartRadio": "Запустить радио",
+  "Track_MoreOptions": "Больше опций",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",
@@ -224,7 +230,7 @@
   "Dialog_ResetMessage": "Сбросить настройки? Ваша музыка останется.",
   "Dialog_ResetComplete": "Настройки сброшены.",
   "Dialog_LogoutMessage": "Вы уверены, что хотите выйти из аккаунта?",
-  "Dialog_AuthMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые XHR запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
+  "Dialog_LoginMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые XHR запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
   
   "Dialog_Merge_NoTarget_Title": "Нечего объединять",
   "Dialog_Merge_NoTarget_Msg": "Нет других локальных плейлистов для объединения.",

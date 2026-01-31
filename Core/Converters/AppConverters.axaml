@@ -22,5 +22,6 @@
     <conv:EnumToBoolConverter x:Key="EnumToBool" />
     <conv:BoolToFontWeightConverter x:Key="BoolToFontWeightConverter" />
     <conv:BoolToIconConverter x:Key="BoolToIconConverter" />
+    <conv:WindowButtonVisibilityConverter x:Key="WindowButtonVisibility" />
 
 </ResourceDictionary>

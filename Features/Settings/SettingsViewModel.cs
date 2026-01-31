@@ -563,8 +563,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private async Task LoginAsync()
     {
-        var cookies = await _dialog.ShowInputAsync(SL["Dialog_Auth_Title"],
-            SL["Dialog_AuthMessage"]);
+        var cookies = await _dialog.ShowInputAsync(SL["Dialog_Login_Title"],
+            SL["Dialog_LoginMessage"]);
 
         if (!string.IsNullOrWhiteSpace(cookies))
         {

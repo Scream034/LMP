@@ -7,7 +7,7 @@
         Width="600" Height="500"
         WindowStartupLocation="CenterOwner"
         SystemDecorations="BorderOnly"
-        Background="{DynamicResource BgBaseBrush}">
+        Background="{DynamicResource BgPrimaryBrush}">
 
     <Border BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
         <Grid RowDefinitions="Auto, Auto, *, Auto">

@@ -12,6 +12,7 @@ using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Avalonia;
+using AsyncImageLoader;
 
 namespace LMP;
 
@@ -77,12 +78,16 @@ class Program
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
 
         // === Core Services ===
-        services.AddSingleton<TrackRegistry>(sp =>
+        services.AddSingleton(sp =>
         {
             var trackRepo = sp.GetRequiredService<ITrackRepository>();
             var playlistRepo = sp.GetRequiredService<IPlaylistRepository>();
             return new TrackRegistry(trackRepo, playlistRepo);
         });
+
+        // Для обложек треков (маленькие)
+        services.AddSingleton<IAsyncImageLoader>(sp =>
+            new CachedImageLoader(sp.GetRequiredService<ImageCacheService>(), ImageQuality.Low));
 
         services.AddSingleton<LibraryService>();
         services.AddSingleton<ThemeManagerService>();

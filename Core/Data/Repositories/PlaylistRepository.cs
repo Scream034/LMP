@@ -283,6 +283,22 @@ public class PlaylistRepository : IPlaylistRepository
         return [.. ids];
     }
 
+    public async Task<long> GetTotalDurationTicksAsync(string playlistId, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        // JOIN PlaylistTracks с Tracks и суммируем DurationTicks
+        var totalTicks = await ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId == playlistId)
+            .Join(ctx.Tracks,
+                pt => pt.TrackId,
+                t => t.Id,
+                (pt, t) => t.DurationTicks)
+            .SumAsync(ct);
+
+        return totalTicks;
+    }
+
     #region Mapping
 
     private static Playlist MapToModel(PlaylistEntity e) => new()

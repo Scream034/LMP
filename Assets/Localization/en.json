@@ -14,6 +14,11 @@
   "Common_Minutes": "min",
   "Common_Files": "files",
 
+  "Window_Minimize": "Minimize",
+  "Window_Maximize": "Maximize",
+  "Window_Restore": "Restore",
+  "Window_Close": "Close",
+
   "Nav_Home": "Home",
   "Nav_Search": "Search",
   "Nav_Library": "Library",
@@ -207,6 +212,7 @@
   "Track_Download": "Download",
   "Track_Downloaded": "Downloaded",
   "Track_StartRadio": "Start Radio",
+  "Track_MoreOptions": "More options",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
@@ -223,7 +229,7 @@
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
-  "Dialog_AuthMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (XHR requests) -> Copy 'Cookie' header\n3. Paste here:",
+  "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (XHR requests) -> Copy 'Cookie' header\n3. Paste here:",
 
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",

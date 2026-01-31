@@ -1,0 +1,118 @@
+<Styles xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 
+         GLOBAL TOOLTIP THEME
+         Использует динамические ресурсы темы с fallback на hardcoded значения
+          -->
+
+    <Style Selector="ToolTip">
+        <Setter Property="MaxWidth" Value="320" />
+        <Setter Property="Background" Value="{DynamicResource BgElevated}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlight}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ToolTip">
+                <Border x:Name="PART_LayoutRoot"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,6"
+                        BoxShadow="0 4 16 0 #60000000">
+                    <ContentPresenter x:Name="PART_ContentPresenter"
+                                      Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      Foreground="{TemplateBinding Foreground}"
+                                      TextWrapping="Wrap"
+                                      MaxWidth="{TemplateBinding MaxWidth}">
+                        <ContentPresenter.Styles>
+                            <Style Selector="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                <Setter Property="FontSize" Value="12" />
+                                <Setter Property="FontWeight" Value="Medium" />
+                            </Style>
+                        </ContentPresenter.Styles>
+                    </ContentPresenter>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- ═══ COMPACT VARIANT ═══ -->
+    <Style Selector="ToolTip.compact">
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ToolTip">
+                <Border Background="{DynamicResource BgElevatedBrush}"
+                        BorderBrush="{DynamicResource BgHighlightBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8,4"
+                        BoxShadow="0 2 8 0 #50000000">
+                    <ContentPresenter Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      TextWrapping="Wrap">
+                        <ContentPresenter.Styles>
+                            <Style Selector="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                <Setter Property="FontSize" Value="11" />
+                                <Setter Property="FontWeight" Value="Medium" />
+                            </Style>
+                        </ContentPresenter.Styles>
+                    </ContentPresenter>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- ═══ ACCENT VARIANT ═══ -->
+    <Style Selector="ToolTip.accent">
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ToolTip">
+                <Border Background="{DynamicResource AccentBrush}"
+                        BorderThickness="0"
+                        CornerRadius="6"
+                        Padding="10,6"
+                        BoxShadow="0 4 16 0 #60000000">
+                    <ContentPresenter Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      TextWrapping="Wrap">
+                        <ContentPresenter.Styles>
+                            <Style Selector="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
+                                <Setter Property="FontSize" Value="12" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Style>
+                        </ContentPresenter.Styles>
+                    </ContentPresenter>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- ═══ INFO VARIANT (с иконкой) ═══ -->
+    <Style Selector="ToolTip.info">
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ToolTip">
+                <Border Background="{DynamicResource BgElevatedBrush}"
+                        BorderBrush="{DynamicResource AccentBrush}"
+                        BorderThickness="1,1,1,2"
+                        CornerRadius="6"
+                        Padding="10,8"
+                        BoxShadow="0 4 16 0 #60000000">
+                    <ContentPresenter Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      TextWrapping="Wrap">
+                        <ContentPresenter.Styles>
+                            <Style Selector="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                <Setter Property="FontSize" Value="12" />
+                            </Style>
+                        </ContentPresenter.Styles>
+                    </ContentPresenter>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+</Styles>
