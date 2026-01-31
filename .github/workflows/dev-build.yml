@@ -1,84 +1,54 @@
-name: Dev Auto Build
+name: Dev Build
 
 on:
   push:
-    branches: 
-      - avalonia
-    
-    paths:
-      - '**.cs'
-      - '**.csproj'
-      - '**.axaml'
-      - '**.xaml'
-      - '**.manifest'
-      - '**.xml'
-
+    branches: [avalonia]
+    paths: ['**.cs', '**.csproj', '**.axaml', '**.xaml']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-exe:
+  build:
     runs-on: windows-latest
-
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-          include-prerelease: true 
+          include-prerelease: true
 
-      - name: Restore dependencies
-        run: dotnet restore MyLiteMusicPlayer.csproj
-
-      - name: Build Standard (Multi-File)
+      - name: Build & Publish
         run: |
           $ver = "0.0.${{ github.run_number }}"
-          echo "Building Version: $ver"
           
-          # УБРАЛИ PublishSingleFile. Теперь это просто папка с файлами.
-          dotnet publish MyLiteMusicPlayer.csproj `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -p:Version=$ver `
-            -p:AssemblyVersion=$ver `
-            -p:FileVersion=$ver `
+          dotnet publish LMP.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:Version=$ver -p:PublishReadyToRun=true `
+            -p:DebugType=None -p:DebugSymbols=false `
             -o ./publish
-
-      # Удаляем отладочные файлы (.pdb), чтобы уменьшить размер архива
-      - name: Cleanup Junk
-        run: |
-          Get-ChildItem ./publish/*.pdb -Recurse | Remove-Item
-          if (Test-Path ./publish/YoutubeExplode.xml) { Remove-Item ./publish/YoutubeExplode.xml }
-
-      # Упаковываем ВСЁ содержимое папки publish в 7z
-      - name: Pack to 7z
-        run: |
-          # Переходим в папку publish
-          cd publish
           
-          # Пакуем всё (.) в архив уровнем выше (..)
-          # Имя архива будет содержать номер билда
-          7z a -t7z "../MyLiteMusicPlayer-Dev-Build-${{ github.run_number }}.7z" . -mx9 -r
+          # Cleanup
+          Remove-Item ./publish/*.xml, ./publish/*.pdb -ErrorAction SilentlyContinue
+          
+          # Archive
+          cd publish
+          7z a -t7z -mx=9 "../LMP-Build-${{ github.run_number }}.7z" .
 
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
+          tag_name: dev-${{ github.run_number }}
           name: "Dev Build #${{ github.run_number }}"
-          body: |
-            Автоматическая сборка из ветки **${{ github.ref_name }}**.
-            
-            **Инструкция:**
-            1. Скачайте архив `.7z`.
-            2. Распакуйте его в отдельную папку.
-            3. Запустите `MyLiteMusicPlayer.exe`.
           prerelease: true
           files: ./*.7z
+          body: |
+            **Branch:** `${{ github.ref_name }}`
+            **Commit:** `${{ github.sha }}`
+            
+            Extract and run `LMP.exe`
