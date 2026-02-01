@@ -148,33 +148,38 @@ public sealed class LibraryService : IAsyncDisposable
                 int totalTracksAdded = 0;
                 int totalTracksMissing = 0;
 
-                foreach (var pl in legacy.Playlists.Values)
+                foreach (var legacyPl in legacy.Playlists.Values)
                 {
                     try
                     {
+                        // Convert LegacyPlaylist to Playlist
+                        var playlist = legacyPl.ToPlaylist();
+
                         // First, create the playlist itself
-                        await _playlists.UpsertAsync(pl, ct);
+                        await _playlists.UpsertAsync(playlist, ct);
                         playlistsMigrated++;
 
                         // Then, add only tracks that exist in the database
-                        var validTrackIds = pl.TrackIds
-                            .Where(id => migratedTrackIds.Contains(id))
+                        var validTrackIds = legacyPl.TrackIds
+                            .Where(migratedTrackIds.Contains)
                             .ToList();
 
-                        var missingCount = pl.TrackIds.Count - validTrackIds.Count;
+                        var missingCount = legacyPl.TrackIds.Count - validTrackIds.Count;
                         if (missingCount > 0)
                         {
                             totalTracksMissing += missingCount;
-                            Log.Warn($"[Migration] Playlist '{pl.Name}': {missingCount} tracks not found in library");
+                            Log.Warn($"[Migration] Playlist '{legacyPl.Name}': {missingCount} tracks not found in library");
                         }
 
                         // Use batch add for efficiency
-                        var added = await _playlists.AddTracksAsync(pl.Id, validTrackIds, ct);
+                        var added = await _playlists.AddTracksAsync(playlist.Id, validTrackIds, ct);
                         totalTracksAdded += added;
+
+                        Log.Debug($"[Migration] Playlist '{legacyPl.Name}': {added}/{legacyPl.TrackIds.Count} tracks linked");
                     }
                     catch (Exception ex)
                     {
-                        Log.Warn($"[Migration] Failed to migrate playlist {pl.Name}: {ex.Message}");
+                        Log.Warn($"[Migration] Failed to migrate playlist {legacyPl.Name}: {ex.Message}");
                     }
                 }
 

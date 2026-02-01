@@ -94,7 +94,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
     {
-        // 1. Text search - using captured query value
+        // 1. Text search
         if (!string.IsNullOrWhiteSpace(query))
         {
             bool matchesText = item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -102,12 +102,15 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             if (!matchesText) return false;
         }
 
-        // 2. Type filter - using captured filterType value
+        // 2. Type filter
+        // Логика:
+        // - Music: всё, кроме явных видеоклипов от официальных каналов
+        // - Video: только явные видеоклипы (официальный канал артиста + НЕ помечен как Song)
         return filterType switch
         {
             ContentFilterType.All => true,
-            ContentFilterType.Music => item.IsMusic,
-            ContentFilterType.Video => !item.IsMusic,
+            ContentFilterType.Music => !item.IsExplicitVideoClip,
+            ContentFilterType.Video => item.IsExplicitVideoClip,
             _ => true
         };
     }

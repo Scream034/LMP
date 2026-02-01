@@ -13,7 +13,7 @@ namespace LMP.Core.Models;
 public class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 {
     // === Identity ===
-    
+
     /// <summary>
     /// Уникальный идентификатор (yt_ID или local_ID). Неизменяемый.
     /// </summary>
@@ -26,12 +26,19 @@ public class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [Reactive] public string? ChannelId { get; set; }
     [Reactive] public string Url { get; set; } = string.Empty;
     [Reactive] public TimeSpan Duration { get; set; }
-    
+
     // URL обложки. При изменении UI должен автоматически обновить картинку.
     [Reactive] public string ThumbnailUrl { get; set; } = string.Empty;
 
     public bool IsOfficialArtist { get; set; }
     public bool IsMusic { get; set; }
+
+    /// <summary>
+    /// Определяет, является ли трек явным видеоклипом (официальный канал артиста + НЕ помечен как аудио).
+    /// Используется для фильтрации Music/Video.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsExplicitVideoClip => IsOfficialArtist && !IsMusic;
 
     // === State (Состояние - критически важно для Identity Map) ===
 
@@ -39,11 +46,11 @@ public class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     /// Лайкнут ли трек. Изменение этого свойства мгновенно отразится во всех View.
     /// </summary>
     [Reactive] public bool IsLiked { get; set; }
-    
+
     [Reactive] public bool IsDisliked { get; set; }
-    
+
     [Reactive] public bool IsDownloaded { get; set; }
-    
+
     [Reactive] public string? LocalPath { get; set; }
 
     // Коллекция ID плейлистов, в которых находится трек.
@@ -56,7 +63,7 @@ public class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [JsonIgnore, Reactive] public string StreamUrl { get; set; } = string.Empty;
 
     public string? RadioSeedId { get; set; }
-    
+
     // Предпочтения по формату (сохраняются)
     public string? PreferredContainer { get; set; }
     public int PreferredBitrate { get; set; }
@@ -89,16 +96,16 @@ public class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
         if (!string.IsNullOrEmpty(freshInfo.Title)) Title = freshInfo.Title;
         if (!string.IsNullOrEmpty(freshInfo.Author)) Author = freshInfo.Author;
         if (!string.IsNullOrEmpty(freshInfo.Url)) Url = freshInfo.Url;
-        
+
         // Часто в поиске приходит более качественная обложка
         if (!string.IsNullOrEmpty(freshInfo.ThumbnailUrl)) ThumbnailUrl = freshInfo.ThumbnailUrl;
-        
+
         // Длительность из API поиска точнее, чем из парсинга плейлиста
         if (freshInfo.Duration.TotalSeconds > 0) Duration = freshInfo.Duration;
 
         if (freshInfo.IsOfficialArtist) IsOfficialArtist = true;
         if (freshInfo.IsMusic) IsMusic = true;
-        
+
         if (!string.IsNullOrEmpty(freshInfo.ChannelId)) ChannelId = freshInfo.ChannelId;
     }
 }

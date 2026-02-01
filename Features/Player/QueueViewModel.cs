@@ -193,7 +193,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     private bool FilterItem(TrackInfo item)
     {
-        // 1. Текстовый поиск
+        // 1. Text search
         if (!string.IsNullOrWhiteSpace(FilterQuery))
         {
             bool matchesText = item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
@@ -201,12 +201,15 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             if (!matchesText) return false;
         }
 
-        // 2. Фильтр по типу
+        // 2. Type filter
+        // Логика:
+        // - Music: всё, кроме явных видеоклипов от официальных каналов
+        // - Video: только явные видеоклипы (официальный канал артиста + НЕ помечен как Song)
         return FilterType switch
         {
             ContentFilterType.All => true,
-            ContentFilterType.Music => item.IsMusic,
-            ContentFilterType.Video => !item.IsMusic,
+            ContentFilterType.Music => !item.IsExplicitVideoClip,
+            ContentFilterType.Video => item.IsExplicitVideoClip,
             _ => true
         };
     }

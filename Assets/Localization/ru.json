@@ -230,7 +230,7 @@
   "Dialog_ResetMessage": "Сбросить настройки? Ваша музыка останется.",
   "Dialog_ResetComplete": "Настройки сброшены.",
   "Dialog_LogoutMessage": "Вы уверены, что хотите выйти из аккаунта?",
-  "Dialog_LoginMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые XHR запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
+  "Dialog_LoginMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые Fetch запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
   
   "Dialog_Merge_NoTarget_Title": "Нечего объединять",
   "Dialog_Merge_NoTarget_Msg": "Нет других локальных плейлистов для объединения.",

@@ -229,7 +229,7 @@
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
-  "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (XHR requests) -> Copy 'Cookie' header\n3. Paste here:",
+  "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (Fetch requests) -> Copy 'Cookie' header\n3. Paste here:",
 
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",

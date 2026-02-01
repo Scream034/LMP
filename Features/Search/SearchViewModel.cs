@@ -146,19 +146,25 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
     {
-        // 1. Фильтр по типу.
-        // Если выбран "Video", мы не должны скрывать музыку, так как клип - это тоже видео.
-        // Но если выбран "Music", мы хотим видеть только музыку.
-        if (filterType == ContentFilterType.Music && !item.IsMusic) return false;
-
-        // 2. Текстовый поиск (локальный)
+        // 1. Text search
         if (!string.IsNullOrWhiteSpace(query))
         {
-            return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                   item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
+            bool matchesText = item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
+            if (!matchesText) return false;
         }
 
-        return true;
+        // 2. Type filter
+        // Логика:
+        // - Music: всё, кроме явных видеоклипов от официальных каналов
+        // - Video: только явные видеоклипы (официальный канал артиста + НЕ помечен как Song)
+        return filterType switch
+        {
+            ContentFilterType.All => true,
+            ContentFilterType.Music => !item.IsExplicitVideoClip,
+            ContentFilterType.Video => item.IsExplicitVideoClip,
+            _ => true
+        };
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
