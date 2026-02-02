@@ -9,6 +9,7 @@ using LMP.Features.Shared;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using LMP.Core.Helpers;
 
 namespace LMP.Features.Search;
 
@@ -171,24 +172,10 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     };
 
     protected override bool FilterItem(TrackInfo item, string query)
-    {
-        if (string.IsNullOrWhiteSpace(query)) return true;
-
-        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-    }
+        => TrackFilters.MatchesTitleOrAuthor(item, query);
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        if (LibService.HasTrack(track.Id))
-        {
-            var existing = LibService.GetTrack(track.Id);
-            if (existing != null)
-            {
-                track.IsLiked = existing.IsLiked;
-                track.IsDownloaded = existing.IsDownloaded;
-            }
-        }
         return _vmFactory.GetOrCreate(track, PlayTrackWithContext);
     }
 

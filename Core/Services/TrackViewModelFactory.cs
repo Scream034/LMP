@@ -6,59 +6,77 @@ namespace LMP.Core.Services;
 
 /// <summary>
 /// Фабрика для создания TrackItemViewModel.
-/// Использует кэширование на основе WeakReference.
+/// Использует TrackRegistry для Identity Map и кэширует ViewModel-и.
 /// </summary>
-public class TrackViewModelFactory(
-    AudioEngine audio,
-    LibraryService library,
-    DownloadService downloads,
-    MusicLibraryManager manager)
+public class TrackViewModelFactory
 {
-    private readonly AudioEngine _audio = audio;
-    private readonly LibraryService _library = library;
-    private readonly DownloadService _downloads = downloads;
-    private readonly MusicLibraryManager _manager = manager;
+    private readonly AudioEngine _audio;
+    private readonly LibraryService _library;
+    private readonly DownloadService _downloads;
+    private readonly MusicLibraryManager _manager;
+    private readonly TrackRegistry _registry;
+    private readonly StreamCacheManager _cacheManager;
 
     private readonly ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> _cache = new();
 
+    public TrackViewModelFactory(
+        AudioEngine audio,
+        LibraryService library,
+        DownloadService downloads,
+        MusicLibraryManager manager,
+        TrackRegistry registry,
+        StreamCacheManager cacheManager)
+    {
+        _audio = audio;
+        _library = library;
+        _downloads = downloads;
+        _manager = manager;
+        _registry = registry;
+        _cacheManager = cacheManager;
+    }
+
     /// <summary>
-    /// Возвращает существующую или создает новую ViewModel для трека.
+    /// Возвращает существующую или создаёт новую ViewModel для трека.
     /// </summary>
     public TrackItemViewModel GetOrCreate(TrackInfo track, Action<TrackInfo>? playAction = null)
     {
-        // 1. Проверяем кэш
-        if (_cache.TryGetValue(track.Id, out var weakRef) && 
-            weakRef.TryGetTarget(out var existing) && 
+        // Identity Map — получаем канонический экземпляр
+        var canonical = _registry.RegisterOrUpdate(track);
+
+        // Проверяем кэш
+        if (_cache.TryGetValue(canonical.Id, out var weakRef) &&
+            weakRef.TryGetTarget(out var existing) &&
             !existing.IsDisposed)
         {
-            // Обновляем контекст использования
             existing.UpdatePlayAction(playAction);
             existing.IsQueueContext = false;
 
-            // НЕ нужно синхронизировать IsLiked/IsDownloaded — 
-            // они автоматически берутся из Track через ObservableAsPropertyHelper
-
-            return existing;
+            if (!ReferenceEquals(existing.Track, canonical))
+            {
+                Log.Warn($"[TrackFactory] VM track mismatch for {canonical.Id}, recreating");
+                existing.Dispose();
+            }
+            else
+            {
+                return existing;
+            }
         }
 
-        // 2. Создаем новую
+        // Создаём новую VM
         var vm = new TrackItemViewModel(
-            track,
+            canonical,
             _audio,
             _library,
             _downloads,
             _manager,
+            _cacheManager,  // ← Передаём через DI
             playAction);
 
-        // 3. Сохраняем в кэш
-        _cache[track.Id] = new WeakReference<TrackItemViewModel>(vm);
+        _cache[canonical.Id] = new WeakReference<TrackItemViewModel>(vm);
 
         return vm;
     }
 
-    /// <summary>
-    /// Создает VM для использования в очереди воспроизведения.
-    /// </summary>
     public TrackItemViewModel CreateForQueue(TrackInfo track, Action<TrackInfo>? playAction = null)
     {
         var vm = GetOrCreate(track, playAction);
@@ -66,10 +84,18 @@ public class TrackViewModelFactory(
         return vm;
     }
 
-    /// <summary>
-    /// Удаляет "мертвые" ссылки из кэша.
-    /// </summary>
-    public void CleanupCache()
+    public TrackItemViewModel? TryGet(string trackId)
+    {
+        if (_cache.TryGetValue(trackId, out var weakRef) &&
+            weakRef.TryGetTarget(out var vm) &&
+            !vm.IsDisposed)
+        {
+            return vm;
+        }
+        return null;
+    }
+
+    public int CleanupCache()
     {
         var deadKeys = _cache
             .Where(kvp => !kvp.Value.TryGetTarget(out var target) || target.IsDisposed)
@@ -81,11 +107,10 @@ public class TrackViewModelFactory(
 
         if (deadKeys.Count > 0)
             Log.Info($"[TrackFactory] Cleaned {deadKeys.Count} dead items.");
+
+        return deadKeys.Count;
     }
 
-    /// <summary>
-    /// Полностью очищает кэш.
-    /// </summary>
     public void Clear()
     {
         foreach (var kvp in _cache)

@@ -86,23 +86,18 @@ public class RangeMap
         {
             if (_ranges.Count == 0)
             {
-                Log.Debug($"[RangeMap] IsFullyDownloaded: NO ranges, total={totalLength}");
+                // Log.Debug($"IsFullyDownloaded: NO ranges, total={totalLength}");
                 return false;
             }
 
             if (_ranges.Count > 1)
             {
-                Log.Debug($"[RangeMap] IsFullyDownloaded: {_ranges.Count} ranges (not merged?), total={totalLength}");
+                // Log.Debug($"IsFullyDownloaded: {_ranges.Count} ranges (not merged?), total={totalLength}");
                 return false;
             }
 
             var range = _ranges[0];
             bool result = range.Start == 0 && range.End >= totalLength;
-
-            if (!result)
-            {
-                Log.Debug($"[RangeMap] IsFullyDownloaded: range=[{range.Start}-{range.End}], total={totalLength}, result={result}");
-            }
 
             return result;
         }

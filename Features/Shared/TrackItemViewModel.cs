@@ -4,7 +4,6 @@ using System.Reactive.Linq;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
-using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
@@ -24,6 +23,10 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     private readonly DownloadService _downloads;
     private readonly StreamCacheManager _cacheManager;
 
+    private readonly ObservableAsPropertyHelper<bool> _isLiked;
+    private readonly ObservableAsPropertyHelper<bool> _isDownloaded;
+    private readonly ObservableAsPropertyHelper<bool> _isCached;
+
     private Action<TrackInfo>? _onPlay;
     private bool _isDisposed;
 
@@ -31,17 +34,9 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #region Properties - Core
 
-    /// <summary>
-    /// Канонический объект трека — единственный источник правды.
-    /// </summary>
     public TrackInfo Track { get; }
-
-    /// <summary>
-    /// Флаг для проверки dispose.
-    /// </summary>
     public bool IsDisposed => _isDisposed;
 
-    // Прямые делегаты к Track
     public string Id => Track.Id;
     public string Title => Track.Title;
     public string Author => Track.Author;
@@ -56,35 +51,20 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #region Properties - State (реактивные, из Track)
 
-    private readonly ObservableAsPropertyHelper<bool> _isLiked;
-    private readonly ObservableAsPropertyHelper<bool> _isDownloaded;
-    private readonly ObservableAsPropertyHelper<bool> _isCached;
-
-    /// <summary>
-    /// Трек в "Любимое".
-    /// </summary>
     public bool IsLiked => _isLiked.Value;
-
-    /// <summary>
-    /// Трек скачан в Downloads.
-    /// </summary>
     public bool IsDownloaded => _isDownloaded.Value;
-
-    /// <summary>
-    /// Трек полностью закэширован (доступен офлайн).
-    /// </summary>
     public bool IsCached => _isCached.Value;
 
     #endregion
 
-    #region Properties - Playback State (локальные)
+    #region Properties - Playback State
 
     [Reactive] public bool IsActive { get; private set; }
     [Reactive] public bool IsPlaying { get; private set; }
 
     #endregion
 
-    #region Properties - Download Progress (локальные)
+    #region Properties - Download Progress
 
     [Reactive] public bool IsDownloading { get; private set; }
     [Reactive] public float DownloadProgress { get; private set; }
@@ -100,9 +80,6 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     public bool ShowAddToQueue => !IsQueueContext;
 
-    /// <summary>
-    /// Текст для кнопки скачивания в меню.
-    /// </summary>
     public string DownloadStatusText
     {
         get
@@ -143,19 +120,18 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         LibraryService library,
         DownloadService downloads,
         MusicLibraryManager manager,
+        StreamCacheManager cacheManager,
         Action<TrackInfo>? onPlay = null)
     {
         Track = track;
         _audio = audio;
         _manager = manager;
         _downloads = downloads;
+        _cacheManager = cacheManager;
         _onPlay = onPlay;
 
-        // Получаем StreamCacheManager через DI
-        _cacheManager = Program.Services.GetRequiredService<StreamCacheManager>();
-
         // ═══════════════════════════════════════════════════════════════
-        // Подписки на свойства Track (реактивные)
+        // Инициализация ObservableAsPropertyHelper (ТОЛЬКО в конструкторе!)
         // ═══════════════════════════════════════════════════════════════
 
         _isLiked = Track.WhenAnyValue(x => x.IsLiked)
@@ -176,7 +152,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             .DisposeWith(_disposables);
 
         // ═══════════════════════════════════════════════════════════════
-        // Подписки на события плеера
+        // Подписки на аудио-события
         // ═══════════════════════════════════════════════════════════════
 
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
@@ -224,7 +200,10 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(_disposables);
 
-        // Инициализация состояния
+        // ═══════════════════════════════════════════════════════════════
+        // Инициализация начального состояния
+        // ═══════════════════════════════════════════════════════════════
+
         IsDownloading = _downloads.IsDownloading(track.Id);
         if (IsDownloading) DownloadProgress = _downloads.GetProgress(track.Id);
         UpdatePlaybackState(_audio.CurrentTrack, _audio.IsPlaying);
@@ -233,36 +212,11 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         // Команды
         // ═══════════════════════════════════════════════════════════════
 
-        PlayCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (_audio.CurrentTrack?.Id == Id)
-                await _audio.SetPlaybackStateAsync(!_audio.IsPlaying);
-            else
-                _onPlay?.Invoke(Track);
-        });
-
+        PlayCommand = ReactiveCommand.CreateFromTask(PlayAsync);
         ToggleLikeCommand = ReactiveCommand.CreateFromTask(() => _manager.ToggleLikeAsync(Track));
-
         AddToQueueCommand = ReactiveCommand.Create(() => _audio.Enqueue(Track));
-
         StartRadioCommand = ReactiveCommand.Create(() => StartRadioAction?.Invoke(Track));
-
-        // Сохранить в папку Downloads
-        SaveToDownloadsCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (Track.IsDownloaded) return; // Уже скачан
-
-            if (Track.IsCached)
-            {
-                // Экспортируем из кэша
-                await _cacheManager.ExportTrackToDownloadsAsync(Track.Id);
-            }
-            else
-            {
-                // Скачиваем с нуля
-                _downloads.StartDownload(Track);
-            }
-        });
+        SaveToDownloadsCommand = ReactiveCommand.CreateFromTask(SaveToDownloadsAsync);
 
         RemoveFromPlaylistCommand = ReactiveCommand.Create(
             () => RemoveFromPlaylistAction?.Invoke(Track),
@@ -272,10 +226,35 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
             () => _audio.RemoveFromQueue(Track),
             this.WhenAnyValue(x => x.IsQueueContext));
 
-        // Уведомление для ShowAddToQueue
         this.WhenAnyValue(x => x.IsQueueContext)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowAddToQueue)))
             .DisposeWith(_disposables);
+    }
+
+    #endregion
+
+    #region Command Handlers
+
+    private async Task PlayAsync()
+    {
+        if (_audio.CurrentTrack?.Id == Id)
+            await _audio.SetPlaybackStateAsync(!_audio.IsPlaying);
+        else
+            _onPlay?.Invoke(Track);
+    }
+
+    private async Task SaveToDownloadsAsync()
+    {
+        if (Track.IsDownloaded) return;
+
+        if (Track.IsCached)
+        {
+            await _cacheManager.ExportTrackToDownloadsAsync(Track.Id);
+        }
+        else
+        {
+            _downloads.StartDownload(Track);
+        }
     }
 
     #endregion
@@ -289,9 +268,6 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         IsPlaying = isMe && isPlaying;
     }
 
-    /// <summary>
-    /// Устанавливает активное состояние (используется QueueViewModel).
-    /// </summary>
     public void SetActive(bool isActive)
     {
         IsActive = isActive;

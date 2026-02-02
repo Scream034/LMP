@@ -1,4 +1,6 @@
-﻿using LMP.Core.Models;
+﻿// Features/Home/HomeViewModel.cs
+using LMP.Core.Helpers;
+using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Features.Shared;
@@ -92,25 +94,16 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     /// Фильтрация только по тексту (без типа контента).
     /// </summary>
     protected override bool FilterItem(TrackInfo item, string query)
-    {
-        if (string.IsNullOrWhiteSpace(query)) return true;
+        => TrackFilters.MatchesTitleOrAuthor(item, query);
 
-        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-    }
-
+    /// <summary>
+    /// Создаёт ViewModel для трека.
+    /// TrackViewModelFactory автоматически получает канонический экземпляр через TrackRegistry.
+    /// </summary>
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        if (LibService.HasTrack(track.Id))
-        {
-            var existing = LibService.GetTrack(track.Id);
-            if (existing != null)
-            {
-                track.IsDownloaded = existing.IsDownloaded;
-                track.LocalPath = existing.LocalPath;
-                track.IsLiked = existing.IsLiked;
-            }
-        }
+        // Фабрика сама вызывает TrackRegistry.RegisterOrUpdate() внутри!
+        // Больше не нужна ручная синхронизация IsLiked/IsDownloaded
         return _vmFactory.GetOrCreate(track, PlayWithContext);
     }
 
@@ -122,7 +115,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         _fetchOffset += 50;
 
-        // Для Home используем стандартный YouTube поиск
         var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
 
         if (ct.IsCancellationRequested) return [];
@@ -131,7 +123,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         if (result.Count > 0)
         {
-            // Кэшируем с SearchSource.YouTube (по умолчанию для Home)
             _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, [.. GetItemsSnapshot(), .. result]);
 
             var imageUrls = result.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
@@ -172,7 +163,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             {
                 _currentQuery = category.Query;
 
-                // Используем SearchSource.YouTube для Home-категорий
                 var cached = await _searchCache.GetAsync(_currentQuery, SearchSource.YouTube, 30);
 
                 if (cached != null && cached.Count > 0 && !force)

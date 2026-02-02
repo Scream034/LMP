@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+﻿// Core/ViewModels/PaginatedViewModel.cs
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -23,7 +24,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
     private readonly CompositeDisposable _cleanUp = [];
 
-    private int _consecutiveEmptyLoads = 0;
+    private int _consecutiveEmptyLoads;
     private const int MaxConsecutiveEmptyLoads = 5;
 
     private CancellationTokenSource? _loadCts;
@@ -139,15 +140,23 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Public Methods
 
+    /// <summary>
+    /// Перемещает элемент. Использует RemoveAt+Insert вместо Move
+    /// для корректной работы с DynamicData Filter.
+    /// </summary>
     protected void MoveSourceItem(int oldIndex, int newIndex)
     {
         _sourceList.Edit(list =>
         {
-            if (oldIndex >= 0 && oldIndex < list.Count &&
-                newIndex >= 0 && newIndex < list.Count)
-            {
-                list.Move(oldIndex, newIndex);
-            }
+            if (oldIndex < 0 || oldIndex >= list.Count ||
+                newIndex < 0 || newIndex >= list.Count ||
+                oldIndex == newIndex)
+                return;
+
+            // RemoveAt + Insert вместо Move — Filter корректно обрабатывает эти события
+            var item = list[oldIndex];
+            list.RemoveAt(oldIndex);
+            list.Insert(newIndex, item);
         });
     }
 
