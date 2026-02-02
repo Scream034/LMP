@@ -221,7 +221,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         UpdateVolumeBars();
         UpdateQueueState();
 
-        Log.Info($"[PlayerBar] Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
+        Log.Info($"Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
         // Event handlers
         _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() =>
@@ -401,7 +401,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            Log.Info($"[PlayerBar] Copying link: {CurrentTrack?.Url}");
+            Log.Info($"Copying link: {CurrentTrack?.Url}");
             if (CurrentTrack?.Url != null)
             {
                 await _clipboard.SetTextAsync(CurrentTrack.Url);
@@ -473,11 +473,11 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 AvailableFormats.Add(f);
             }
 
-            Log.Debug($"[PlayerBar] Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
+            Log.Debug($"Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
         }
         catch (Exception ex)
         {
-            Log.Error($"[PlayerBar] LoadFormatsAsync error: {ex.Message}");
+            Log.Error($"LoadFormatsAsync error: {ex.Message}");
         }
     }
 
@@ -490,8 +490,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         if (CurrentTrack == null || CurrentTrack.Id != trackId)
             return;
 
-        Log.Debug($"[PlayerBar] OnFormatCached: {trackId} {container}/{bitrate}kbps downloaded={isDownloaded}");
-
         // Ищем формат в списке и обновляем его
         bool found = false;
         foreach (var format in AvailableFormats)
@@ -501,7 +499,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             {
                 format.IsDownloaded = isDownloaded;
                 found = true;
-                Log.Debug($"[PlayerBar] Updated format {format.DisplayName} IsDownloaded={isDownloaded}");
+                Log.Info($"Updated format {format.DisplayName} IsDownloaded={isDownloaded}");
                 break;
             }
         }
@@ -510,7 +508,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         // Перезагружаем список форматов
         if (!found && AvailableFormats.Count > 0)
         {
-            Log.Debug($"[PlayerBar] Format not found in list, reloading...");
+            Log.Info($"Format not found in list, reloading...");
             _ = LoadFormatsAsync();
         }
 

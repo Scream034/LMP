@@ -1,4 +1,5 @@
-﻿using Avalonia.Controls;
+﻿// Features/Playlist/PlaylistViewModel.cs
+using Avalonia.Controls;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -6,14 +7,12 @@ using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 
 namespace LMP.Features.Playlist;
 
-/// <summary>
-/// ViewModel для отображения содержимого плейлиста и управления им.
-/// </summary>
-public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
+public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackItemViewModel>
 {
     #region Fields
 
@@ -26,15 +25,13 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     private readonly EventHandler<string> _languageChangedHandler;
 
     private string _currentPlaylistId = "";
-    private List<string> _allTrackIds = [];
-    private int _loadedOffset = 0;
 
     private readonly IDisposable? _librarySubscription;
     private readonly IDisposable? _audioStateSub;
     private readonly IDisposable? _trackChangeSub;
 
-    private bool _isMovingInternally;
-    private bool _isDisposed;
+    private DateTime _lastMoveTime = DateTime.MinValue;
+    private const int MoveDebounceMs = 1000;
 
     #endregion
 
@@ -96,11 +93,11 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     #region Constructor
 
     public PlaylistViewModel(
-      AudioEngine audio,
-      DownloadService downloads,
-      MusicLibraryManager manager,
-      IDialogService dialog,
-      TrackViewModelFactory vmFactory)
+        AudioEngine audio,
+        DownloadService downloads,
+        MusicLibraryManager manager,
+        IDialogService dialog,
+        TrackViewModelFactory vmFactory)
     {
         _audio = audio;
         _downloads = downloads;
@@ -149,49 +146,42 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
         AddToQueueCommand = ReactiveCommand.Create(() =>
         {
-            _audio.EnqueueRange(GetItemsSnapshot());
+            _audio.EnqueueRange(GetLoadedItemsSnapshot());
         }, hasTracks);
 
+        // Команда перемещения
         MoveItemCommand = ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
         {
-            var (oldIdx, newIdx) = tuple;
-            if (!CanReorderItems || oldIdx == newIdx) return;
+            if (!CanReorderItems) return;
 
-            try
-            {
-                _isMovingInternally = true;
+            _lastMoveTime = DateTime.Now;
 
-                MoveSourceItem(oldIdx, newIdx);
-
-                await _manager.MovePlaylistTrackAsync(_currentPlaylistId, oldIdx, newIdx);
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"Failed to move track in playlist: {ex.Message}");
-                _isMovingInternally = false;
-                await LoadPlaylistAsync(_currentPlaylistId);
-            }
-            finally
-            {
-                _isMovingInternally = false;
-            }
+            // Вызываем метод базового класса
+            await MoveItemAsync(tuple.oldIndex, tuple.newIndex);
         });
 
-        // Обновление CanReorderItems при изменении фильтра
+        // Обновление CanReorderItems
         this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ =>
             {
-                CanReorderItems = CanEdit && string.IsNullOrWhiteSpace(FilterQuery);
-            });
+                CanReorderItems = CanEdit && CanReorder;
+            })
+            .DisposeWith(Disposables);
 
+        // Подписка на изменения библиотеки
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
-            .Throttle(TimeSpan.FromMilliseconds(500))
+            .Throttle(TimeSpan.FromMilliseconds(600))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                if (_isMovingInternally) return;
+                if ((DateTime.Now - _lastMoveTime).TotalMilliseconds < MoveDebounceMs)
+                {
+                    Log.Debug("[Playlist] Ignoring OnDataChanged (recent move)");
+                    return;
+                }
+
                 if (!string.IsNullOrEmpty(_currentPlaylistId))
                 {
                     await LoadPlaylistAsync(_currentPlaylistId);
@@ -214,13 +204,90 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     #endregion
 
-    #region Methods
+    #region Abstract Implementation
+
+    protected override string GetItemId(TrackInfo item) => item.Id;
+
+    protected override TrackItemViewModel CreateViewModel(TrackInfo item)
+    {
+        var vm = _vmFactory.GetOrCreate(item, PlayFromPlaylist);
+        vm.SourceContextId = _currentPlaylistId;
+        vm.IsPlaylistContext = CanEdit;
+
+        vm.RemoveFromPlaylistAction = async (t) =>
+        {
+            if (CanEdit)
+                await _manager.RemoveTrackFromPlaylistAsync(_currentPlaylistId, t.Id);
+        };
+
+        vm.StartRadioAction = (t) => Log.Info($"Start radio requested for {t.Title}");
+
+        return vm;
+    }
+
+    protected override bool MatchesFilter(TrackInfo item, string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return true;
+
+        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    protected override async Task<List<TrackInfo>> LoadItemsByIdsAsync(
+        IEnumerable<string> ids, CancellationToken ct)
+    {
+        return await LibService.GetPlaylistTracksAsync(
+            _currentPlaylistId,
+            limit: ids.Count(),
+            offset: LoadedCount,
+            ct);
+    }
+
+    protected override async Task SaveMoveAsync(int fromMasterIndex, int toMasterIndex, CancellationToken ct)
+    {
+        Log.Info($"[Playlist] Saving move {fromMasterIndex}→{toMasterIndex}");
+        await _manager.MovePlaylistTrackAsync(_currentPlaylistId, fromMasterIndex, toMasterIndex);
+        Log.Info("[Playlist] Move saved");
+    }
+
+    #endregion
+
+    #region Public Methods
+
+    public async Task LoadPlaylistAsync(string playlistId)
+    {
+        _currentPlaylistId = playlistId;
+
+        var playlist = await LibService.GetPlaylistAsync(playlistId);
+        if (playlist == null) return;
+
+        PlaylistName = playlist.Name;
+        ThumbnailUrl = playlist.ThumbnailUrl;
+        CanEdit = playlist.IsEditable;
+        IsCloud = playlist.IsFromAccount;
+        IsReadOnly = !playlist.IsEditable;
+
+        var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
+        TrackCount = allIds.Count;
+        this.RaisePropertyChanged(nameof(FormattedTrackCount));
+
+        TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
+        FormatDuration();
+
+        await InitializeAsync(allIds);
+        await CheckPlaybackStateAsync();
+    }
+
+    #endregion
+
+    #region Private Methods
 
     private async Task CheckPlaybackStateAsync()
     {
         if (_audio.CurrentTrack != null && _audio.IsPlaying)
         {
-            IsPlayingThisPlaylist = await LibService.IsTrackInPlaylistAsync(_audio.CurrentTrack.Id, _currentPlaylistId);
+            IsPlayingThisPlaylist = await LibService.IsTrackInPlaylistAsync(
+                _audio.CurrentTrack.Id, _currentPlaylistId);
         }
         else
         {
@@ -238,21 +305,16 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             return;
         }
 
-        if (_audio.CurrentTrack != null &&
-            _audio.IsPaused &&
-            await LibService.IsTrackInPlaylistAsync(_audio.CurrentTrack.Id, _currentPlaylistId))
-        {
-            _ = _audio.SetPlaybackStateAsync(true);
-            return;
-        }
+        // Загружаем все треки для воспроизведения
+        var allIds = GetAllIds();
+        var allTracks = await LibService.GetPlaylistTracksAsync(
+            _currentPlaylistId, limit: allIds.Count, offset: 0);
 
-        var allTracks = await GetAllPlaylistTracksAsync();
         if (allTracks.Count == 0) return;
 
         _audio.ClearQueue();
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
-
         _audio.EnqueueRange(allTracks);
 
         _ = Task.Run(async () => await _audio.PlayTrackAsync(allTracks[0]));
@@ -262,7 +324,10 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     {
         if (TrackCount == 0) return;
 
-        var allTracks = await GetAllPlaylistTracksAsync();
+        var allIds = GetAllIds();
+        var allTracks = await LibService.GetPlaylistTracksAsync(
+            _currentPlaylistId, limit: allIds.Count, offset: 0);
+
         if (allTracks.Count == 0) return;
 
         _audio.ClearQueue();
@@ -285,7 +350,10 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     {
         IsDownloadingActive = true;
 
-        var allTracks = await GetAllPlaylistTracksAsync();
+        var allIds = GetAllIds();
+        var allTracks = await LibService.GetPlaylistTracksAsync(
+            _currentPlaylistId, limit: allIds.Count, offset: 0);
+
         foreach (var track in allTracks.Where(t => !t.IsDownloaded))
         {
             _downloads.StartDownload(track);
@@ -294,58 +362,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         Observable.Timer(TimeSpan.FromSeconds(2))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => IsDownloadingActive = false);
-    }
-
-    protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
-    {
-        var vm = _vmFactory.GetOrCreate(track, PlayFromPlaylist);
-
-        vm.SourceContextId = _currentPlaylistId;
-        vm.IsPlaylistContext = CanEdit;
-
-        vm.RemoveFromPlaylistAction = async (t) =>
-        {
-            if (CanEdit)
-                await _manager.RemoveTrackFromPlaylistAsync(_currentPlaylistId, t.Id);
-        };
-
-        vm.StartRadioAction = (t) => Log.Info($"Start radio requested for {t.Title}");
-
-        return vm;
-    }
-
-    public async Task LoadPlaylistAsync(string playlistId)
-    {
-        _currentPlaylistId = playlistId;
-        _loadedOffset = 0;
-
-        var playlist = await LibService.GetPlaylistAsync(playlistId);
-        if (playlist == null) return;
-
-        PlaylistName = playlist.Name;
-        ThumbnailUrl = playlist.ThumbnailUrl;
-        CanEdit = playlist.IsEditable;
-        IsCloud = playlist.IsFromAccount;
-        IsReadOnly = !playlist.IsEditable;
-
-        _allTrackIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
-        TrackCount = _allTrackIds.Count;
-        this.RaisePropertyChanged(nameof(FormattedTrackCount));
-
-        TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
-        FormatDuration();
-
-        var initialTracks = await LibService.GetPlaylistTracksAsync(
-            playlistId,
-            limit: BatchSize,
-            offset: 0);
-
-        _loadedOffset = initialTracks.Count;
-
-        bool canFetchMore = _allTrackIds.Count > _loadedOffset;
-        await InitializeItemsAsync(initialTracks, canFetchMore: canFetchMore);
-
-        await CheckPlaybackStateAsync();
     }
 
     private void FormatDuration()
@@ -362,66 +378,16 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             FormattedDuration = $"{seconds}s";
     }
 
-    protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
-    {
-        if (_loadedOffset >= _allTrackIds.Count)
-        {
-            SetCanFetchMore(false);
-            return [];
-        }
-
-        try
-        {
-            var tracks = await LibService.GetPlaylistTracksAsync(
-                _currentPlaylistId,
-                limit: BatchSize,
-                offset: _loadedOffset,
-                ct);
-
-            if (ct.IsCancellationRequested) return [];
-
-            _loadedOffset += tracks.Count;
-
-            if (_loadedOffset >= _allTrackIds.Count)
-            {
-                SetCanFetchMore(false);
-            }
-
-            return tracks;
-        }
-        catch (OperationCanceledException)
-        {
-            return [];
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Playlist] FetchMore error: {ex.Message}");
-            SetCanFetchMore(false);
-            return [];
-        }
-    }
-
-    private async Task<List<TrackInfo>> GetAllPlaylistTracksAsync()
-    {
-        var loadedTracks = GetItemsSnapshot();
-        if (loadedTracks.Count >= TrackCount)
-            return loadedTracks;
-
-        return await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId,
-            limit: TrackCount,
-            offset: 0);
-    }
-
     private async void PlayFromPlaylist(TrackInfo track)
     {
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
 
-        var allTracks = await GetAllPlaylistTracksAsync();
+        var allIds = GetAllIds();
+        var allTracks = await LibService.GetPlaylistTracksAsync(
+            _currentPlaylistId, limit: allIds.Count, offset: 0);
 
         await _audio.StartQueueAsync(allTracks, track);
-
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 
@@ -451,42 +417,14 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     #endregion
 
-    #region Filter Implementation
+    #region Dispose
 
-    /// <summary>
-    /// Фильтрация только по тексту.
-    /// </summary>
-    protected override bool FilterItem(TrackInfo item, string query)
+    public override void Dispose()
     {
-        if (string.IsNullOrWhiteSpace(query)) return true;
-
-        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-    }
-
-    #endregion
-
-    #region IDisposable Implementation
-
-    public new void Dispose()
-    {
-        if (_isDisposed) return;
-        _isDisposed = true;
-
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
-
         _librarySubscription?.Dispose();
         _audioStateSub?.Dispose();
         _trackChangeSub?.Dispose();
-        CancelLoading();
-
-        if (Items != null)
-        {
-            foreach (var item in Items)
-            {
-                item.Dispose();
-            }
-        }
 
         base.Dispose();
     }

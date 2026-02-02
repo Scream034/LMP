@@ -1,4 +1,5 @@
-﻿using LMP.Core.Models;
+﻿// Features/Player/QueueViewModel.cs
+using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Features.Shared;
@@ -10,11 +11,7 @@ using System.Reactive.Linq;
 
 namespace LMP.Features.Player;
 
-/// <summary>
-/// ViewModel для очереди воспроизведения.
-/// Не использует SearchSource, так как очередь содержит уже загруженные треки.
-/// </summary>
-public class QueueViewModel : ViewModelBase, IDisposable
+public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 {
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
@@ -22,16 +19,16 @@ public class QueueViewModel : ViewModelBase, IDisposable
 
     private readonly IDisposable? _queueSub;
     private readonly IDisposable? _trackSub;
-    private bool _isMovingInternally;
+    private readonly IDisposable? _filterSub;
 
+    private bool _isMovingInternally;
     private readonly Dictionary<string, TrackItemViewModel> _vmCache = [];
+
+    // Master список (соответствует _audio.Queue)
+    private List<TrackInfo> _masterQueue = [];
 
     [Reactive] public bool IsEmpty { get; private set; } = true;
     [Reactive] public bool CanReorderItems { get; private set; } = true;
-
-    /// <summary>
-    /// Текстовый фильтр для поиска в очереди.
-    /// </summary>
     [Reactive] public string FilterQuery { get; set; } = string.Empty;
 
     public ObservableCollection<TrackItemViewModel> QueueItems { get; } = [];
@@ -68,26 +65,7 @@ public class QueueViewModel : ViewModelBase, IDisposable
         MoveItemCommand = ReactiveCommand.Create<(int oldIndex, int newIndex)>(tuple =>
         {
             if (!CanReorderItems) return;
-
-            var (oldIdx, newIdx) = tuple;
-            if (oldIdx == newIdx) return;
-
-            try
-            {
-                _isMovingInternally = true;
-
-                if (oldIdx >= 0 && oldIdx < QueueItems.Count &&
-                    newIdx >= 0 && newIdx < QueueItems.Count)
-                {
-                    QueueItems.Move(oldIdx, newIdx);
-                }
-
-                _audio.MoveQueueItem(oldIdx, newIdx);
-            }
-            finally
-            {
-                _isMovingInternally = false;
-            }
+            MoveItem(tuple.oldIndex, tuple.newIndex);
         });
 
         _queueSub = Observable.FromEvent(
@@ -99,7 +77,7 @@ public class QueueViewModel : ViewModelBase, IDisposable
             {
                 if (!_isMovingInternally)
                 {
-                    RefreshQueue();
+                    RefreshFromAudioEngine();
                 }
             });
 
@@ -109,45 +87,46 @@ public class QueueViewModel : ViewModelBase, IDisposable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => UpdateActiveStates());
 
-        // Реакция на изменение фильтра
-        this.WhenAnyValue(x => x.FilterQuery)
+        _filterSub = this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);
-                RefreshQueue();
+                RebuildVisibleItems();
             });
 
-        RefreshQueue();
+        RefreshFromAudioEngine();
     }
 
-    private void RefreshQueue()
+    /// <summary>
+    /// Синхронизирует _masterQueue с AudioEngine.
+    /// </summary>
+    private void RefreshFromAudioEngine()
     {
-        var allQueue = _audio.Queue;
+        _masterQueue = [.. _audio.Queue];
+        RebuildVisibleItems();
+    }
+
+    /// <summary>
+    /// Перестраивает QueueItems на основе _masterQueue и фильтра.
+    /// </summary>
+    private void RebuildVisibleItems()
+    {
         var currentId = _audio.CurrentTrack?.Id;
+        var query = FilterQuery;
 
-        // Применяем фильтр
-        var filteredTracks = allQueue.Where(FilterItem).ToList();
-        var filteredIds = filteredTracks.Select(t => t.Id).ToHashSet();
-
-        // 1. Удаляем VM для треков, которых больше нет
-        var toRemove = QueueItems
-            .Where(vm => !filteredIds.Contains(vm.Id))
+        // Формируем отфильтрованный список
+        var filtered = _masterQueue
+            .Where(t => MatchesFilter(t, query))
             .ToList();
 
-        foreach (var vm in toRemove)
-        {
-            QueueItems.Remove(vm);
-            _vmCache.Remove(vm.Id);
-            vm.Dispose();
-        }
+        // Собираем нужные VM
+        var newItems = new List<TrackItemViewModel>();
+        var usedIds = new HashSet<string>();
 
-        // 2. Добавляем новые VM / обновляем порядок
-        for (int i = 0; i < filteredTracks.Count; i++)
+        foreach (var track in filtered)
         {
-            var track = filteredTracks[i];
-
             if (!_vmCache.TryGetValue(track.Id, out var vm))
             {
                 vm = _vmFactory.CreateForQueue(track, PlayFromQueue);
@@ -155,30 +134,95 @@ public class QueueViewModel : ViewModelBase, IDisposable
             }
 
             vm.SetActive(track.Id == currentId);
-
-            int currentIndex = QueueItems.IndexOf(vm);
-            if (currentIndex == -1)
-            {
-                if (i < QueueItems.Count)
-                    QueueItems.Insert(i, vm);
-                else
-                    QueueItems.Add(vm);
-            }
-            else if (currentIndex != i)
-            {
-                QueueItems.Move(currentIndex, i);
-            }
+            newItems.Add(vm);
+            usedIds.Add(track.Id);
         }
+
+        // Удаляем неиспользуемые VM из кэша
+        var toRemove = _vmCache.Keys.Where(k => !usedIds.Contains(k)).ToList();
+        foreach (var id in toRemove)
+        {
+            _vmCache[id].Dispose();
+            _vmCache.Remove(id);
+        }
+
+        // Синхронизируем ObservableCollection
+        SyncCollection(newItems);
 
         IsEmpty = QueueItems.Count == 0;
     }
 
-    private bool FilterItem(TrackInfo item)
+    private void SyncCollection(List<TrackItemViewModel> newItems)
     {
-        if (string.IsNullOrWhiteSpace(FilterQuery)) return true;
+        // Удаляем лишние с конца
+        while (QueueItems.Count > newItems.Count)
+        {
+            QueueItems.RemoveAt(QueueItems.Count - 1);
+        }
 
-        return item.Title.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(FilterQuery, StringComparison.OrdinalIgnoreCase);
+        // Обновляем/добавляем
+        for (int i = 0; i < newItems.Count; i++)
+        {
+            if (i < QueueItems.Count)
+            {
+                if (!ReferenceEquals(QueueItems[i], newItems[i]))
+                {
+                    QueueItems[i] = newItems[i];
+                }
+            }
+            else
+            {
+                QueueItems.Add(newItems[i]);
+            }
+        }
+    }
+
+    private static bool MatchesFilter(TrackInfo item, string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return true;
+        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Перемещает элемент в видимом списке с пересчётом master-индексов.
+    /// </summary>
+    private void MoveItem(int oldIdx, int newIdx)
+    {
+        if (oldIdx == newIdx) return;
+        if (oldIdx < 0 || oldIdx >= QueueItems.Count) return;
+        if (newIdx < 0 || newIdx >= QueueItems.Count) return;
+
+        // При активном фильтре нужно пересчитывать master индексы
+        if (!string.IsNullOrWhiteSpace(FilterQuery))
+        {
+            Log.Warn("[Queue] Cannot reorder with active filter");
+            return;
+        }
+
+        var movingVm = QueueItems[oldIdx];
+        var movingTrack = movingVm.Track;
+
+        Log.Info($"[Queue] Moving {oldIdx} → {newIdx}");
+
+        try
+        {
+            _isMovingInternally = true;
+
+            // 1. Обновляем UI
+            QueueItems.Move(oldIdx, newIdx);
+
+            // 2. Обновляем локальный master
+            _masterQueue.RemoveAt(oldIdx);
+            _masterQueue.Insert(newIdx, movingTrack);
+
+            // 3. Обновляем AudioEngine
+            _audio.MoveQueueItem(oldIdx, newIdx);
+        }
+        finally
+        {
+            _isMovingInternally = false;
+        }
     }
 
     private void PlayFromQueue(TrackInfo track)
@@ -199,14 +243,13 @@ public class QueueViewModel : ViewModelBase, IDisposable
     {
         _queueSub?.Dispose();
         _trackSub?.Dispose();
+        _filterSub?.Dispose();
 
         foreach (var vm in _vmCache.Values)
-        {
             vm.Dispose();
-        }
+
         _vmCache.Clear();
         QueueItems.Clear();
-
         GC.SuppressFinalize(this);
     }
 }

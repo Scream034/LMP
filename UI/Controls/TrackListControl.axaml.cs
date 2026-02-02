@@ -541,13 +541,16 @@ public partial class TrackListControl : UserControl
         var position = e.GetPosition(targetItem);
         bool insertAfter = position.Y > targetItem.Bounds.Height / 2;
 
+        // targetVisualIndex - позиция для вставки (перед каким элементом)
         int targetVisualIndex = containerIndex;
         if (insertAfter)
             targetVisualIndex++;
 
+        // Корректируем для Move семантики
+        // Move(old, new) перемещает элемент НА позицию new
         int moveIndex = targetVisualIndex;
         if (oldIndex < targetVisualIndex)
-            moveIndex--;
+            moveIndex--; // Компенсируем сдвиг от удаления
 
         return Math.Clamp(moveIndex, 0, _listBox.ItemCount - 1);
     }
