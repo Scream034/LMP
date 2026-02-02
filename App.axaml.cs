@@ -28,6 +28,12 @@ public partial class App : Application
             // 1. Get library service (don't await initialization here!)
             var library = Program.Services.GetRequiredService<LibraryService>();
 
+            var registry = Program.Services.GetRequiredService<TrackRegistry>();
+            var cacheManager = Program.Services.GetRequiredService<StreamCacheManager>();
+
+            // Передаем CacheManager в Registry ДО начала загрузки данных (HydrateAsync)
+            registry.CacheManager = cacheManager;
+
             // 2. Initialize localization with default, will update after DB init
             LocalizationService.Instance.Initialize("en");
 
@@ -65,7 +71,7 @@ public partial class App : Application
 
 #if DEBUG
             desktop.MainWindow.AttachDevTools();
-    
+
             // Debug window
             desktop.MainWindow.KeyDown += (s, e) =>
             {

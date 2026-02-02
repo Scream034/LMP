@@ -1111,7 +1111,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
                 // Запускаем промоут если ещё не скачано
                 if (!track.IsDownloaded && !_cacheManager.IsPromoted(track.Id))
-                    _cacheManager.TriggerPromoteWithNotification(track.Id, track.Id);
+                    _cacheManager.TriggerCacheCompleted(track.Id, track.Id);
 
                 return new StreamDetails(meta.SourceUrl, meta.ContentLength, meta.Bitrate, meta.Codec, meta.Container);
             }

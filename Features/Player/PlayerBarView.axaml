@@ -285,7 +285,7 @@
 
                                                                 <!-- Размер -->
                                                                 <TextBlock Grid.Column="3"
-                                                                    Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}"
+                                                                    Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}" 
                                                                     Foreground="{DynamicResource TextMutedBrush}"
                                                                     FontSize="11"
                                                                     VerticalAlignment="Center"

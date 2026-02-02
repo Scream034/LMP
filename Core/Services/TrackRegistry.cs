@@ -17,6 +17,8 @@ public sealed class TrackRegistry
     // Strong references for important tracks (library items)
     private readonly ConcurrentDictionary<string, TrackInfo> _pinned = new();
 
+    public StreamCacheManager? CacheManager { get; set; }
+
     private readonly ITrackRepository? _repository;
     private readonly IPlaylistRepository? _playlists;
 
@@ -33,25 +35,47 @@ public sealed class TrackRegistry
     {
         if (string.IsNullOrEmpty(incoming.Id)) return incoming;
 
-        // Check pinned first (faster)
+        TrackInfo result = incoming;
+
+        // Check pinned first
         if (_pinned.TryGetValue(incoming.Id, out var pinned))
         {
             pinned.UpdateMetadata(incoming);
-            return pinned;
+            result = pinned;
         }
-
         // Check weak cache
-        if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
+        else if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
         {
             cached.UpdateMetadata(incoming);
             UpdatePinStatus(cached);
-            return cached;
+            result = cached;
+        }
+        else
+        {
+            // Register new
+            _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
+            UpdatePinStatus(incoming);
+            result = incoming;
         }
 
-        // Register as new
-        _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
-        UpdatePinStatus(incoming);
-        return incoming;
+        if (CacheManager != null && !result.IsDownloaded && !result.IsCached)
+        {
+            if (CacheManager.IsFullyCached(result.Id))
+            {
+                // Подтягиваем метаданные кэша (битрейт, контейнер)
+                var meta = StreamCacheManager.TryGetMetadata(result.Id);
+                if (meta != null)
+                {
+                    result.MarkAsCached(meta.Container, meta.Bitrate);
+                }
+                else
+                {
+                    result.IsCached = true;
+                }
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -142,29 +166,29 @@ public sealed class TrackRegistry
         Log.Info("[TrackRegistry] Hydrating from database...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        // Load liked tracks
+        var allLoaded = new List<TrackInfo>();
+
+        // 1. Load Liked
         var liked = await _repository.GetLikedAsync(500, 0, ct);
-        foreach (var t in liked)
-        {
-            if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
-            RegisterOrUpdate(t);
-        }
+        allLoaded.AddRange(liked);
 
-        // Load downloaded tracks
+        // 2. Load Downloaded
         var downloaded = await _repository.GetDownloadedAsync(500, 0, ct);
-        foreach (var t in downloaded)
+        allLoaded.AddRange(downloaded);
+
+        // 3. Load Recent
+        var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
+        allLoaded.AddRange(recent);
+
+        // Регистрация в памяти
+        foreach (var t in allLoaded)
         {
             if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
-            RegisterOrUpdate(t);
+            RegisterOrUpdate(t); // Здесь сработает проверка IsFullyCached
         }
 
-        // Load recent tracks
-        var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
-        foreach (var t in recent)
-        {
-            if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
-            RegisterOrUpdate(t);
-        }
+        // Дополнительная пакетная проверка (оптимизация), если cacheManager доступен
+        CacheManager?.HydrateCacheStatus(_pinned.Values);
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} tracks in {sw.ElapsedMilliseconds}ms");

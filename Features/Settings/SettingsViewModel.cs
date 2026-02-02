@@ -92,6 +92,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public double AudioCacheUsagePercent { get; private set; }
     [Reactive] public string DownloadsStats { get; private set; } = "...";
     [Reactive] public double DownloadsUsagePercent { get; private set; }
+    [Reactive] public bool AutoSaveToDownloads { get; set; }
 
     public ObservableCollection<ThemeSettings> ThemePresets { get; } = [];
     [Reactive] public ThemeSettings? SelectedPreset { get; set; }
@@ -193,6 +194,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             {
                 _library.UpdateSettings(s => s.Storage.DownloadedTracksLimitMb = v);
                 UpdateCacheStats();
+            });
+
+        this.WhenAnyValue(x => x.AutoSaveToDownloads)
+            .Skip(1)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Storage.AutoSaveToDownloads = v);
             });
 
         LoadAllSettings();

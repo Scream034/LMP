@@ -72,7 +72,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     [Reactive] public bool IsLiked { get; private set; }
     [Reactive] public bool IsNavigating { get; private set; }
 
-    public string SafeTitle => CurrentTrack?.Title ?? "Not Playing";
+    public string SafeTitle => CurrentTrack?.Title ?? SL["Player_NotPlaying"];
     public string SafeAuthor => CurrentTrack?.Author ?? "";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
 
@@ -151,9 +151,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #region Properties - Tooltips
 
-    public string ShuffleTooltip => SL["Player_Shuffle"] ?? "Shuffle";
-    public string PreviousTooltip => SL["Player_Previous"] ?? "Previous";
-    public string NextTooltip => SL["Player_Next"] ?? "Next";
+    public static string ShuffleTooltip => SL.Get("Player_Shuffle", "Shuffle");
+    public static string PreviousTooltip => SL.Get("Player_Previous", "Previous");
+    public static string NextTooltip => SL.Get("Player_Next", "Next");
 
     public string PlayPauseTooltip => IsPlaying
         ? (SL["Player_Pause"] ?? "Pause")
@@ -171,11 +171,11 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         ? (SL["Track_Unlike"] ?? "Remove from Liked")
         : (SL["Track_Like"] ?? "Add to Liked");
 
-    public string CopyTooltip => SL["Track_CopyLink"] ?? "Copy Link";
+    public static string CopyTooltip => SL["Track_CopyLink"] ?? "Copy Link";
 
     public string VolumeTooltip => IsMuted
-        ? (SL["Player_Unmute"] ?? "Unmute")
-        : $"{SL["Player_Volume"] ?? "Volume"}: {Volume}%";
+        ? SL.Get("Player_Unmute", "Unmute")
+        : string.Format(SL.Get("Player_VolumeTooltip", "Volume: {0}%"), Volume);
 
     #endregion
 
@@ -604,7 +604,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             PositionSeconds = 0;
             BufferedSeconds = track.IsDownloaded ? DurationSeconds : 0;
             ShowStreamInfo = true;
-            StreamInfo = SL["Stream_Loading"] ?? "Loading...";
+            StreamInfo = SL.Get("Player_StreamInfo_Loading", "Loading...");
         }
         else
         {
@@ -680,7 +680,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         if (!isReady || string.IsNullOrEmpty(format))
         {
-            StreamInfo = SL["Stream_Loading"] ?? "Loading...";
+            StreamInfo = SL.Get("Player_StreamInfo_Loading", "Loading..."); 
             ShowStreamInfo = true;
             return;
         }
@@ -725,7 +725,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         {
             var kbs = ((currentBytes - _lastDownloadedBytes) / elapsed) / 1024.0;
             DownloadSpeedText = kbs > 10
-                ? (kbs >= 1024 ? $"{kbs / 1024:F1} MB/s" : $"{kbs:F0} KB/s")
+                ? (kbs >= 1024 
+                    ? string.Format(SL.Get("Stream_Speed_Mb", "{0:F1} MB/s"), kbs / 1024) 
+                    : string.Format(SL.Get("Stream_Speed_Kb", "{0:F0} KB/s"), kbs))
                 : "";
         }
         _lastDownloadedBytes = currentBytes;

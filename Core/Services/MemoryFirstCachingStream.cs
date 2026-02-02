@@ -137,7 +137,7 @@ public sealed class MemoryFirstCachingStream : Stream
         {
             _downloadComplete = true;
             // Используем единый метод с уведомлением
-            _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+            _cacheManager.TriggerCacheCompleted(_cacheId, _originalTrackId);
             Log.Info($"[CacheStream] {_cacheId} already complete, promoting...");
         }
 
@@ -520,7 +520,7 @@ public sealed class MemoryFirstCachingStream : Stream
     private async Task DiskWriterLoopAsync()
     {
         int bytesWrittenSinceSave = 0;
-        const int SaveThreshold = 128 * 1024; // Уменьшил для более частых проверок
+        const int SaveThreshold = 128 * 1024;
 
         try
         {
@@ -556,12 +556,12 @@ public sealed class MemoryFirstCachingStream : Stream
                             Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
                             bytesWrittenSinceSave = 0;
 
-                            Log.Info($"[CacheStream] {_cacheId} fully downloaded! Bytes: {_diskRanges.DownloadedBytes}/{_contentLength}");
+                            Log.Info($"[CacheStream] {_cacheId} fully cached! Bytes: {_diskRanges.DownloadedBytes}/{_contentLength}");
 
                             var meta = StreamCacheManager.TryGetMetadata(_cacheId);
                             Log.Debug($"[CacheStream] Metadata: {meta?.Codec}/{meta?.Bitrate}kbps/{meta?.Container}");
 
-                            _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+                            _cacheManager.TriggerCacheCompleted(_cacheId, _originalTrackId);
                         }
                         else if (bytesWrittenSinceSave >= SaveThreshold)
                         {
@@ -592,7 +592,7 @@ public sealed class MemoryFirstCachingStream : Stream
                 _downloadComplete = true;
                 Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
                 Log.Info($"[CacheStream] {_cacheId} completed on loop exit");
-                _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+                _cacheManager.TriggerCacheCompleted(_cacheId, _originalTrackId);
             }
         }
     }

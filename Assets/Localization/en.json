@@ -18,6 +18,7 @@
   "Window_Maximize": "Maximize",
   "Window_Restore": "Restore",
   "Window_Close": "Close",
+  "Window_Close_Hover": "Close",
 
   "Nav_Home": "Home",
   "Nav_Search": "Search",
@@ -84,12 +85,15 @@
   "Settings_AdvancedColors": "Advanced Colors",
   "Settings_Client": "YouTube Client",
   "Settings_ClientDesc": "Change if tracks fail to load (403 Error).",
-  "Settings_DownloadedTracks": "Downloaded Tracks",
   "Settings_DownloadsLimit": "Downloads",
   "Settings_ImagesLimit": "Images",
   "Settings_AudioLimit": "Audio",
-  "Settings_ClearDownloadsConfirm": "Delete all downloaded tracks? This cannot be undone.",
   "Settings_DownloadedTracksDesc": "Tracks fully cached during playback are saved here.",
+  "Settings_AutoSaveDownloads": "Auto-save to Downloads",
+  "Settings_AutoSaveDownloadsDesc": "Automatically save fully cached tracks to Downloads folder. Disabled = tracks stay in cache only (saves disk space).",
+  "Settings_DownloadedTracks": "Downloaded Tracks",
+  "Settings_ClearDownloadsConfirm": "Delete all downloaded tracks? This cannot be undone.",
+
 
   "Settings_ChannelUrl": "Public Channel",
   "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
@@ -211,6 +215,9 @@
   "Player_Shuffle": "Shuffle",
   "Player_Error_403_Title": "Playback Issue",
   "Player_Error_403_Msg": "Multiple playback errors occurred. This usually means YouTube is blocking the current client.\n\nPlease go to Settings -> Network and change 'YouTube Client' (e.g. to TV or Web).",
+  "Player_NotPlaying": "Not Playing",
+  "Player_StreamInfo_Loading": "Loading stream...",
+  "Player_VolumeTooltip": "Volume: {0}%",
 
   "Track_Like": "Add to Liked",
   "Track_Unlike": "Remove from Liked",
@@ -222,6 +229,8 @@
   "Track_Downloaded": "Downloaded",
   "Track_StartRadio": "Start Radio",
   "Track_MoreOptions": "More options",
+  "Track_Cached": "Cached (available offline)",
+  "Track_SaveToFolder": "Save to folder",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
@@ -283,6 +292,9 @@
   "Stream_SelectQuality": "Select Quality",
   "Stream_LocalFile": "Local File",
   "Stream_Loading": "Buffering...",
+  "Stream_Format_Mb": "{0:F1} MB",
+  "Stream_Speed_Mb": "{0:F1} MB/s",
+  "Stream_Speed_Kb": "{0:F0} KB/s",
 
   "Button_Cancel": "Cancel",
   "Button_Create": "Create",

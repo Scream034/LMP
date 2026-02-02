@@ -53,6 +53,7 @@ public sealed class LibraryService : IAsyncDisposable
         _dbFactory = dbFactory;
 
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
+
         // Throttled settings save
         _saveSubscription = _saveSettingsSignal
             .Throttle(TimeSpan.FromSeconds(1))

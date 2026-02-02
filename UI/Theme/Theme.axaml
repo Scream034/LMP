@@ -2,10 +2,10 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia">
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- SHARED RESOURCES (only non-transition resources)                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    
+
+
     <Style>
         <Style.Resources>
             <BoxShadows x:Key="CardShadow">0 4 8 0 #40000000</BoxShadows>
@@ -13,9 +13,9 @@
         </Style.Resources>
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- BASE STYLES                                                          -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- BASE STYLES     -->
+
 
     <Style Selector="Window">
         <Setter Property="Background" Value="{DynamicResource BgPrimaryBrush}" />
@@ -23,9 +23,9 @@
         <Setter Property="FontFamily" Value="Inter, Segoe UI, sans-serif" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- WINDOW CONTROL BUTTONS                                               -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <Style Selector="Button.window-btn">
         <Setter Property="Background" Value="Transparent" />
@@ -107,20 +107,20 @@
 
     <!-- Close button -->
     <Style Selector="Button.window-btn-close:pointerover">
-        <Setter Property="Background" Value="#E81123" />
+        <Setter Property="Background" Value="{DynamicResource SystemErrorBrush}" />
     </Style>
 
     <Style Selector="Button.window-btn-close:pointerover > Grid > Line">
-        <Setter Property="Stroke" Value="White" />
+        <Setter Property="Stroke" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
 
     <Style Selector="Button.window-btn-close:pressed">
-        <Setter Property="Background" Value="#C42B1C" />
+        <Setter Property="Background" Value="{DynamicResource SystemErrorBgBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- APP LOGO BUTTON                                                      -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- APP LOGO BUTTON -->
+
 
     <Style Selector="Button#AppLogoButton:pointerover TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -152,9 +152,9 @@
         <Setter Property="Opacity" Value="0.25" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- ACCENT BUTTON                                                        -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- ACCENT BUTTON   -->
+
 
     <Style Selector="Button.accent">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -182,9 +182,9 @@
         <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- PRIMARY BUTTON                                                       -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- PRIMARY BUTTON  -->
+
 
     <Style Selector="Button.primary-btn">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -215,9 +215,9 @@
         <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- SIDEBAR BUTTON                                                       -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- SIDEBAR BUTTON  -->
+
 
     <Style Selector="Button.sidebar-btn">
         <Setter Property="Background" Value="Transparent" />
@@ -254,9 +254,9 @@
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- ICON BUTTON                                                          -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- ICON BUTTON     -->
+
 
     <Style Selector="Button.icon-btn">
         <Setter Property="Background" Value="Transparent" />
@@ -299,9 +299,9 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- PLAYBACK BUTTON                                                      -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- PLAYBACK BUTTON -->
+
 
     <Style Selector="Button.playback-btn">
         <Setter Property="Background" Value="Transparent" />
@@ -317,7 +317,8 @@
                 <BrushTransition Property="Background" Duration="0:0:0.15" />
                 <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -345,9 +346,9 @@
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- MAIN PLAY/PAUSE BUTTON                                               -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <Style Selector="Button.playback-btn-main">
         <Setter Property="Background" Value="Transparent" />
@@ -363,7 +364,8 @@
                 <BrushTransition Property="Background" Duration="0:0:0.15" />
                 <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -382,9 +384,9 @@
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- PLAY CIRCLE BUTTON                                                   -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <Style Selector="Button.play-circle">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -412,9 +414,9 @@
         <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- DELETE BUTTON                                                        -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- DELETE BUTTON   -->
+
 
     <Style Selector="Button.delete-btn">
         <Setter Property="Background" Value="{DynamicResource SystemErrorBrush}" />
@@ -439,9 +441,9 @@
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBg}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- VOLUME BAR                                                           -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- VOLUME BAR      -->
+
 
     <Style Selector="Border.volume-bar">
         <Setter Property="Width" Value="4" />
@@ -459,9 +461,9 @@
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- SLIDER COMPONENTS                                                    -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <Style Selector="Border.slider-track">
         <Setter Property="Height" Value="4" />
@@ -544,9 +546,9 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- INDICATORS                                                           -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- INDICATORS      -->
+
 
     <Style Selector="Border.repeat-indicator">
         <Setter Property="Width" Value="4" />
@@ -559,7 +561,8 @@
         <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="BackEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25"
+                    Easing="BackEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -582,7 +585,8 @@
         <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -637,9 +641,9 @@
         </Style.Animations>
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- LOADING DOTS                                                         -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- LOADING DOTS    -->
+
 
     <Style Selector="Ellipse.loading-dot">
         <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
@@ -747,9 +751,9 @@
         </Style.Animations>
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- TEXTBOX STYLES                                                       -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- TEXTBOX STYLES  -->
+
 
     <Style Selector="TextBox.search-box">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -796,9 +800,9 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- FILTER TYPE BUTTONS                                                  -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <Style Selector="Button.filter-type-btn">
         <Setter Property="Background" Value="Transparent" />
@@ -826,9 +830,9 @@
         <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- TRACK LIST STYLES                                                    -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <Style Selector="ListBox.track-list">
         <Setter Property="Background" Value="Transparent" />
@@ -867,11 +871,13 @@
         </Setter>
     </Style>
 
-    <Style Selector="ListBox.track-list ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="ListBox.track-list ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <Style Selector="ListBox.track-list ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="ListBox.track-list ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
@@ -937,7 +943,8 @@
         <Setter Property="RenderTransform" Value="scale(0.85)" />
         <Setter Property="Transitions">
             <Transitions>
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -986,7 +993,8 @@
         <Setter Property="RenderTransform" Value="scale(1)" />
         <Setter Property="Transitions">
             <Transitions>
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -999,7 +1007,8 @@
         <Setter Property="RenderTransform" Value="scale(1.05)" />
         <Setter Property="Transitions">
             <Transitions>
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="BackEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25"
+                    Easing="BackEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -1026,7 +1035,8 @@
         <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -1056,7 +1066,8 @@
         <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -1100,9 +1111,9 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- CONTEXT MENU                                                         -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- CONTEXT MENU    -->
+
 
     <Style Selector="MenuFlyoutPresenter">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -1154,12 +1165,13 @@
         <Setter Property="Margin" Value="8,4" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <!-- STANDARD AVALONIA CONTROLS OVERRIDE                                  -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
 
     <!-- Standard Button -->
-    <Style Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn)">
+    <Style
+        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn)">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
@@ -1174,11 +1186,13 @@
         </Setter>
     </Style>
 
-    <Style Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):pointerover">
+    <Style
+        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):pointerover">
         <Setter Property="Background" Value="{DynamicResource BgHoverBrush}" />
     </Style>
 
-    <Style Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):pressed">
+    <Style
+        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):pressed">
         <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
 
@@ -1363,7 +1377,8 @@
         <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
     </Style>
 
-    <Style Selector="ComboBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="ComboBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
 
@@ -1381,11 +1396,13 @@
         <Setter Property="CornerRadius" Value="4" />
     </Style>
 
-    <Style Selector="TextBox:not(.search-box):not(.filter-ghost):pointerover /template/ Border#PART_BorderElement">
+    <Style
+        Selector="TextBox:not(.search-box):not(.filter-ghost):pointerover /template/ Border#PART_BorderElement">
         <Setter Property="BorderBrush" Value="{DynamicResource TextMutedBrush}" />
     </Style>
 
-    <Style Selector="TextBox:not(.search-box):not(.filter-ghost):focus /template/ Border#PART_BorderElement">
+    <Style
+        Selector="TextBox:not(.search-box):not(.filter-ghost):focus /template/ Border#PART_BorderElement">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderThickness" Value="2" />
     </Style>

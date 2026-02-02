@@ -1,5 +1,4 @@
-﻿// Core/Services/MusicLibraryManager.cs
-using LMP.Core.Models;
+﻿using LMP.Core.Models;
 using ReactiveUI;
 
 namespace LMP.Core.Services;

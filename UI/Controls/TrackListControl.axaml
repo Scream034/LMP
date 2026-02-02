@@ -217,12 +217,27 @@
                                         FontSize="12" />
                                 </StackPanel>
 
-                                <!-- КОЛОНКА 2: Скачивание -->
+                                <!-- КОЛОНКА 2: Статус кэширования/скачивания -->
                                 <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
+                                    <!-- Скачано (в Downloads) -->
                                     <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
                                         IsVisible="{Binding IsDownloaded}"
-                                        HorizontalAlignment="Center" />
+                                        ToolTip.Tip="{Binding L[Track_Downloaded]}" />
+
+                                    <!-- Только закэшировано (офлайн доступ) -->
+                                    <mi:MaterialIcon Kind="CloudCheck" Width="16" Height="16"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        ToolTip.Tip="{Binding L[Track_Cached]}">
+                                        <mi:MaterialIcon.IsVisible>
+                                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                <Binding Path="IsCached" />
+                                                <Binding Path="!IsDownloaded" />
+                                            </MultiBinding>
+                                        </mi:MaterialIcon.IsVisible>
+                                    </mi:MaterialIcon>
+
+                                    <!-- Прогресс скачивания -->
                                     <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
                                         Width="32" Height="3"
                                         IsVisible="{Binding IsDownloading}"
@@ -288,12 +303,15 @@
                                                     </MenuItem.Icon>
                                                 </MenuItem>
 
+                                                <!-- Download / Save -->
                                                 <MenuItem Header="{Binding DownloadStatusText}"
-                                                    Command="{Binding DownloadTrackCommand}"
+                                                    Command="{Binding SaveToDownloadsCommand}"
                                                     IsEnabled="{Binding !IsDownloaded}">
                                                     <MenuItem.Icon>
                                                         <mi:MaterialIcon
-                                                            Kind="{Binding IsDownloaded, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Check|Download'}" />
+                                                            Kind="{Binding IsDownloaded, 
+                                                                Converter={StaticResource BoolToIconConverter}, 
+                                                                ConverterParameter='Check|Download'}" />
                                                     </MenuItem.Icon>
                                                 </MenuItem>
 
