@@ -7,7 +7,6 @@ using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
-using LMP.Core.Youtube.Search; // Добавлен using для SearchFilter
 
 namespace LMP.Features.Home;
 
@@ -33,7 +32,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     #endregion
 
     #region Properties
-    // LoadDelayMs удален, так как DynamicData обрабатывает это иначе
     protected override int BatchSize => DefaultBatchSize;
     protected override int PrefetchThreshold => DefaultPrefetch;
 
@@ -44,7 +42,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     public ObservableCollection<CategoryItem> Categories { get; } = [];
     public DebugStats Stats { get; } = new();
 
-    // Alias для совместимости с View, если там используется ActiveTracks
     public ReadOnlyObservableCollection<TrackItemViewModel> ActiveTracks => Items;
     #endregion
 
@@ -89,27 +86,17 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #endregion
 
-
     #region Overrides & Filter Implementation
 
-    protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
+    /// <summary>
+    /// Фильтрация только по тексту (без типа контента).
+    /// </summary>
+    protected override bool FilterItem(TrackInfo item, string query)
     {
-        // 1. Text search - using captured query value
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            bool matchesText = item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-            if (!matchesText) return false;
-        }
+        if (string.IsNullOrWhiteSpace(query)) return true;
 
-        // 2. Type filter - using captured filterType value
-        return filterType switch
-        {
-            ContentFilterType.All => true,
-            ContentFilterType.Music => item.IsMusic,
-            ContentFilterType.Video => !item.IsMusic,
-            _ => true
-        };
+        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -133,21 +120,19 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     {
         if (SelectedCategory?.IsSpecial == true) return [];
 
-        // Увеличиваем оффсет для запроса большего количества видео
         _fetchOffset += 50;
 
-        // ВНИМАНИЕ: YoutubeProvider.SearchAsync использует ContentFilterTypeExtensions.ToSearchFilter(FilterType) внутри.
+        // Для Home используем стандартный YouTube поиск
         var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
 
         if (ct.IsCancellationRequested) return [];
 
-        // TotalCount берется из базы
         var result = newTracks.Skip(TotalCount).ToList();
 
         if (result.Count > 0)
         {
-            // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
-            _ = _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), [.. GetItemsSnapshot(), .. result]);
+            // Кэшируем с SearchSource.YouTube (по умолчанию для Home)
+            _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, [.. GetItemsSnapshot(), .. result]);
 
             var imageUrls = result.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
             _ = _imageCache.PrefetchAsync(imageUrls, ct);
@@ -156,6 +141,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         return result;
     }
     #endregion
+
     #region Private Methods
 
     private async Task LoadTracksAsync(bool force = false)
@@ -186,8 +172,8 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             {
                 _currentQuery = category.Query;
 
-                // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
-                var cached = await _searchCache.GetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), 30);
+                // Используем SearchSource.YouTube для Home-категорий
+                var cached = await _searchCache.GetAsync(_currentQuery, SearchSource.YouTube, 30);
 
                 if (cached != null && cached.Count > 0 && !force)
                 {
@@ -203,8 +189,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
                     if (tracks.Count > 0)
                     {
-                        // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
-                        _ = _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), tracks);
+                        _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, tracks);
                     }
                 }
 
@@ -233,8 +218,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
             if (fresh.Count > 0)
             {
-                // ИСПРАВЛЕНО: Добавлен аргумент ContentFilterTypeExtensions.ToSearchFilter(FilterType)
-                await _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), fresh);
+                await _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, fresh);
             }
         }
         catch { }

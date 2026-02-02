@@ -30,7 +30,7 @@ public partial class TrackRepository : ITrackRepository
         if (idList.Count == 0) return [];
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var entities = await ctx.Tracks
             .Where(t => idList.Contains(t.Id))
             .ToDictionaryAsync(t => t.Id, ct);
@@ -43,13 +43,13 @@ public partial class TrackRepository : ITrackRepository
     public async Task<List<TrackInfo>> SearchAsync(string query, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
-        
+
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
         // Use LIKE search (FTS can be added later if needed)
         var pattern = $"%{query}%";
         var entities = await ctx.Tracks
-            .Where(t => EF.Functions.Like(t.Title, pattern) || 
+            .Where(t => EF.Functions.Like(t.Title, pattern) ||
                        EF.Functions.Like(t.Author, pattern))
             .OrderBy(t => t.Title)
             .Skip(offset)
@@ -62,7 +62,7 @@ public partial class TrackRepository : ITrackRepository
     public async Task<List<TrackInfo>> GetLikedAsync(int limit = 100, int offset = 0, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var entities = await ctx.Tracks
             .Where(t => t.IsLiked)
             .OrderByDescending(t => t.UpdatedAt)
@@ -76,7 +76,7 @@ public partial class TrackRepository : ITrackRepository
     public async Task<List<TrackInfo>> GetDownloadedAsync(int limit = 100, int offset = 0, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var entities = await ctx.Tracks
             .Where(t => t.IsDownloaded)
             .OrderByDescending(t => t.UpdatedAt)
@@ -90,7 +90,7 @@ public partial class TrackRepository : ITrackRepository
     public async Task<List<TrackInfo>> GetRecentlyPlayedAsync(int limit = 50, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var recentIds = await ctx.RecentlyPlayed
             .OrderByDescending(r => r.PlayedAt)
             .Take(limit)
@@ -98,7 +98,7 @@ public partial class TrackRepository : ITrackRepository
             .ToListAsync(ct);
 
         if (recentIds.Count == 0) return [];
-        
+
         return await GetByIdsAsync(recentIds, ct);
     }
 
@@ -121,9 +121,9 @@ public partial class TrackRepository : ITrackRepository
     public async Task UpsertAsync(TrackInfo track, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var existing = await ctx.Tracks.FirstOrDefaultAsync(t => t.Id == track.Id, ct);
-        
+
         if (existing != null)
         {
             // Update existing - detach first to avoid tracking conflicts
@@ -149,14 +149,14 @@ public partial class TrackRepository : ITrackRepository
         if (trackList.Count == 0) return;
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         var ids = trackList.Select(t => t.Id).ToList();
-        
+
         // Get existing tracks with tracking enabled for this operation
         var existingEntities = await ctx.Tracks
             .Where(t => ids.Contains(t.Id))
             .ToListAsync(ct);
-        
+
         var existingMap = existingEntities.ToDictionary(t => t.Id);
         var now = DateTime.UtcNow;
 
@@ -217,7 +217,7 @@ public partial class TrackRepository : ITrackRepository
     public async Task AddToHistoryAsync(string trackId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
-        
+
         // Remove existing entry for this track
         await ctx.RecentlyPlayed
             .Where(r => r.TrackId == trackId)
@@ -250,6 +250,40 @@ public partial class TrackRepository : ITrackRepository
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
         await ctx.RecentlyPlayed.ExecuteDeleteAsync(ct);
+    }
+
+    public async Task<List<TrackInfo>> GetAllAsync(int limit = 10000, int offset = 0, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        var entities = await ctx.Tracks
+            .OrderByDescending(t => t.UpdatedAt)
+            .Skip(offset)
+            .Take(limit)
+            .ToListAsync(ct);
+
+        return [.. entities.Select(MapToModel)];
+    }
+
+    public async Task<List<TrackInfo>> GetLocalTracksAsync(int limit = 1000, int offset = 0, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        // Локальные треки: ID начинается с "local_" ИЛИ IsDownloaded = true
+        var entities = await ctx.Tracks
+            .Where(t => t.Id.StartsWith("local_") || t.IsDownloaded)
+            .OrderByDescending(t => t.UpdatedAt)
+            .Skip(offset)
+            .Take(limit)
+            .ToListAsync(ct);
+
+        return [.. entities.Select(MapToModel)];
+    }
+
+    public async Task<int> CountLocalAsync(CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+        return await ctx.Tracks.CountAsync(t => t.Id.StartsWith("local_") || t.IsDownloaded, ct);
     }
 
     #endregion

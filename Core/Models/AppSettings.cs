@@ -27,11 +27,34 @@ public class ProxySettings
     public string Password { get; set; } = ""; // В реальном приложении стоит шифровать
 }
 
+/// <summary>
+/// Настройки хранения данных.
+/// </summary>
 public class StorageSettings
 {
+    /// <summary>
+    /// Лимит кэша изображений в МБ.
+    /// </summary>
     public int ImageCacheLimitMb { get; set; } = 500;
+
+    /// <summary>
+    /// Лимит кэша аудио (StreamCache) в МБ.
+    /// Старые файлы удаляются автоматически при превышении.
+    /// </summary>
     public int AudioCacheLimitMb { get; set; } = 2048;
-    public int MaxBitmapCacheItems { get; set; } = 40; 
+
+    public int DownloadedTracksLimitMb { get; set; } = 5000;
+
+    /// <summary>
+    /// Максимальное количество изображений в RAM-кэше.
+    /// </summary>
+    public int MaxBitmapCacheItems { get; set; } = 40;
+
+    /// <summary>
+    /// Автоматически сохранять полностью закэшированные треки в папку Downloads.
+    /// По умолчанию выключено для экономии места (файл дублируется).
+    /// </summary>
+    public bool AutoSaveToDownloads { get; set; } = false;
 }
 
 public class StreamingConfig
@@ -98,4 +121,9 @@ public class AppSettings
     // === Search ===
     public string LastSearchQuery { get; set; } = "";
     public List<string> SearchHistory { get; set; } = [];
+
+    /// <summary>
+    /// Режим синхронизации лайков с YouTube.
+    /// </summary>
+    public LikeSyncMode LikeSyncMode { get; set; } = LikeSyncMode.MusicOnly;
 }

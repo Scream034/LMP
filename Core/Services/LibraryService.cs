@@ -1,5 +1,4 @@
-﻿// Core/Services/LibraryService.cs
-using System.Reactive;
+﻿using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -53,7 +52,7 @@ public sealed class LibraryService : IAsyncDisposable
         _settings = settings;
         _dbFactory = dbFactory;
 
-        LocalizationService.Instance.LanguageChanged += (_, _) => OnDataChanged?.Invoke();
+        LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
 
         // Throttled settings save
         _saveSubscription = _saveSettingsSignal
@@ -148,33 +147,38 @@ public sealed class LibraryService : IAsyncDisposable
                 int totalTracksAdded = 0;
                 int totalTracksMissing = 0;
 
-                foreach (var pl in legacy.Playlists.Values)
+                foreach (var legacyPl in legacy.Playlists.Values)
                 {
                     try
                     {
+                        // Convert LegacyPlaylist to Playlist
+                        var playlist = legacyPl.ToPlaylist();
+
                         // First, create the playlist itself
-                        await _playlists.UpsertAsync(pl, ct);
+                        await _playlists.UpsertAsync(playlist, ct);
                         playlistsMigrated++;
 
                         // Then, add only tracks that exist in the database
-                        var validTrackIds = pl.TrackIds
-                            .Where(id => migratedTrackIds.Contains(id))
+                        var validTrackIds = legacyPl.TrackIds
+                            .Where(migratedTrackIds.Contains)
                             .ToList();
 
-                        var missingCount = pl.TrackIds.Count - validTrackIds.Count;
+                        var missingCount = legacyPl.TrackIds.Count - validTrackIds.Count;
                         if (missingCount > 0)
                         {
                             totalTracksMissing += missingCount;
-                            Log.Warn($"[Migration] Playlist '{pl.Name}': {missingCount} tracks not found in library");
+                            Log.Warn($"[Migration] Playlist '{legacyPl.Name}': {missingCount} tracks not found in library");
                         }
 
                         // Use batch add for efficiency
-                        var added = await _playlists.AddTracksAsync(pl.Id, validTrackIds, ct);
+                        var added = await _playlists.AddTracksAsync(playlist.Id, validTrackIds, ct);
                         totalTracksAdded += added;
+
+                        Log.Debug($"[Migration] Playlist '{legacyPl.Name}': {added}/{legacyPl.TrackIds.Count} tracks linked");
                     }
                     catch (Exception ex)
                     {
-                        Log.Warn($"[Migration] Failed to migrate playlist {pl.Name}: {ex.Message}");
+                        Log.Warn($"[Migration] Failed to migrate playlist {legacyPl.Name}: {ex.Message}");
                     }
                 }
 
@@ -286,6 +290,88 @@ public sealed class LibraryService : IAsyncDisposable
     {
         var totalTicks = await _playlists.GetTotalDurationTicksAsync(playlistId, ct);
         return TimeSpan.FromTicks(totalTicks);
+    }
+
+    /// <summary>
+    /// Gets all tracks from the library with pagination.
+    /// </summary>
+    public async Task<List<TrackInfo>> GetAllTracksAsync(
+        int limit = 10000,
+        int offset = 0,
+        CancellationToken ct = default)
+    {
+        var tracks = await _tracks.GetAllAsync(limit, offset, ct);
+        foreach (var t in tracks)
+        {
+            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            _registry.RegisterOrUpdate(t);
+        }
+        return tracks;
+    }
+
+    /// <summary>
+    /// Gets only local and downloaded tracks (for offline search).
+    /// </summary>
+    public async Task<List<TrackInfo>> GetLocalTracksAsync(
+        int limit = 1000,
+        int offset = 0,
+        CancellationToken ct = default)
+    {
+        var tracks = await _tracks.GetLocalTracksAsync(limit, offset, ct);
+        foreach (var t in tracks)
+        {
+            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            _registry.RegisterOrUpdate(t);
+        }
+        return tracks;
+    }
+
+    /// <summary>
+    /// Gets total count of tracks in the library.
+    /// </summary>
+    public async Task<int> GetTrackCountAsync(CancellationToken ct = default)
+    {
+        return await _tracks.CountAsync(ct);
+    }
+
+    /// <summary>
+    /// Gets count of local/downloaded tracks.
+    /// </summary>
+    public async Task<int> GetLocalTrackCountAsync(CancellationToken ct = default)
+    {
+        return await _tracks.CountLocalAsync(ct);
+    }
+
+    /// <summary>
+    /// Searches tracks in the local library (offline-capable).
+    /// Uses FTS for fast full-text search.
+    /// </summary>
+    public async Task<List<TrackInfo>> SearchLocalTracksAsync(
+        string query,
+        int limit = 100,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return await GetLocalTracksAsync(limit, 0, ct);
+
+        // Сначала получаем все локальные треки
+        var allLocal = await _tracks.GetLocalTracksAsync(limit * 2, 0, ct);
+
+        // Фильтруем в памяти (для небольших коллекций это быстрее чем SQL LIKE)
+        var filtered = allLocal
+            .Where(t =>
+                t.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                t.Author.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Take(limit)
+            .ToList();
+
+        foreach (var t in filtered)
+        {
+            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            _registry.RegisterOrUpdate(t);
+        }
+
+        return filtered;
     }
 
     #endregion
@@ -607,6 +693,15 @@ public sealed class LibraryService : IAsyncDisposable
 
     #endregion
 
+    #region Events
+
+    private void OnLanguageChanged(object? _, string __)
+    {
+        OnDataChanged?.Invoke();
+    }
+
+    #endregion
+
     #region Cleanup
 
     public async Task ResetAsync(CancellationToken ct = default)
@@ -628,6 +723,7 @@ public sealed class LibraryService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
         _saveSubscription.Dispose();
         _saveSettingsSignal.Dispose();
 

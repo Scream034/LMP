@@ -1,13 +1,14 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Diagnostics;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Features.Shared;
+using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using LMP.Core.Youtube.Search; // Важно: для SearchFilter
 
 namespace LMP.Features.Search;
 
@@ -21,11 +22,13 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     #region Fields
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
+    private readonly StreamCacheManager _streamCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
+    private ContentSource _currentSource = ContentSource.YouTubeMusic;
     private CancellationTokenSource? _searchCts;
     private YoutubeProvider.SearchSession? _searchSession;
     private DateTime _lastSearchTime = DateTime.MinValue;
@@ -37,13 +40,23 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private int InitialBatchSize => LibService.Settings.LoadBatchSize > 0 ? LibService.Settings.LoadBatchSize * 2 : 50;
     private int ScrollBatchSize => LibService.Settings.SearchBatchSize > 0 ? LibService.Settings.SearchBatchSize : 30;
 
-    // Это строка для API запроса (Глобальный поиск)
     [Reactive] public string SearchQuery { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Источник поиска: YouTube Music (музыка), YouTube (всё), Local (локальные).
+    /// </summary>
+    [Reactive] public ContentSource Source { get; set; } = ContentSource.YouTubeMusic;
+
     [Reactive] public bool HasResults { get; private set; }
     [Reactive] public string? ErrorMessage { get; private set; }
     [Reactive] public bool IsFromCache { get; private set; }
+    [Reactive] public bool IsOfflineMode { get; private set; }
+
     public bool ShowForceSearchButton => LibService.Settings.EnableSearchCache && IsFromCache && !IsLoading;
     public ObservableCollection<string> RecentSearches { get; } = [];
+
+    public string SourceDisplayName => Source.GetDisplayName();
+    public string SourceIcon => Source.GetIcon();
     #endregion
 
     #region Commands
@@ -51,6 +64,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     public ReactiveCommand<Unit, Unit> ForceSearchCommand { get; }
     public ReactiveCommand<string, Unit> HistoryClickCommand { get; }
     public ReactiveCommand<string, Unit> RemoveHistoryCommand { get; }
+    public ReactiveCommand<string, Unit> SetSourceCommand { get; }
     #endregion
 
     public SearchViewModel(
@@ -58,13 +72,15 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         AudioEngine audio,
-        TrackViewModelFactory vmFactory)
+        TrackViewModelFactory vmFactory,
+        StreamCacheManager streamCache)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
         _vmFactory = vmFactory;
+        _streamCache = streamCache;
 
         foreach (var item in LibService.Settings.SearchHistory)
             RecentSearches.Add(item);
@@ -96,23 +112,36 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             UpdateHistoryStorage();
         });
 
+        SetSourceCommand = ReactiveCommand.Create<string>(sourceStr =>
+        {
+            if (Enum.TryParse<ContentSource>(sourceStr, true, out var result))
+            {
+                Source = result;
+            }
+        });
+
         SearchCommand.ThrownExceptions.Subscribe(ex => LogError("SearchCommand", ex));
         ForceSearchCommand.ThrownExceptions.Subscribe(ex => LogError("ForceSearchCommand", ex));
-        HistoryClickCommand.ThrownExceptions.Subscribe(ex => LogError("HistoryClickCommand", ex));
 
         this.WhenAnyValue(x => x.IsFromCache, x => x.IsLoading)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowForceSearchButton)));
 
-        // Автоматический перезапуск поиска при изменении типа фильтра (Музыка/Видео/Все)
-        // Исправлен синтаксис Subscribe для избежания ошибки CS0029
-        this.WhenAnyValue(x => x.FilterType)
+        // При изменении источника — обновляем UI и перезапускаем поиск
+        this.WhenAnyValue(x => x.Source)
             .Skip(1)
-            .Throttle(TimeSpan.FromMilliseconds(300))
+            .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(async _ =>
+            .Subscribe(async source =>
             {
+                this.RaisePropertyChanged(nameof(SourceDisplayName));
+                this.RaisePropertyChanged(nameof(SourceIcon));
+                IsOfflineMode = source == ContentSource.Local;
+
                 if (!string.IsNullOrWhiteSpace(SearchQuery))
+                {
+                    Log.Debug($"[Search] Source changed to {source}, re-executing search...");
                     await ExecuteSearchAsync(forceNetwork: false);
+                }
             });
 
         if (!string.IsNullOrEmpty(LibService.Settings.LastSearchQuery))
@@ -131,34 +160,22 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     }
 
     /// <summary>
-    /// Конвертирует UI фильтр в фильтр YouTube API.
+    /// Конвертирует ContentSource в SearchFilter для YouTube API.
     /// </summary>
-    private SearchFilter GetYoutubeSearchFilter()
+    private SearchFilter GetSearchFilter() => Source switch
     {
-        return FilterType switch
-        {
-            ContentFilterType.Music => SearchFilter.Music,
-            ContentFilterType.Video => SearchFilter.Video,
-            // Для "All" используем None (YouTube сам решит, обычно смешанная выдача)
-            _ => SearchFilter.None
-        };
-    }
+        ContentSource.YouTubeMusic => SearchFilter.MusicSong,
+        ContentSource.YouTube => SearchFilter.Video,
+        ContentSource.Local => SearchFilter.None, // Не используется для локальных
+        _ => SearchFilter.MusicSong
+    };
 
-    protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
+    protected override bool FilterItem(TrackInfo item, string query)
     {
-        // 1. Фильтр по типу.
-        // Если выбран "Video", мы не должны скрывать музыку, так как клип - это тоже видео.
-        // Но если выбран "Music", мы хотим видеть только музыку.
-        if (filterType == ContentFilterType.Music && !item.IsMusic) return false;
+        if (string.IsNullOrWhiteSpace(query)) return true;
 
-        // 2. Текстовый поиск (локальный)
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                   item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return true;
+        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -179,13 +196,22 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
-        if (TotalCount >= MaxResults) return [];
+        // Локальные файлы не подгружаются с сети
+        if (Source == ContentSource.Local || TotalCount >= MaxResults)
+            return [];
+
+        var currentFilter = GetSearchFilter();
+
+        if (_searchSession != null && _searchSession.Filter != currentFilter)
+        {
+            _searchSession.Dispose();
+            _searchSession = null;
+        }
 
         if (_searchSession == null && !string.IsNullOrEmpty(_currentQuery))
         {
             var existingIds = GetLoadedItemsIds();
-            // Передаем правильный фильтр
-            _searchSession = _youtube.CreateSearchSession(_currentQuery, MaxResults, GetYoutubeSearchFilter(), existingIds);
+            _searchSession = _youtube.CreateSearchSession(_currentQuery, MaxResults, currentFilter, existingIds);
         }
 
         if (_searchSession != null && _searchSession.HasMore)
@@ -196,14 +222,29 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 if (ct.IsCancellationRequested) return [];
 
-                if (newTracks.Count > 0 && LibService.Settings.EnableSearchCache)
+                // Помечаем треки из YouTube Music как музыку
+                if (Source == ContentSource.YouTubeMusic)
                 {
-                    var currentItems = GetItemsSnapshot();
-                    var allTracks = currentItems.Concat(newTracks).ToList();
-                    _ = _searchCache.SetAsync(_currentQuery, ContentFilterTypeExtensions.ToSearchFilter(FilterType), allTracks);
+                    foreach (var t in newTracks) t.IsMusic = true;
+                }
 
-                    var imageUrls = newTracks.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
-                    _ = _imageCache.PrefetchAsync(imageUrls!, ct);
+                if (newTracks.Count > 0)
+                {
+                    // ИСПРАВЛЕНИЕ #3: Проверка наличия трека в полном кэше
+                    // ChunkCacheService (StreamCacheManager) знает, скачан ли файл полностью
+                    _streamCache.HydrateCacheStatus(newTracks);
+
+                    if (LibService.Settings.EnableSearchCache)
+                    {
+                        var currentItems = GetItemsSnapshot();
+                        var allTracks = currentItems.Concat(newTracks).ToList();
+                        _ = _searchCache.SetAsync(_currentQuery, SourceToSearchSource(), allTracks);
+
+                        var imageUrls = newTracks.Take(10)
+                            .Select(static t => t.ThumbnailUrl)
+                            .Where(static u => !string.IsNullOrEmpty(u));
+                        _ = _imageCache.PrefetchAsync(imageUrls!, ct);
+                    }
                 }
 
                 if (!_searchSession.HasMore)
@@ -231,6 +272,16 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         return [];
     }
+
+    /// <summary>
+    /// Конвертирует ContentSource в SearchSource для кэша.
+    /// </summary>
+    private SearchSource SourceToSearchSource() => Source switch
+    {
+        ContentSource.YouTubeMusic => SearchSource.YouTubeMusic,
+        ContentSource.YouTube => SearchSource.YouTube,
+        _ => SearchSource.YouTube
+    };
 
     private bool CanExecuteSearch()
     {
@@ -265,6 +316,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
             HasResults = false;
             _currentQuery = SearchQuery.Trim();
+            _currentSource = Source;
 
             try
             {
@@ -274,6 +326,13 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             catch (Exception ex) { Log.Error($"History save error: {ex.Message}"); }
 
             await Task.Delay(50, ct);
+
+            // Локальный поиск
+            if (Source == ContentSource.Local)
+            {
+                await HandleLocalSearchAsync(ct);
+                return;
+            }
 
             var queryType = YoutubeProvider.DetectQueryType(_currentQuery);
 
@@ -304,6 +363,43 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                 IsFetchingFromNetwork = false;
             }
         }
+    }
+
+    /// <summary>
+    /// Поиск по локальной библиотеке (оффлайн).
+    /// </summary>
+    private async Task HandleLocalSearchAsync(CancellationToken ct)
+    {
+        Log.Debug($"[Search] Local search: '{_currentQuery}'");
+
+        List<TrackInfo> filtered;
+
+        if (string.IsNullOrWhiteSpace(_currentQuery))
+        {
+            // Если запрос пустой — показываем все локальные треки
+            filtered = await LibService.GetLocalTracksAsync(MaxResults, 0, ct);
+        }
+        else
+        {
+            // Поиск по локальной библиотеке
+            filtered = await LibService.SearchLocalTracksAsync(_currentQuery, MaxResults, ct);
+        }
+
+        ct.ThrowIfCancellationRequested();
+
+        await InitializeItemsAsync(filtered, canFetchMore: false);
+
+        HasResults = filtered.Count > 0;
+
+        if (!HasResults)
+        {
+            var localCount = await LibService.GetLocalTrackCountAsync(ct);
+            ErrorMessage = localCount == 0
+                ? SL["Search_NoLocalFiles"]
+                : SL["Search_NoResults"];
+        }
+
+        Log.Info($"[Search] Local search complete: {filtered.Count} results");
     }
 
     private async Task HandleDirectUrlAsync(CancellationToken ct)
@@ -339,17 +435,15 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private async Task HandleSearchAsync(CancellationToken ct, bool forceNetwork)
     {
-        // Получаем правильный фильтр
-        var apiFilter = GetYoutubeSearchFilter();
+        var sw = Stopwatch.StartNew();
+        var apiFilter = GetSearchFilter();
+        var cacheSource = SourceToSearchSource();
 
-        // 1. Проверяем кэш (ТЕПЕРЬ ДЛЯ ВСЕХ ФИЛЬТРОВ)
-        // Убрали проверку FilterType == ContentFilterType.All
         bool useCache = !forceNetwork && LibService.Settings.EnableSearchCache;
 
         if (useCache)
         {
-            // Передаем фильтр в GetAsync
-            var cached = await _searchCache.GetAsync(_currentQuery, apiFilter, minCount: 20);
+            var cached = await _searchCache.GetAsync(_currentQuery, cacheSource, minCount: 20);
             ct.ThrowIfCancellationRequested();
 
             if (cached != null && cached.Count >= 20)
@@ -360,15 +454,19 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 var urls = cached.Take(20).Select(static t => t.ThumbnailUrl);
                 _ = _imageCache.PrefetchAsync(urls!, ct);
+
+                Log.Debug($"[Search] Cache hit: {cached.Count} items in {sw.ElapsedMilliseconds}ms");
                 return;
             }
         }
 
-        // 2. Сетевой запрос
         IsFetchingFromNetwork = true;
         IsFromCache = false;
 
-        if (forceNetwork) _searchCache.InvalidateQuery(_currentQuery, apiFilter);
+        if (forceNetwork)
+            _searchCache.InvalidateQuery(_currentQuery, cacheSource);
+
+        Log.Debug($"[Search] Network search: '{_currentQuery}' (Source: {Source})");
 
         var (tracks, session) = await _youtube.SearchWithSessionAsync(
             _currentQuery,
@@ -379,8 +477,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         _searchSession = session;
 
-        // Фикс для фильтра Music, чтобы точно проставить IsMusic
-        if (apiFilter == SearchFilter.Music)
+        // Помечаем треки из YouTube Music как музыку
+        if (Source == ContentSource.YouTubeMusic)
         {
             foreach (var t in tracks) t.IsMusic = true;
         }
@@ -388,11 +486,9 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         ct.ThrowIfCancellationRequested();
         IsFetchingFromNetwork = false;
 
-        // 3. Сохраняем в кэш (ТЕПЕРЬ ДЛЯ ВСЕХ ФИЛЬТРОВ)
         if (tracks.Count > 0 && LibService.Settings.EnableSearchCache)
         {
-            // Сохраняем с учетом фильтра
-            _ = _searchCache.SetAsync(_currentQuery, apiFilter, tracks);
+            _ = _searchCache.SetAsync(_currentQuery, cacheSource, tracks);
             var urls = tracks.Take(20).Select(static t => t.ThumbnailUrl);
             _ = _imageCache.PrefetchAsync(urls!, ct);
         }
@@ -402,6 +498,9 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         HasResults = tracks.Count > 0;
         if (!HasResults) ErrorMessage = SL["Search_NoResults"];
+
+        sw.Stop();
+        Log.Info($"[Search] Got {tracks.Count} results in {sw.ElapsedMilliseconds}ms, hasMore: {hasMore}");
     }
 
     private void AddToHistory(string query)
@@ -419,7 +518,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void PlayTrackWithContext(TrackInfo track)
     {
-        _ = Task.Run(async () => await _audio.PlayTrackAsync(track));
+        _ = Task.Run(async () => await _audio.StartQueueAsync([track], track));
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 

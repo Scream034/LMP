@@ -1,5 +1,4 @@
-﻿// Core/ViewModels/PaginatedViewModel.cs
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -33,13 +32,11 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     private int _totalSourceCount;
 
     private string _filterQuery = string.Empty;
-    private ContentFilterType _filterType = ContentFilterType.All;
 
     #endregion
 
     #region Properties
 
-    // Changed: Access Settings property instead of Data
     protected virtual int BatchSize => LibService.Settings.LoadBatchSize > 0
         ? LibService.Settings.LoadBatchSize
         : 20;
@@ -58,17 +55,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         set => this.RaiseAndSetIfChanged(ref _filterQuery, value);
     }
 
-    public ContentFilterType FilterType
-    {
-        get => _filterType;
-        set => this.RaiseAndSetIfChanged(ref _filterType, value);
-    }
-
     public ReadOnlyObservableCollection<TViewModel> Items => _items;
     protected int TotalCount => _totalSourceCount;
 
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
-    public ReactiveCommand<string, Unit> SetFilterTypeCommand { get; }
 
     #endregion
 
@@ -77,22 +67,13 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     protected PaginatedViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
-        // Changed: Access Settings property
         EnableSmoothLoading = LibService.Settings.EnableSmoothLoading;
 
-        SetFilterTypeCommand = ReactiveCommand.Create<string>(typeStr =>
-        {
-            if (Enum.TryParse<ContentFilterType>(typeStr, true, out var result))
-            {
-                FilterType = result;
-            }
-        });
-
-        var filterPredicate = this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
+        var filterPredicate = this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.TaskpoolScheduler)
-            .Select(tuple => BuildFilterPredicate(tuple.Item1, tuple.Item2))
-            .StartWith(BuildFilterPredicate(_filterQuery, _filterType));
+            .Select(query => BuildFilterPredicate(query))
+            .StartWith(BuildFilterPredicate(_filterQuery));
 
         _sourceList.Connect()
             .Filter(filterPredicate)
@@ -119,19 +100,17 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(visibleCount =>
             {
-                // Если после фильтрации осталось мало элементов и есть ещё данные
                 if (visibleCount < PrefetchThreshold && HasMoreItems && !IsLoading && !IsLoadingMore && !IsFetchingFromNetwork)
                 {
                     if (_consecutiveEmptyLoads < MaxConsecutiveEmptyLoads)
                     {
-                        Log.Debug($"[Paginated] Auto-loading more (visible: {visibleCount}, threshold: {PrefetchThreshold})");
                         _ = LoadNextBatchAsync();
                     }
                 }
             })
             .DisposeWith(_cleanUp);
 
-        this.WhenAnyValue(x => x.FilterQuery, x => x.FilterType)
+        this.WhenAnyValue(x => x.FilterQuery)
             .Subscribe(_ => _consecutiveEmptyLoads = 0)
             .DisposeWith(_cleanUp);
     }
@@ -141,7 +120,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     #region Abstract Methods
 
     protected abstract TViewModel CreateItemViewModel(TSource item);
-    protected abstract bool FilterItem(TSource item, string query, ContentFilterType filterType);
+    protected abstract bool FilterItem(TSource item, string query);
     protected virtual string GetItemId(TSource item) => item?.GetHashCode().ToString() ?? "";
 
     protected virtual Task<List<TSource>> FetchMoreFromNetworkAsync(CancellationToken ct)
@@ -151,9 +130,9 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Private Helpers
 
-    private Func<TSource, bool> BuildFilterPredicate(string query, ContentFilterType filterType)
+    private Func<TSource, bool> BuildFilterPredicate(string query)
     {
-        return item => FilterItem(item, query, filterType);
+        return item => FilterItem(item, query);
     }
 
     #endregion

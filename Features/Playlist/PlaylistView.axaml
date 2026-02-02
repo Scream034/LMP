@@ -11,7 +11,6 @@
     x:CompileBindings="True">
 
     <UserControl.Styles>
-        <!-- Стиль для GridSplitter -->
         <Style Selector="GridSplitter.header-splitter">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="MinHeight" Value="6" />
@@ -25,21 +24,15 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <!-- 0: Header (resizable) -->
-            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="220"
-                MaxHeight="340" />
-            <!-- 1: Splitter -->
+            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="220" MaxHeight="340" />
             <RowDefinition Height="Auto" />
-            <!-- 2: Compact Filter -->
             <RowDefinition Height="Auto" />
-            <!-- 3: List -->
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- HEADER (Row 0) -->
+        <!-- HEADER -->
         <Border Grid.Row="0"
             BorderBrush="{DynamicResource BgHighlightBrush}"
-            BorderThickness="0,0,0,0"
             Background="{DynamicResource BgPrimaryBrush}"
             Padding="24,16">
 
@@ -48,7 +41,7 @@
 
                 <Grid RowDefinitions="*, Auto" Width="800">
                     <Grid Grid.Row="0" ColumnDefinitions="Auto, *" Margin="0,0,0,16">
-                        <!-- Playlist Cover -->
+                        <!-- Cover -->
                         <Border Grid.Column="0" Width="180" Height="180" CornerRadius="8"
                             ClipToBounds="True" Background="{DynamicResource BgSkeletonBrush}"
                             BoxShadow="{StaticResource CardShadow}">
@@ -57,14 +50,12 @@
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
 
-                                <!-- ★ Используем QualityImage для высокого качества -->
                                 <Image
                                     controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                     controls:QualityImage.Quality="High"
                                     Stretch="UniformToFill"
                                     IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
 
-                                <!-- Для локальных ресурсов -->
                                 <Image
                                     Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
                                     Stretch="UniformToFill"
@@ -72,7 +63,7 @@
                             </Panel>
                         </Border>
 
-                        <!-- Playlist Info -->
+                        <!-- Info -->
                         <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
                             <TextBlock Text="PLAYLIST" FontSize="12" FontWeight="Bold"
                                 Foreground="{DynamicResource TextSecondaryBrush}" LetterSpacing="1" />
@@ -94,11 +85,10 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- Actions Toolbar -->
+                    <!-- Actions -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16"
                         VerticalAlignment="Center">
-                        <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="52"
-                            Height="52">
+                        <Button Classes="play-circle" Command="{Binding PlayAllCommand}" Width="52" Height="52">
                             <Panel>
                                 <mi:MaterialIcon Kind="Play" Width="26" Height="26"
                                     Foreground="{DynamicResource TextDarkBrush}"
@@ -112,13 +102,7 @@
                         <Button Classes="icon-btn" Command="{Binding ShufflePlayCommand}"
                             ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
                             <mi:MaterialIcon Kind="ShuffleVariant" Width="22" Height="22"
-                                Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}">
-                                <mi:MaterialIcon.Transitions>
-                                    <Transitions>
-                                        <BrushTransition Property="Foreground" Duration="0:0:0.2" />
-                                    </Transitions>
-                                </mi:MaterialIcon.Transitions>
-                            </mi:MaterialIcon>
+                                Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                         </Button>
 
                         <Button Classes="icon-btn" Command="{Binding AddToQueueCommand}"
@@ -141,53 +125,29 @@
             </Viewbox>
         </Border>
 
-        <!-- GRIDSPLITTER (Row 1) - для изменения размера шапки -->
+        <!-- SPLITTER -->
         <GridSplitter Grid.Row="1"
             Classes="header-splitter"
             ResizeDirection="Rows"
             ResizeBehavior="PreviousAndNext"
             HorizontalAlignment="Stretch" />
 
-        <!-- COMPACT FILTER (Row 2) -->
+        <!-- TEXT FILTER ONLY -->
         <Grid Grid.Row="2" Margin="24,12,24,12">
             <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36">
-                <Grid ColumnDefinitions="Auto, *, Auto">
-                    <!-- Icon -->
+                <Grid ColumnDefinitions="Auto, *">
                     <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
                         Foreground="{DynamicResource TextSecondaryBrush}"
                         Margin="12,0,4,0" />
 
-                    <!-- Search Input -->
                     <TextBox Grid.Column="1" Classes="filter-ghost"
                         Text="{Binding FilterQuery}"
                         Watermark="{Binding L[Search_LocalFilterTitle]}" />
-
-                    <!-- Filter Types (Icons Only) -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="4">
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
-                            Classes="filter-type-btn"
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
-                            ToolTip.Tip="All">
-                            <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
-                        </Button>
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
-                            Classes="filter-type-btn"
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
-                            ToolTip.Tip="Music Only">
-                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
-                        </Button>
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
-                            Classes="filter-type-btn"
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
-                            ToolTip.Tip="Video Only">
-                            <mi:MaterialIcon Kind="Movie" Width="16" Height="16" />
-                        </Button>
-                    </StackPanel>
                 </Grid>
             </Border>
         </Grid>
 
-        <!-- LIST AREA (Row 3) -->
+        <!-- LIST -->
         <controls:TrackListControl
             Grid.Row="3"
             Margin="24,0"
@@ -201,6 +161,5 @@
             IsPlaylistContext="{Binding CanEdit}"
             EnableReordering="{Binding CanReorderItems}"
             MoveItemCommand="{Binding MoveItemCommand}" />
-
     </Grid>
 </UserControl>

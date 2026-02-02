@@ -1,5 +1,4 @@
-﻿// Core/Services/MusicLibraryManager.cs
-using LMP.Core.Models;
+﻿using LMP.Core.Models;
 using ReactiveUI;
 
 namespace LMP.Core.Services;
@@ -56,6 +55,8 @@ public class MusicLibraryManager : ReactiveObject
         try
         {
             Log.Info("[Sync] Starting liked videos sync from YouTube...");
+
+            // Получаем треки. Обычно YouTube API возвращает Most Recent first.
             var likedTracks = await _ytUser.GetLikedTracksAsync();
             var localLiked = await _library.GetLikedPlaylistAsync(ct);
             int addedCount = 0;
@@ -63,17 +64,21 @@ public class MusicLibraryManager : ReactiveObject
             if (likedTracks == null || likedTracks.Count == 0) return;
 
             var existingIds = new HashSet<string>(localLiked.TrackIds);
-            var tracksToProcess = ((IEnumerable<TrackInfo>)likedTracks).Reverse();
+
+            // Давайте просто уберем Reverse(), как просили, чтобы вернуть "естественный" порядок прихода данных.
+            IEnumerable<TrackInfo> tracksToProcess = likedTracks;
 
             foreach (var track in tracksToProcess)
             {
                 if (ct.IsCancellationRequested) break;
 
                 track.IsLiked = true;
+                // Сохраняем в базу (Upsert)
                 await _library.AddOrUpdateTrackAsync(track, ct);
 
                 if (!existingIds.Contains(track.Id))
                 {
+                    // Добавляем в плейлист
                     await _library.AddTrackToPlaylistAsync(track, LibraryService.LikedPlaylistId, ct);
                     addedCount++;
                 }

@@ -11,11 +11,11 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" /> <!-- 0: Header & Filter -->
-            <RowDefinition Height="*" />    <!-- 1: List -->
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 1. HEADER AREA -->
+        <!-- HEADER AREA -->
         <StackPanel Grid.Row="0" Margin="24,16,24,8">
             <!-- Greeting & Debug -->
             <Grid ColumnDefinitions="*, Auto" Margin="0,0,0,12">
@@ -32,7 +32,7 @@
                 </Button>
             </Grid>
 
-            <!-- Debug Panel (Скрыта по умолчанию) -->
+            <!-- Debug Panel -->
             <Border IsVisible="{Binding ShowDebugInfo}"
                 Background="{DynamicResource BgSecondaryBrush}" CornerRadius="8" Padding="12"
                 Margin="0,0,0,12">
@@ -94,47 +94,20 @@
                 </ListBox.Styles>
             </ListBox>
 
-            <!-- COMPACT FILTER BAR -->
+            <!-- TEXT FILTER ONLY -->
             <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36" Padding="8,0">
-                <Grid ColumnDefinitions="Auto, *, Auto">
+                <Grid ColumnDefinitions="Auto, *">
                     <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
                         Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,0,0" />
 
                     <TextBox Grid.Column="1" Classes="filter-ghost"
                         Text="{Binding FilterQuery}"
                         Watermark="{Binding L[Search_Placeholder]}" />
-
-                    <!-- Filter Types -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
-                        <!-- All -->
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
-                            Classes="filter-type-btn" 
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}"
-                            ToolTip.Tip="All">
-                            <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
-                        </Button>
-                        
-                        <!-- Music -->
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
-                            Classes="filter-type-btn" 
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}"
-                            ToolTip.Tip="Music Only">
-                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
-                        </Button>
-                        
-                        <!-- Video -->
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
-                            Classes="filter-type-btn" 
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}"
-                            ToolTip.Tip="Video Only">
-                            <mi:MaterialIcon Kind="Movie" Width="16" Height="16" />
-                        </Button>
-                    </StackPanel>
                 </Grid>
             </Border>
         </StackPanel>
 
-        <!-- 2. MAIN CONTENT AREA -->
+        <!-- MAIN CONTENT -->
         <ScrollViewer Grid.Row="1" Margin="24,0,24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />

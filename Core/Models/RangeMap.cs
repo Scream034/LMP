@@ -84,9 +84,27 @@ public class RangeMap
     {
         lock (_lock)
         {
-            return _ranges.Count == 1 &&
-                   _ranges[0].Start == 0 &&
-                   _ranges[0].End >= totalLength;
+            if (_ranges.Count == 0)
+            {
+                Log.Debug($"[RangeMap] IsFullyDownloaded: NO ranges, total={totalLength}");
+                return false;
+            }
+
+            if (_ranges.Count > 1)
+            {
+                Log.Debug($"[RangeMap] IsFullyDownloaded: {_ranges.Count} ranges (not merged?), total={totalLength}");
+                return false;
+            }
+
+            var range = _ranges[0];
+            bool result = range.Start == 0 && range.End >= totalLength;
+
+            if (!result)
+            {
+                Log.Debug($"[RangeMap] IsFullyDownloaded: range=[{range.Start}-{range.End}], total={totalLength}, result={result}");
+            }
+
+            return result;
         }
     }
 

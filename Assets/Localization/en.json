@@ -18,6 +18,7 @@
   "Window_Maximize": "Maximize",
   "Window_Restore": "Restore",
   "Window_Close": "Close",
+  "Window_Close_Hover": "Close",
 
   "Nav_Home": "Home",
   "Nav_Search": "Search",
@@ -64,6 +65,9 @@
   "Search_ForceRefresh": "Refresh from network",
   "Search_NetworkError": "Network error. Please try again.",
   "Search_LocalFilterTitle": "Refine results",
+  "Search_LocalFiles": "Local Files",
+  "Search_NoLocalFiles": "No local files in library. Download some tracks or add local files.",
+  "Search_OfflineMode": "Searching local library only",
 
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",
@@ -81,6 +85,15 @@
   "Settings_AdvancedColors": "Advanced Colors",
   "Settings_Client": "YouTube Client",
   "Settings_ClientDesc": "Change if tracks fail to load (403 Error).",
+  "Settings_DownloadsLimit": "Downloads",
+  "Settings_ImagesLimit": "Images",
+  "Settings_AudioLimit": "Audio",
+  "Settings_DownloadedTracksDesc": "Tracks fully cached during playback are saved here.",
+  "Settings_AutoSaveDownloads": "Auto-save to Downloads",
+  "Settings_AutoSaveDownloadsDesc": "Automatically save fully cached tracks to Downloads folder. Disabled = tracks stay in cache only (saves disk space).",
+  "Settings_DownloadedTracks": "Downloaded Tracks",
+  "Settings_ClearDownloadsConfirm": "Delete all downloaded tracks? This cannot be undone.",
+
 
   "Settings_ChannelUrl": "Public Channel",
   "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
@@ -202,6 +215,9 @@
   "Player_Shuffle": "Shuffle",
   "Player_Error_403_Title": "Playback Issue",
   "Player_Error_403_Msg": "Multiple playback errors occurred. This usually means YouTube is blocking the current client.\n\nPlease go to Settings -> Network and change 'YouTube Client' (e.g. to TV or Web).",
+  "Player_NotPlaying": "Not Playing",
+  "Player_StreamInfo_Loading": "Loading stream...",
+  "Player_VolumeTooltip": "Volume: {0}%",
 
   "Track_Like": "Add to Liked",
   "Track_Unlike": "Remove from Liked",
@@ -213,6 +229,8 @@
   "Track_Downloaded": "Downloaded",
   "Track_StartRadio": "Start Radio",
   "Track_MoreOptions": "More options",
+  "Track_Cached": "Cached (available offline)",
+  "Track_SaveToFolder": "Save to folder",
 
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
@@ -229,7 +247,7 @@
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
-  "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (XHR requests) -> Copy 'Cookie' header\n3. Paste here:",
+  "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (Fetch requests) -> Copy 'Cookie' header\n3. Paste here:",
 
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",
@@ -274,6 +292,9 @@
   "Stream_SelectQuality": "Select Quality",
   "Stream_LocalFile": "Local File",
   "Stream_Loading": "Buffering...",
+  "Stream_Format_Mb": "{0:F1} MB",
+  "Stream_Speed_Mb": "{0:F1} MB/s",
+  "Stream_Speed_Kb": "{0:F0} KB/s",
 
   "Button_Cancel": "Cancel",
   "Button_Create": "Create",

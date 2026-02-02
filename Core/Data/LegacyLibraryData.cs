@@ -1,6 +1,47 @@
+// Core/Data/LegacyLibraryData.cs
 using LMP.Core.Models;
 
 namespace LMP.Core.Data;
+
+/// <summary>
+/// Legacy playlist model for JSON migration (without JsonIgnore on TrackIds).
+/// </summary>
+internal class LegacyPlaylist
+{
+    public string Id { get; set; } = string.Empty;
+    
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string Name { get; set; } = "New Playlist";
+    
+    public string? ThumbnailUrl { get; set; }
+    public string? Author { get; set; }
+    public string? Description { get; set; }
+    public int SyncMode { get; set; }
+    public string? YoutubeId { get; set; }
+    public string? ETag { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    
+    // НЕТ [JsonIgnore] - будет десериализовано!
+    public List<string> TrackIds { get; set; } = [];
+    
+    /// <summary>
+    /// Converts to domain Playlist model (without TrackIds - they go to junction table).
+    /// </summary>
+    public Playlist ToPlaylist() => new()
+    {
+        Id = Id,
+        StoredName = Name,
+        ThumbnailUrl = ThumbnailUrl,
+        Author = Author,
+        Description = Description,
+        SyncMode = (PlaylistSyncMode)SyncMode,
+        YoutubeId = YoutubeId,
+        ETag = ETag,
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt
+    };
+}
 
 /// <summary>
 /// Legacy model for JSON migration. Matches old LibraryData structure.
@@ -8,7 +49,7 @@ namespace LMP.Core.Data;
 internal class LegacyLibraryData
 {
     public Dictionary<string, TrackInfo>? Tracks { get; set; }
-    public Dictionary<string, Playlist>? Playlists { get; set; }
+    public Dictionary<string, LegacyPlaylist>? Playlists { get; set; }
     public List<string>? LikedTrackIds { get; set; }
     public List<string>? RecentlyPlayedIds { get; set; }
     public List<string>? SearchHistory { get; set; }

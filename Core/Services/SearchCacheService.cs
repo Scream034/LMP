@@ -3,13 +3,13 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Models;
-using LMP.Core.Youtube.Search;
 
 namespace LMP.Core.Services;
 
 public class CachedSearchResult
 {
     public string Query { get; set; } = "";
+    public string Source { get; set; } = "";
     public DateTime CachedAt { get; set; }
     public List<TrackInfo> Tracks { get; set; } = [];
 }
@@ -19,18 +19,14 @@ public class SearchCacheService
     private readonly int _maxCacheFiles = 50;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    // In-memory LRU cache для горячих запросов
+    // In-memory LRU cache
     private readonly Dictionary<string, CachedSearchResult> _memoryCache = [];
     private readonly LinkedList<string> _lruOrder = new();
-    private const int MaxMemoryCacheItems = 10;
+    private const int MaxMemoryCacheItems = 15;
 
-    // Ленивый доступ к LibraryService (избегаем циклических зависимостей при DI)
     private LibraryService? _libService;
     private LibraryService LibService => _libService ??= Program.Services.GetRequiredService<LibraryService>();
 
-    /// <summary>
-    /// TTL из настроек пользователя (в минутах), по умолчанию 60
-    /// </summary>
     private TimeSpan CacheTtl => TimeSpan.FromMinutes(
         LibService.Settings.SearchCacheTtlMinutes > 0
             ? LibService.Settings.SearchCacheTtlMinutes
@@ -38,35 +34,44 @@ public class SearchCacheService
 
     public SearchCacheService()
     {
-        // Очистка старого кэша при старте
         _ = Task.Run(CleanupOldCacheAsync);
     }
 
     /// <summary>
-    /// Получить из кэша (память → диск)
+    /// Получить из кэша.
     /// </summary>
-    public async Task<List<TrackInfo>?> GetAsync(string query, SearchFilter filter, int minCount = 10)
+    public async Task<List<TrackInfo>?> GetAsync(string query, SearchSource source, int minCount = 10)
     {
-        var key = GetCacheKey(query, filter);
+        if (string.IsNullOrWhiteSpace(query)) return null;
+
+        var key = GetCacheKey(query, source);
         var ttl = CacheTtl;
 
-        // 1. Memory Check
-        if (_memoryCache.TryGetValue(key, out var memResult))
+        // Memory Check
+        lock (_memoryCache)
         {
-            var age = DateTime.UtcNow - memResult.CachedAt;
-            if (age < ttl && memResult.Tracks.Count >= minCount)
+            if (_memoryCache.TryGetValue(key, out var memResult))
             {
-                TouchLru(key);
-                return memResult.Tracks;
+                var age = DateTime.UtcNow - memResult.CachedAt;
+                if (age < ttl && memResult.Tracks.Count >= minCount)
+                {
+                    TouchLruUnsafe(key);
+                    Log.Debug($"[SearchCache] Memory hit: '{query}' ({source}), {memResult.Tracks.Count} items");
+                    return [.. memResult.Tracks];
+                }
+                if (age >= ttl)
+                {
+                    RemoveFromMemoryUnsafe(key);
+                }
             }
-            if (age >= ttl) RemoveFromMemory(key);
         }
 
-        // 2. Disk Check
+        // Disk Check
         await _lock.WaitAsync();
         try
         {
-            var filePath = Path.Combine(G.Folder.SearchCache, $"{key}.json");
+            EnsureCacheDirectoryExists();
+            var filePath = GetFilePath(key);
             if (!File.Exists(filePath)) return null;
 
             var json = await File.ReadAllTextAsync(filePath);
@@ -77,37 +82,41 @@ public class SearchCacheService
             var age = DateTime.UtcNow - cached.CachedAt;
             if (age > ttl)
             {
-                File.Delete(filePath);
+                TryDeleteFile(filePath);
                 return null;
             }
 
-            // Валидация фильтра (на всякий случай, если кэш был без фильтра)
             if (cached.Tracks.Count < minCount) return null;
 
             AddToMemoryCache(key, cached);
-            return cached.Tracks;
+            Log.Debug($"[SearchCache] Disk hit: '{query}' ({source}), {cached.Tracks.Count} items");
+            return [.. cached.Tracks];
         }
         catch (Exception ex)
         {
             Log.Error($"[SearchCache] Read error: {ex.Message}");
             return null;
         }
-        finally { _lock.Release(); }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     /// <summary>
-    /// Сохранить в кэш (память + диск)
+    /// Сохранить в кэш.
     /// </summary>
-    public async Task SetAsync(string query, SearchFilter filter, List<TrackInfo> tracks)
+    public async Task SetAsync(string query, SearchSource source, List<TrackInfo> tracks)
     {
-        if (tracks.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(query) || tracks.Count == 0) return;
 
-        var key = GetCacheKey(query, filter);
+        var key = GetCacheKey(query, source);
         var cached = new CachedSearchResult
         {
             Query = query,
+            Source = source.ToCacheKey(),
             CachedAt = DateTime.UtcNow,
-            Tracks = tracks
+            Tracks = [.. tracks]
         };
 
         AddToMemoryCache(key, cached);
@@ -115,12 +124,36 @@ public class SearchCacheService
         await _lock.WaitAsync();
         try
         {
-            var filePath = Path.Combine(G.Folder.SearchCache, $"{key}.json");
+            EnsureCacheDirectoryExists();
+            var filePath = GetFilePath(key);
             var json = JsonSerializer.Serialize(cached, G.Json.Compact);
             await File.WriteAllTextAsync(filePath, json);
+            Log.Debug($"[SearchCache] Stored: '{query}' ({source}), {tracks.Count} items");
         }
-        catch { /* ignore write errors */ }
-        finally { _lock.Release(); }
+        catch (Exception ex)
+        {
+            Log.Warn($"[SearchCache] Write error: {ex.Message}");
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public void InvalidateQuery(string query, SearchSource source)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return;
+
+        var key = GetCacheKey(query, source);
+        RemoveFromMemory(key);
+
+        try
+        {
+            var filePath = GetFilePath(key);
+            TryDeleteFile(filePath);
+            Log.Debug($"[SearchCache] Invalidated: '{query}' ({source})");
+        }
+        catch { }
     }
 
     private void AddToMemoryCache(string key, CachedSearchResult result)
@@ -130,11 +163,10 @@ public class SearchCacheService
             if (_memoryCache.ContainsKey(key))
             {
                 _memoryCache[key] = result;
-                TouchLru(key);
+                TouchLruUnsafe(key);
             }
             else
             {
-                // Удаляем старые если превышен лимит
                 while (_memoryCache.Count >= MaxMemoryCacheItems && _lruOrder.Count > 0)
                 {
                     var oldest = _lruOrder.Last!.Value;
@@ -148,19 +180,32 @@ public class SearchCacheService
         }
     }
 
-    private void TouchLru(string key)
+    private void TouchLruUnsafe(string key)
+    {
+        _lruOrder.Remove(key);
+        _lruOrder.AddFirst(key);
+    }
+
+    private void RemoveFromMemory(string key)
     {
         lock (_memoryCache)
         {
-            _lruOrder.Remove(key);
-            _lruOrder.AddFirst(key);
+            RemoveFromMemoryUnsafe(key);
         }
+    }
+
+    private void RemoveFromMemoryUnsafe(string key)
+    {
+        _memoryCache.Remove(key);
+        _lruOrder.Remove(key);
     }
 
     private async Task CleanupOldCacheAsync()
     {
         try
         {
+            EnsureCacheDirectoryExists();
+
             var ttl = CacheTtl;
             var files = Directory.GetFiles(G.Folder.SearchCache, "*.json")
                 .Select(static f => new FileInfo(f))
@@ -169,27 +214,24 @@ public class SearchCacheService
 
             int deletedCount = 0;
 
-            // Удаляем старые файлы (превышение лимита)
             foreach (var file in files.Skip(_maxCacheFiles))
             {
-                file.Delete();
+                TryDeleteFile(file.FullName);
                 deletedCount++;
-                Log.Info($"[SearchCache] Deleted excess cache: {file.Name}");
             }
 
-            // Удаляем просроченные по TTL
             foreach (var file in files.Take(_maxCacheFiles))
             {
                 if (DateTime.UtcNow - file.LastWriteTimeUtc > ttl)
                 {
-                    file.Delete();
+                    TryDeleteFile(file.FullName);
                     deletedCount++;
                 }
             }
 
             if (deletedCount > 0)
             {
-                Log.Info($"[SearchCache] Cleanup: deleted {deletedCount} files (ttl: {ttl.TotalMinutes}min)");
+                Log.Info($"[SearchCache] Cleanup: deleted {deletedCount} files");
             }
         }
         catch (Exception ex)
@@ -200,62 +242,9 @@ public class SearchCacheService
         await Task.CompletedTask;
     }
 
-    private static string GetCacheKey(string query, SearchFilter filter)
-    {
-        var rawKey = $"{query.ToLowerInvariant().Trim()}|{filter}";
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(rawKey));
-        return Convert.ToHexString(bytes)[..16];
-    }
-
     /// <summary>
-    /// Инвалидирует кэш для конкретного запроса
-    /// </summary>
-    public void InvalidateQuery(string query, SearchFilter filter)
-    {
-        var key = GetCacheKey(query, filter);
-        RemoveFromMemory(key);
-        try
-        {
-            var filePath = Path.Combine(G.Folder.SearchCache, $"{key}.json");
-            if (File.Exists(filePath)) File.Delete(filePath);
-        }
-        catch { }
-    }
-
-    private void RemoveFromMemory(string key)
-    {
-        lock (_memoryCache)
-        {
-            _memoryCache.Remove(key);
-            _lruOrder.Remove(key);
-        }
-    }
-
-    public void ClearAll()
-    {
-        lock (_memoryCache)
-        {
-            _memoryCache.Clear();
-            _lruOrder.Clear();
-        }
-
-        try
-        {
-            foreach (var file in Directory.GetFiles(G.Folder.SearchCache, "*.json"))
-            {
-                File.Delete(file);
-            }
-            Log.Info("[SearchCache] Cleared all cache");
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[SearchCache] Clear error: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Принудительная очистка просроченных записей
-    /// Вызывается при изменении TTL в настройках
+    /// Принудительная очистка просроченных записей.
+    /// Вызывается при изменении TTL в настройках.
     /// </summary>
     public async Task CleanupExpiredAsync()
     {
@@ -274,8 +263,7 @@ public class SearchCacheService
 
             foreach (var key in expiredKeys)
             {
-                _memoryCache.Remove(key);
-                _lruOrder.Remove(key);
+                RemoveFromMemoryUnsafe(key);
             }
 
             if (expiredKeys.Count > 0)
@@ -285,16 +273,62 @@ public class SearchCacheService
         }
     }
 
-    /// <summary>
-    /// Статистика кэша
-    /// </summary>
+    private static string GetCacheKey(string query, SearchSource source)
+    {
+        var normalizedQuery = query.ToLowerInvariant().Trim();
+        var sourceKey = source.ToCacheKey();
+        var rawKey = $"{normalizedQuery}|{sourceKey}";
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(rawKey));
+        return Convert.ToHexString(bytes)[..16];
+    }
+
+    private static string GetFilePath(string key) =>
+        Path.Combine(G.Folder.SearchCache, $"{key}.json");
+
+    private static void EnsureCacheDirectoryExists()
+    {
+        if (!Directory.Exists(G.Folder.SearchCache))
+            Directory.CreateDirectory(G.Folder.SearchCache);
+    }
+
+    private static void TryDeleteFile(string filePath)
+    {
+        try { if (File.Exists(filePath)) File.Delete(filePath); }
+        catch { }
+    }
+
+    public void ClearAll()
+    {
+        lock (_memoryCache)
+        {
+            _memoryCache.Clear();
+            _lruOrder.Clear();
+        }
+
+        try
+        {
+            EnsureCacheDirectoryExists();
+            foreach (var file in Directory.GetFiles(G.Folder.SearchCache, "*.json"))
+            {
+                TryDeleteFile(file);
+            }
+            Log.Info("[SearchCache] Cleared all cache");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[SearchCache] Clear error: {ex.Message}");
+        }
+    }
+
     public (int MemoryItems, int DiskItems, long DiskSizeBytes, int TtlMinutes) GetStats()
     {
-        int memCount = _memoryCache.Count;
+        int memCount;
+        lock (_memoryCache) { memCount = _memoryCache.Count; }
+
+        EnsureCacheDirectoryExists();
         var files = Directory.GetFiles(G.Folder.SearchCache, "*.json");
         long size = files.Sum(static f => new FileInfo(f).Length);
         int ttl = (int)CacheTtl.TotalMinutes;
         return (memCount, files.Length, size, ttl);
     }
 }
-

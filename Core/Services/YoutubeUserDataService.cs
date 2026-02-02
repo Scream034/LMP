@@ -8,49 +8,59 @@ public partial class YoutubeUserDataService
 {
     private readonly YoutubeProvider _provider;
     private readonly CookieAuthService _auth;
+    private readonly LibraryService _library;
 
-    public YoutubeUserDataService(YoutubeProvider provider, CookieAuthService auth)
+    public YoutubeUserDataService(YoutubeProvider provider, CookieAuthService auth, LibraryService library)
     {
         _provider = provider;
         _auth = auth;
+        _library = library;
     }
 
-    public async Task RateVideoAsync(string videoId, string rating)
-    {
-        await _provider.LikeTrackAsync(videoId, rating == "like");
-    }
-
-    public async Task<List<TrackInfo>> GetLikedTracksAsync()
+    /// <summary>
+    /// Получает лайкнутые треки в зависимости от режима синхронизации.
+    /// </summary>
+    public async Task<List<TrackInfo>> GetLikedTracksAsync(LikeSyncMode mode = LikeSyncMode.MusicOnly)
     {
         if (!_auth.IsAuthenticated) return [];
 
         try
         {
-            Log.Info("[Sync] Starting liked videos sync from YouTube (LL)...");
-            
-            // Используем обычный клиент плейлистов для LL. 
-            // Берем первые 1000 треков для начала.
-            var likedTracks = await _provider.GetClient().Playlists
-                .GetVideosAsync(new PlaylistId("LL"))
-                .TakeAsync(1000) 
-                .ToListAsync();
+            List<TrackInfo> likedTracks = [];
 
-            if (likedTracks.Count == 0)
+            switch (mode)
             {
-                Log.Info("[Sync] Playlist LL returned 0 tracks. Trying fallback to Music Liked (LM)...");
-                // Если LL пуст (или не доступен), пробуем Music API (VLLM)
-                // Это вернет только музыку, но лучше чем ничего.
-                try 
-                {
-                    var musicLikes = await _provider.GetClient().Music.GetLikedTracksAsync();
-                    likedTracks.AddRange(musicLikes);
-                } 
-                catch (Exception ex) 
-                {
-                     Log.Warn($"[Sync] Music fallback failed: {ex.Message}");
-                }
+                case LikeSyncMode.MusicOnly:
+                    // Используем YouTube Music API (LM плейлист)
+                    Log.Info("[Sync] Fetching Music Likes (LM) from YouTube Music...");
+                    try
+                    {
+                        var musicLikes = await _provider.GetClient().Music.GetLikedTracksAsync();
+                        likedTracks.AddRange(musicLikes);
+                        Log.Info($"[Sync] Got {musicLikes.Count} music likes from LM.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[Sync] Music API failed, falling back to LL: {ex.Message}");
+                        // Fallback на LL с фильтрацией
+                        var allLikes = await GetAllLikedVideosAsync();
+                        likedTracks.AddRange(allLikes.Where(t => t.IsMusic));
+                    }
+                    break;
+
+                case LikeSyncMode.AllVideos:
+                    // Используем стандартный YouTube API (LL плейлист)
+                    Log.Info("[Sync] Fetching ALL Liked Videos (LL)...");
+                    likedTracks = await GetAllLikedVideosAsync();
+                    break;
+
+                case LikeSyncMode.LocalOnly:
+                    // Не синхронизируем с облаком
+                    Log.Info("[Sync] LocalOnly mode - no cloud sync.");
+                    return [];
             }
 
+            // Помечаем все как лайкнутые и добавляем префикс
             foreach (var track in likedTracks)
             {
                 track.IsLiked = true;
@@ -59,8 +69,8 @@ public partial class YoutubeUserDataService
                     track.Id = "yt_" + track.Id;
                 }
             }
-            
-            Log.Info($"[Sync] Fetched {likedTracks.Count} liked items.");
+
+            Log.Info($"[Sync] Total liked tracks: {likedTracks.Count}");
             return likedTracks;
         }
         catch (Exception ex)
@@ -68,6 +78,19 @@ public partial class YoutubeUserDataService
             Log.Error($"[Sync] Failed to fetch liked tracks: {ex.Message}");
             return [];
         }
+    }
+
+    private async Task<List<TrackInfo>> GetAllLikedVideosAsync()
+    {
+        return await _provider.GetClient().Playlists
+            .GetVideosAsync(new PlaylistId("LL"))
+            .TakeAsync(1000)
+            .ToListAsync();
+    }
+
+    public async Task RateVideoAsync(string videoId, string rating)
+    {
+        await _provider.LikeTrackAsync(videoId, rating == "like");
     }
 
     public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()

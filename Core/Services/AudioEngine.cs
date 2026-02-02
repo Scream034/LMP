@@ -133,12 +133,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         _httpClient = new HttpClient(new SocketsHttpHandler
         {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(16),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-            MaxConnectionsPerServer = 3,
-            ConnectTimeout = TimeSpan.FromSeconds(5)
+            MaxConnectionsPerServer = 8, // Увеличить для параллельной загрузки обложек/поиска
+            ConnectTimeout = TimeSpan.FromSeconds(4), // Быстрый тайм-аут коннекта (Fail fast)
+            EnableMultipleHttp2Connections = true // YouTube поддерживает HTTP/2
         })
-        { Timeout = TimeSpan.FromMinutes(5) };
+        { Timeout = TimeSpan.FromMinutes(4) };
 
         // Устанавливаем User-Agent от VR-клиента для скачивания потоков
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeClientUtils.UserAgent);
@@ -616,16 +617,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         track.TransientContainer = container;
         track.TransientBitrate = targetBitrate;
 
+        // КРИТИЧНО: Очищаем ВСЕ кэшированные данные о стриме
+        track.StreamUrl = string.Empty;
+        track.CachedCodec = string.Empty;
+        track.CachedBitrate = 0;
+        track.CachedContainer = string.Empty;
+
         if (_library.Settings.RememberTrackFormat)
         {
             track.PreferredContainer = container;
             track.PreferredBitrate = targetBitrate;
-
-            // Сохраняем изменения. Так как объект canonical, просто говорим библиотеке обновить его статус.
             _ = _library.AddOrUpdateTrackAsync(track);
         }
 
-        track.StreamUrl = string.Empty;
         _playbackStartedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await PlayCurrentIndexAsync();
@@ -649,20 +653,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         var sw = Stopwatch.StartNew();
         await StopPlaybackAsync();
-
         MemoryFirstCachingStream? cacheStream = null;
 
         try
         {
             ct.ThrowIfCancellationRequested();
 
-            StreamDetails? stream = null;
-            try
-            {
-                stream = await GetOrRefreshStreamAsync(track, forceRefresh: false, ct);
-            }
-            catch (OperationCanceledException) { return; }
-
+            var stream = await GetOrRefreshStreamAsync(track, forceRefresh: false, ct);
             if (stream == null)
             {
                 if (ct.IsCancellationRequested) return;
@@ -672,24 +669,29 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_session != session) return;
             ct.ThrowIfCancellationRequested();
 
+            // ═══════════════════════════════════════════════════════════════
+            // Определяем cacheId СРАЗУ после получения stream
+            // ═══════════════════════════════════════════════════════════════
+            bool hasOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
+
+            string cacheId = hasOverride
+                ? $"{track.Id}_{stream.Container}_{stream.Bitrate}"
+                : track.Id;
+
+            // Обновляем метаданные для ПРАВИЛЬНОГО cacheId
+            StreamCacheManager.UpdateStreamInfo(cacheId, stream.Codec, stream.Bitrate, stream.Container);
+
+            Log.Info($"[AudioEngine] Stream: {stream.Codec}/{stream.Bitrate}kbps, cache={cacheId}");
             SetStreamInfo(stream.Codec, stream.Bitrate);
 
-            bool isManualQualityOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
-
             long size = stream.Size;
-            if (size <= 0 && !isManualQualityOverride)
-            {
+            if (size <= 0 && !hasOverride)
                 size = await TryGetContentLengthAsync(stream.Url, ct);
-            }
 
             if (_session != session || ct.IsCancellationRequested) return;
 
             if (size > 0)
             {
-                string cacheId = isManualQualityOverride
-                    ? $"{track.Id}_{stream.Container}_{stream.Bitrate}"
-                    : track.Id;
-
                 cacheStream = new MemoryFirstCachingStream(
                     cacheId,
                     stream.Url,
@@ -697,15 +699,15 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     _httpClient,
                     _cacheManager,
                     _currentStreamingConfig,
-                    urlRefresher: async (token) =>
+                    urlRefresher: async token =>
                     {
-                        var newStream = await GetOrRefreshStreamAsync(track, forceRefresh: true, token);
-                        return newStream?.Url;
-                    }
+                        var s = await GetOrRefreshStreamAsync(track, forceRefresh: true, token);
+                        return s?.Url;
+                    },
+                    originalTrackId: track.Id
                 );
 
-                var preBufferResult = await cacheStream.PreBufferAsync(ct);
-                if (!preBufferResult)
+                if (!await cacheStream.PreBufferAsync(ct))
                 {
                     cacheStream.Dispose();
                     cacheStream = null;
@@ -727,11 +729,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             else
             {
                 var media = new Media(_libVLC!, stream.Url, FromType.FromLocation);
-
-                // Берем актуальный UA (вдруг пользователь поменял настройку)
                 media.AddOption($":http-user-agent={YoutubeClientUtils.UserAgent}");
                 media.AddOption(":http-referrer=https://www.youtube.com/");
-
                 StartPlayback(media, null, track);
             }
 
@@ -746,25 +745,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 Log.Error($"[AudioEngine] Error: {ex.Message}");
                 RaiseEvent(() => OnError?.Invoke(ex.Message));
 
-                // --- ЛОГИКА ОБРАБОТКИ ОШИБОК 403 / ПОТОКА ---
-                _consecutiveErrors++;
-
-                if (_consecutiveErrors >= MaxConsecutiveErrors)
+                if (++_consecutiveErrors >= MaxConsecutiveErrors)
                 {
-                    Log.Error($"[AudioEngine] Critical error threshold reached ({_consecutiveErrors}). Stopping playback.");
-                    Stop(); // Полная остановка, чтобы не спамить запросами
-
+                    Stop();
                     RaiseEvent(() => OnCriticalError?.Invoke(
-                        SL["Player_Error_403_Title"] ?? "Playback Error",
-                        SL["Player_Error_403_Msg"] ?? "Too many playback errors. Please try changing the 'YouTube Client' in Settings -> Network."
-                    ));
-
+                        SL["Player_Error_403_Title"] ?? "Error",
+                        SL["Player_Error_403_Msg"] ?? "Too many errors"));
                     _consecutiveErrors = 0;
-                    return; // Прерываем цепочку
+                    return;
                 }
 
-                // Если ошибка не критическая, пробуем следующий трек (стандартное поведение)
-                // Но с небольшой задержкой, чтобы не ддосить сервер
                 await Task.Delay(1000, CancellationToken.None);
                 _ = PlayNextAsync();
             }
@@ -1060,24 +1050,48 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     // === Stream Info & API ===
 
-    public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo() =>
-        CurrentTrack?.IsDownloaded == true
-            ? (Path.GetExtension(CurrentTrack.LocalPath)?.TrimStart('.').ToUpper() ?? "FILE", 0, true)
-            : (_activeCodec, _activeBitrate, _streamInfoReady);
+    public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo()
+    {
+        // Активный стрим имеет приоритет
+        if (_streamInfoReady && !string.IsNullOrEmpty(_activeCodec))
+        {
+            return (_activeCodec, _activeBitrate, true);
+        }
+
+        // Fallback для скачанных
+        if (CurrentTrack?.IsDownloaded == true && !string.IsNullOrEmpty(CurrentTrack.LocalPath))
+        {
+            string format = Path.GetExtension(CurrentTrack.LocalPath)?
+                .TrimStart('.').ToUpperInvariant() ?? "FILE";
+            int bitrate = CurrentTrack.PreferredBitrate;
+            if (bitrate <= 0)
+            {
+                var meta = StreamCacheManager.TryGetMetadata(CurrentTrack.Id);
+                if (meta != null) bitrate = meta.Bitrate;
+            }
+            return (format, bitrate, true);
+        }
+
+        return ("", 0, false);
+    }
 
     public long GetDownloadedBytes() =>
         _currentStream != null ? (long)(_currentStream.DownloadProgress / 100 * _currentStream.Length) : 0;
 
     private void ResetStreamInfo()
     {
-        (_activeCodec, _activeBitrate, _streamInfoReady) = ("", 0, false);
+        _activeCodec = "";
+        _activeBitrate = 0;
+        _streamInfoReady = false;
         Volatile.Write(ref _cachedTime, 0);
         Volatile.Write(ref _cachedLength, 0);
     }
 
     private void SetStreamInfo(string codec, int bitrate)
     {
-        (_activeCodec, _activeBitrate, _streamInfoReady) = (codec, bitrate, true);
+        _activeCodec = codec?.ToUpperInvariant() ?? "";
+        _activeBitrate = bitrate;
+        _streamInfoReady = true;
         RaiseEvent(() => OnStreamInfoReady?.Invoke());
     }
 
@@ -1085,27 +1099,33 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task<StreamDetails?> GetOrRefreshStreamAsync(TrackInfo track, bool forceRefresh, CancellationToken ct)
     {
-        bool hasUserOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
+        bool hasOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
-        // Используем кэшированные метаданные, если трек есть на диске
-        if (!forceRefresh && !hasUserOverride && _cacheManager.IsFullyCached(track.Id))
+        // Проверяем полный кэш (только если нет override)
+        if (!hasOverride && !forceRefresh && _cacheManager.IsFullyCached(track.Id))
         {
-            var meta = _cacheManager.TryGetMetadata(track.Id);
+            var meta = StreamCacheManager.TryGetMetadata(track.Id);
             if (meta != null && meta.ContentLength > 0 && !string.IsNullOrEmpty(meta.Codec))
             {
-                Log.Info($"[AudioEngine] Track {track.Id} is fully cached.");
-                track.CachedBitrate = meta.Bitrate;
-                track.CachedCodec = meta.Codec;
-                track.CachedContainer = meta.Container;
+                Log.Info($"[AudioEngine] Using cached stream for {track.Id}");
+
+                // Запускаем промоут если ещё не скачано
+                if (!track.IsDownloaded && !_cacheManager.IsPromoted(track.Id))
+                    _cacheManager.TriggerCacheCompleted(track.Id, track.Id);
+
                 return new StreamDetails(meta.SourceUrl, meta.ContentLength, meta.Bitrate, meta.Codec, meta.Container);
             }
         }
 
-        bool needFresh = forceRefresh || string.IsNullOrEmpty(track.StreamUrl) || string.IsNullOrEmpty(track.CachedCodec) || hasUserOverride;
+        // Нужен ли свежий запрос?
+        bool needFresh = forceRefresh || hasOverride ||
+                         string.IsNullOrEmpty(track.StreamUrl) ||
+                         string.IsNullOrEmpty(track.CachedCodec);
 
         if (!needFresh)
             return new(track.StreamUrl, -1, track.CachedBitrate, track.CachedCodec, track.CachedContainer);
 
+        // Запрос к YouTube
         return await WithLock(_apiLock, async () =>
         {
             await ThrottleApiCall(ct);
@@ -1117,10 +1137,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (!result.HasValue) return null;
 
-            if (!hasUserOverride)
-                _cacheManager.UpdateStreamInfo(track.Id, result.Value.Codec, result.Value.Bitrate, result.Value.Container);
+            // НЕ вызываем UpdateStreamInfo здесь — это делается в PlayTrackInternalAsync
 
-            return new StreamDetails(result.Value.Url, result.Value.Size,
+            return new StreamDetails(
+                result.Value.Url, result.Value.Size,
                 result.Value.Bitrate, result.Value.Codec, result.Value.Container);
         });
     }
@@ -1256,7 +1276,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     }
 
     private static void Try(Action action) { try { action(); } catch { } }
-    private static T TryGet<T>(Func<T> func, T fallback = default!) { try { return func(); } catch { return fallback; } }
 
     private static async Task WithLock(SemaphoreSlim sem, Func<Task> action)
     {

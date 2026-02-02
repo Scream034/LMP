@@ -7,98 +7,245 @@ namespace LMP.Core.Models;
 
 /// <summary>
 /// Представляет музыкальный трек.
-/// Реализует паттерн "Active Record" (частично) через реактивные свойства.
-/// Является единственной точкой правды для состояния трека в памяти.
+/// Является единственным источником правды для состояния трека.
+/// Все свойства реактивные — UI обновляется автоматически.
 /// </summary>
-public class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
+public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 {
-    // === Identity ===
-    
+    #region Identity
+
     /// <summary>
-    /// Уникальный идентификатор (yt_ID или local_ID). Неизменяемый.
+    /// Уникальный идентификатор (yt_ID для YouTube или local_ID для локальных).
     /// </summary>
     public string Id { get; set; } = string.Empty;
 
-    // === Metadata (Reactive, так как могут уточняться из сети) ===
+    #endregion
 
-    [Reactive] public string Title { get; set; } = string.Empty;
-    [Reactive] public string Author { get; set; } = string.Empty;
-    [Reactive] public string? ChannelId { get; set; }
-    [Reactive] public string Url { get; set; } = string.Empty;
-    [Reactive] public TimeSpan Duration { get; set; }
-    
-    // URL обложки. При изменении UI должен автоматически обновить картинку.
-    [Reactive] public string ThumbnailUrl { get; set; } = string.Empty;
-
-    public bool IsOfficialArtist { get; set; }
-    public bool IsMusic { get; set; }
-
-    // === State (Состояние - критически важно для Identity Map) ===
+    #region Metadata
 
     /// <summary>
-    /// Лайкнут ли трек. Изменение этого свойства мгновенно отразится во всех View.
+    /// Название трека.
+    /// </summary>
+    [Reactive] public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Исполнитель/автор.
+    /// </summary>
+    [Reactive] public string Author { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ID канала YouTube (для связи с исполнителем).
+    /// </summary>
+    [Reactive] public string? ChannelId { get; set; }
+
+    /// <summary>
+    /// URL трека на YouTube.
+    /// </summary>
+    [Reactive] public string Url { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Длительность трека.
+    /// </summary>
+    [Reactive] public TimeSpan Duration { get; set; }
+
+    /// <summary>
+    /// URL обложки.
+    /// </summary>
+    [Reactive] public string ThumbnailUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Флаг официального канала исполнителя.
+    /// </summary>
+    public bool IsOfficialArtist { get; set; }
+
+    /// <summary>
+    /// Флаг музыкального контента (не видеоклип).
+    /// </summary>
+    public bool IsMusic { get; set; }
+
+    /// <summary>
+    /// Является ли трек явным видеоклипом.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsExplicitVideoClip => IsOfficialArtist && !IsMusic;
+
+    /// <summary>
+    /// Есть ли обложка.
+    /// </summary>
+    public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl);
+
+    #endregion
+
+    #region User State
+
+    /// <summary>
+    /// Трек добавлен в "Любимое".
     /// </summary>
     [Reactive] public bool IsLiked { get; set; }
-    
+
+    /// <summary>
+    /// Трек помечен как "Не нравится".
+    /// </summary>
     [Reactive] public bool IsDisliked { get; set; }
-    
+
+    /// <summary>
+    /// Трек сохранён в папку Downloads (явно скачан пользователем).
+    /// Файл НЕ удаляется при очистке кэша.
+    /// </summary>
     [Reactive] public bool IsDownloaded { get; set; }
-    
+
+    /// <summary>
+    /// Трек полностью закэширован (доступен офлайн через StreamCache).
+    /// Файл МОЖЕТ быть удалён при очистке кэша.
+    /// </summary>
+    [Reactive] public bool IsCached { get; set; }
+
+    /// <summary>
+    /// Трек доступен для офлайн-воспроизведения.
+    /// True если скачан ИЛИ закэширован.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsAvailableOffline => IsDownloaded || IsCached;
+
+    /// <summary>
+    /// Путь к локальному файлу (для скачанных треков).
+    /// </summary>
     [Reactive] public string? LocalPath { get; set; }
 
-    // Коллекция ID плейлистов, в которых находится трек.
-    // Используем HashSet для быстрого поиска.
+    #endregion
+
+    #region Playlists
+
+    /// <summary>
+    /// ID плейлистов, в которых находится трек.
+    /// </summary>
     public HashSet<string> InPlaylists { get; set; } = [];
 
-    // === Technical / Cache fields ===
+    #endregion
 
-    // Стрим URL не сохраняется на диск, но кэшируется в памяти объекта
-    [JsonIgnore, Reactive] public string StreamUrl { get; set; } = string.Empty;
+    #region Format Preferences
 
+    /// <summary>
+    /// Предпочтительный контейнер (webm, mp4, m4a).
+    /// Сохраняется в БД.
+    /// </summary>
+    [Reactive] public string? PreferredContainer { get; set; }
+
+    /// <summary>
+    /// Предпочтительный битрейт (kbps).
+    /// Сохраняется в БД.
+    /// </summary>
+    [Reactive] public int PreferredBitrate { get; set; }
+
+    /// <summary>
+    /// ID трека-источника для радио.
+    /// </summary>
     public string? RadioSeedId { get; set; }
-    
-    // Предпочтения по формату (сохраняются)
-    public string? PreferredContainer { get; set; }
-    public int PreferredBitrate { get; set; }
 
-    // Временные предпочтения (для текущей сессии)
+    #endregion
+
+    #region Runtime Cache (не сохраняется)
+
+    /// <summary>
+    /// Временный контейнер для текущей сессии (ручной выбор качества).
+    /// </summary>
     [JsonIgnore] public string? TransientContainer { get; set; }
+
+    /// <summary>
+    /// Временный битрейт для текущей сессии.
+    /// </summary>
     [JsonIgnore] public int TransientBitrate { get; set; }
 
-    // Кэш кодеков для быстрого старта
+    /// <summary>
+    /// Кэшированный URL потока (не сохраняется).
+    /// </summary>
+    [JsonIgnore, Reactive] public string StreamUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Кэшированный кодек текущего потока.
+    /// </summary>
     [JsonIgnore] public string CachedCodec { get; set; } = "";
+
+    /// <summary>
+    /// Кэшированный битрейт текущего потока.
+    /// </summary>
     [JsonIgnore] public int CachedBitrate { get; set; }
+
+    /// <summary>
+    /// Кэшированный контейнер текущего потока.
+    /// </summary>
     [JsonIgnore] public string CachedContainer { get; set; } = "";
 
-    public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl);
+    #endregion
+
+    #region Constructors
 
     /// <summary>
     /// Конструктор по умолчанию для сериализатора.
     /// </summary>
     public TrackInfo() { }
 
-    /// <summary>
-    /// Обновляет метаданные текущего объекта данными из нового (свежего) объекта.
-    /// Используется, когда поиск возвращает более полные данные о треке, который уже есть в библиотеке.
-    /// НЕ перезаписывает пользовательское состояние (IsLiked, IsDownloaded).
-    /// </summary>
-    /// <param name="freshInfo">Объект с новыми данными (обычно из API).</param>
-    public void UpdateMetadata(TrackInfo freshInfo)
-    {
-        // Обновляем базовые поля, только если новые данные валидны
-        if (!string.IsNullOrEmpty(freshInfo.Title)) Title = freshInfo.Title;
-        if (!string.IsNullOrEmpty(freshInfo.Author)) Author = freshInfo.Author;
-        if (!string.IsNullOrEmpty(freshInfo.Url)) Url = freshInfo.Url;
-        
-        // Часто в поиске приходит более качественная обложка
-        if (!string.IsNullOrEmpty(freshInfo.ThumbnailUrl)) ThumbnailUrl = freshInfo.ThumbnailUrl;
-        
-        // Длительность из API поиска точнее, чем из парсинга плейлиста
-        if (freshInfo.Duration.TotalSeconds > 0) Duration = freshInfo.Duration;
+    #endregion
 
-        if (freshInfo.IsOfficialArtist) IsOfficialArtist = true;
-        if (freshInfo.IsMusic) IsMusic = true;
-        
-        if (!string.IsNullOrEmpty(freshInfo.ChannelId)) ChannelId = freshInfo.ChannelId;
+    #region Methods
+
+    /// <summary>
+    /// Обновляет метаданные из свежего объекта.
+    /// НЕ перезаписывает пользовательское состояние (IsLiked, IsDownloaded, IsCached).
+    /// </summary>
+    /// <param name="fresh">Объект с новыми данными (обычно из API).</param>
+    public void UpdateMetadata(TrackInfo fresh)
+    {
+        if (!string.IsNullOrEmpty(fresh.Title)) Title = fresh.Title;
+        if (!string.IsNullOrEmpty(fresh.Author)) Author = fresh.Author;
+        if (!string.IsNullOrEmpty(fresh.Url)) Url = fresh.Url;
+        if (!string.IsNullOrEmpty(fresh.ThumbnailUrl)) ThumbnailUrl = fresh.ThumbnailUrl;
+        if (fresh.Duration.TotalSeconds > 0) Duration = fresh.Duration;
+        if (fresh.IsOfficialArtist) IsOfficialArtist = true;
+        if (fresh.IsMusic) IsMusic = true;
+        if (!string.IsNullOrEmpty(fresh.ChannelId)) ChannelId = fresh.ChannelId;
     }
+
+    /// <summary>
+    /// Помечает трек как полностью закэшированный.
+    /// Трек доступен офлайн, но файл в кэше (не в Downloads).
+    /// </summary>
+    /// <param name="container">Контейнер файла (webm, mp4).</param>
+    /// <param name="bitrate">Битрейт в kbps.</param>
+    public void MarkAsCached(string? container = null, int bitrate = 0)
+    {
+        IsCached = true;
+        if (!string.IsNullOrEmpty(container)) PreferredContainer = container;
+        if (bitrate > 0) PreferredBitrate = bitrate;
+    }
+
+    /// <summary>
+    /// Помечает трек как скачанный (сохранён в Downloads).
+    /// Также устанавливает IsCached = true.
+    /// </summary>
+    /// <param name="localPath">Путь к файлу в Downloads.</param>
+    /// <param name="container">Контейнер файла.</param>
+    /// <param name="bitrate">Битрейт в kbps.</param>
+    public void MarkAsDownloaded(string localPath, string? container = null, int bitrate = 0)
+    {
+        IsDownloaded = true;
+        IsCached = true;
+        LocalPath = localPath;
+        if (!string.IsNullOrEmpty(container)) PreferredContainer = container;
+        if (bitrate > 0) PreferredBitrate = bitrate;
+    }
+
+    /// <summary>
+    /// Сбрасывает статус кэширования (при очистке кэша).
+    /// НЕ сбрасывает IsDownloaded.
+    /// </summary>
+    public void ClearCacheStatus()
+    {
+        if (!IsDownloaded)
+        {
+            IsCached = false;
+        }
+    }
+
+    #endregion
 }

@@ -17,6 +17,7 @@
   "Window_Maximize": "Развернуть",
   "Window_Restore": "Восстановить",
   "Window_Close": "Закрыть",
+  "Window_Close_Hover": "Закрыть",
 
   "Nav_Home": "Главная",
   "Nav_Search": "Поиск",
@@ -63,6 +64,9 @@
   "Search_ForceRefresh": "Обновить из сети",
   "Search_NetworkError": "Ошибка сети. Попробуйте ещё раз.",
   "Search_LocalFilterTitle": "Уточнить результаты",
+  "Search_LocalFiles": "Локальные файлы",
+  "Search_NoLocalFiles": "В библиотеке нет локальных файлов. Скачайте треки или добавьте локальные файлы.",
+  "Search_OfflineMode": "Поиск только по локальной библиотеке",
   
   "Settings_Title": "Настройки",
   "Settings_Account_Language": "Аккаунт и язык",
@@ -80,6 +84,14 @@
   "Settings_AdvancedColors": "Дополнительные цвета",
   "Settings_Client": "Клиент YouTube",
   "Settings_ClientDesc": "Измените, если треки не грузятся (Ошибка 403).",
+  "Settings_DownloadsLimit": "Загрузки",
+  "Settings_ImagesLimit": "Картинки",
+  "Settings_AudioLimit": "Аудио",
+  "Settings_DownloadedTracksDesc": "Сюда сохраняются полностью закэшированные треки.",
+  "Settings_AutoSaveDownloads": "Автосохранение в Загрузки",
+  "Settings_AutoSaveDownloadsDesc": "Автоматически сохранять закэшированные треки в папку Загрузки. Выключено = треки остаются только в кэше (экономия места).",
+  "Settings_DownloadedTracks": "Скачанные треки",
+  "Settings_ClearDownloadsConfirm": "Удалить все скачанные треки? Это действие нельзя отменить.",
 
   "Settings_ChannelUrl": "Публичный канал",
   "Settings_ChannelUrlDesc": "Синхронизация публичных плейлистов без входа в Google.",
@@ -203,6 +215,9 @@
   "Player_Volume": "Громкость",
   "Player_Error_403_Title": "Ошибка воспроизведения",
   "Player_Error_403_Msg": "Множественные ошибки при воспроизведении. Обычно это значит, что YouTube блокирует текущий клиент.\n\nПожалуйста, перейдите в Настройки -> Сеть и измените 'Клиент YouTube' (например, на TV или Web).",
+  "Player_NotPlaying": "Не играет",
+  "Player_StreamInfo_Loading": "Загрузка потока...",
+  "Player_VolumeTooltip": "Громкость: {0}%",
 
   "Track_Like": "Добавить в любимое",
   "Track_Unlike": "Убрать из любимого",
@@ -214,6 +229,8 @@
   "Track_Downloaded": "Скачано",
   "Track_StartRadio": "Запустить радио",
   "Track_MoreOptions": "Больше опций",
+  "Track_Cached": "В кэше (доступен офлайн)",
+  "Track_SaveToFolder": "Сохранить в папку",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",
@@ -230,7 +247,7 @@
   "Dialog_ResetMessage": "Сбросить настройки? Ваша музыка останется.",
   "Dialog_ResetComplete": "Настройки сброшены.",
   "Dialog_LogoutMessage": "Вы уверены, что хотите выйти из аккаунта?",
-  "Dialog_LoginMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые XHR запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
+  "Dialog_LoginMessage": "1. Откройте music.youtube.com в режиме ИНКОГНИТО (Нужно зайти в аккаунт)\n2. F12 -> Сеть (любые Fetch запросы) -> Скопируйте заголовок 'Cookie'\n3. Вставьте сюда:",
   
   "Dialog_Merge_NoTarget_Title": "Нечего объединять",
   "Dialog_Merge_NoTarget_Msg": "Нет других локальных плейлистов для объединения.",
@@ -275,6 +292,9 @@
   "Stream_SelectQuality": "Выбор качества",
   "Stream_LocalFile": "Локальный файл",
   "Stream_Loading": "Буферизация...",
+  "Stream_Format_Mb": "{0:F1} МБ",
+  "Stream_Speed_Mb": "{0:F1} МБ/с",
+  "Stream_Speed_Kb": "{0:F0} КБ/с",
 
   "Button_Cancel": "Отмена",
   "Button_Create": "Создать",

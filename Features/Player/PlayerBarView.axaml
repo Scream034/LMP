@@ -253,15 +253,43 @@
                                                             HorizontalAlignment="Stretch"
                                                             Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
                                                             CommandParameter="{Binding}">
-                                                            <Grid ColumnDefinitions="*, Auto">
-                                                                <TextBlock
-                                                                    Text="{Binding DisplayName}" />
+                                                            <Grid
+                                                                ColumnDefinitions="Auto, *, Auto, Auto">
+                                                                <!-- Галочка для скачанного формата -->
+                                                                <Panel Grid.Column="0" Width="22">
+                                                                    <mi:MaterialIcon
+                                                                        Kind="CheckCircle"
+                                                                        Width="16" Height="16"
+                                                                        Foreground="{DynamicResource AccentBrush}"
+                                                                        IsVisible="{Binding IsDownloaded}"
+                                                                        VerticalAlignment="Center"
+                                                                        HorizontalAlignment="Left" />
+                                                                </Panel>
+
+                                                                <!-- Название формата -->
                                                                 <TextBlock Grid.Column="1"
-                                                                    Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}"
+                                                                    Text="{Binding DisplayName}"
+                                                                    VerticalAlignment="Center"
+                                                                    FontWeight="{Binding IsActive, Converter={StaticResource BoolToFontWeight}}" />
+
+                                                                <!-- Индикатор активного формата -->
+                                                                <Panel Grid.Column="2" Width="20"
+                                                                    Margin="4,0">
+                                                                    <mi:MaterialIcon
+                                                                        Kind="VolumeHigh"
+                                                                        Width="14" Height="14"
+                                                                        Foreground="{DynamicResource AccentBrush}"
+                                                                        IsVisible="{Binding IsActive}"
+                                                                        VerticalAlignment="Center" />
+                                                                </Panel>
+
+                                                                <!-- Размер -->
+                                                                <TextBlock Grid.Column="3"
+                                                                    Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}" 
                                                                     Foreground="{DynamicResource TextMutedBrush}"
                                                                     FontSize="11"
                                                                     VerticalAlignment="Center"
-                                                                    Margin="12,0,0,0" />
+                                                                    Margin="4,0,0,0" />
                                                             </Grid>
                                                         </Button>
                                                     </DataTemplate>

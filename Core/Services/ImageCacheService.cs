@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Runtime;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media.Imaging;
@@ -12,13 +13,13 @@ public enum ImageQuality
 {
     /// <summary>Миниатюры (44-60px элементы)</summary>
     Low = 120,
-    
+
     /// <summary>Средние обложки (120-180px)</summary>
     Medium = 200,
-    
+
     /// <summary>Большие обложки (200-300px)</summary>
     High = 400,
-    
+
     /// <summary>Полноразмерные изображения</summary>
     Ultra = 800
 }
@@ -86,8 +87,8 @@ public sealed class ImageCacheService : IDisposable
     /// Загружает изображение с указанным качеством.
     /// </summary>
     public async Task<Bitmap?> GetImageAsync(
-        string url, 
-        ImageQuality quality = ImageQuality.Low, 
+        string url,
+        ImageQuality quality = ImageQuality.Low,
         CancellationToken ct = default)
     {
         return await GetImageAsync(url, (int)quality, ct);
@@ -97,8 +98,8 @@ public sealed class ImageCacheService : IDisposable
     /// Загружает изображение с указанным размером декодирования.
     /// </summary>
     public async Task<Bitmap?> GetImageAsync(
-        string url, 
-        int decodeWidth, 
+        string url,
+        int decodeWidth,
         CancellationToken ct = default)
     {
         if (_isDisposed || string.IsNullOrEmpty(url)) return null;
@@ -150,7 +151,7 @@ public sealed class ImageCacheService : IDisposable
 
             if (Interlocked.Increment(ref _loadCounter) % CleanupInterval == 0)
             {
-                _ = Task.Run(PerformMaintenanceAsync);
+                _ = Task.Run(PerformMaintenanceAsync, ct);
             }
         }
     }
@@ -204,8 +205,11 @@ public sealed class ImageCacheService : IDisposable
             _lruOrder.Clear();
         }
 
-        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
-        Log.Info("[ImageCache] Memory cache cleared.");
+        // Форсируем очистку Large Object Heap, где живут битмапы
+        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+
+        Log.Info("[ImageCache] Memory cache cleared and compacted.");
     }
 
     public void EnforceLimits()
@@ -270,9 +274,9 @@ public sealed class ImageCacheService : IDisposable
     #region Private Methods
 
     private async Task<Bitmap?> LoadFromDiskOrNetworkAsync(
-        string url, 
-        string key, 
-        int decodeWidth, 
+        string url,
+        string key,
+        int decodeWidth,
         CancellationToken ct)
     {
         try
@@ -327,7 +331,17 @@ public sealed class ImageCacheService : IDisposable
                         try
                         {
                             using var stream = File.OpenRead(diskPath);
-                            return Bitmap.DecodeToWidth(stream, decodeWidth);
+
+                            // Если запрошен DecodeWidth, используем его строго.
+                            // Для списков и сеток это критично.
+                            if (decodeWidth > 0)
+                            {
+                                return Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.LowQuality);
+                            }
+                            else
+                            {
+                                return new Bitmap(stream);
+                            }
                         }
                         catch
                         {
