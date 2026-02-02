@@ -253,10 +253,23 @@
                                                             HorizontalAlignment="Stretch"
                                                             Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
                                                             CommandParameter="{Binding}">
-                                                            <Grid ColumnDefinitions="*, Auto">
-                                                                <TextBlock
-                                                                    Text="{Binding DisplayName}" />
+                                                            <Grid ColumnDefinitions="Auto, *, Auto">
+                                                                <!-- Галочка для скачанного формата -->
+                                                                <Panel Grid.Column="0" Width="22">
+                                                                    <mi:MaterialIcon
+                                                                        Kind="CheckCircle"
+                                                                        Width="16" Height="16"
+                                                                        Foreground="{DynamicResource AccentBrush}"
+                                                                        IsVisible="{Binding IsDownloaded}"
+                                                                        VerticalAlignment="Center"
+                                                                        HorizontalAlignment="Left" />
+                                                                </Panel>
+
                                                                 <TextBlock Grid.Column="1"
+                                                                    Text="{Binding DisplayName}"
+                                                                    VerticalAlignment="Center" />
+
+                                                                <TextBlock Grid.Column="2"
                                                                     Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}"
                                                                     Foreground="{DynamicResource TextMutedBrush}"
                                                                     FontSize="11"

@@ -21,7 +21,8 @@ public sealed class MemoryFirstCachingStream : Stream
     private const int MaxFileOpenRetries = 10;
     private const int FileOpenRetryDelayMs = 100;
 
-    private readonly string _trackId;
+    private readonly string _cacheId;
+    private readonly string _originalTrackId;
     private string _url;
     private readonly Func<CancellationToken, Task<string?>>? _urlRefresher;
 
@@ -73,12 +74,19 @@ public sealed class MemoryFirstCachingStream : Stream
 
     public bool IsFullyDownloaded => _downloadComplete;
 
+
     public MemoryFirstCachingStream(
-        string trackId, string url, long contentLength,
-        HttpClient http, StreamCacheManager cacheManager, StreamingConfig config,
-        Func<CancellationToken, Task<string?>>? urlRefresher = null)
+        string cacheId,
+        string url,
+        long contentLength,
+        HttpClient http,
+        StreamCacheManager cacheManager,
+        StreamingConfig config,
+        Func<CancellationToken, Task<string?>>? urlRefresher = null,
+        string? originalTrackId = null)
     {
-        _trackId = trackId;
+        _cacheId = cacheId;
+        _originalTrackId = originalTrackId ?? cacheId;
         _url = url;
         _contentLength = contentLength;
         _http = http;
@@ -88,18 +96,26 @@ public sealed class MemoryFirstCachingStream : Stream
         _chunkSize = config.ChunkSize;
         _readAheadChunks = config.ReadAheadChunks;
         _maxConcurrentDownloads = config.MaxConcurrentDownloads;
-        // Fallback если в конфиге пришел 0 (защита от дурака)
         _maxRamChunks = config.MaxRamChunks > 0 ? config.MaxRamChunks : 50;
         _downloadTimeoutMs = config.DownloadTimeoutMs;
 
-        _cachePath = StreamCacheManager.GetCachePath(trackId);
+        _cachePath = StreamCacheManager.GetCachePath(_cacheId);
         _downloadCts = new CancellationTokenSource();
         _downloadSemaphore = new SemaphoreSlim(_maxConcurrentDownloads);
         _totalChunks = (int)((_contentLength + _chunkSize - 1) / _chunkSize);
 
-        var meta = cacheManager.LoadOrCreateMetadata(trackId, url, contentLength);
+        var meta = StreamCacheManager.LoadOrCreateMetadata(_cacheId, url, contentLength);
         _diskRanges = RangeMap.Deserialize(meta.RangesJson);
         _bytesDownloaded = _diskRanges.DownloadedBytes;
+
+        // Если файл уже полностью скачан, сразу запускаем promote
+        if (_diskRanges.IsFullyDownloaded(_contentLength))
+        {
+            _downloadComplete = true;
+            // Используем единый метод с уведомлением
+            _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+            Log.Info($"[CacheStream] {_cacheId} already complete, promoting...");
+        }
 
         _cacheFile = OpenCacheFileWithRetry(_cachePath);
         if (_cacheFile != null && _cacheFile.Length < _contentLength)
@@ -110,7 +126,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
         _diskWriterTask = Task.Run(DiskWriterLoopAsync);
 
-        Log.Info($"Opened {trackId}: {contentLength / 1024 / 1024}MB. RAM Limit: {_maxRamChunks} chunks.");
+        Log.Info($"Opened {_cacheId} (track: {_originalTrackId}): {contentLength / 1024 / 1024}MB");
     }
 
     private static FileStream? OpenCacheFileWithRetry(string path)
@@ -477,15 +493,13 @@ public sealed class MemoryFirstCachingStream : Stream
         return true;
     }
 
-    // ИСПРАВЛЕННЫЙ DiskWriterLoop
     private async Task DiskWriterLoopAsync()
     {
         int bytesWrittenSinceSave = 0;
-        const int SaveThreshold = 512 * 1024;
+        const int SaveThreshold = 256 * 1024; // Чуть уменьшил порог для более частого сохранения состояния
 
         try
         {
-            // Читаем, пока канал не закроется ИЛИ пока не отменят
             while (await _diskChannel.Reader.WaitToReadAsync(_disposeCts.Token))
             {
                 while (_diskChannel.Reader.TryRead(out var item))
@@ -493,7 +507,7 @@ public sealed class MemoryFirstCachingStream : Stream
                     var (pos, data, len) = item;
                     try
                     {
-                        if (_disposing || _cacheFile == null) continue; // Просто вернем буфер в finally
+                        if (_disposing || _cacheFile == null) continue;
 
                         await _fileSemaphore.WaitAsync(_disposeCts.Token);
                         try
@@ -511,8 +525,15 @@ public sealed class MemoryFirstCachingStream : Stream
 
                         if (bytesWrittenSinceSave >= SaveThreshold)
                         {
-                            Try(() => _cacheManager.UpdateRanges(_trackId, _diskRanges));
+                            Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
                             bytesWrittenSinceSave = 0;
+
+                            if (_diskRanges.IsFullyDownloaded(_contentLength))
+                            {
+                                Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
+                                // Используем единый метод с уведомлением
+                                _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -521,26 +542,13 @@ public sealed class MemoryFirstCachingStream : Stream
                     }
                     finally
                     {
-                        // КРИТИЧЕСКИ ВАЖНО: Всегда возвращаем буфер
                         ArrayPool<byte>.Shared.Return(data);
                     }
                 }
             }
         }
-        catch (OperationCanceledException)
-        {
-            // Нормальное завершение при Dispose
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Disk writer loop crash: {ex.Message}");
-        }
-
-        // При выходе из цикла (отмена или ошибка) может остаться мусор в канале?
-        // WaitToReadAsync выбросит OperationCanceledException, и мы попадем в catch.
-        // Но TryRead может не вычитать всё.
-        // Поэтому очистку остатков делаем в Dispose или здесь в finally.
-        // Но лучше и надежнее в Dispose, когда Writer уже Complete.
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Log.Error($"Disk writer loop crash: {ex.Message}"); }
     }
 
     public override void Flush() { }
@@ -567,7 +575,7 @@ public sealed class MemoryFirstCachingStream : Stream
                 ArrayPool<byte>.Shared.Return(item.Data);
             }
 
-            Try(() => _cacheManager.UpdateRanges(_trackId, _diskRanges));
+            Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
             Try(_dataAvailable.Set);
 
             Task.Run(async () =>

@@ -12,6 +12,8 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
+using ReactiveUI.Fody.Helpers;
+using ReactiveUI;
 
 namespace LMP.Core.Services;
 
@@ -152,10 +154,6 @@ public partial class YoutubeProvider : IDisposable
                     var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
                                    ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
 
-                    // ИСПРАВЛЕНИЕ: Логика классификации для Home
-                    // Если YTM отдает item.Type == "Song", это аудио-трек -> Music
-                    // Если YTM отдает item.Type == "Video", это видеоклип -> Video (IsMusic = false)
-                    // Это позволит фильтру "Video" показывать клипы, а фильтру "Music" - только аудио.
                     bool isMusicContent = string.Equals(item.Type, "Song", StringComparison.OrdinalIgnoreCase);
 
                     var track = new TrackInfo
@@ -263,7 +261,6 @@ public partial class YoutubeProvider : IDisposable
         string? targetContainer = track.TransientContainer;
         int targetBitrate = track.TransientBitrate;
 
-        // Access settings through the new property
         if (string.IsNullOrEmpty(targetContainer))
         {
             var settings = _libraryService?.Settings;
@@ -353,7 +350,6 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        // Access settings through the new property
         var qualityPref = _libraryService?.Settings.QualityPreference ?? AudioQualityPreference.BestAvailable;
 
         return qualityPref switch
@@ -513,11 +509,7 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             var videoId = VideoId.TryParse(url) ?? VideoId.Parse(ExtractVideoId(url) ?? "");
-
-            // Получаем "сырой" трек от YoutubeClient
             var rawTrack = await _youtube.Videos.GetAsync(videoId);
-
-            // Регистрируем его и получаем канонический экземпляр
             return _trackRegistry.RegisterOrUpdate(rawTrack);
         }
         catch (Exception ex)
@@ -528,16 +520,20 @@ public partial class YoutubeProvider : IDisposable
     }
 
     #region Search
+    /// <summary>
+    /// Streaming search с пагинацией батчами.
+    /// </summary>
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
         string query,
         int maxResults = 300,
-        SearchFilter filter = SearchFilter.Video,
+        SearchFilter filter = SearchFilter.None,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query)) yield break;
 
         var sw = Stopwatch.StartNew();
         int count = 0;
+        bool isMusicFilter = filter.IsMusicContext();
 
         NotifyStatus($"[YouTube] Starting streaming search for '{query}' (Filter: {filter})...");
 
@@ -553,6 +549,12 @@ public partial class YoutubeProvider : IDisposable
 
                 if (result is TrackInfo rawTrack)
                 {
+                    // Для музыкального фильтра принудительно ставим IsMusic
+                    if (isMusicFilter)
+                    {
+                        rawTrack.IsMusic = true;
+                    }
+
                     var track = _trackRegistry.RegisterOrUpdate(rawTrack);
                     tracks.Add(track);
                     count++;
@@ -572,26 +574,39 @@ public partial class YoutubeProvider : IDisposable
         NotifyStatus($"[YouTube] Search complete: {count} results in {sw.ElapsedMilliseconds}ms");
     }
 
+    /// <summary>
+    /// Быстрый поиск без пагинации.
+    /// </summary>
     public async Task<List<TrackInfo>> SearchFastAsync(
         string query,
         int maxResults = 100,
-        SearchFilter filter = SearchFilter.Video,
+        SearchFilter filter = SearchFilter.None,
         CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query)) return [];
 
         var sw = Stopwatch.StartNew();
         var results = new List<TrackInfo>(maxResults);
+        bool isMusicFilter = filter.IsMusicContext();
 
         try
         {
-            var enumerable = _youtube.Search.GetVideosAsync(query, ct);
-
-            await foreach (var item in enumerable)
+            // Используем GetResultBatchesAsync для поддержки всех типов фильтров
+            await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
             {
+                foreach (var item in batch.Items)
+                {
+                    if (results.Count >= maxResults) break;
+
+                    if (item is TrackInfo rawTrack)
+                    {
+                        if (isMusicFilter) rawTrack.IsMusic = true;
+                        var track = _trackRegistry.RegisterOrUpdate(rawTrack);
+                        results.Add(track);
+                    }
+                }
+
                 if (results.Count >= maxResults) break;
-                var track = _trackRegistry.RegisterOrUpdate(item);
-                results.Add(track);
             }
 
             sw.Stop();
@@ -609,19 +624,25 @@ public partial class YoutubeProvider : IDisposable
         return results;
     }
 
-    public async Task<List<TrackInfo>> SearchAsync(string query, int maxResults = 100)
+    /// <summary>
+    /// Простой поиск с фильтром по умолчанию (обратная совместимость).
+    /// </summary>
+    public async Task<List<TrackInfo>> SearchAsync(
+        string query,
+        int maxResults = 100,
+        SearchFilter filter = SearchFilter.None)
     {
-        return await SearchFastAsync(query, maxResults, SearchFilter.Video);
+        return await SearchFastAsync(query, maxResults, filter);
     }
 
-    public class SearchSession : IDisposable
+    public sealed class SearchSession : IDisposable
     {
         private readonly YoutubeClient _youtube;
         private readonly TrackRegistry _registry;
         private readonly string _query;
         private readonly int _maxResults;
         private readonly SearchFilter _filter;
-        private readonly HashSet<string> _seenIds = [];
+        private readonly HashSet<string> _seenIds;
         private IAsyncEnumerator<Batch<ISearchResult>>? _enumerator;
         private bool _hasMore = true;
         private bool _disposed;
@@ -629,6 +650,7 @@ public partial class YoutubeProvider : IDisposable
 
         public bool HasMore => (_hasMore || _buffer.Count > 0) && !_disposed && _seenIds.Count < _maxResults;
         public int LoadedCount => _seenIds.Count;
+        public SearchFilter Filter => _filter;
 
         internal SearchSession(
             YoutubeClient youtube,
@@ -649,7 +671,6 @@ public partial class YoutubeProvider : IDisposable
             {
                 foreach (var id in skipTrackIds)
                 {
-                    // Убираем префикс yt_, если он есть, для корректной сверки
                     var cleanId = id.StartsWith("yt_") ? id[3..] : id;
                     _seenIds.Add(cleanId);
                 }
@@ -662,12 +683,14 @@ public partial class YoutubeProvider : IDisposable
 
             var results = new List<TrackInfo>();
 
+            // Берём из буфера
             while (results.Count < count && _buffer.Count > 0)
             {
                 results.Add(_buffer[0]);
                 _buffer.RemoveAt(0);
             }
 
+            // Загружаем новые
             while (results.Count < count && _hasMore && _seenIds.Count < _maxResults)
             {
                 try
@@ -679,53 +702,33 @@ public partial class YoutubeProvider : IDisposable
                     if (!await _enumerator.MoveNextAsync())
                     {
                         _hasMore = false;
-                        // Log.Info("[SearchSession] Enumerator finished (No more items).");
                         break;
                     }
 
                     var batch = _enumerator.Current;
-                    // Log.Info($"[SearchSession] Got batch with {batch.Items.Count} items.");
 
                     foreach (var item in batch.Items)
                     {
                         if (_seenIds.Count >= _maxResults) break;
 
-                        TrackInfo? track = null;
-                        string? rawId = null;
-
-                        // Диагностика типа элемента
-                        // Log.Debug($"[SearchSession] Processing item of type: {item.GetType().Name}");
-
                         if (item is TrackInfo tInfo)
                         {
-                            rawId = tInfo.Id.StartsWith("yt_") ? tInfo.Id[3..] : tInfo.Id;
-                            if (_seenIds.Add(rawId)) track = tInfo;
-                        }
-                        else if (item is Playlist pInfo)
-                        {
-                            rawId = pInfo.YoutubeId;
-                            if (!string.IsNullOrEmpty(rawId) && _seenIds.Add(rawId))
-                                track = ConvertPlaylistToTrackInfo(pInfo);
-                        }
-                        else if (item is VideoSearchResult video)
-                        {
-                            // На всякий случай, если SearchClient вернет легаси тип
-                            rawId = video.Id.Value;
-                            if (_seenIds.Add(rawId))
-                                track = ConvertSearchResultToTrackInfo(video);
-                        }
+                            var rawId = tInfo.Id.StartsWith("yt_") ? tInfo.Id[3..] : tInfo.Id;
+                            if (!_seenIds.Add(rawId)) continue;
 
-                        if (track != null)
-                        {
-                            track = _registry.RegisterOrUpdate(track);
-
-                            // Лог успешного добавления
-                            // Log.Info($"[SearchSession] Added: {track.Title} (IsMusic: {track.IsMusic})");
+                            var track = _registry.RegisterOrUpdate(tInfo);
 
                             if (results.Count < count)
                                 results.Add(track);
                             else
                                 _buffer.Add(track);
+                        }
+                        else if (item is Playlist pInfo)
+                        {
+                            var rawId = pInfo.YoutubeId;
+                            if (string.IsNullOrEmpty(rawId) || !_seenIds.Add(rawId)) continue;
+
+                            // Для плейлистов можно добавить конвертацию если нужно
                         }
                     }
                 }
@@ -738,7 +741,6 @@ public partial class YoutubeProvider : IDisposable
                 }
             }
 
-            // Log.Info($"[SearchSession] Returning {results.Count} items. Buffer size: {_buffer.Count}");
             return results;
         }
 
@@ -756,12 +758,16 @@ public partial class YoutubeProvider : IDisposable
             GC.SuppressFinalize(this);
         }
     }
+
     private SearchSession? _currentSearchSession;
 
+    /// <summary>
+    /// Создаёт новую поисковую сессию с заданными параметрами.
+    /// </summary>
     public SearchSession CreateSearchSession(
         string query,
         int maxResults = 300,
-        SearchFilter filter = SearchFilter.Video,
+        SearchFilter filter = SearchFilter.None,
         IEnumerable<string>? skipTrackIds = null)
     {
         _currentSearchSession?.Dispose();
@@ -771,11 +777,14 @@ public partial class YoutubeProvider : IDisposable
         return _currentSearchSession;
     }
 
+    /// <summary>
+    /// Выполняет поиск и возвращает начальные результаты вместе с сессией для пагинации.
+    /// </summary>
     public async Task<(List<TrackInfo> Tracks, SearchSession Session)> SearchWithSessionAsync(
         string query,
         int initialCount = 50,
         int maxResults = 300,
-        SearchFilter filter = SearchFilter.Video,
+        SearchFilter filter = SearchFilter.None,
         CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query))
@@ -998,19 +1007,17 @@ public partial class YoutubeProvider : IDisposable
     #endregion
 
     #region Helpers
-    // Вспомогательный метод конвертации Плейлиста в Трек (для UI)
     private static TrackInfo ConvertPlaylistToTrackInfo(Playlist playlist)
     {
         return new TrackInfo
         {
-            Id = playlist.Id, // Уже с префиксом yt_ или yt_pl_
+            Id = playlist.Id,
             Title = playlist.Name,
             Author = playlist.Author ?? "Unknown Playlist",
             Url = playlist.Url,
             Duration = TimeSpan.Zero,
             ThumbnailUrl = playlist.ThumbnailUrl ?? "",
             IsMusic = false,
-            // Можно добавить спец. флаг или логику отображения иконки плейлиста
         };
     }
 
@@ -1102,13 +1109,14 @@ public partial class YoutubeProvider : IDisposable
     #endregion
 }
 
-public class StreamOption
+public class StreamOption : ReactiveObject
 {
     public string Container { get; set; } = "";
     public double Bitrate { get; set; }
     public string Codec { get; set; } = "";
     public double SizeMb { get; set; }
     public string DisplayName => $"{Codec} {Bitrate:F0}kbps ({Container})";
+    [Reactive] public bool IsDownloaded { get; set; }
 }
 
 public class HomeSection

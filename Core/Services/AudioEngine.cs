@@ -133,12 +133,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         _httpClient = new HttpClient(new SocketsHttpHandler
         {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(16),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-            MaxConnectionsPerServer = 3,
-            ConnectTimeout = TimeSpan.FromSeconds(5)
+            MaxConnectionsPerServer = 8, // Увеличить для параллельной загрузки обложек/поиска
+            ConnectTimeout = TimeSpan.FromSeconds(4), // Быстрый тайм-аут коннекта (Fail fast)
+            EnableMultipleHttp2Connections = true // YouTube поддерживает HTTP/2
         })
-        { Timeout = TimeSpan.FromMinutes(5) };
+        { Timeout = TimeSpan.FromMinutes(4) };
 
         // Устанавливаем User-Agent от VR-клиента для скачивания потоков
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", YoutubeClientUtils.UserAgent);
@@ -616,16 +617,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         track.TransientContainer = container;
         track.TransientBitrate = targetBitrate;
 
+        // КРИТИЧНО: Очищаем ВСЕ кэшированные данные о стриме
+        track.StreamUrl = string.Empty;
+        track.CachedCodec = string.Empty;
+        track.CachedBitrate = 0;
+        track.CachedContainer = string.Empty;
+
         if (_library.Settings.RememberTrackFormat)
         {
             track.PreferredContainer = container;
             track.PreferredBitrate = targetBitrate;
-
-            // Сохраняем изменения. Так как объект canonical, просто говорим библиотеке обновить его статус.
             _ = _library.AddOrUpdateTrackAsync(track);
         }
 
-        track.StreamUrl = string.Empty;
         _playbackStartedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await PlayCurrentIndexAsync();
@@ -672,6 +676,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_session != session) return;
             ct.ThrowIfCancellationRequested();
 
+            Log.Info($"[AudioEngine] Setting stream info: {stream.Codec}/{stream.Bitrate}kbps");
             SetStreamInfo(stream.Codec, stream.Bitrate);
 
             bool isManualQualityOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
@@ -701,7 +706,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     {
                         var newStream = await GetOrRefreshStreamAsync(track, forceRefresh: true, token);
                         return newStream?.Url;
-                    }
+                    },
+                    originalTrackId: track.Id
                 );
 
                 var preBufferResult = await cacheStream.PreBufferAsync(ct);
@@ -1060,24 +1066,48 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     // === Stream Info & API ===
 
-    public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo() =>
-        CurrentTrack?.IsDownloaded == true
-            ? (Path.GetExtension(CurrentTrack.LocalPath)?.TrimStart('.').ToUpper() ?? "FILE", 0, true)
-            : (_activeCodec, _activeBitrate, _streamInfoReady);
+    public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo()
+    {
+        // Активный стрим имеет приоритет
+        if (_streamInfoReady && !string.IsNullOrEmpty(_activeCodec))
+        {
+            return (_activeCodec, _activeBitrate, true);
+        }
+
+        // Fallback для скачанных
+        if (CurrentTrack?.IsDownloaded == true && !string.IsNullOrEmpty(CurrentTrack.LocalPath))
+        {
+            string format = Path.GetExtension(CurrentTrack.LocalPath)?
+                .TrimStart('.').ToUpperInvariant() ?? "FILE";
+            int bitrate = CurrentTrack.PreferredBitrate;
+            if (bitrate <= 0)
+            {
+                var meta = StreamCacheManager.TryGetMetadata(CurrentTrack.Id);
+                if (meta != null) bitrate = meta.Bitrate;
+            }
+            return (format, bitrate, true);
+        }
+
+        return ("", 0, false);
+    }
 
     public long GetDownloadedBytes() =>
         _currentStream != null ? (long)(_currentStream.DownloadProgress / 100 * _currentStream.Length) : 0;
 
     private void ResetStreamInfo()
     {
-        (_activeCodec, _activeBitrate, _streamInfoReady) = ("", 0, false);
+        _activeCodec = "";
+        _activeBitrate = 0;
+        _streamInfoReady = false;
         Volatile.Write(ref _cachedTime, 0);
         Volatile.Write(ref _cachedLength, 0);
     }
 
     private void SetStreamInfo(string codec, int bitrate)
     {
-        (_activeCodec, _activeBitrate, _streamInfoReady) = (codec, bitrate, true);
+        _activeCodec = codec?.ToUpperInvariant() ?? "";
+        _activeBitrate = bitrate;
+        _streamInfoReady = true;
         RaiseEvent(() => OnStreamInfoReady?.Invoke());
     }
 
@@ -1087,21 +1117,36 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         bool hasUserOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
-        // Используем кэшированные метаданные, если трек есть на диске
-        if (!forceRefresh && !hasUserOverride && _cacheManager.IsFullyCached(track.Id))
+        // При ручном выборе формата — ВСЕГДА идём в API
+        if (hasUserOverride)
         {
-            var meta = _cacheManager.TryGetMetadata(track.Id);
+            Log.Info($"[AudioEngine] Quality override active: {track.TransientContainer}/{track.TransientBitrate}kbps");
+        }
+        // Используем кэшированные метаданные только если НЕТ override
+        else if (!forceRefresh && _cacheManager.IsFullyCached(track.Id))
+        {
+            var meta = StreamCacheManager.TryGetMetadata(track.Id);
             if (meta != null && meta.ContentLength > 0 && !string.IsNullOrEmpty(meta.Codec))
             {
                 Log.Info($"[AudioEngine] Track {track.Id} is fully cached.");
                 track.CachedBitrate = meta.Bitrate;
                 track.CachedCodec = meta.Codec;
                 track.CachedContainer = meta.Container;
+
+                if (!track.IsDownloaded && !_cacheManager.IsPromoted(track.Id))
+                {
+                    _cacheManager.TriggerPromoteWithNotification(track.Id, track.Id);
+                }
+
                 return new StreamDetails(meta.SourceUrl, meta.ContentLength, meta.Bitrate, meta.Codec, meta.Container);
             }
         }
 
-        bool needFresh = forceRefresh || string.IsNullOrEmpty(track.StreamUrl) || string.IsNullOrEmpty(track.CachedCodec) || hasUserOverride;
+        // Определяем нужен ли свежий запрос
+        bool needFresh = forceRefresh ||
+                         hasUserOverride ||  // ВСЕГДА fresh при override!
+                         string.IsNullOrEmpty(track.StreamUrl) ||
+                         string.IsNullOrEmpty(track.CachedCodec);
 
         if (!needFresh)
             return new(track.StreamUrl, -1, track.CachedBitrate, track.CachedCodec, track.CachedContainer);
@@ -1117,8 +1162,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (!result.HasValue) return null;
 
+            // Обновляем кэш только если НЕТ override
             if (!hasUserOverride)
-                _cacheManager.UpdateStreamInfo(track.Id, result.Value.Codec, result.Value.Bitrate, result.Value.Container);
+                StreamCacheManager.UpdateStreamInfo(track.Id, result.Value.Codec, result.Value.Bitrate, result.Value.Container);
 
             return new StreamDetails(result.Value.Url, result.Value.Size,
                 result.Value.Bitrate, result.Value.Codec, result.Value.Container);
@@ -1256,7 +1302,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     }
 
     private static void Try(Action action) { try { action(); } catch { } }
-    private static T TryGet<T>(Func<T> func, T fallback = default!) { try { return func(); } catch { return fallback; } }
 
     private static async Task WithLock(SemaphoreSlim sem, Func<Task> action)
     {

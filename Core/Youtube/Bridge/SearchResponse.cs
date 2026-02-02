@@ -42,16 +42,15 @@ internal partial class SearchResponse
 
     private SearchResponse(JsonElement content)
     {
-        // Используем начальную ёмкость для уменьшения реаллокаций
         var videos = new List<VideoData>(32);
         var playlists = new List<PlaylistData>(8);
         var channels = new List<ChannelData>(4);
         string? foundToken = null;
 
-        // Оптимизированный сбор элементов
+        // Используем ref struct enumerator там где возможно, но здесь генератор
         foreach (var item in CollectItemsFast(content))
         {
-            // Один проход по свойствам объекта вместо множественных TryGetProperty
+            // Передаем токен по ссылке, чтобы извлечь его попутно
             var result = ClassifyAndExtract(item, ref foundToken);
 
             switch (result.Type)
@@ -71,6 +70,8 @@ internal partial class SearchResponse
         Videos = videos;
         Playlists = playlists;
         Channels = channels;
+
+        // Если токен не найден при обходе, пробуем быстрый поиск
         ContinuationToken = foundToken ?? ExtractContinuationTokenFast(content);
     }
 
@@ -144,11 +145,12 @@ internal partial class SearchResponse
     }
 
     /// <summary>
-    /// Оптимизированный сборщик с использованием Stack (меньше аллокаций чем Queue для DFS)
+    /// Оптимизированный сборщик элементов.
+    /// ИСПРАВЛЕНИЕ: Инверсия порядка массива при добавлении в Stack, 
+    /// чтобы результаты извлекались в правильном порядке.
     /// </summary>
     private static IEnumerable<JsonElement> CollectItemsFast(JsonElement root)
     {
-        // Stack выделяется на стеке для небольших размеров
         var stack = new Stack<JsonElement>(64);
         stack.Push(root);
 
@@ -158,26 +160,34 @@ internal partial class SearchResponse
 
             if (current.ValueKind == JsonValueKind.Array)
             {
-                foreach (var item in current.EnumerateArray())
-                    stack.Push(item);
+                // ИСПРАВЛЕНИЕ #1: Инверсия поиска
+                // JsonElement.ArrayEnumerator идет от 0 к N.
+                // Если пушить в стек как есть, N выйдет первым (LIFO).
+                // Нам нужно пушить в обратном порядке: N, N-1... 0.
+                // Тогда 0 выйдет первым.
+
+                int len = current.GetArrayLength();
+                for (int i = len - 1; i >= 0; i--)
+                {
+                    stack.Push(current[i]);
+                }
                 continue;
             }
 
             if (current.ValueKind != JsonValueKind.Object)
                 continue;
 
-            // Проверяем является ли это целевым элементом за один проход
+            // Оптимизация #2: Быстрая проверка на целевой элемент
             bool isItem = false;
-            bool hasLockupWithId = false;
 
+            // EnumerateObject не создает мусора (struct enumerator)
             foreach (var prop in current.EnumerateObject())
             {
                 if (ItemRendererNames.Contains(prop.Name))
                 {
                     if (prop.Name == "lockupViewModel")
                     {
-                        // Дополнительная проверка для lockupViewModel
-                        hasLockupWithId = prop.Value.GetPropertyOrNull("contentId") != null;
+                        bool hasLockupWithId = prop.Value.TryGetProperty("contentId", out _);
                         if (hasLockupWithId) { isItem = true; break; }
                     }
                     else
@@ -191,14 +201,17 @@ internal partial class SearchResponse
             if (isItem)
             {
                 yield return current;
-                continue; // Не углубляемся в item renderers
+                continue; // Не углубляемся внутрь найденного элемента (renderer)
             }
 
-            // Добавляем только известные контейнеры
+            // Добавляем дочерние контейнеры
             foreach (var prop in current.EnumerateObject())
             {
+                // Проверка по FrozenSet O(1)
                 if (ContainerNames.Contains(prop.Name))
+                {
                     stack.Push(prop.Value);
+                }
             }
         }
     }

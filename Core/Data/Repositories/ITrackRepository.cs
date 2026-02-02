@@ -8,12 +8,15 @@ public interface ITrackRepository
     // Read
     Task<TrackInfo?> GetByIdAsync(string id, CancellationToken ct = default);
     Task<List<TrackInfo>> GetByIdsAsync(IEnumerable<string> ids, CancellationToken ct = default);
+    Task<List<TrackInfo>> GetAllAsync(int limit = 10000, int offset = 0, CancellationToken ct = default);
     Task<List<TrackInfo>> SearchAsync(string query, int limit = 50, int offset = 0, CancellationToken ct = default);
     Task<List<TrackInfo>> GetLikedAsync(int limit = 100, int offset = 0, CancellationToken ct = default);
     Task<List<TrackInfo>> GetDownloadedAsync(int limit = 100, int offset = 0, CancellationToken ct = default);
     Task<List<TrackInfo>> GetRecentlyPlayedAsync(int limit = 50, CancellationToken ct = default);
+    Task<List<TrackInfo>> GetLocalTracksAsync(int limit = 1000, int offset = 0, CancellationToken ct = default);
     Task<int> CountAsync(CancellationToken ct = default);
     Task<int> CountLikedAsync(CancellationToken ct = default);
+    Task<int> CountLocalAsync(CancellationToken ct = default);
     
     // Write
     Task UpsertAsync(TrackInfo track, CancellationToken ct = default);

@@ -18,7 +18,7 @@ public partial class PlayerBarView : UserControl
         VolumeHitBox.PropertyChanged += OnVolumeHitBoxPropertyChanged;
     }
 
-    // FIX: Принудительно скрываем тултипы при уходе контрола из дерева (сворачивание, переключение табов)
+    // Принудительно скрываем тултипы при уходе контрола из дерева (сворачивание, переключение табов)
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
@@ -129,7 +129,7 @@ public partial class PlayerBarView : UserControl
         if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
         if (vm.DurationSeconds <= 0) return;
 
-        // FIX: Если курсор ушел за пределы, скрываем тултип
+        // Если курсор ушел за пределы, скрываем тултип
         if (!hitBox.IsPointerOver && !_isDraggingSeek)
         {
             HoverTooltip.IsVisible = false;
@@ -254,7 +254,7 @@ public partial class PlayerBarView : UserControl
     {
         if (sender is not Border hitBox || DataContext is not PlayerBarViewModel vm) return;
 
-        // FIX: Если курсор ушел за пределы, скрываем тултип
+        // Если курсор ушел за пределы, скрываем тултип
         if (!hitBox.IsPointerOver && !_isDraggingVolume)
         {
             VolumeTooltip.IsVisible = false;

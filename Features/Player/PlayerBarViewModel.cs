@@ -30,7 +30,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly DownloadService _downloads;
     private readonly IClipboardService _clipboard;
     private readonly YoutubeProvider _youtube;
-    private readonly MusicLibraryManager _musicManager; // Добавлено
+    private readonly MusicLibraryManager _musicManager;
+    private readonly StreamCacheManager _cacheManager;
 
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
@@ -49,6 +50,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     private readonly Action<int> _maxVolumeChangedHandler;
     private readonly Action<TrackInfo?> _trackChangedHandler;
     private readonly Action _streamInfoReadyHandler;
+    private readonly Action<string, string, int, bool> _formatCachedHandler;
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
@@ -200,14 +202,16 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         DownloadService downloads,
         IClipboardService clipboard,
         YoutubeProvider youtube,
-        MusicLibraryManager musicManager) // Injection
+        MusicLibraryManager musicManager,
+        StreamCacheManager cacheManager)
     {
         _audio = audio;
         _library = library;
         _downloads = downloads;
         _clipboard = clipboard;
         _youtube = youtube;
-        _musicManager = musicManager; // Assign
+        _musicManager = musicManager;
+        _cacheManager = cacheManager;
 
         // Initialize values
         MaxVolume = _library.Settings.MaxVolumeLimit < 100 ? 100 : _library.Settings.MaxVolumeLimit;
@@ -244,6 +248,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 Dispatcher.UIThread.Post(() => IsSeekBusy = false);
             }
         };
+        
+        // Обработчик события кэширования формата
+        _formatCachedHandler = OnFormatCached;
 
         // Subscribe to AudioEngine events
         _audio.OnPlaybackStateChanged += _playbackStateHandler;
@@ -252,6 +259,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnMaxVolumeChanged += _maxVolumeChangedHandler;
         _audio.OnTrackChanged += _trackChangedHandler;
         _audio.OnStreamInfoReady += _streamInfoReadyHandler;
+        
+        // Подписка на событие кэширования
+        _cacheManager.OnFormatCached += _formatCachedHandler;
 
         // Rx subscriptions
         _librarySub = Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
@@ -380,7 +390,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(VolumeTooltip));
         });
 
-        // ISPR: Используем MusicLibraryManager для корректной синхронизации с YouTube
         ToggleLikeCommand = ReactiveCommand.CreateFromTask(async () =>
         {
             if (CurrentTrack != null)
@@ -400,20 +409,78 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             }
         }, this.WhenAnyValue(x => x.HasTrack));
 
-        LoadFormatsCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (CurrentTrack == null) return;
-            AvailableFormats.Clear();
-            string videoId = CurrentTrack.Id.Replace("yt_", "");
-            var formats = await _youtube.GetStreamOptionsAsync(videoId);
-            foreach (var f in formats) AvailableFormats.Add(f);
-        });
+        LoadFormatsCommand = ReactiveCommand.CreateFromTask(LoadFormatsAsync);
 
         SwitchFormatCommand = ReactiveCommand.CreateFromTask<StreamOption>(async (option) =>
         {
             if (option == null) return;
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
         });
+    }
+
+    #endregion
+
+    #region Format Loading
+
+    private async Task LoadFormatsAsync()
+    {
+        if (CurrentTrack == null) return;
+        AvailableFormats.Clear();
+
+        string videoId = CurrentTrack.Id.Replace("yt_", "");
+        var formats = await _youtube.GetStreamOptionsAsync(videoId);
+
+        // Получаем все скачанные форматы для этого трека
+        var cachedFormats = _cacheManager.GetCachedFormats(CurrentTrack.Id);
+
+        foreach (var f in formats)
+        {
+            f.IsDownloaded = false;
+
+            // Проверяем в списке скачанных форматов
+            foreach (var cached in cachedFormats)
+            {
+                if (string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
+                    (int)f.Bitrate == cached.Bitrate)
+                {
+                    f.IsDownloaded = true;
+                    break;
+                }
+            }
+
+            // Дополнительно проверяем через IsFormatCached (на случай если GetCachedFormats не вернул)
+            if (!f.IsDownloaded)
+            {
+                f.IsDownloaded = _cacheManager.IsFormatCached(CurrentTrack.Id, f.Container, (int)f.Bitrate);
+            }
+
+            AvailableFormats.Add(f);
+        }
+    }
+
+    /// <summary>
+    /// Обработчик события кэширования формата.
+    /// Обновляет IsDownloaded для соответствующего формата в списке.
+    /// </summary>
+    private void OnFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
+    {
+        // Проверяем, относится ли это к текущему треку
+        if (CurrentTrack == null || CurrentTrack.Id != trackId)
+            return;
+
+        Log.Debug($"[PlayerBar] OnFormatCached: {trackId} {container}/{bitrate}kbps downloaded={isDownloaded}");
+
+        // Ищем формат в списке и обновляем его
+        foreach (var format in AvailableFormats)
+        {
+            if (string.Equals(format.Container, container, StringComparison.OrdinalIgnoreCase) &&
+                (int)format.Bitrate == bitrate)
+            {
+                format.IsDownloaded = isDownloaded;
+                Log.Debug($"[PlayerBar] Updated format {format.DisplayName} IsDownloaded={isDownloaded}");
+                break;
+            }
+        }
     }
 
     #endregion
@@ -483,6 +550,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         IsSeekBusy = true;
         _lastDownloadedBytes = 0;
+        
+        // Очищаем список форматов при смене трека
+        AvailableFormats.Clear();
 
         if (track != null)
         {
@@ -567,6 +637,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             StreamInfo = "";
             return;
         }
+
         var (format, bitrate, isReady) = _audio.GetCurrentStreamInfo();
 
         if (!isReady || string.IsNullOrEmpty(format))
@@ -576,10 +647,19 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        if (CurrentTrack.IsDownloaded)
-            StreamInfo = $"{format} • {SL["Stream_LocalFile"] ?? "Local File"}";
+        if (bitrate > 0)
+        {
+            StreamInfo = $"{format} • {bitrate}kbps";
+        }
         else
-            StreamInfo = bitrate > 0 ? $"{format} • {bitrate}kbps" : format;
+        {
+            StreamInfo = format;
+        }
+
+        if (CurrentTrack.IsDownloaded && !string.IsNullOrEmpty(CurrentTrack.LocalPath))
+        {
+            StreamInfo += " ✓";
+        }
 
         ShowStreamInfo = true;
     }
@@ -606,33 +686,27 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _lastSpeedCheck = now;
     }
 
-   private void FallbackPositionUpdate()
+    private void FallbackPositionUpdate()
     {
-        // Если мы перематываем, не дергаем обновления, чтобы ползунок не скакал
         if (!HasTrack || _isSeeking || _justFinishedSeeking) return;
 
-        // AudioEngine.TotalDuration и Position теперь безопасны (читают из памяти)
         var realDur = _audio.TotalDuration;
-        
-        // Обновляем Duration только если она реально изменилась (оптимизация)
+
         if (Math.Abs(DurationSeconds - realDur.TotalSeconds) > 1 && realDur.TotalSeconds > 0)
         {
             Duration = realDur;
             DurationSeconds = Duration.TotalSeconds;
         }
 
-        // Буфер
         if (_audio.BufferProgress > 0)
         {
             BufferedSeconds = DurationSeconds * (_audio.BufferProgress / 100.0);
         }
-        
-        // Позиция
+
         if (IsPlaying)
         {
-             // Читаем безопасное свойство
-             Position = _audio.CurrentPosition;
-             PositionSeconds = Position.TotalSeconds;
+            Position = _audio.CurrentPosition;
+            PositionSeconds = Position.TotalSeconds;
         }
     }
 
@@ -704,6 +778,9 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnMaxVolumeChanged -= _maxVolumeChangedHandler;
         _audio.OnTrackChanged -= _trackChangedHandler;
         _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
+        
+        // Отписка от события кэширования
+        _cacheManager.OnFormatCached -= _formatCachedHandler;
 
         _librarySub?.Dispose();
         _loadingSub?.Dispose();

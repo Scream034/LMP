@@ -33,7 +33,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
     private readonly IDisposable? _audioStateSub;
     private readonly IDisposable? _trackChangeSub;
 
-    private bool _isMovingInternally; // Флаг для подавления полной перезагрузки
+    private bool _isMovingInternally;
     private bool _isDisposed;
 
     #endregion
@@ -149,7 +149,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
         AddToQueueCommand = ReactiveCommand.Create(() =>
         {
-            // Заменено небезопасное `AllItems` на `GetItemsSnapshot()`
             _audio.EnqueueRange(GetItemsSnapshot());
         }, hasTracks);
 
@@ -162,17 +161,13 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             {
                 _isMovingInternally = true;
 
-                // 1. Оптимистичное (мгновенное) обновление UI
                 MoveSourceItem(oldIdx, newIdx);
 
-                // 2. Сохранение изменений в сервисе
                 await _manager.MovePlaylistTrackAsync(_currentPlaylistId, oldIdx, newIdx);
             }
             catch (Exception ex)
             {
                 Log.Error($"Failed to move track in playlist: {ex.Message}");
-                // В случае ошибки, принудительно перезагружаем плейлист, чтобы отменить
-                // оптимистичное обновление
                 _isMovingInternally = false;
                 await LoadPlaylistAsync(_currentPlaylistId);
             }
@@ -182,12 +177,11 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             }
         });
 
-        this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery, x => x.FilterType)
+        // Обновление CanReorderItems при изменении фильтра
+        this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ =>
             {
-                CanReorderItems = CanEdit &&
-                                  string.IsNullOrWhiteSpace(FilterQuery) &&
-                                  FilterType == ContentFilterType.All;
+                CanReorderItems = CanEdit && string.IsNullOrWhiteSpace(FilterQuery);
             });
 
         _librarySubscription = Observable.FromEvent(
@@ -197,7 +191,7 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                if (_isMovingInternally) return; // Игнорируем событие, если оно вызвано нами же
+                if (_isMovingInternally) return;
                 if (!string.IsNullOrEmpty(_currentPlaylistId))
                 {
                     await LoadPlaylistAsync(_currentPlaylistId);
@@ -252,7 +246,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             return;
         }
 
-        // Получаем треки (без лишних копий)
         var allTracks = await GetAllPlaylistTracksAsync();
         if (allTracks.Count == 0) return;
 
@@ -260,10 +253,8 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
 
-        // EnqueueRange теперь не делает лишних копий
         _audio.EnqueueRange(allTracks);
 
-        // Запускаем воспроизведение в фоне
         _ = Task.Run(async () => await _audio.PlayTrackAsync(allTracks[0]));
     }
 
@@ -323,9 +314,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         return vm;
     }
 
-    /// <summary>
-    /// Загружает плейлист с поддержкой пагинации.
-    /// </summary>
     public async Task LoadPlaylistAsync(string playlistId)
     {
         _currentPlaylistId = playlistId;
@@ -340,16 +328,13 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         IsCloud = playlist.IsFromAccount;
         IsReadOnly = !playlist.IsEditable;
 
-        // Получаем все ID треков для подсчёта
         _allTrackIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
         TrackCount = _allTrackIds.Count;
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
-        // ★ ИСПРАВЛЕНИЕ: Получаем суммарную длительность для ВСЕХ треков из БД
         TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
         FormatDuration();
 
-        // Загружаем первую порцию треков для отображения
         var initialTracks = await LibService.GetPlaylistTracksAsync(
             playlistId,
             limit: BatchSize,
@@ -363,7 +348,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         await CheckPlaybackStateAsync();
     }
 
-    // ★ Переименовать и упростить метод форматирования
     private void FormatDuration()
     {
         int totalHours = (int)TotalDuration.TotalHours;
@@ -378,12 +362,8 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             FormattedDuration = $"{seconds}s";
     }
 
-    /// <summary>
-    /// Подгрузка следующей порции треков.
-    /// </summary>
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
-        // Проверяем, есть ли ещё треки для загрузки
         if (_loadedOffset >= _allTrackIds.Count)
         {
             SetCanFetchMore(false);
@@ -402,14 +382,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
             _loadedOffset += tracks.Count;
 
-            // Обновляем расчёт длительности
-            if (tracks.Count > 0)
-            {
-                var allLoaded = GetItemsSnapshot();
-                allLoaded.AddRange(tracks);
-            }
-
-            // Проверяем, загрузили ли всё
             if (_loadedOffset >= _allTrackIds.Count)
             {
                 SetCanFetchMore(false);
@@ -429,9 +401,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         }
     }
 
-    /// <summary>
-    /// Получает все треки плейлиста для воспроизведения.
-    /// </summary>
     private async Task<List<TrackInfo>> GetAllPlaylistTracksAsync()
     {
         var loadedTracks = GetItemsSnapshot();
@@ -444,22 +413,18 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
             offset: 0);
     }
 
-    /// <summary>
-    /// Воспроизводит трек из плейлиста, заменяя очередь ВСЕМИ треками плейлиста.
-    /// </summary>
     private async void PlayFromPlaylist(TrackInfo track)
     {
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
 
-        // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Всегда заменяем очередь всеми треками плейлиста
         var allTracks = await GetAllPlaylistTracksAsync();
 
-        // Запускаем очередь с выбранного трека
         await _audio.StartQueueAsync(allTracks, track);
 
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
+
     private async Task MergePlaylistAsync()
     {
         var otherPlaylists = (await LibService.GetAllPlaylistsAsync())
@@ -488,27 +453,15 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
 
     #region Filter Implementation
 
-    protected override bool FilterItem(TrackInfo item, string query, ContentFilterType filterType)
+    /// <summary>
+    /// Фильтрация только по тексту.
+    /// </summary>
+    protected override bool FilterItem(TrackInfo item, string query)
     {
-        // 1. Text search
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            bool matchesText = item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-            if (!matchesText) return false;
-        }
+        if (string.IsNullOrWhiteSpace(query)) return true;
 
-        // 2. Type filter
-        // Логика:
-        // - Music: всё, кроме явных видеоклипов от официальных каналов
-        // - Video: только явные видеоклипы (официальный канал артиста + НЕ помечен как Song)
-        return filterType switch
-        {
-            ContentFilterType.All => true,
-            ContentFilterType.Music => !item.IsExplicitVideoClip,
-            ContentFilterType.Video => item.IsExplicitVideoClip,
-            _ => true
-        };
+        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
     #endregion
@@ -527,8 +480,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
         _trackChangeSub?.Dispose();
         CancelLoading();
 
-        // --- ИСПРАВЛЕНИЕ: Принудительно очищаем ViewModels треков ---
-        // Items - это коллекция из базового PaginatedViewModel
         if (Items != null)
         {
             foreach (var item in Items)
@@ -536,7 +487,6 @@ public sealed class PlaylistViewModel : PaginatedViewModel<TrackInfo, TrackItemV
                 item.Dispose();
             }
         }
-        // -----------------------------------------------------------
 
         base.Dispose();
     }

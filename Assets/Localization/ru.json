@@ -63,6 +63,9 @@
   "Search_ForceRefresh": "Обновить из сети",
   "Search_NetworkError": "Ошибка сети. Попробуйте ещё раз.",
   "Search_LocalFilterTitle": "Уточнить результаты",
+  "Search_LocalFiles": "Локальные файлы",
+  "Search_NoLocalFiles": "В библиотеке нет локальных файлов. Скачайте треки или добавьте локальные файлы.",
+  "Search_OfflineMode": "Поиск только по локальной библиотеке",
   
   "Settings_Title": "Настройки",
   "Settings_Account_Language": "Аккаунт и язык",

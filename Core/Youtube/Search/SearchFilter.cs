@@ -57,3 +57,40 @@ public enum SearchFilter
     /// </summary>
     MusicPlaylist
 }
+
+/// <summary>
+/// Расширения для SearchFilter.
+/// </summary>
+public static class SearchFilterExtensions
+{
+    /// <summary>
+    /// Проверяет, является ли фильтр музыкальным контекстом (требует WEB_REMIX API).
+    /// </summary>
+    public static bool IsMusicContext(this SearchFilter filter)
+    {
+        return filter is SearchFilter.Music
+            or SearchFilter.MusicSong
+            or SearchFilter.MusicVideo
+            or SearchFilter.MusicAlbum
+            or SearchFilter.MusicArtist
+            or SearchFilter.MusicPlaylist;
+    }
+
+    /// <summary>
+    /// Возвращает строковый ключ для кэширования.
+    /// </summary>
+    public static string ToCacheKey(this SearchFilter filter)
+    {
+        return filter switch
+        {
+            SearchFilter.Music => "music",
+            SearchFilter.MusicSong => "music_song",
+            SearchFilter.MusicVideo => "music_video",
+            SearchFilter.MusicAlbum => "music_album",
+            SearchFilter.Video => "video",
+            SearchFilter.Playlist => "playlist",
+            SearchFilter.Channel => "channel",
+            _ => "all"
+        };
+    }
+}

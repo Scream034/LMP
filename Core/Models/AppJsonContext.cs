@@ -1,0 +1,31 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using LMP.Core.Models;
+using LMP.Core.Services;
+
+namespace LMP.Core.Models;
+
+/// <summary>
+/// JSON Source Generator для оптимизации памяти и производительности.
+/// Убирает накладные расходы рефлексии при работе с моделями.
+/// </summary>
+[JsonSerializable(typeof(TrackInfo))]
+[JsonSerializable(typeof(List<TrackInfo>))]
+[JsonSerializable(typeof(Playlist))]
+[JsonSerializable(typeof(List<Playlist>))]
+[JsonSerializable(typeof(StreamCacheMetadata))]
+[JsonSerializable(typeof(List<RangeItem>))]
+[JsonSerializable(typeof(ThemeSettings))]
+[JsonSourceGenerationOptions(
+    WriteIndented = false, 
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+public partial class AppJsonContext : JsonSerializerContext
+{
+    public static AppJsonContext DefaultCompact { get; } = new(new JsonSerializerOptions
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    });
+}

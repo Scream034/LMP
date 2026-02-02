@@ -64,6 +64,9 @@
   "Search_ForceRefresh": "Refresh from network",
   "Search_NetworkError": "Network error. Please try again.",
   "Search_LocalFilterTitle": "Refine results",
+  "Search_LocalFiles": "Local Files",
+  "Search_NoLocalFiles": "No local files in library. Download some tracks or add local files.",
+  "Search_OfflineMode": "Searching local library only",
 
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",

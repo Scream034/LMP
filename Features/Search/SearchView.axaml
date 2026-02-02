@@ -8,10 +8,9 @@
     x:Class="LMP.Features.Search.SearchView"
     x:DataType="vm:SearchViewModel"
     x:CompileBindings="True"
-    x:Name="SearchRoot">
+    x:Name="SearchRoot"> <!-- 1. Добавлено имя для привязки -->
 
     <UserControl.Styles>
-        <!-- Стиль для чипсов (кнопок истории) -->
         <Style Selector="Button.chip">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
@@ -26,7 +25,24 @@
         <Style Selector="Button.chip:pointerover">
             <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource TextMutedBrush}" />
+        </Style>
+        
+        <!-- Source selector -->
+        <Style Selector="RadioButton.source-tab">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Padding" Value="16,10" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="CornerRadius" Value="8,8,0,0" />
+        </Style>
+        <Style Selector="RadioButton.source-tab:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+        <Style Selector="RadioButton.source-tab:checked">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         </Style>
     </UserControl.Styles>
 
@@ -34,15 +50,53 @@
         <!-- HEADER -->
         <StackPanel Grid.Row="0" Margin="24,24,24,8">
             <TextBlock Text="{Binding L[Search_Title]}" FontSize="28" FontWeight="Bold"
-                Margin="0,0,0,12" />
+                Margin="0,0,0,16" />
 
-            <!-- Global Search Box -->
+            <!-- SOURCE TABS -->
+            <Border Background="{DynamicResource BgSecondaryBrush}" CornerRadius="8" Padding="4" Margin="0,0,0,16">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <RadioButton Classes="source-tab" GroupName="SearchSource"
+                        IsChecked="{Binding Source, Converter={StaticResource EnumToBool}, ConverterParameter=YouTubeMusic}"
+                        Command="{Binding SetSourceCommand}" CommandParameter="YouTubeMusic">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <mi:MaterialIcon Kind="Music" Width="18" Height="18" />
+                            <TextBlock Text="YouTube Music" />
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton Classes="source-tab" GroupName="SearchSource"
+                        IsChecked="{Binding Source, Converter={StaticResource EnumToBool}, ConverterParameter=YouTube}"
+                        Command="{Binding SetSourceCommand}" CommandParameter="YouTube">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <mi:MaterialIcon Kind="Youtube" Width="18" Height="18" />
+                            <TextBlock Text="YouTube" />
+                        </StackPanel>
+                    </RadioButton>
+                    
+                    <RadioButton Classes="source-tab" GroupName="SearchSource"
+                        IsChecked="{Binding Source, Converter={StaticResource EnumToBool}, ConverterParameter=Local}"
+                        Command="{Binding SetSourceCommand}" CommandParameter="Local">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <mi:MaterialIcon Kind="FolderMusic" Width="18" Height="18" />
+                            <TextBlock Text="{Binding L[Search_LocalFiles], FallbackValue='Local Files'}" />
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+            </Border>
+
+            <!-- Search Box -->
             <Grid ColumnDefinitions="*, Auto" MaxWidth="600" HorizontalAlignment="Left">
-                <TextBox Classes="search-box" Watermark="{Binding L[Search_Placeholder]}"
-                    Text="{Binding SearchQuery}" CornerRadius="20" Padding="15,10">
+                <TextBox Classes="search-box" 
+                    Watermark="{Binding L[Search_Placeholder]}"
+                    Text="{Binding SearchQuery}" 
+                    CornerRadius="20" Padding="15,10">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
                     </TextBox.KeyBindings>
+                    <TextBox.InnerLeftContent>
+                        <mi:MaterialIcon Kind="{Binding SourceIcon}" Width="18" Height="18" 
+                            Foreground="{DynamicResource TextMutedBrush}" Margin="8,0,0,0" />
+                    </TextBox.InnerLeftContent>
                     <TextBox.InnerRightContent>
                         <Button Command="{Binding SearchCommand}" Classes="icon-btn"
                             Margin="0,0,4,0" Height="30" Width="30">
@@ -59,9 +113,20 @@
                         Foreground="{DynamicResource AccentBrush}" />
                 </Button>
             </Grid>
-            
-            <!-- RECENT SEARCH CHIPS (History) -->
-            <ItemsControl ItemsSource="{Binding RecentSearches}" Margin="0,12,0,0" MaxWidth="600" HorizontalAlignment="Left">
+
+            <!-- Offline mode indicator -->
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="4,8,0,0"
+                IsVisible="{Binding IsOfflineMode}" Opacity="0.8">
+                <mi:MaterialIcon Kind="WifiOff" Width="14" Height="14"
+                    Foreground="{DynamicResource SystemWarnOrangeBrush}" />
+                <TextBlock Text="{Binding L[Search_OfflineMode], FallbackValue='Searching local library only'}" 
+                    FontSize="12" Foreground="{DynamicResource SystemWarnOrangeBrush}" />
+            </StackPanel>
+
+            <!-- Recent Searches -->
+            <ItemsControl ItemsSource="{Binding RecentSearches}" Margin="0,12,0,0" 
+                MaxWidth="600" HorizontalAlignment="Left"
+                IsVisible="{Binding !IsOfflineMode}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <WrapPanel Orientation="Horizontal" />
@@ -69,17 +134,16 @@
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <!-- Кнопка-чипс, клик вызывает поиск -->
-                        <Button Classes="chip" Content="{Binding}" 
-                                Command="{Binding $parent[UserControl].((vm:SearchViewModel)DataContext).HistoryClickCommand}" 
-                                CommandParameter="{Binding}" 
-                                Margin="0,0,8,8">
-                            <!-- Контекстное меню для удаления из истории -->
+                        <!-- 2. ИСПРАВЛЕННАЯ ПРИВЯЗКА: используем ElementName (#SearchRoot) вместо $parent -->
+                        <Button Classes="chip" Content="{Binding}"
+                            Command="{Binding #SearchRoot.DataContext.HistoryClickCommand}"
+                            CommandParameter="{Binding}"
+                            Margin="0,0,8,8">
                             <Button.ContextFlyout>
                                 <MenuFlyout>
-                                    <MenuItem Header="Remove" 
-                                              Command="{Binding $parent[UserControl].((vm:SearchViewModel)DataContext).RemoveHistoryCommand}"
-                                              CommandParameter="{Binding}">
+                                    <MenuItem Header="Remove"
+                                        Command="{Binding #SearchRoot.DataContext.RemoveHistoryCommand}"
+                                        CommandParameter="{Binding}">
                                         <MenuItem.Icon>
                                             <mi:MaterialIcon Kind="Delete" Width="16" Height="16"/>
                                         </MenuItem.Icon>
@@ -114,44 +178,21 @@
                 </StackPanel>
             </Border>
 
-            <!-- COMPACT LOCAL FILTER (Only when results exist) -->
+            <!-- Local text filter -->
             <Border Margin="0,16,0,0" IsVisible="{Binding HasResults}"
                 Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36"
                 MaxWidth="600" HorizontalAlignment="Left">
-                <Grid ColumnDefinitions="Auto, *, Auto" Width="500">
+                <Grid ColumnDefinitions="Auto, *" Width="400">
                     <mi:MaterialIcon Kind="FilterVariant" Width="16" Height="16"
                         Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,4,0" />
 
                     <TextBox Grid.Column="1" Classes="filter-ghost" Text="{Binding FilterQuery}"
                         Watermark="{Binding L[Search_LocalFilterTitle]}" />
-
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" Margin="4">
-                        <!-- All -->
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="All"
-                            Classes="filter-type-btn"
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=All}">
-                            <mi:MaterialIcon Kind="AllInclusive" Width="16" Height="16" />
-                        </Button>
-                        
-                        <!-- Music -->
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Music"
-                            Classes="filter-type-btn"
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Music}">
-                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16" />
-                        </Button>
-                        
-                        <!-- Video -->
-                        <Button Command="{Binding SetFilterTypeCommand}" CommandParameter="Video"
-                            Classes="filter-type-btn"
-                            Classes.active="{Binding FilterType, Converter={StaticResource EnumToBool}, ConverterParameter=Video}">
-                            <mi:MaterialIcon Kind="Movie" Width="16" Height="16" />
-                        </Button>
-                    </StackPanel>
                 </Grid>
             </Border>
         </StackPanel>
 
-        <!-- LIST AREA -->
+        <!-- LIST -->
         <ScrollViewer Grid.Row="1" Margin="24,0">
             <i:Interaction.Behaviors>
                 <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />

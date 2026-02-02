@@ -31,7 +31,7 @@ public class StorageSettings
 {
     public int ImageCacheLimitMb { get; set; } = 500;
     public int AudioCacheLimitMb { get; set; } = 2048;
-    public int MaxBitmapCacheItems { get; set; } = 40; 
+    public int MaxBitmapCacheItems { get; set; } = 40;
 }
 
 public class StreamingConfig
@@ -98,4 +98,9 @@ public class AppSettings
     // === Search ===
     public string LastSearchQuery { get; set; } = "";
     public List<string> SearchHistory { get; set; } = [];
+
+    /// <summary>
+    /// Режим синхронизации лайков с YouTube.
+    /// </summary>
+    public LikeSyncMode LikeSyncMode { get; set; } = LikeSyncMode.MusicOnly;
 }

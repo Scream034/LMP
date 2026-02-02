@@ -1,4 +1,5 @@
-﻿using System.Reactive;
+﻿// Features/Shared/TrackItemViewModel.cs
+using System.Reactive;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -19,6 +20,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     private readonly LibraryService _library;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
+    private readonly StreamCacheManager _cacheManager;
 
     private Action<TrackInfo>? _onPlay;
 
@@ -29,6 +31,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     private readonly Action<TrackInfo> _onTrackUpdatedHandler;
     private readonly Action<string, float> _onDownloadProgressHandler;
     private readonly Action<string, bool, string?> _onDownloadCompletedHandler;
+    private readonly Action<string, string, int, bool> _onFormatCachedHandler;
 
     #endregion
 
@@ -121,6 +124,8 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _library = library;
         _downloads = downloads;
         _manager = manager;
+        _cacheManager = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<StreamCacheManager>(Program.Services);
         _onPlay = onPlay;
 
         Title = track.Title;
@@ -133,12 +138,14 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _onTrackUpdatedHandler = OnLibraryTrackUpdated;
         _onDownloadProgressHandler = OnDownloadProgress;
         _onDownloadCompletedHandler = OnDownloadCompleted;
+        _onFormatCachedHandler = OnFormatCached;
 
         _audio.OnTrackChanged += _onTrackChangedHandler;
         _audio.OnPlaybackStateChanged += _onPlaybackStateHandler;
         _library.OnTrackUpdated += _onTrackUpdatedHandler;
         _downloads.OnProgress += _onDownloadProgressHandler;
         _downloads.OnCompleted += _onDownloadCompletedHandler;
+        _cacheManager.OnFormatCached += _onFormatCachedHandler;
 
         IsDownloading = _downloads.IsDownloading(track.Id);
         if (IsDownloading)
@@ -212,13 +219,16 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     private void OnLibraryTrackUpdated(TrackInfo updatedTrack)
     {
-        if (updatedTrack.Id == Id)
-        {
-            IsLiked = updatedTrack.IsLiked;
-            IsDownloaded = updatedTrack.IsDownloaded;
-            this.RaisePropertyChanged(nameof(IsDownloaded));
-            this.RaisePropertyChanged(nameof(DownloadStatusText));
-        }
+        if (updatedTrack.Id != Id) return;
+
+        // Обновляем состояние из canonical объекта
+        IsLiked = updatedTrack.IsLiked;
+        IsDownloaded = updatedTrack.IsDownloaded;
+
+        // Принудительно уведомляем UI
+        this.RaisePropertyChanged(nameof(IsLiked));
+        this.RaisePropertyChanged(nameof(IsDownloaded));
+        this.RaisePropertyChanged(nameof(DownloadStatusText));
     }
 
     private void OnDownloadProgress(string trackId, float progress)
@@ -242,6 +252,24 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
                 this.RaisePropertyChanged(nameof(IsDownloaded));
                 this.RaisePropertyChanged(nameof(DownloadStatusText));
             }
+        }
+    }
+
+    /// <summary>
+    /// Вызывается когда формат полностью закэширован (стриминг завершён).
+    /// </summary>
+    private void OnFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
+    {
+        if (trackId != Id) return;
+
+        Log.Debug($"[TrackItemVM] OnFormatCached received for {Id}, isDownloaded={isDownloaded}, Track.IsDownloaded={Track.IsDownloaded}");
+
+        // Обновляем из канонического объекта Track
+        if (Track.IsDownloaded != IsDownloaded)
+        {
+            IsDownloaded = Track.IsDownloaded;
+            this.RaisePropertyChanged(nameof(IsDownloaded));
+            this.RaisePropertyChanged(nameof(DownloadStatusText));
         }
     }
 
@@ -311,6 +339,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _library.OnTrackUpdated -= _onTrackUpdatedHandler;
         _downloads.OnProgress -= _onDownloadProgressHandler;
         _downloads.OnCompleted -= _onDownloadCompletedHandler;
+        _cacheManager.OnFormatCached -= _onFormatCachedHandler;
 
         GC.SuppressFinalize(this);
     }

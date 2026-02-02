@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using LMP.Core.Services;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Utils;
 
@@ -7,120 +6,136 @@ namespace LMP.Core.Youtube.Search;
 
 internal class SearchController(HttpClient http)
 {
-  private const string FilterSong = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
-  private const string FilterVideo = "EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D";
-  private const string FilterAlbum = "EgWKAQIYAWoKEAkQChAFEAMQBA%3D%3D";
-  private const string FilterArtist = "EgWKAQIgAWoKEAkQChAFEAMQBA%3D%3D";
-  private const string FilterCommunityPlaylist = "EgeKAQQoAEABagoQAxAEEAoQCRAF";
+    // Proto-параметры для YouTube Music API (WEB_REMIX)
+    private const string FilterMusicSong = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D";
+    private const string FilterMusicVideo = "EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D";
+    private const string FilterMusicAlbum = "EgWKAQIYAWoKEAkQChAFEAMQBA%3D%3D";
+    private const string FilterMusicArtist = "EgWKAQIgAWoKEAkQChAFEAMQBA%3D%3D";
+    private const string FilterMusicPlaylist = "EgeKAQQoAEABagoQAxAEEAoQCRAF";
 
-  private static JsonElement GetMusicContext()
-  {
-    var json = $$"""
-        {
-            "context": {
-                "client": {
-                    "clientName": "WEB_REMIX",
-                    "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
-                    "hl": "{{YoutubeHttpHandler.GetHl()}}",
-                    "gl": "{{YoutubeHttpHandler.GetGl()}}"
-                },
-                "user": {}
-            }
-        }
-        """;
-    return Json.Parse(json);
-  }
+    // Proto-параметры для стандартного YouTube API (WEB)
+    private const string FilterVideoWeb = "EgIQAQ%3D%3D";
+    private const string FilterPlaylistWeb = "EgIQAw%3D%3D";
+    private const string FilterChannelWeb = "EgIQAg%3D%3D";
 
-  private static JsonElement GetWebContext()
-  {
-    var json = $$"""
+    public async ValueTask<SearchResponse> GetSearchResponseAsync(
+        string searchQuery,
+        SearchFilter searchFilter,
+        string? continuationToken,
+        CancellationToken cancellationToken = default)
+    {
+        bool isMusicContext = IsMusicFilter(searchFilter);
+
+        // Параметры фильтра (при continuation не передаём)
+        string? searchParams = continuationToken == null 
+            ? GetSearchParams(searchFilter, isMusicContext) 
+            : null;
+
+        var url = isMusicContext
+            ? "https://music.youtube.com/youtubei/v1/search"
+            : "https://www.youtube.com/youtubei/v1/search";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+
+        // Формируем JSON напрямую (быстрее чем через MemoryStream)
+        var context = isMusicContext ? GetMusicContextJson() : GetWebContextJson();
+        
+        string jsonBody;
+        if (continuationToken != null)
         {
-            "context": {
-                "client": {
-                  "clientName": "WEB",
-                  "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
-                  "hl": "{{YoutubeHttpHandler.GetHl()}}",
-                  "gl": "{{YoutubeHttpHandler.GetGl()}}"
+            jsonBody = $$"""
+                {
+                    "query": {{Json.Serialize(searchQuery)}},
+                    "continuation": {{Json.Serialize(continuationToken)}},
+                    {{context}}
                 }
+                """;
+        }
+        else if (searchParams != null)
+        {
+            jsonBody = $$"""
+                {
+                    "query": {{Json.Serialize(searchQuery)}},
+                    "params": {{Json.Serialize(searchParams)}},
+                    {{context}}
+                }
+                """;
+        }
+        else
+        {
+            jsonBody = $$"""
+                {
+                    "query": {{Json.Serialize(searchQuery)}},
+                    {{context}}
+                }
+                """;
+        }
+
+        request.Content = new StringContent(jsonBody);
+        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+        using var response = await http.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+        return SearchResponse.Parse(responseContent);
+    }
+
+    private static bool IsMusicFilter(SearchFilter filter) =>
+        filter is SearchFilter.Music 
+            or SearchFilter.MusicSong 
+            or SearchFilter.MusicVideo 
+            or SearchFilter.MusicAlbum 
+            or SearchFilter.MusicArtist 
+            or SearchFilter.MusicPlaylist;
+
+    private static string? GetSearchParams(SearchFilter filter, bool isMusicContext)
+    {
+        if (isMusicContext)
+        {
+            return filter switch
+            {
+                SearchFilter.Music => FilterMusicSong,
+                SearchFilter.MusicSong => FilterMusicSong,
+                SearchFilter.MusicVideo => FilterMusicVideo,
+                SearchFilter.MusicAlbum => FilterMusicAlbum,
+                SearchFilter.MusicArtist => FilterMusicArtist,
+                SearchFilter.MusicPlaylist => FilterMusicPlaylist,
+                _ => null
+            };
+        }
+
+        return filter switch
+        {
+            SearchFilter.Video => FilterVideoWeb,
+            SearchFilter.Playlist => FilterPlaylistWeb,
+            SearchFilter.Channel => FilterChannelWeb,
+            _ => null
+        };
+    }
+
+    private static string GetMusicContextJson() =>
+        $$"""
+        "context": {
+            "client": {
+                "clientName": "WEB_REMIX",
+                "clientVersion": "{{YoutubeHttpHandler.MusicClientVersion}}",
+                "hl": "{{YoutubeHttpHandler.GetHl()}}",
+                "gl": "{{YoutubeHttpHandler.GetGl()}}"
+            },
+            "user": {}
+        }
+        """;
+
+    private static string GetWebContextJson() =>
+        $$"""
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "{{YoutubeHttpHandler.WebClientVersion}}",
+                "hl": "{{YoutubeHttpHandler.GetHl()}}",
+                "gl": "{{YoutubeHttpHandler.GetGl()}}"
             }
         }
         """;
-    return Json.Parse(json);
-  }
-
-  public async ValueTask<SearchResponse> GetSearchResponseAsync(
-      string searchQuery,
-      SearchFilter searchFilter,
-      string? continuationToken,
-      CancellationToken cancellationToken = default
-  )
-  {
-    bool isMusicContext = searchFilter is SearchFilter.Music
-                                       or SearchFilter.MusicSong
-                                       or SearchFilter.MusicVideo
-                                       or SearchFilter.MusicAlbum
-                                       or SearchFilter.MusicArtist
-                                       or SearchFilter.MusicPlaylist;
-
-    string? searchParams = null;
-
-    if (isMusicContext)
-    {
-      searchParams = searchFilter switch
-      {
-        SearchFilter.Music => FilterSong,
-        SearchFilter.MusicSong => FilterSong,
-        SearchFilter.MusicVideo => FilterVideo,
-        SearchFilter.MusicAlbum => FilterAlbum,
-        SearchFilter.MusicArtist => FilterArtist,
-        SearchFilter.MusicPlaylist => FilterCommunityPlaylist,
-        _ => null
-      };
-    }
-    else
-    {
-      searchParams = searchFilter switch
-      {
-        SearchFilter.Video => "EgIQAQ%3D%3D",
-        SearchFilter.Playlist => "EgIQAw%3D%3D",
-        SearchFilter.Channel => "EgIQAg%3D%3D",
-        _ => null
-      };
-    }
-
-    if (continuationToken != null) searchParams = null;
-
-    var url = isMusicContext
-        ? "https://music.youtube.com/youtubei/v1/search"
-        : "https://www.youtube.com/youtubei/v1/search";
-
-    using var request = new HttpRequestMessage(HttpMethod.Post, url);
-
-    using var ms = new MemoryStream();
-    using (var writer = new Utf8JsonWriter(ms))
-    {
-      writer.WriteStartObject();
-      writer.WriteString("query", searchQuery);
-
-      if (continuationToken != null)
-        writer.WriteString("continuation", continuationToken);
-
-      if (searchParams != null)
-        writer.WriteString("params", searchParams);
-
-      var context = isMusicContext ? GetMusicContext() : GetWebContext();
-      foreach (var prop in context.EnumerateObject()) prop.WriteTo(writer);
-
-      writer.WriteEndObject();
-    }
-
-    request.Content = new ByteArrayContent(ms.ToArray());
-    request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-
-    using var response = await http.SendAsync(request, cancellationToken);
-    response.EnsureSuccessStatusCode();
-
-    var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
-    return SearchResponse.Parse(responseContent);
-  }
 }
