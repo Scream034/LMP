@@ -1,4 +1,5 @@
 ﻿// Features/Player/QueueViewModel.cs
+using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -178,11 +179,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     }
 
     private static bool MatchesFilter(TrackInfo item, string query)
-    {
-        if (string.IsNullOrWhiteSpace(query)) return true;
-        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-    }
+        => TrackFilters.MatchesTitleOrAuthor(item, query);
 
     /// <summary>
     /// Перемещает элемент в видимом списке с пересчётом master-индексов.

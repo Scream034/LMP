@@ -1,5 +1,6 @@
 ﻿// Features/Playlist/PlaylistViewModel.cs
 using Avalonia.Controls;
+using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -32,6 +33,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     private DateTime _lastMoveTime = DateTime.MinValue;
     private const int MoveDebounceMs = 1000;
+
+    // Кэш всех треков для избежания повторных загрузок
+    private List<TrackInfo>? _allTracksCache;
+    private bool _allTracksCacheValid;
 
     #endregion
 
@@ -140,8 +145,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         RefreshPlaylistCommand = ReactiveCommand.CreateFromTask(() => LoadPlaylistAsync(_currentPlaylistId));
 
-        ShufflePlayCommand = ReactiveCommand.Create(ToggleShuffle, hasTracks);
-        DownloadAllCommand = ReactiveCommand.Create(DownloadAll, hasTracks);
+        ShufflePlayCommand = ReactiveCommand.CreateFromTask(ShufflePlayAsync, hasTracks);
+        DownloadAllCommand = ReactiveCommand.CreateFromTask(DownloadAllAsync, hasTracks);
         MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
 
         AddToQueueCommand = ReactiveCommand.Create(() =>
@@ -149,18 +154,16 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             _audio.EnqueueRange(GetLoadedItemsSnapshot());
         }, hasTracks);
 
-        // Команда перемещения
         MoveItemCommand = ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
         {
             if (!CanReorderItems) return;
 
             _lastMoveTime = DateTime.Now;
+            InvalidateAllTracksCache();
 
-            // Вызываем метод базового класса
             await MoveItemAsync(tuple.oldIndex, tuple.newIndex);
         });
 
-        // Обновление CanReorderItems
         this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ =>
             {
@@ -168,7 +171,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             })
             .DisposeWith(Disposables);
 
-        // Подписка на изменения библиотеки
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
@@ -181,6 +183,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                     Log.Debug("[Playlist] Ignoring OnDataChanged (recent move)");
                     return;
                 }
+
+                InvalidateAllTracksCache();
 
                 if (!string.IsNullOrEmpty(_currentPlaylistId))
                 {
@@ -210,14 +214,18 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     protected override TrackItemViewModel CreateViewModel(TrackInfo item)
     {
-        var vm = _vmFactory.GetOrCreate(item, PlayFromPlaylist);
+        // Фабрика сама использует TrackRegistry!
+        var vm = _vmFactory.GetOrCreate(item, PlayFromPlaylistAsync);
         vm.SourceContextId = _currentPlaylistId;
         vm.IsPlaylistContext = CanEdit;
 
         vm.RemoveFromPlaylistAction = async (t) =>
         {
             if (CanEdit)
+            {
+                InvalidateAllTracksCache();
                 await _manager.RemoveTrackFromPlaylistAsync(_currentPlaylistId, t.Id);
+            }
         };
 
         vm.StartRadioAction = (t) => Log.Info($"Start radio requested for {t.Title}");
@@ -225,20 +233,17 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         return vm;
     }
 
+    // Используем общий хелпер для DRY
     protected override bool MatchesFilter(TrackInfo item, string query)
-    {
-        if (string.IsNullOrWhiteSpace(query)) return true;
-
-        return item.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               item.Author.Contains(query, StringComparison.OrdinalIgnoreCase);
-    }
+        => TrackFilters.MatchesTitleOrAuthor(item, query);
 
     protected override async Task<List<TrackInfo>> LoadItemsByIdsAsync(
         IEnumerable<string> ids, CancellationToken ct)
     {
+        var idsList = ids.ToList(); // Enumerate once
         return await LibService.GetPlaylistTracksAsync(
             _currentPlaylistId,
-            limit: ids.Count(),
+            limit: idsList.Count,
             offset: LoadedCount,
             ct);
     }
@@ -252,11 +257,40 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #endregion
 
+    #region All Tracks Helper (DRY)
+
+    /// <summary>
+    /// Загружает все треки плейлиста (с кэшированием).
+    /// </summary>
+    private async Task<List<TrackInfo>> GetAllTracksAsync()
+    {
+        if (_allTracksCacheValid && _allTracksCache != null)
+        {
+            return _allTracksCache;
+        }
+
+        var allIds = GetAllIds();
+        _allTracksCache = await LibService.GetPlaylistTracksAsync(
+            _currentPlaylistId, limit: allIds.Count, offset: 0);
+        _allTracksCacheValid = true;
+
+        return _allTracksCache;
+    }
+
+    private void InvalidateAllTracksCache()
+    {
+        _allTracksCacheValid = false;
+        _allTracksCache = null;
+    }
+
+    #endregion
+
     #region Public Methods
 
     public async Task LoadPlaylistAsync(string playlistId)
     {
         _currentPlaylistId = playlistId;
+        InvalidateAllTracksCache();
 
         var playlist = await LibService.GetPlaylistAsync(playlistId);
         if (playlist == null) return;
@@ -301,15 +335,11 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         if (IsPlayingThisPlaylist)
         {
-            _ = _audio.SetPlaybackStateAsync(false);
+            await _audio.SetPlaybackStateAsync(false);
             return;
         }
 
-        // Загружаем все треки для воспроизведения
-        var allIds = GetAllIds();
-        var allTracks = await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId, limit: allIds.Count, offset: 0);
-
+        var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
         _audio.ClearQueue();
@@ -317,17 +347,14 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         IsShuffleActive = false;
         _audio.EnqueueRange(allTracks);
 
-        _ = Task.Run(async () => await _audio.PlayTrackAsync(allTracks[0]));
+        await _audio.PlayTrackAsync(allTracks[0]);
     }
 
-    private async void ToggleShuffle()
+    private async Task ShufflePlayAsync()
     {
         if (TrackCount == 0) return;
 
-        var allIds = GetAllIds();
-        var allTracks = await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId, limit: allIds.Count, offset: 0);
-
+        var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
         _audio.ClearQueue();
@@ -337,22 +364,22 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var queue = _audio.Queue;
         if (queue.Count > 0)
         {
-            _ = _audio.PlayTrackAsync(queue[0]);
+            await _audio.PlayTrackAsync(queue[0]);
         }
 
         IsShuffleActive = true;
+
         Observable.Timer(TimeSpan.FromMilliseconds(800))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => IsShuffleActive = false);
+            .Subscribe(_ => IsShuffleActive = false)
+            .DisposeWith(Disposables);
     }
 
-    private async void DownloadAll()
+    private async Task DownloadAllAsync()
     {
         IsDownloadingActive = true;
 
-        var allIds = GetAllIds();
-        var allTracks = await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId, limit: allIds.Count, offset: 0);
+        var allTracks = await GetAllTracksAsync();
 
         foreach (var track in allTracks.Where(t => !t.IsDownloaded))
         {
@@ -361,7 +388,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         Observable.Timer(TimeSpan.FromSeconds(2))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => IsDownloadingActive = false);
+            .Subscribe(_ => IsDownloadingActive = false)
+            .DisposeWith(Disposables);
     }
 
     private void FormatDuration()
@@ -378,17 +406,21 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             FormattedDuration = $"{seconds}s";
     }
 
-    private async void PlayFromPlaylist(TrackInfo track)
+    private async void PlayFromPlaylistAsync(TrackInfo track)
     {
-        _audio.ShuffleEnabled = false;
-        IsShuffleActive = false;
+        try
+        {
+            _audio.ShuffleEnabled = false;
+            IsShuffleActive = false;
 
-        var allIds = GetAllIds();
-        var allTracks = await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId, limit: allIds.Count, offset: 0);
-
-        await _audio.StartQueueAsync(allTracks, track);
-        _ = LibService.AddToRecentlyPlayedAsync(track);
+            var allTracks = await GetAllTracksAsync();
+            await _audio.StartQueueAsync(allTracks, track);
+            _ = LibService.AddToRecentlyPlayedAsync(track);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Playlist] PlayFromPlaylist error: {ex.Message}");
+        }
     }
 
     private async Task MergePlaylistAsync()
