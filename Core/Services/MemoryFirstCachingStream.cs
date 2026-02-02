@@ -69,8 +69,22 @@ public sealed class MemoryFirstCachingStream : Stream
         set => Seek(value, SeekOrigin.Begin);
     }
 
-    public double DownloadProgress => _contentLength <= 0 ? 0 :
-        Math.Min((double)Volatile.Read(ref _bytesDownloaded) / _contentLength * 100, 100);
+    public double DownloadProgress
+    {
+        get
+        {
+            if (_contentLength <= 0) return 0;
+            double progress = Math.Min((double)Volatile.Read(ref _bytesDownloaded) / _contentLength * 100, 100);
+
+            // Логируем когда прогресс достигает 100%
+            if (progress >= 99.9 && !_downloadComplete)
+            {
+                Log.Debug($"[CacheStream] {_cacheId} progress={progress:F1}%, but _downloadComplete={_downloadComplete}");
+            }
+
+            return progress;
+        }
+    }
 
     public bool IsFullyDownloaded => _downloadComplete;
 
@@ -104,7 +118,17 @@ public sealed class MemoryFirstCachingStream : Stream
         _downloadSemaphore = new SemaphoreSlim(_maxConcurrentDownloads);
         _totalChunks = (int)((_contentLength + _chunkSize - 1) / _chunkSize);
 
-        var meta = StreamCacheManager.LoadOrCreateMetadata(_cacheId, url, contentLength);
+        var meta = StreamCacheManager.TryGetMetadata(cacheId);
+        if (meta == null)
+        {
+            Log.Warn($"[CacheStream] No metadata for {cacheId}! Creating...");
+            meta = StreamCacheManager.LoadOrCreateMetadata(cacheId, url, contentLength);
+        }
+        else
+        {
+            Log.Debug($"[CacheStream] Metadata exists: {meta.Codec}/{meta.Bitrate}kbps/{meta.Container}");
+        }
+
         _diskRanges = RangeMap.Deserialize(meta.RangesJson);
         _bytesDownloaded = _diskRanges.DownloadedBytes;
 
@@ -496,7 +520,7 @@ public sealed class MemoryFirstCachingStream : Stream
     private async Task DiskWriterLoopAsync()
     {
         int bytesWrittenSinceSave = 0;
-        const int SaveThreshold = 256 * 1024; // Чуть уменьшил порог для более частого сохранения состояния
+        const int SaveThreshold = 128 * 1024; // Уменьшил для более частых проверок
 
         try
         {
@@ -523,22 +547,33 @@ public sealed class MemoryFirstCachingStream : Stream
                         _diskRanges.MarkComplete(pos, pos + len);
                         bytesWrittenSinceSave += len;
 
-                        if (bytesWrittenSinceSave >= SaveThreshold)
+                        // Проверяем завершение после КАЖДОЙ записи
+                        if (!_downloadComplete && _diskRanges.IsFullyDownloaded(_contentLength))
                         {
+                            _downloadComplete = true;
+
+                            // Сохраняем финальное состояние
                             Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
                             bytesWrittenSinceSave = 0;
 
-                            if (_diskRanges.IsFullyDownloaded(_contentLength))
-                            {
-                                Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
-                                // Используем единый метод с уведомлением
-                                _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
-                            }
+                            Log.Info($"[CacheStream] {_cacheId} fully downloaded! Bytes: {_diskRanges.DownloadedBytes}/{_contentLength}");
+
+                            var meta = StreamCacheManager.TryGetMetadata(_cacheId);
+                            Log.Debug($"[CacheStream] Metadata: {meta?.Codec}/{meta?.Bitrate}kbps/{meta?.Container}");
+
+                            _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+                        }
+                        else if (bytesWrittenSinceSave >= SaveThreshold)
+                        {
+                            // Периодическое сохранение прогресса
+                            Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
+                            bytesWrittenSinceSave = 0;
                         }
                     }
                     catch (Exception ex)
                     {
-                        if (ex is not OperationCanceledException) Log.Error($"Disk write error: {ex.Message}");
+                        if (ex is not OperationCanceledException)
+                            Log.Error($"[CacheStream] Disk write error: {ex.Message}");
                     }
                     finally
                     {
@@ -548,7 +583,18 @@ public sealed class MemoryFirstCachingStream : Stream
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Log.Error($"Disk writer loop crash: {ex.Message}"); }
+        catch (Exception ex) { Log.Error($"[CacheStream] Disk writer loop crash: {ex.Message}"); }
+        finally
+        {
+            // Финальная проверка при завершении цикла
+            if (!_downloadComplete && _diskRanges.IsFullyDownloaded(_contentLength))
+            {
+                _downloadComplete = true;
+                Try(() => StreamCacheManager.UpdateRanges(_cacheId, _diskRanges));
+                Log.Info($"[CacheStream] {_cacheId} completed on loop exit");
+                _cacheManager.TriggerPromoteWithNotification(_cacheId, _originalTrackId);
+            }
+        }
     }
 
     public override void Flush() { }

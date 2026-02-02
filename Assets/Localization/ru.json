@@ -83,6 +83,12 @@
   "Settings_AdvancedColors": "Дополнительные цвета",
   "Settings_Client": "Клиент YouTube",
   "Settings_ClientDesc": "Измените, если треки не грузятся (Ошибка 403).",
+  "Settings_DownloadedTracks": "Скачанные треки",
+  "Settings_DownloadsLimit": "Загрузки",
+  "Settings_ImagesLimit": "Картинки",
+  "Settings_AudioLimit": "Аудио",
+  "Settings_ClearDownloadsConfirm": "Удалить все скачанные треки? Это действие нельзя отменить.",
+  "Settings_DownloadedTracksDesc": "Сюда сохраняются полностью закэшированные треки.",
 
   "Settings_ChannelUrl": "Публичный канал",
   "Settings_ChannelUrlDesc": "Синхронизация публичных плейлистов без входа в Google.",

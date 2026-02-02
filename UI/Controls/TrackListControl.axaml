@@ -222,23 +222,18 @@
                                     <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
                                         IsVisible="{Binding IsDownloaded}"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" />
+                                        HorizontalAlignment="Center" />
                                     <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
                                         Width="32" Height="3"
                                         IsVisible="{Binding IsDownloading}"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" />
+                                        Foreground="{DynamicResource AccentBrush}" />
                                 </Panel>
 
                                 <!-- КОЛОНКА 3: Лайк -->
                                 <Button Grid.Column="3"
                                     Classes="icon-btn like-btn"
                                     Classes.is-liked="{Binding IsLiked}"
-                                    Command="{Binding ToggleLikeCommand}"
-                                    Width="32" Height="32"
-                                    Margin="4,0">
+                                    Command="{Binding ToggleLikeCommand}">
                                     <mi:MaterialIcon
                                         Kind="{Binding IsLiked, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Heart|HeartOutline'}"
                                         Width="16" Height="16" />

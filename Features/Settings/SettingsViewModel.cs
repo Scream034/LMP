@@ -84,11 +84,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     [Reactive] public int ImageCacheLimitMb { get; set; }
     [Reactive] public int AudioCacheLimitMb { get; set; }
+    [Reactive] public int DownloadedTracksLimitMb { get; set; }
 
     [Reactive] public string ImageCacheStats { get; private set; } = "...";
     [Reactive] public string AudioCacheStats { get; private set; } = "...";
     [Reactive] public double ImageCacheUsagePercent { get; private set; }
     [Reactive] public double AudioCacheUsagePercent { get; private set; }
+    [Reactive] public string DownloadsStats { get; private set; } = "...";
+    [Reactive] public double DownloadsUsagePercent { get; private set; }
 
     public ObservableCollection<ThemeSettings> ThemePresets { get; } = [];
     [Reactive] public ThemeSettings? SelectedPreset { get; set; }
@@ -127,6 +130,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearDownloadsCommand { get; }
 
     public SettingsViewModel(
         LibraryService library,
@@ -162,6 +166,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ClearAudioCacheCommand = ReactiveCommand.CreateFromTask(ClearAudioCacheAsync);
         ApplyThemeCommand = ReactiveCommand.Create(ApplyTheme);
         ResetThemeCommand = ReactiveCommand.Create(ResetTheme);
+        ClearDownloadsCommand = ReactiveCommand.CreateFromTask(ClearDownloadsAsync);
+
         this.WhenAnyValue(x => x.SelectedClient)
                     .Skip(1).WhereNotNull()
                     .Subscribe(async c => // <--- Добавлено async
@@ -179,6 +185,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                         // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
                         _youtube.ClearCache();
                     });
+
+        this.WhenAnyValue(x => x.DownloadedTracksLimitMb)
+            .Skip(1)
+            .Throttle(TimeSpan.FromMilliseconds(500))
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Storage.DownloadedTracksLimitMb = v);
+                UpdateCacheStats();
+            });
 
         LoadAllSettings();
         UpdateCacheStats();
@@ -378,6 +393,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         ImageCacheLimitMb = s.Storage.ImageCacheLimitMb;
         AudioCacheLimitMb = s.Storage.AudioCacheLimitMb;
+        DownloadedTracksLimitMb = s.Storage.DownloadedTracksLimitMb;
 
         MaxBitmapCacheItems = s.Storage.MaxBitmapCacheItems > 0 ? s.Storage.MaxBitmapCacheItems : 40;
         if (MaxBitmapCacheItems == 20) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low);
@@ -514,15 +530,19 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private void UpdateCacheStats()
     {
         var (imgCount, imgSize) = _imageCache.GetStats();
-        var audioStats = StreamCacheManager.GetStats();
+        var (audioFileCount, audioSizeMb) = StreamCacheManager.GetStats();
+        var (downloadFileCount, downloadSizeMb) = StreamCacheManager.GetDownloadsStats();
 
         ImageCacheStats = $"{imgSize} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]})";
-        AudioCacheStats = $"{audioStats.SizeMb} MB / {AudioCacheLimitMb} MB ({audioStats.FileCount} {SL["Common_Files"]})";
+        AudioCacheStats = $"{audioSizeMb} MB / {AudioCacheLimitMb} MB ({audioFileCount} {SL["Common_Files"]})";
+        DownloadsStats = $"{downloadSizeMb} MB / {DownloadedTracksLimitMb} MB ({downloadFileCount} {SL["Common_Files"]})";
 
         ImageCacheUsagePercent = ImageCacheLimitMb > 0
             ? Math.Clamp((double)imgSize / ImageCacheLimitMb, 0, 1) : 0;
         AudioCacheUsagePercent = AudioCacheLimitMb > 0
-            ? Math.Clamp((double)audioStats.SizeMb / AudioCacheLimitMb, 0, 1) : 0;
+            ? Math.Clamp((double)audioSizeMb / AudioCacheLimitMb, 0, 1) : 0;
+        DownloadsUsagePercent = DownloadedTracksLimitMb > 0
+            ? Math.Clamp((double)downloadSizeMb / DownloadedTracksLimitMb, 0, 1) : 0;
     }
 
     private async Task SetFakeAccountAsync()
@@ -626,6 +646,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         await _library.ResetAsync();
         LoadAllSettings();
         await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Dialog_ResetComplete"]);
+    }
+
+    private async Task ClearDownloadsAsync()
+    {
+        if (!await _dialog.ConfirmAsync(SL["Dialog_Confirm_Title"], SL["Settings_ClearDownloadsConfirm"]))
+            return;
+
+        await _streamCache.ClearDownloadsAsync();
+        UpdateCacheStats();
     }
 
     public void Dispose()

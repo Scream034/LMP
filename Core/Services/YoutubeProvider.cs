@@ -1115,8 +1115,15 @@ public class StreamOption : ReactiveObject
     public double Bitrate { get; set; }
     public string Codec { get; set; } = "";
     public double SizeMb { get; set; }
+    
     public string DisplayName => $"{Codec} {Bitrate:F0}kbps ({Container})";
+    
     [Reactive] public bool IsDownloaded { get; set; }
+    
+    /// <summary>
+    /// Текущий активный формат (который сейчас воспроизводится).
+    /// </summary>
+    [Reactive] public bool IsActive { get; set; }
 }
 
 public class HomeSection

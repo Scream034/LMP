@@ -248,7 +248,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 Dispatcher.UIThread.Post(() => IsSeekBusy = false);
             }
         };
-        
+
         // Обработчик события кэширования формата
         _formatCachedHandler = OnFormatCached;
 
@@ -259,7 +259,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnMaxVolumeChanged += _maxVolumeChangedHandler;
         _audio.OnTrackChanged += _trackChangedHandler;
         _audio.OnStreamInfoReady += _streamInfoReadyHandler;
-        
+
         // Подписка на событие кэширования
         _cacheManager.OnFormatCached += _formatCachedHandler;
 
@@ -414,6 +414,17 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         SwitchFormatCommand = ReactiveCommand.CreateFromTask<StreamOption>(async (option) =>
         {
             if (option == null) return;
+
+            // Сбрасываем IsActive у всех форматов
+            foreach (var f in AvailableFormats)
+            {
+                f.IsActive = false;
+            }
+
+            // Устанавливаем IsActive для выбранного
+            option.IsActive = true;
+
+            // Переключаем формат
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
         });
     }
@@ -422,39 +433,51 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #region Format Loading
 
+    /// <summary>
+    /// Загружает список доступных форматов для текущего трека.
+    /// </summary>
     private async Task LoadFormatsAsync()
     {
         if (CurrentTrack == null) return;
-        AvailableFormats.Clear();
 
-        string videoId = CurrentTrack.Id.Replace("yt_", "");
-        var formats = await _youtube.GetStreamOptionsAsync(videoId);
-
-        // Получаем все скачанные форматы для этого трека
-        var cachedFormats = _cacheManager.GetCachedFormats(CurrentTrack.Id);
-
-        foreach (var f in formats)
+        try
         {
-            f.IsDownloaded = false;
+            string videoId = CurrentTrack.Id.Replace("yt_", "");
+            var formats = await _youtube.GetStreamOptionsAsync(videoId);
 
-            // Проверяем в списке скачанных форматов
-            foreach (var cached in cachedFormats)
+            // Получаем текущий активный формат
+            var (currentFormat, currentBitrate, _) = _audio.GetCurrentStreamInfo();
+
+            // Получаем все скачанные форматы для этого трека
+            var cachedFormats = _cacheManager.GetCachedFormats(CurrentTrack.Id);
+
+            AvailableFormats.Clear();
+
+            foreach (var f in formats)
             {
-                if (string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
-                    (int)f.Bitrate == cached.Bitrate)
+                // Проверяем, скачан ли этот формат
+                f.IsDownloaded = cachedFormats.Any(cached =>
+                    string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
+                    (int)f.Bitrate == cached.Bitrate);
+
+                // Дополнительная проверка через IsFormatCached
+                if (!f.IsDownloaded)
                 {
-                    f.IsDownloaded = true;
-                    break;
+                    f.IsDownloaded = _cacheManager.IsFormatCached(CurrentTrack.Id, f.Container, (int)f.Bitrate);
                 }
+
+                // Помечаем текущий активный формат
+                f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
+                             (int)f.Bitrate == currentBitrate;
+
+                AvailableFormats.Add(f);
             }
 
-            // Дополнительно проверяем через IsFormatCached (на случай если GetCachedFormats не вернул)
-            if (!f.IsDownloaded)
-            {
-                f.IsDownloaded = _cacheManager.IsFormatCached(CurrentTrack.Id, f.Container, (int)f.Bitrate);
-            }
-
-            AvailableFormats.Add(f);
+            Log.Debug($"[PlayerBar] Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[PlayerBar] LoadFormatsAsync error: {ex.Message}");
         }
     }
 
@@ -464,22 +487,37 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
     /// </summary>
     private void OnFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
     {
-        // Проверяем, относится ли это к текущему треку
         if (CurrentTrack == null || CurrentTrack.Id != trackId)
             return;
 
         Log.Debug($"[PlayerBar] OnFormatCached: {trackId} {container}/{bitrate}kbps downloaded={isDownloaded}");
 
         // Ищем формат в списке и обновляем его
+        bool found = false;
         foreach (var format in AvailableFormats)
         {
             if (string.Equals(format.Container, container, StringComparison.OrdinalIgnoreCase) &&
                 (int)format.Bitrate == bitrate)
             {
                 format.IsDownloaded = isDownloaded;
+                found = true;
                 Log.Debug($"[PlayerBar] Updated format {format.DisplayName} IsDownloaded={isDownloaded}");
                 break;
             }
+        }
+
+        // Если формат не найден в списке — возможно список ещё не загружен или устарел
+        // Перезагружаем список форматов
+        if (!found && AvailableFormats.Count > 0)
+        {
+            Log.Debug($"[PlayerBar] Format not found in list, reloading...");
+            _ = LoadFormatsAsync();
+        }
+
+        // Обновляем StreamInfo
+        if (isDownloaded)
+        {
+            UpdateStreamInfo();
         }
     }
 
@@ -550,7 +588,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         IsSeekBusy = true;
         _lastDownloadedBytes = 0;
-        
+
         // Очищаем список форматов при смене трека
         AvailableFormats.Clear();
 
@@ -647,6 +685,13 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        // Обновляем IsActive в списке форматов
+        foreach (var f in AvailableFormats)
+        {
+            f.IsActive = string.Equals(f.Codec, format, StringComparison.OrdinalIgnoreCase) &&
+                         (int)f.Bitrate == bitrate;
+        }
+
         if (bitrate > 0)
         {
             StreamInfo = $"{format} • {bitrate}kbps";
@@ -656,6 +701,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             StreamInfo = format;
         }
 
+        // Добавляем галочку если трек скачан
         if (CurrentTrack.IsDownloaded && !string.IsNullOrEmpty(CurrentTrack.LocalPath))
         {
             StreamInfo += " ✓";
@@ -778,7 +824,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _audio.OnMaxVolumeChanged -= _maxVolumeChangedHandler;
         _audio.OnTrackChanged -= _trackChangedHandler;
         _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
-        
+
         // Отписка от события кэширования
         _cacheManager.OnFormatCached -= _formatCachedHandler;
 

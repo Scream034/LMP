@@ -31,6 +31,7 @@ public class StorageSettings
 {
     public int ImageCacheLimitMb { get; set; } = 500;
     public int AudioCacheLimitMb { get; set; } = 2048;
+    public int DownloadedTracksLimitMb { get; set; } = 5000; // 5GB по умолчанию
     public int MaxBitmapCacheItems { get; set; } = 40;
 }
 

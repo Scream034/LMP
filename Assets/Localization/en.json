@@ -84,6 +84,12 @@
   "Settings_AdvancedColors": "Advanced Colors",
   "Settings_Client": "YouTube Client",
   "Settings_ClientDesc": "Change if tracks fail to load (403 Error).",
+  "Settings_DownloadedTracks": "Downloaded Tracks",
+  "Settings_DownloadsLimit": "Downloads",
+  "Settings_ImagesLimit": "Images",
+  "Settings_AudioLimit": "Audio",
+  "Settings_ClearDownloadsConfirm": "Delete all downloaded tracks? This cannot be undone.",
+  "Settings_DownloadedTracksDesc": "Tracks fully cached during playback are saved here.",
 
   "Settings_ChannelUrl": "Public Channel",
   "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
