@@ -1,5 +1,4 @@
-﻿// Features/Player/QueueViewModel.cs
-using LMP.Core.Helpers;
+﻿using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -18,10 +17,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly TrackViewModelFactory _vmFactory;
-
-    private readonly IDisposable? _queueSub;
-    private readonly IDisposable? _trackSub;
-    private readonly IDisposable? _filterSub;
 
     private bool _isMovingInternally;
     private readonly Dictionary<string, TrackItemViewModel> _vmCache = [];
@@ -52,7 +47,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         _downloads = downloads;
         _vmFactory = vmFactory;
 
-        // ThrownExceptions subscription to prevent memory leak
         ClearQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.ClearQueue()));
         ShuffleQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.ShuffleQueue()));
 
@@ -73,7 +67,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             MoveItem(tuple.oldIndex, tuple.newIndex);
         }));
 
-        _queueSub = Observable.FromEvent(
+        // Use DisposeWith to prevent memory leaks!
+        Observable.FromEvent(
                 h => _audio.OnQueueChanged += h,
                 h => _audio.OnQueueChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(50))
@@ -84,49 +79,44 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
                 {
                     RefreshFromAudioEngine();
                 }
-            });
+            })
+            .DisposeWith(Disposables);
 
-        _trackSub = Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
+        Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdateActiveStates());
+            .Subscribe(_ => UpdateActiveStates())
+            .DisposeWith(Disposables);
 
-        _filterSub = this.WhenAnyValue(x => x.FilterQuery)
+        this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);
                 RebuildVisibleItems();
-            });
+            })
+            .DisposeWith(Disposables);
 
         RefreshFromAudioEngine();
     }
 
-    /// <summary>
-    /// Синхронизирует _masterQueue с AudioEngine.
-    /// </summary>
     private void RefreshFromAudioEngine()
     {
         _masterQueue = [.. _audio.Queue];
         RebuildVisibleItems();
     }
 
-    /// <summary>
-    /// Перестраивает QueueItems на основе _masterQueue и фильтра.
-    /// </summary>
     private void RebuildVisibleItems()
     {
         var currentId = _audio.CurrentTrack?.Id;
         var query = FilterQuery;
 
-        // Формируем отфильтрованный список
         var filtered = _masterQueue
             .Where(t => MatchesFilter(t, query))
             .ToList();
 
-        // Собираем нужные VM
         var newItems = new List<TrackItemViewModel>();
         var usedIds = new HashSet<string>();
 
@@ -143,7 +133,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             usedIds.Add(track.Id);
         }
 
-        // Удаляем неиспользуемые VM из кэша
         var toRemove = _vmCache.Keys.Where(k => !usedIds.Contains(k)).ToList();
         foreach (var id in toRemove)
         {
@@ -151,21 +140,17 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             _vmCache.Remove(id);
         }
 
-        // Синхронизируем ObservableCollection
         SyncCollection(newItems);
-
         IsEmpty = QueueItems.Count == 0;
     }
 
     private void SyncCollection(List<TrackItemViewModel> newItems)
     {
-        // Удаляем лишние с конца
         while (QueueItems.Count > newItems.Count)
         {
             QueueItems.RemoveAt(QueueItems.Count - 1);
         }
 
-        // Обновляем/добавляем
         for (int i = 0; i < newItems.Count; i++)
         {
             if (i < QueueItems.Count)
@@ -185,16 +170,12 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private static bool MatchesFilter(TrackInfo item, string query)
         => TrackFilters.MatchesTitleOrAuthor(item, query);
 
-    /// <summary>
-    /// Перемещает элемент в видимом списке с пересчётом master-индексов.
-    /// </summary>
     private void MoveItem(int oldIdx, int newIdx)
     {
         if (oldIdx == newIdx) return;
         if (oldIdx < 0 || oldIdx >= QueueItems.Count) return;
         if (newIdx < 0 || newIdx >= QueueItems.Count) return;
 
-        // При активном фильтре нужно пересчитывать master индексы
         if (!string.IsNullOrWhiteSpace(FilterQuery))
         {
             Log.Warn("[Queue] Cannot reorder with active filter");
@@ -209,15 +190,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         try
         {
             _isMovingInternally = true;
-
-            // 1. Обновляем UI
             QueueItems.Move(oldIdx, newIdx);
-
-            // 2. Обновляем локальный master
             _masterQueue.RemoveAt(oldIdx);
             _masterQueue.Insert(newIdx, movingTrack);
-
-            // 3. Обновляем AudioEngine
             _audio.MoveQueueItem(oldIdx, newIdx);
         }
         finally
@@ -248,6 +223,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         {
             Log.Debug("[QueueVM] Disposing");
             
+            // Dispose all cached ViewModels
             foreach (var vm in _vmCache.Values)
                 vm.Dispose();
 

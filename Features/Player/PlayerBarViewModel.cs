@@ -1,5 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
@@ -12,7 +13,7 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Features.Player;
 
-public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
+public sealed class PlayerBarViewModel : ViewModelBase
 {
     #region Constants
 
@@ -35,22 +36,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
-
-    private readonly IDisposable? _librarySub;
-    private readonly IDisposable? _downloadProgressSub;
-    private readonly IDisposable _nextSub;
-    private readonly IDisposable _prevSub;
-    private readonly IDisposable? _loadingSub;
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
-
-    private readonly Action<bool, bool> _playbackStateHandler;
-    private readonly Action _queueChangedHandler;
-    private readonly Action<TimeSpan> _positionChangedHandler;
-    private readonly Action<int> _maxVolumeChangedHandler;
-    private readonly Action<TrackInfo?> _trackChangedHandler;
-    private readonly Action _streamInfoReadyHandler;
-    private readonly Action<string, string, int, bool> _formatCachedHandler;
 
     private bool _isSeeking;
     private bool _justFinishedSeeking;
@@ -223,50 +210,83 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         Log.Info($"Initialized. MaxVol: {MaxVolume}, CurrentVol: {Volume}");
 
-        // Event handlers
-        _playbackStateHandler = (isPlaying, isPaused) => Dispatcher.UIThread.Post(() =>
-        {
-            SyncPlaybackState(isPlaying, isPaused);
-            this.RaisePropertyChanged(nameof(PlayPauseTooltip));
-        });
-        _queueChangedHandler = () => Dispatcher.UIThread.Post(UpdateQueueState);
-        _maxVolumeChangedHandler = newMax => Dispatcher.UIThread.Post(() => HandleMaxVolumeChanged(newMax));
-        _trackChangedHandler = t => Dispatcher.UIThread.Post(() => HandleTrackChanged(t));
-        _streamInfoReadyHandler = () => Dispatcher.UIThread.Post(UpdateStreamInfo);
-        _positionChangedHandler = pos =>
-        {
-            if (!_isSeeking && !_justFinishedSeeking)
+        // --- Event Subscriptions (via DisposeWith to prevent leaks) ---
+
+        // AudioEngine Events
+        Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
+            h => (p, u) => h((p, u)),
+            h => _audio.OnPlaybackStateChanged += h,
+            h => _audio.OnPlaybackStateChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(state =>
             {
-                Dispatcher.UIThread.Post(() =>
+                SyncPlaybackState(state.Item1, state.Item2);
+                this.RaisePropertyChanged(nameof(PlayPauseTooltip));
+            })
+            .DisposeWith(Disposables);
+
+        Observable.FromEvent(
+            h => _audio.OnQueueChanged += h,
+            h => _audio.OnQueueChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => UpdateQueueState())
+            .DisposeWith(Disposables);
+
+        Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
+            h => _audio.OnPositionChanged += h,
+            h => _audio.OnPositionChanged -= h)
+            // No ObserveOn needed for high frequency if logic is simple, 
+            // but for UI update usually needed. Throttling is handled in VM state if needed.
+            .Subscribe(pos =>
+            {
+                if (!_isSeeking && !_justFinishedSeeking)
                 {
-                    Position = pos;
-                    PositionSeconds = pos.TotalSeconds;
-                });
-            }
-            if (IsSeekBusy && !IsLoading)
-            {
-                Dispatcher.UIThread.Post(() => IsSeekBusy = false);
-            }
-        };
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        Position = pos;
+                        PositionSeconds = pos.TotalSeconds;
+                    });
+                }
+                if (IsSeekBusy && !IsLoading)
+                {
+                    Dispatcher.UIThread.Post(() => IsSeekBusy = false);
+                }
+            })
+            .DisposeWith(Disposables);
 
-        // Обработчик события кэширования формата
-        _formatCachedHandler = OnFormatCached;
+        Observable.FromEvent<Action<int>, int>(
+            h => _audio.OnMaxVolumeChanged += h,
+            h => _audio.OnMaxVolumeChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(HandleMaxVolumeChanged)
+            .DisposeWith(Disposables);
 
-        // Subscribe to AudioEngine events
-        _audio.OnPlaybackStateChanged += _playbackStateHandler;
-        _audio.OnQueueChanged += _queueChangedHandler;
-        _audio.OnPositionChanged += _positionChangedHandler;
-        _audio.OnMaxVolumeChanged += _maxVolumeChangedHandler;
-        _audio.OnTrackChanged += _trackChangedHandler;
-        _audio.OnStreamInfoReady += _streamInfoReadyHandler;
+        Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
+            h => _audio.OnTrackChanged += h,
+            h => _audio.OnTrackChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(HandleTrackChanged)
+            .DisposeWith(Disposables);
 
-        // Подписка на событие кэширования
-        _cacheManager.OnFormatCached += _formatCachedHandler;
+        Observable.FromEvent(
+            h => _audio.OnStreamInfoReady += h,
+            h => _audio.OnStreamInfoReady -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => UpdateStreamInfo()) // ИСПРАВЛЕНО: используем лямбду для игнорирования аргумента Unit
+            .DisposeWith(Disposables);
 
-        // Rx subscriptions
-        _librarySub = Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
-                h => _library.OnTrackUpdated += h,
-                h => _library.OnTrackUpdated -= h)
+        // Cache Events
+        Observable.FromEvent<Action<string, string, int, bool>, (string, string, int, bool)>(
+            h => (t, c, b, d) => h((t, c, b, d)),
+            h => _cacheManager.OnFormatCached += h,
+            h => _cacheManager.OnFormatCached -= h)
+            .Subscribe(x => OnFormatCached(x.Item1, x.Item2, x.Item3, x.Item4))
+            .DisposeWith(Disposables);
+
+        // Library Updates
+        Observable.FromEvent<Action<TrackInfo>, TrackInfo>(
+            h => _library.OnTrackUpdated += h,
+            h => _library.OnTrackUpdated -= h)
             .Where(t => CurrentTrack != null && t.Id == CurrentTrack.Id)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(t =>
@@ -274,7 +294,25 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 IsLiked = t.IsLiked;
                 if (CurrentTrack != null) CurrentTrack.IsLiked = t.IsLiked;
                 this.RaisePropertyChanged(nameof(LikeTooltip));
-            });
+            })
+            .DisposeWith(Disposables);
+
+        // Download Progress
+        Observable.FromEvent<Action<string, float>, (string, float)>(
+            h => (id, p) => h((id, p)),
+            h => _downloads.OnProgress += h,
+            h => _downloads.OnProgress -= h)
+            .Sample(TimeSpan.FromMilliseconds(200))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(x =>
+            {
+                if (CurrentTrack?.Id == x.Item1)
+                {
+                    BufferedSeconds = DurationSeconds * x.Item2;
+                }
+            })
+            .DisposeWith(Disposables);
+
 
         // Volume updates TO audio engine
         this.WhenAnyValue(x => x.Volume)
@@ -284,21 +322,25 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
                 IsMuted = v < 1;
                 UpdateVolumeBars();
                 this.RaisePropertyChanged(nameof(VolumeTooltip));
-            });
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.RepeatMode)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(RepeatTooltip)));
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(RepeatTooltip)))
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.IsLiked)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(LikeTooltip)));
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(LikeTooltip)))
+            .DisposeWith(Disposables);
 
-        _loadingSub = _audio.WhenValueChanged(x => x.IsLoading)
+        _audio.WhenValueChanged(x => x.IsLoading)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(l =>
             {
                 IsLoading = l;
                 IsSeekBusy = l;
-            });
+            })
+            .DisposeWith(Disposables);
 
         // Timers
         _fallbackPositionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -309,39 +351,26 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         _speedUpdateTimer.Tick += (_, _) => UpdateDownloadSpeed();
         _speedUpdateTimer.Start();
 
-        // Download progress subscription
-        _downloadProgressSub = Observable.FromEvent<Action<string, float>, (string, float)>(
-                h => (id, p) => h((id, p)),
-                h => _downloads.OnProgress += h,
-                h => _downloads.OnProgress -= h)
-            .Sample(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(x =>
-            {
-                if (CurrentTrack?.Id == x.Item1)
-                {
-                    BufferedSeconds = DurationSeconds * x.Item2;
-                }
-            });
-
-        // Navigation
-        _nextSub = _nextSubject
+        // Navigation Subjects
+        _nextSubject
             .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
                 try { await _audio.PlayNextAsync(); }
                 finally { IsNavigating = false; }
-            });
+            })
+            .DisposeWith(Disposables);
 
-        _prevSub = _prevSubject
+        _prevSubject
             .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
                 try { await _audio.PlayPreviousAsync(); }
                 finally { IsNavigating = false; }
-            });
+            })
+            .DisposeWith(Disposables);
 
         // Commands
         var canExecute = this.WhenAnyValue(x => x.HasTrack, x => x.IsLoading,
@@ -349,7 +378,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
             (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
 
-        // FIX: Используем CreateCommand из ViewModelBase для предотвращения утечек
         PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             bool wantsToPlay = !_audio.IsPlaying;
@@ -367,7 +395,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             ShuffleEnabled = true;
             Observable.Timer(TimeSpan.FromMilliseconds(500))
                 .ObserveOn(RxApp.MainThreadScheduler)
-                .Subscribe(_ => ShuffleEnabled = false);
+                .Subscribe(_ => ShuffleEnabled = false)
+                .DisposeWith(Disposables);
         }, canShuffle));
 
         ToggleRepeatCommand = CreateCommand(ReactiveCommand.Create(() =>
@@ -418,9 +447,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #region Format Loading
 
-    /// <summary>
-    /// Загружает список доступных форматов для текущего трека.
-    /// </summary>
     private async Task LoadFormatsAsync()
     {
         if (CurrentTrack == null) return;
@@ -430,34 +456,27 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             string videoId = CurrentTrack.Id.Replace("yt_", "");
             var formats = await _youtube.GetStreamOptionsAsync(videoId);
 
-            // Получаем текущий активный формат
             var (currentFormat, currentBitrate, _) = _audio.GetCurrentStreamInfo();
-
-            // Получаем все скачанные форматы для этого трека
             var cachedFormats = _cacheManager.GetCachedFormats(CurrentTrack.Id);
 
             AvailableFormats.Clear();
 
             foreach (var f in formats)
             {
-                // Проверяем, скачан ли этот формат
                 f.IsDownloaded = cachedFormats.Any(cached =>
                     string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
                     (int)f.Bitrate == cached.Bitrate);
 
-                // Дополнительная проверка через IsFormatCached
                 if (!f.IsDownloaded)
                 {
                     f.IsDownloaded = _cacheManager.IsFormatCached(CurrentTrack.Id, f.Container, (int)f.Bitrate);
                 }
 
-                // Помечаем текущий активный формат
                 f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
                              (int)f.Bitrate == currentBitrate;
 
                 AvailableFormats.Add(f);
             }
-
             Log.Debug($"Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
         }
         catch (Exception ex)
@@ -466,16 +485,11 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         }
     }
 
-    /// <summary>
-    /// Обработчик события кэширования формата.
-    /// Обновляет IsDownloaded для соответствующего формата в списке.
-    /// </summary>
     private void OnFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
     {
         if (CurrentTrack == null || CurrentTrack.Id != trackId)
             return;
 
-        // Ищем формат в списке и обновляем его
         bool found = false;
         foreach (var format in AvailableFormats)
         {
@@ -484,20 +498,15 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             {
                 format.IsDownloaded = isDownloaded;
                 found = true;
-                Log.Info($"Updated format {format.DisplayName} IsDownloaded={isDownloaded}");
                 break;
             }
         }
 
-        // Если формат не найден в списке — возможно список ещё не загружен или устарел
-        // Перезагружаем список форматов
         if (!found && AvailableFormats.Count > 0)
         {
-            Log.Info($"Format not found in list, reloading...");
             _ = LoadFormatsAsync();
         }
 
-        // Обновляем StreamInfo
         if (isDownloaded)
         {
             UpdateStreamInfo();
@@ -572,7 +581,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         IsSeekBusy = true;
         _lastDownloadedBytes = 0;
 
-        // Очищаем список форматов при смене трека
         AvailableFormats.Clear();
 
         if (track != null)
@@ -668,7 +676,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        // Обновляем IsActive в списке форматов
         foreach (var f in AvailableFormats)
         {
             f.IsActive = string.Equals(f.Codec, format, StringComparison.OrdinalIgnoreCase) &&
@@ -684,7 +691,6 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             StreamInfo = format;
         }
 
-        // Добавляем галочку если трек скачан
         if (CurrentTrack.IsDownloaded && !string.IsNullOrEmpty(CurrentTrack.LocalPath))
         {
             StreamInfo += " ✓";
@@ -802,13 +808,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
             _audio.SaveVolumeNow();
             _fallbackPositionTimer.Stop();
             _speedUpdateTimer.Stop();
-            _audio.OnPlaybackStateChanged -= _playbackStateHandler;
-            _audio.OnQueueChanged -= _queueChangedHandler;
-            _audio.OnPositionChanged -= _positionChangedHandler;
-            _audio.OnMaxVolumeChanged -= _maxVolumeChangedHandler;
-            _audio.OnTrackChanged -= _trackChangedHandler;
-            _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
-            _cacheManager.OnFormatCached -= _formatCachedHandler;
+            
+            // Note: Rx subscriptions (via DisposeWith) and Timer handles are cleared in base.Dispose()
         }
         base.Dispose(disposing);
     }

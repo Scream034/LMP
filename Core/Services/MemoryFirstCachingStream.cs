@@ -610,6 +610,52 @@ public sealed class MemoryFirstCachingStream : Stream
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
+    /// <summary>
+    /// Принудительно освобождает чанки из RAM, если они уже сохранены на диск.
+    /// Вызывается при сворачивании приложения для экономии памяти.
+    /// </summary>
+    public void ReleaseRamBuffers()
+    {
+        if (_disposed) return;
+
+        int removedCount = 0;
+        long freedBytes = 0;
+
+        // Проходим по всем чанкам в памяти
+        foreach (var kvp in _chunks)
+        {
+            int idx = kvp.Key;
+
+            // Вычисляем позицию чанка в файле
+            long start = (long)idx * _chunkSize;
+            long end = Math.Min(start + _chunkSize, _contentLength);
+
+            // ПРОВЕРКА: Если этот диапазон уже есть на диске
+            if (_diskRanges.IsRangeComplete(start, end))
+            {
+                // Удаляем из словаря
+                if (_chunks.TryRemove(idx, out var buffer))
+                {
+                    freedBytes += buffer.Length;
+                    removedCount++;
+
+                    // Возвращаем буфер в пул памяти (ArrayPool)
+                    System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+        }
+
+        if (freedBytes > 0)
+        {
+            // Корректируем диагностику
+            MemoryDiagnostics.UntrackBytes("Stream.RAMChunks", freedBytes);
+            Log.Info($"[CacheStream] Released {removedCount} chunks from RAM ({freedBytes / 1024 / 1024} MB) due to minimization.");
+
+            // Форсируем GC, чтобы пул массивов мог освободиться, если он переполнен
+            // (ArrayPool.Shared держит массивы, но GC может их забрать при давлении памяти)
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (_disposed) return;

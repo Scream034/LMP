@@ -173,7 +173,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var caching = _currentStreamingConfig.VlcNetworkCachingMs;
 
         _libVLC = new LibVLC(
-            "--no-video", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
+            "--no-video", "--vout=none", "--no-video-title-show", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
             $"--network-caching={caching}",
             $"--file-caching={caching}",
             $"--live-caching={caching}",
@@ -296,6 +296,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 MaxRamChunks = 100
             }
         };
+    }
+
+    public void NotifyAppMinimized()
+    {
+        // 1. Сбрасываем буферы текущего потока
+        if (_currentStream is MemoryFirstCachingStream stream)
+        {
+            stream.ReleaseRamBuffers();
+        }
+
+        // 2. Если есть другие тяжелые ресурсы, можно почистить их здесь
+        // Например, историю, если она огромная (но она у нас ограничена 100 элементами)
     }
 
     // === Volume ===

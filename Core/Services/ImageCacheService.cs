@@ -283,10 +283,10 @@ public sealed class ImageCacheService : IDisposable
     #region Private Methods
 
     private async Task<Bitmap?> LoadFromDiskOrNetworkAsync(
-        string url,
-        string key,
-        int decodeWidth,
-        CancellationToken ct)
+      string url,
+      string key,
+      int decodeWidth,
+      CancellationToken ct)
     {
         try
         {
@@ -299,6 +299,7 @@ public sealed class ImageCacheService : IDisposable
 
         try
         {
+            // Double-check memory cache inside lock/semaphore
             if (_memoryCache.TryGetValue(key, out var cached))
             {
                 TouchLru(key);
@@ -307,7 +308,6 @@ public sealed class ImageCacheService : IDisposable
 
             ct.ThrowIfCancellationRequested();
 
-            // Для диска - базовый ключ без размера
             var diskKey = GetCacheKey(url);
             var fileLock = GetFileLock(diskKey);
             await fileLock.WaitAsync(ct);
@@ -320,9 +320,20 @@ public sealed class ImageCacheService : IDisposable
                 {
                     ct.ThrowIfCancellationRequested();
 
-                    var bytes = await _http.GetByteArrayAsync(url, ct);
-                    await File.WriteAllBytesAsync(diskPath, bytes, ct);
-                    Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
+                    // ОПТИМИЗАЦИЯ: Скачиваем потоком, без выделения byte[] в RAM
+                    // Это снижает нагрузку на GC и LOH
+                    using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+
+                    if (!response.IsSuccessStatusCode)
+                        return null;
+
+                    using var networkStream = await response.Content.ReadAsStreamAsync(ct);
+                    using var fileStream = new FileStream(diskPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+
+                    await networkStream.CopyToAsync(fileStream, ct);
+
+                    // Обновляем размер кэша
+                    Interlocked.Add(ref _currentDiskCacheBytes, fileStream.Length);
 
                     long limitBytes = (long)_library.Settings.Storage.ImageCacheLimitMb * 1024 * 1024;
                     if (_currentDiskCacheBytes > limitBytes)
@@ -341,11 +352,11 @@ public sealed class ImageCacheService : IDisposable
                         {
                             using var stream = File.OpenRead(diskPath);
 
-                            // Если запрошен DecodeWidth, используем его строго.
-                            // Для списков и сеток это критично.
                             if (decodeWidth > 0)
                             {
-                                return Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.LowQuality);
+                                // ОПТИМИЗАЦИЯ: HighQuality лучше для обложек, 
+                                // LowQuality может давать "лесенки". Разница в памяти нулевая, в CPU - минимальная.
+                                return Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.HighQuality);
                             }
                             else
                             {
