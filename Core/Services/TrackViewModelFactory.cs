@@ -11,7 +11,6 @@ namespace LMP.Core.Services;
 public class TrackViewModelFactory
 {
     private readonly AudioEngine _audio;
-    private readonly LibraryService _library;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
     private readonly TrackRegistry _registry;
@@ -21,14 +20,12 @@ public class TrackViewModelFactory
 
     public TrackViewModelFactory(
         AudioEngine audio,
-        LibraryService library,
         DownloadService downloads,
         MusicLibraryManager manager,
         TrackRegistry registry,
         StreamCacheManager cacheManager)
     {
         _audio = audio;
-        _library = library;
         _downloads = downloads;
         _manager = manager;
         _registry = registry;
@@ -66,13 +63,14 @@ public class TrackViewModelFactory
         var vm = new TrackItemViewModel(
             canonical,
             _audio,
-            _library,
             _downloads,
             _manager,
             _cacheManager,  // ← Передаём через DI
             playAction);
 
         _cache[canonical.Id] = new WeakReference<TrackItemViewModel>(vm);
+
+        MemoryDiagnostics.TrackInstance("TrackVM.Created");
 
         return vm;
     }
@@ -95,6 +93,11 @@ public class TrackViewModelFactory
         return null;
     }
 
+    public void TryRemove(string trackId)
+    {
+        _cache.TryRemove(trackId, out _);
+    }
+
     public int CleanupCache()
     {
         var deadKeys = _cache
@@ -106,7 +109,11 @@ public class TrackViewModelFactory
             _cache.TryRemove(key, out _);
 
         if (deadKeys.Count > 0)
+        {
+            // ТРЕКИНГ
+            MemoryDiagnostics.SetBytes("TrackVM.CacheSize", _cache.Count);
             Log.Info($"[TrackFactory] Cleaned {deadKeys.Count} dead items.");
+        }
 
         return deadKeys.Count;
     }

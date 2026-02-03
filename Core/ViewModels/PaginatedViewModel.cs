@@ -1,5 +1,4 @@
-﻿// Core/ViewModels/PaginatedViewModel.cs
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -12,7 +11,7 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.ViewModels;
 
-public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IDisposable, IFilterable
+public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IFilterable
     where TViewModel : IDisposable
     where TSource : notnull
 {
@@ -22,7 +21,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     private readonly SourceList<TSource> _sourceList = new();
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
-    private readonly CompositeDisposable _cleanUp = [];
+    private readonly CompositeDisposable _dynamicDataSubscriptions = new();
 
     private int _consecutiveEmptyLoads;
     private const int MaxConsecutiveEmptyLoads = 5;
@@ -83,7 +82,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             .Bind(out _items)
             .DisposeMany()
             .Subscribe()
-            .DisposeWith(_cleanUp);
+            .DisposeWith(_dynamicDataSubscriptions);
 
         var canLoadMore = this.WhenAnyValue(
             x => x.IsLoadingMore,
@@ -92,7 +91,8 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             x => x.HasMoreItems,
             (more, init, net, hasMore) => !more && !init && !net && hasMore);
 
-        LoadMoreCommand = ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore);
+        // FIX: Используем CreateCommand из базового класса
+        LoadMoreCommand = CreateCommand(ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore));
 
         _sourceList.Connect()
             .Filter(filterPredicate)
@@ -109,11 +109,11 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                     }
                 }
             })
-            .DisposeWith(_cleanUp);
+            .DisposeWith(_dynamicDataSubscriptions);
 
         this.WhenAnyValue(x => x.FilterQuery)
             .Subscribe(_ => _consecutiveEmptyLoads = 0)
-            .DisposeWith(_cleanUp);
+            .DisposeWith(_dynamicDataSubscriptions);
     }
 
     #endregion
@@ -140,10 +140,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Public Methods
 
-    /// <summary>
-    /// Перемещает элемент. Использует RemoveAt+Insert вместо Move
-    /// для корректной работы с DynamicData Filter.
-    /// </summary>
     protected void MoveSourceItem(int oldIndex, int newIndex)
     {
         _sourceList.Edit(list =>
@@ -153,7 +149,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                 oldIndex == newIndex)
                 return;
 
-            // RemoveAt + Insert вместо Move — Filter корректно обрабатывает эти события
             var item = list[oldIndex];
             list.RemoveAt(oldIndex);
             list.Insert(newIndex, item);
@@ -278,23 +273,22 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #endregion
 
-    #region IDisposable
+    #region IDisposable - ИСПРАВЛЕНО: override вместо new
 
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    protected virtual void Dispose(bool disposing)
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
+        
         if (disposing)
         {
+            Log.Debug($"[PaginatedVM] Disposing");
+            
             CancelLoading();
-            _cleanUp.Dispose();
+            _dynamicDataSubscriptions.Dispose();
             _sourceList.Dispose();
         }
+        
+        base.Dispose(disposing);
         _isDisposed = true;
     }
 

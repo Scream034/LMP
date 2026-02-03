@@ -349,84 +349,69 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
             (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
 
-        PlayPauseCommand = ReactiveCommand.CreateFromTask(async () =>
+        // FIX: Используем CreateCommand из ViewModelBase для предотвращения утечек
+        PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             bool wantsToPlay = !_audio.IsPlaying;
             await _audio.SetPlaybackStateAsync(wantsToPlay);
-        }, this.WhenAnyValue(x => x.HasTrack));
+        }, this.WhenAnyValue(x => x.HasTrack)));
 
-        NextCommand = ReactiveCommand.Create(() => { IsNavigating = true; _nextSubject.OnNext(Unit.Default); }, canNavigate);
-        PreviousCommand = ReactiveCommand.Create(() => { IsNavigating = true; _prevSubject.OnNext(Unit.Default); }, canNavigate);
+        NextCommand = CreateCommand(ReactiveCommand.Create(() => { IsNavigating = true; _nextSubject.OnNext(Unit.Default); }, canNavigate));
+        PreviousCommand = CreateCommand(ReactiveCommand.Create(() => { IsNavigating = true; _prevSubject.OnNext(Unit.Default); }, canNavigate));
 
         var canShuffle = this.WhenAnyValue(x => x.HasQueueToShuffle, x => x.IsLoading,
             (hasTracks, loading) => hasTracks && !loading);
-        ShuffleQueueCommand = ReactiveCommand.Create(() =>
+        ShuffleQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             _audio.ShuffleQueue();
             ShuffleEnabled = true;
             Observable.Timer(TimeSpan.FromMilliseconds(500))
                 .ObserveOn(RxApp.MainThreadScheduler)
                 .Subscribe(_ => ShuffleEnabled = false);
-        }, canShuffle);
+        }, canShuffle));
 
-        ToggleRepeatCommand = ReactiveCommand.Create(() =>
+        ToggleRepeatCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            RepeatMode = RepeatMode switch
-            {
-                RepeatMode.None => RepeatMode.RepeatAll,
-                RepeatMode.RepeatAll => RepeatMode.RepeatOne,
-                _ => RepeatMode.None
-            };
+            RepeatMode = RepeatMode switch { RepeatMode.None => RepeatMode.RepeatAll, RepeatMode.RepeatAll => RepeatMode.RepeatOne, _ => RepeatMode.None };
             _audio.RepeatMode = RepeatMode;
             _library.UpdateSettings(s => s.RepeatMode = RepeatMode);
-
             ShowRepeatModeHint();
-        });
+        }));
 
-        ToggleMuteCommand = ReactiveCommand.Create(() =>
+        ToggleMuteCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             _audio.ToggleMute();
             Volume = (int)_audio.GetVolume();
             this.RaisePropertyChanged(nameof(VolumeTooltip));
-        });
+        }));
 
-        ToggleLikeCommand = ReactiveCommand.CreateFromTask(async () =>
+        ToggleLikeCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             if (CurrentTrack != null)
             {
                 await _musicManager.ToggleLikeAsync(CurrentTrack);
                 ShowLikeHint();
             }
-        }, this.WhenAnyValue(x => x.HasTrack));
+        }, this.WhenAnyValue(x => x.HasTrack)));
 
-        CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
+        CopyLinkCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
-            Log.Info($"Copying link: {CurrentTrack?.Url}");
             if (CurrentTrack?.Url != null)
             {
                 await _clipboard.SetTextAsync(CurrentTrack.Url);
                 ShowCopyHint();
             }
-        }, this.WhenAnyValue(x => x.HasTrack));
+        }, this.WhenAnyValue(x => x.HasTrack)));
 
-        LoadFormatsCommand = ReactiveCommand.CreateFromTask(LoadFormatsAsync);
+        LoadFormatsCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadFormatsAsync));
 
-        SwitchFormatCommand = ReactiveCommand.CreateFromTask<StreamOption>(async (option) =>
+        SwitchFormatCommand = CreateCommand(ReactiveCommand.CreateFromTask<StreamOption>(async (option) =>
         {
             if (option == null) return;
-
-            // Сбрасываем IsActive у всех форматов
-            foreach (var f in AvailableFormats)
-            {
-                f.IsActive = false;
-            }
-
-            // Устанавливаем IsActive для выбранного
+            foreach (var f in AvailableFormats) f.IsActive = false;
             option.IsActive = true;
-
-            // Переключаем формат
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
-        });
+        }));
     }
 
     #endregion
@@ -678,7 +663,7 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
         if (!isReady || string.IsNullOrEmpty(format))
         {
-            StreamInfo = SL.Get("Player_StreamInfo_Loading", "Loading..."); 
+            StreamInfo = SL.Get("Player_StreamInfo_Loading", "Loading...");
             ShowStreamInfo = true;
             return;
         }
@@ -723,8 +708,8 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
         {
             var kbs = ((currentBytes - _lastDownloadedBytes) / elapsed) / 1024.0;
             DownloadSpeedText = kbs > 10
-                ? (kbs >= 1024 
-                    ? string.Format(SL.Get("Stream_Speed_Mb", "{0:F1} MB/s"), kbs / 1024) 
+                ? (kbs >= 1024
+                    ? string.Format(SL.Get("Stream_Speed_Mb", "{0:F1} MB/s"), kbs / 1024)
                     : string.Format(SL.Get("Stream_Speed_Kb", "{0:F0} KB/s"), kbs))
                 : "";
         }
@@ -808,35 +793,24 @@ public sealed class PlayerBarViewModel : ViewModelBase, IDisposable
 
     #region IDisposable
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        _isDisposed = true;
-
-        _audio.SaveVolumeNow();
-
-        _fallbackPositionTimer.Stop();
-        _speedUpdateTimer.Stop();
-
-        _audio.OnPlaybackStateChanged -= _playbackStateHandler;
-        _audio.OnQueueChanged -= _queueChangedHandler;
-        _audio.OnPositionChanged -= _positionChangedHandler;
-        _audio.OnMaxVolumeChanged -= _maxVolumeChangedHandler;
-        _audio.OnTrackChanged -= _trackChangedHandler;
-        _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
-
-        // Отписка от события кэширования
-        _cacheManager.OnFormatCached -= _formatCachedHandler;
-
-        _librarySub?.Dispose();
-        _loadingSub?.Dispose();
-        _downloadProgressSub?.Dispose();
-        _nextSub.Dispose();
-        _prevSub.Dispose();
-        _nextSubject.Dispose();
-        _prevSubject.Dispose();
-
-        GC.SuppressFinalize(this);
+        if (disposing)
+        {
+            _isDisposed = true;
+            _audio.SaveVolumeNow();
+            _fallbackPositionTimer.Stop();
+            _speedUpdateTimer.Stop();
+            _audio.OnPlaybackStateChanged -= _playbackStateHandler;
+            _audio.OnQueueChanged -= _queueChangedHandler;
+            _audio.OnPositionChanged -= _positionChangedHandler;
+            _audio.OnMaxVolumeChanged -= _maxVolumeChangedHandler;
+            _audio.OnTrackChanged -= _trackChangedHandler;
+            _audio.OnStreamInfoReady -= _streamInfoReadyHandler;
+            _cacheManager.OnFormatCached -= _formatCachedHandler;
+        }
+        base.Dispose(disposing);
     }
 
     #endregion

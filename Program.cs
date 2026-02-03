@@ -102,7 +102,6 @@ class Program
         services.AddSingleton<StreamCacheManager>();
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
-        services.AddSingleton<MemoryMonitor>();
 
         // === Audio & Downloads ===
         services.AddSingleton<AudioEngine>();

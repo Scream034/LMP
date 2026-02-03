@@ -280,24 +280,24 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #region IDisposable Implementation
 
-    public new void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        _isDisposed = true;
-
-        LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
-
-        _categoryCts?.Cancel();
-        _categoryCts?.Dispose();
-        CancelLoading();
-
-        foreach (var item in Items)
+        
+        if (disposing)
         {
-            item.Dispose();
-        }
+            Log.Debug("[HomeVM] Disposing");
+            
+            LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
 
-        base.Dispose();
+            _categoryCts?.Cancel();
+            _categoryCts?.Dispose();
+        }
+        
+        base.Dispose(disposing);  // Вызовет PaginatedViewModel.Dispose(bool)
+        _isDisposed = true;
     }
+
 
     #endregion
 }

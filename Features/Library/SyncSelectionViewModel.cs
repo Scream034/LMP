@@ -25,11 +25,11 @@ public class SyncSelectionViewModel : ViewModelBase
         }
 
         // Возвращаем список выбранных
-        SyncCommand = ReactiveCommand.Create(() => 
-            Items.Where(x => x.IsSelected).Select(x => x.Original).ToList());
+        SyncCommand = CreateCommand(ReactiveCommand.Create(() => 
+            Items.Where(x => x.IsSelected).Select(x => x.Original).ToList()));
 
         // Возвращаем пустой список (отмена)
-        CancelCommand = ReactiveCommand.Create(() => new List<PlaylistSearchResult>());
+        CancelCommand = CreateCommand(ReactiveCommand.Create(() => new List<PlaylistSearchResult>()));
     }
 }
 

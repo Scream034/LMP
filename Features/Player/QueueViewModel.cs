@@ -8,6 +8,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 
 namespace LMP.Features.Player;
@@ -27,6 +28,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     // Master список (соответствует _audio.Queue)
     private List<TrackInfo> _masterQueue = [];
+
+    private bool _isDisposed;
 
     [Reactive] public bool IsEmpty { get; private set; } = true;
     [Reactive] public bool CanReorderItems { get; private set; } = true;
@@ -49,25 +52,26 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         _downloads = downloads;
         _vmFactory = vmFactory;
 
-        ClearQueueCommand = ReactiveCommand.Create(() => _audio.ClearQueue());
-        ShuffleQueueCommand = ReactiveCommand.Create(() => _audio.ShuffleQueue());
+        // ThrownExceptions subscription to prevent memory leak
+        ClearQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.ClearQueue()));
+        ShuffleQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.ShuffleQueue()));
 
-        DownloadAllCommand = ReactiveCommand.Create(() =>
+        DownloadAllCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             foreach (var item in QueueItems.Where(t => !t.IsDownloaded))
                 _downloads.StartDownload(item.Track);
-        });
+        }));
 
-        RemoveTrackCommand = ReactiveCommand.Create<TrackItemViewModel>(item =>
+        RemoveTrackCommand = CreateCommand(ReactiveCommand.Create<TrackItemViewModel>(item =>
         {
             _audio.RemoveFromQueue(item.Track);
-        });
+        }));
 
-        MoveItemCommand = ReactiveCommand.Create<(int oldIndex, int newIndex)>(tuple =>
+        MoveItemCommand = CreateCommand(ReactiveCommand.Create<(int oldIndex, int newIndex)>(tuple =>
         {
             if (!CanReorderItems) return;
             MoveItem(tuple.oldIndex, tuple.newIndex);
-        });
+        }));
 
         _queueSub = Observable.FromEvent(
                 h => _audio.OnQueueChanged += h,
@@ -236,17 +240,22 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         }
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        _queueSub?.Dispose();
-        _trackSub?.Dispose();
-        _filterSub?.Dispose();
+        if (_isDisposed) return;
+        
+        if (disposing)
+        {
+            Log.Debug("[QueueVM] Disposing");
+            
+            foreach (var vm in _vmCache.Values)
+                vm.Dispose();
 
-        foreach (var vm in _vmCache.Values)
-            vm.Dispose();
-
-        _vmCache.Clear();
-        QueueItems.Clear();
-        GC.SuppressFinalize(this);
+            _vmCache.Clear();
+            QueueItems.Clear();
+        }
+        
+        base.Dispose(disposing);
+        _isDisposed = true;
     }
 }

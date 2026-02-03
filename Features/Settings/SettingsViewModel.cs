@@ -1,6 +1,7 @@
 ﻿// Features/Settings/SettingsViewModel.cs
 using System.Collections.ObjectModel;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Avalonia.Media;
 using LMP.Core.Models;
@@ -39,7 +40,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
 
-    private bool _isDisposed;
     private bool _isLoadingTheme;
     private bool _isUpdatingPreset;
 
@@ -156,36 +156,37 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         InitializeLists();
 
-        LoginCommand = ReactiveCommand.CreateFromTask(LoginAsync);
-        LogoutCommand = ReactiveCommand.CreateFromTask(LogoutAsync);
-        SetFakeAccountCommand = ReactiveCommand.CreateFromTask(SetFakeAccountAsync);
-        ClearFakeAccountCommand = ReactiveCommand.Create(ClearFakeAccount);
-        BrowseDownloadPathCommand = ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync);
-        ClearHistoryCommand = ReactiveCommand.CreateFromTask(ClearHistoryAsync);
-        ResetLibraryCommand = ReactiveCommand.CreateFromTask(ResetLibraryAsync);
-        ClearImageCacheCommand = ReactiveCommand.CreateFromTask(ClearImageCacheAsync);
-        ClearAudioCacheCommand = ReactiveCommand.CreateFromTask(ClearAudioCacheAsync);
-        ApplyThemeCommand = ReactiveCommand.Create(ApplyTheme);
-        ResetThemeCommand = ReactiveCommand.Create(ResetTheme);
-        ClearDownloadsCommand = ReactiveCommand.CreateFromTask(ClearDownloadsAsync);
+        // FIX: ThrownExceptions subscription to prevent memory leak
+        LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
+        LogoutCommand = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
+        SetFakeAccountCommand = CreateCommand(ReactiveCommand.CreateFromTask(SetFakeAccountAsync));
+        ClearFakeAccountCommand = CreateCommand(ReactiveCommand.Create(ClearFakeAccount));
+        BrowseDownloadPathCommand = CreateCommand(ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync));
+        ClearHistoryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearHistoryAsync));
+        ResetLibraryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ResetLibraryAsync));
+        ClearImageCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearImageCacheAsync));
+        ClearAudioCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearAudioCacheAsync));
+        ApplyThemeCommand = CreateCommand(ReactiveCommand.Create(ApplyTheme));
+        ResetThemeCommand = CreateCommand(ReactiveCommand.Create(ResetTheme));
+        ClearDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
 
         this.WhenAnyValue(x => x.SelectedClient)
-                    .Skip(1).WhereNotNull()
-                    .Subscribe(async c => // <--- Добавлено async
-                    {
-                        // 1. Сохраняем в настройки
-                        _library.UpdateSettings(s => s.YoutubeClient = c.Value);
+            .Skip(1).WhereNotNull()
+            .Subscribe(async c =>
+            {
+                // 1. Сохраняем в настройки
+                _library.UpdateSettings(s => s.YoutubeClient = c.Value);
 
-                        // 2. Обновляем статику (чтобы VideoController и HttpHandler увидели изменения)
-                        YoutubeClientUtils.CurrentProfile = c.Value;
+                // 2. Обновляем статику (чтобы VideoController и HttpHandler увидели изменения)
+                YoutubeClientUtils.CurrentProfile = c.Value;
 
-                        // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
-                        // ВАЖНО: await, чтобы UI не завис и LibVLC не крашнулся
-                        await _audio.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
+                // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
+                await _audio.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
 
-                        // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
-                        _youtube.ClearCache();
-                    });
+                // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
+                _youtube.ClearCache();
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.DownloadedTracksLimitMb)
             .Skip(1)
@@ -194,21 +195,25 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             {
                 _library.UpdateSettings(s => s.Storage.DownloadedTracksLimitMb = v);
                 UpdateCacheStats();
-            });
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.AutoSaveToDownloads)
             .Skip(1)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.Storage.AutoSaveToDownloads = v);
-            });
+            })
+            .DisposeWith(Disposables);
 
         LoadAllSettings();
         UpdateCacheStats();
         SetupSubscriptions();
 
-        LocalizationService.Instance.LanguageChanged += (_, _) => RefreshLocalizedLists();
+        LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
     }
+
+    private void OnLanguageChanged(object? sender, string e) => RefreshLocalizedLists();
 
     private void InitializeLists()
     {
@@ -251,26 +256,32 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void SetupSubscriptions()
     {
-        // Changed: Use UpdateSettings instead of Data + Save
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1).WhereNotNull()
             .Subscribe(lang =>
             {
                 LocalizationService.Instance.CurrentLanguage = lang.Code;
                 _library.UpdateSettings(s => s.LanguageCode = lang.Code);
-            });
+            })
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SelectedInternetProfile).Skip(1).WhereNotNull().Subscribe(p =>
-        {
-            _library.UpdateSettings(s => s.InternetProfile = p.Value);
-            NetworkRestartRequired = true;
-        });
+        this.WhenAnyValue(x => x.SelectedInternetProfile).Skip(1).WhereNotNull()
+            .Subscribe(p =>
+            {
+                _library.UpdateSettings(s => s.InternetProfile = p.Value);
+                NetworkRestartRequired = true;
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort, x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
-            .Skip(1).Subscribe(x => { NetworkRestartRequired = true; SaveNetworkSettings(); });
+            .Skip(1)
+            .Subscribe(x => { NetworkRestartRequired = true; SaveNetworkSettings(); })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.ImageCacheLimitMb, x => x.AudioCacheLimitMb)
-            .Skip(1).Throttle(TimeSpan.FromMilliseconds(500)).Subscribe(_ => SaveStorageSettings());
+            .Skip(1).Throttle(TimeSpan.FromMilliseconds(500))
+            .Subscribe(_ => SaveStorageSettings())
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.SelectedImageCachePreset)
             .Skip(1)
@@ -286,7 +297,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                     _ => MaxBitmapCacheItems
                 };
                 _isUpdatingPreset = false;
-            });
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.MaxBitmapCacheItems)
             .Skip(1)
@@ -304,12 +316,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                     else SelectedImageCachePreset = null;
                     _isUpdatingPreset = false;
                 }
-            });
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.ImageCacheLimitMb, x => x.AudioCacheLimitMb)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(500))
-            .Subscribe(_ => SaveStorageSettings());
+            .Subscribe(_ => SaveStorageSettings())
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(
                 x => x.AccentColor, x => x.BgPrimaryColor, x => x.BgSecondaryColor,
@@ -319,53 +333,69 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             {
                 if (!_isLoadingTheme)
                     HasUnsavedThemeChanges = true;
-            });
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.SelectedPreset)
             .Skip(1).WhereNotNull()
-            .Subscribe(ApplyPresetToColorPickers);
+            .Subscribe(ApplyPresetToColorPickers)
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.MaxVolumeLimit).Skip(1).Subscribe(v =>
-        {
-            _library.UpdateSettings(s => s.MaxVolumeLimit = v);
-            _audio.UpdateAudioSettings();
-        });
+        this.WhenAnyValue(x => x.MaxVolumeLimit).Skip(1)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.MaxVolumeLimit = v);
+                _audio.UpdateAudioSettings();
+            })
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.TargetGainDb).Skip(1).Subscribe(v =>
-        {
-            _library.UpdateSettings(s => s.TargetGainDb = v);
-            _audio.UpdateAudioSettings();
-        });
+        this.WhenAnyValue(x => x.TargetGainDb).Skip(1)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.TargetGainDb = v);
+                _audio.UpdateAudioSettings();
+            })
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.QualityPreference).Skip(1).Subscribe(v =>
-        {
-            _library.UpdateSettings(s => s.QualityPreference = v);
-            _youtube.ClearCache();
-        });
+        this.WhenAnyValue(x => x.QualityPreference).Skip(1)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.QualityPreference = v);
+                _youtube.ClearCache();
+            })
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.DiscordRpcEnabled).Skip(1).Subscribe(v =>
-            _library.UpdateSettings(s => s.DiscordRpcEnabled = v));
+        this.WhenAnyValue(x => x.DiscordRpcEnabled).Skip(1)
+            .Subscribe(v => _library.UpdateSettings(s => s.DiscordRpcEnabled = v))
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.AutoPlayOnPaste).Skip(1).Subscribe(v =>
-            _library.UpdateSettings(s => s.AutoPlayOnUrlPaste = v));
+        this.WhenAnyValue(x => x.AutoPlayOnPaste).Skip(1)
+            .Subscribe(v => _library.UpdateSettings(s => s.AutoPlayOnUrlPaste = v))
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.EnableSmoothLoading).Skip(1).Subscribe(v =>
-            _library.UpdateSettings(s => s.EnableSmoothLoading = v));
+        this.WhenAnyValue(x => x.EnableSmoothLoading).Skip(1)
+            .Subscribe(v => _library.UpdateSettings(s => s.EnableSmoothLoading = v))
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.RememberTrackFormat).Skip(1).Subscribe(v =>
-            _library.UpdateSettings(s => s.RememberTrackFormat = v));
+        this.WhenAnyValue(x => x.RememberTrackFormat).Skip(1)
+            .Subscribe(v => _library.UpdateSettings(s => s.RememberTrackFormat = v))
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SearchBatchSize).Skip(1).Subscribe(v =>
-            _library.UpdateSettings(s => s.SearchBatchSize = v));
+        this.WhenAnyValue(x => x.SearchBatchSize).Skip(1)
+            .Subscribe(v => _library.UpdateSettings(s => s.SearchBatchSize = v))
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.EnableSearchCache).Skip(1).Subscribe(v =>
-            _library.UpdateSettings(s => s.EnableSearchCache = v));
+        this.WhenAnyValue(x => x.EnableSearchCache).Skip(1)
+            .Subscribe(v => _library.UpdateSettings(s => s.EnableSearchCache = v))
+            .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SearchCacheTtlMinutes).Skip(1).Subscribe(v =>
-        {
-            _library.UpdateSettings(s => s.SearchCacheTtlMinutes = v);
-            _ = _searchCache.CleanupExpiredAsync();
-        });
+        this.WhenAnyValue(x => x.SearchCacheTtlMinutes).Skip(1)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.SearchCacheTtlMinutes = v);
+                _ = _searchCache.CleanupExpiredAsync();
+            })
+            .DisposeWith(Disposables);
     }
 
     private void LoadAllSettings()
@@ -665,10 +695,16 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         UpdateCacheStats();
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        if (_isDisposed) return;
-        _isDisposed = true;
-        GC.SuppressFinalize(this);
+        if (disposing)
+        {        // FIX: Отписываемся от события локализации
+            LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
+
+            // FIX: Диспозим локальные подписки и команды
+            Disposables.Dispose();
+        }
+
+        base.Dispose();
     }
 }

@@ -9,15 +9,10 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Features.Shared;
 
-/// <summary>
-/// ViewModel для отображения трека в списке.
-/// Не дублирует состояние — биндится напрямую к TrackInfo.
-/// </summary>
-public sealed class TrackItemViewModel : ViewModelBase, IDisposable
+public sealed class TrackItemViewModel : ViewModelBase
 {
     #region Fields
 
-    private readonly CompositeDisposable _disposables = new();
     private readonly AudioEngine _audio;
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
@@ -49,7 +44,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     #endregion
 
-    #region Properties - State (реактивные, из Track)
+    #region Properties - State
 
     public bool IsLiked => _isLiked.Value;
     public bool IsDownloaded => _isDownloaded.Value;
@@ -117,7 +112,6 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
     public TrackItemViewModel(
         TrackInfo track,
         AudioEngine audio,
-        LibraryService library,
         DownloadService downloads,
         MusicLibraryManager manager,
         StreamCacheManager cacheManager,
@@ -130,37 +124,30 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
         _cacheManager = cacheManager;
         _onPlay = onPlay;
 
-        // ═══════════════════════════════════════════════════════════════
-        // Инициализация ObservableAsPropertyHelper (ТОЛЬКО в конструкторе!)
-        // ═══════════════════════════════════════════════════════════════
-
+        // ObservableAsPropertyHelper - используем Disposables из ViewModelBase
         _isLiked = Track.WhenAnyValue(x => x.IsLiked)
             .ToProperty(this, x => x.IsLiked)
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
         _isDownloaded = Track.WhenAnyValue(x => x.IsDownloaded)
             .ToProperty(this, x => x.IsDownloaded)
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
         _isCached = Track.WhenAnyValue(x => x.IsCached)
             .ToProperty(this, x => x.IsCached)
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
-        // Уведомляем UI при изменении статусов
         Track.WhenAnyValue(x => x.IsDownloaded, x => x.IsCached)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(DownloadStatusText)))
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
-        // ═══════════════════════════════════════════════════════════════
-        // Подписки на аудио-события
-        // ═══════════════════════════════════════════════════════════════
-
+        // Audio subscriptions
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(t => UpdatePlaybackState(t, _audio.IsPlaying))
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
         Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
                 h => (a, b) => h((a, b)),
@@ -168,12 +155,9 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
                 h => _audio.OnPlaybackStateChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(x => UpdatePlaybackState(_audio.CurrentTrack, x.Item1))
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
-        // ═══════════════════════════════════════════════════════════════
-        // Подписки на события скачивания
-        // ═══════════════════════════════════════════════════════════════
-
+        // Download subscriptions
         Observable.FromEvent<Action<string, float>, (string, float)>(
                 h => (id, p) => h((id, p)),
                 h => _downloads.OnProgress += h,
@@ -185,7 +169,7 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
                 IsDownloading = true;
                 DownloadProgress = x.Item2;
             })
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
         Observable.FromEvent<Action<string, bool, string?>, (string, bool, string?)>(
                 h => (id, ok, path) => h((id, ok, path)),
@@ -198,37 +182,36 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
                 IsDownloading = false;
                 DownloadProgress = 0;
             })
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
 
-        // ═══════════════════════════════════════════════════════════════
-        // Инициализация начального состояния
-        // ═══════════════════════════════════════════════════════════════
-
+        // Initialize state
         IsDownloading = _downloads.IsDownloading(track.Id);
         if (IsDownloading) DownloadProgress = _downloads.GetProgress(track.Id);
         UpdatePlaybackState(_audio.CurrentTrack, _audio.IsPlaying);
 
-        // ═══════════════════════════════════════════════════════════════
-        // Команды
-        // ═══════════════════════════════════════════════════════════════
+        // Commands - используем CreateCommand из ViewModelBase
+        PlayCommand = CreateCommand(ReactiveCommand.CreateFromTask(PlayAsync));
+        ToggleLikeCommand = CreateCommand(ReactiveCommand.CreateFromTask(() => _manager.ToggleLikeAsync(Track)));
+        AddToQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.Enqueue(Track)));
+        StartRadioCommand = CreateCommand(ReactiveCommand.Create(() => StartRadioAction?.Invoke(Track)));
+        SaveToDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(SaveToDownloadsAsync));
 
-        PlayCommand = ReactiveCommand.CreateFromTask(PlayAsync);
-        ToggleLikeCommand = ReactiveCommand.CreateFromTask(() => _manager.ToggleLikeAsync(Track));
-        AddToQueueCommand = ReactiveCommand.Create(() => _audio.Enqueue(Track));
-        StartRadioCommand = ReactiveCommand.Create(() => StartRadioAction?.Invoke(Track));
-        SaveToDownloadsCommand = ReactiveCommand.CreateFromTask(SaveToDownloadsAsync);
+        RemoveFromPlaylistCommand = CreateCommand(
+            ReactiveCommand.Create(
+                () => RemoveFromPlaylistAction?.Invoke(Track),
+                this.WhenAnyValue(x => x.IsPlaylistContext)));
 
-        RemoveFromPlaylistCommand = ReactiveCommand.Create(
-            () => RemoveFromPlaylistAction?.Invoke(Track),
-            this.WhenAnyValue(x => x.IsPlaylistContext));
+        RemoveFromQueueCommand = CreateCommand(
+            ReactiveCommand.Create(
+                () => _audio.RemoveFromQueue(Track),
+                this.WhenAnyValue(x => x.IsQueueContext)));
 
-        RemoveFromQueueCommand = ReactiveCommand.Create(
-            () => _audio.RemoveFromQueue(Track),
-            this.WhenAnyValue(x => x.IsQueueContext));
-
+        // UI state subscriptions
         this.WhenAnyValue(x => x.IsQueueContext)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowAddToQueue)))
-            .DisposeWith(_disposables);
+            .DisposeWith(Disposables);
+
+        MemoryDiagnostics.TrackInstance("TrackVM.Created");
     }
 
     #endregion
@@ -276,11 +259,28 @@ public sealed class TrackItemViewModel : ViewModelBase, IDisposable
 
     public void UpdatePlayAction(Action<TrackInfo>? onPlay) => _onPlay = onPlay;
 
-    public void Dispose()
+    #endregion
+
+    #region IDisposable - ИСПРАВЛЕНО: override вместо new
+
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
+        
+        if (disposing)
+        {
+            Log.Debug($"[TrackVM] Disposing {Id} ({Title})");
+
+            // Очищаем делегаты
+            _onPlay = null;
+            StartRadioAction = null;
+            RemoveFromPlaylistAction = null;
+
+            MemoryDiagnostics.UntrackInstance("TrackVM.Created");
+        }
+        
+        base.Dispose(disposing);  // Это вызовет Disposables.Dispose()
         _isDisposed = true;
-        _disposables.Dispose();
     }
 
     #endregion

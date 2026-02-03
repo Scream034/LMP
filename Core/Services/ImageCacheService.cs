@@ -201,6 +201,15 @@ public sealed class ImageCacheService : IDisposable
 
         lock (_lruLock)
         {
+            // ТРЕКИНГ - сбрасываем счётчики
+            MemoryDiagnostics.SetBytes("ImageCache.Bitmaps", 0);
+            MemoryDiagnostics.SetBytes("ImageCache.Items", 0);
+
+            foreach (var item in _memoryCache.Values)
+            {
+                item.Bitmap?.Dispose();
+            }
+
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
@@ -407,20 +416,43 @@ public sealed class ImageCacheService : IDisposable
 
     private void AddToMemoryCache(string key, Bitmap bitmap)
     {
+        // Точный расчёт размера
+        long pixelSize = (long)bitmap.PixelSize.Width * bitmap.PixelSize.Height;
+        long estimatedSize = pixelSize * 4; // RGBA
+
+        // Для LOH tracking (>85KB)
+        if (estimatedSize > 85000)
+        {
+            MemoryDiagnostics.TrackBytes("ImageCache.LOH", estimatedSize);
+        }
+
         lock (_lruLock)
         {
-            int limit = MaxMemoryItems;
-
-            while (_memoryCache.Count >= limit && _lruOrder.Count > 0)
+            while (_memoryCache.Count >= MaxMemoryItems && _lruOrder.Count > 0)
             {
                 var oldest = _lruOrder.Last!.Value;
                 _lruOrder.RemoveLast();
-                _memoryCache.TryRemove(oldest, out _);
+
+                if (_memoryCache.TryRemove(oldest, out var removed) && removed.Bitmap != null)
+                {
+                    long oldPixels = (long)removed.Bitmap.PixelSize.Width * removed.Bitmap.PixelSize.Height;
+                    long oldSize = oldPixels * 4;
+
+                    MemoryDiagnostics.UntrackBytes("ImageCache.Bitmaps", oldSize);
+                    MemoryDiagnostics.UntrackInstance("ImageCache.Items");
+
+                    if (oldSize > 85000)
+                    {
+                        MemoryDiagnostics.UntrackBytes("ImageCache.LOH", oldSize);
+                    }
+                }
             }
 
-            if (limit > 0 && _memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
+            if (MaxMemoryItems > 0 && _memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
             {
                 _lruOrder.AddFirst(key);
+                MemoryDiagnostics.TrackBytes("ImageCache.Bitmaps", estimatedSize);
+                MemoryDiagnostics.TrackInstance("ImageCache.Items");
             }
         }
     }

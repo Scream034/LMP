@@ -12,6 +12,7 @@ using LMP.Features.Library;
 using LMP.Features.Settings;
 using LMP.Features.Playlist;
 using System.Reactive.Concurrency;
+using System.Runtime;
 
 namespace LMP.Features.Shell;
 
@@ -45,7 +46,7 @@ public class MainWindowViewModel : ViewModelBase
         audio.OnCriticalError += (title, msg) =>
         {
             // Гарантируем, что диалог не заблокирует поток обработки аудио
-            RxApp.MainThreadScheduler.Schedule(async () => 
+            RxApp.MainThreadScheduler.Schedule(async () =>
             {
                 await dialog.ShowInfoAsync(title, msg);
             });
@@ -54,13 +55,14 @@ public class MainWindowViewModel : ViewModelBase
         // Навигация возможна только если не заблокирована
         var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
 
-        NavigateCommand = ReactiveCommand.Create<string>(pageName =>
+        // FIX: ThrownExceptions subscription to prevent memory leak
+        NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
         {
             if (!IsNavigationLocked)
             {
                 Navigate(pageName);
             }
-        }, canNavigate);
+        }, canNavigate));
 
         Navigate("Home");
 
@@ -148,6 +150,17 @@ public class MainWindowViewModel : ViewModelBase
         // И чистим мертвые ссылки в реестре треков
         Program.Services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
 
+        // Если уходим с тяжелой страницы (Search/Library), форсируем очистку
+        if (CurrentPageName == "Search" || CurrentPageName == "Library")
+        {
+            // Очищаем кэш VM, так как при возврате мы все равно пересоздадим список
+            Program.Services.GetRequiredService<TrackViewModelFactory>().Clear();
+
+            // Компактификация LOH (убирает дыры от JSON строк и буферов)
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced);
+        }
+
         CurrentPageName = pageName;
         sw.Stop();
         Log.Info($"Successfully switched to {pageName} in {sw.ElapsedMilliseconds}ms");
@@ -174,4 +187,3 @@ public class MainWindowViewModel : ViewModelBase
         });
     }
 }
-

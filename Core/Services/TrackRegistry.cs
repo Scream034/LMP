@@ -11,10 +11,7 @@ namespace LMP.Core.Services;
 /// </summary>
 public sealed class TrackRegistry
 {
-    // Weak references for transient tracks (search results)
     private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _cache = new();
-
-    // Strong references for important tracks (library items)
     private readonly ConcurrentDictionary<string, TrackInfo> _pinned = new();
 
     public StreamCacheManager? CacheManager { get; set; }
@@ -36,6 +33,7 @@ public sealed class TrackRegistry
         if (string.IsNullOrEmpty(incoming.Id)) return incoming;
 
         TrackInfo result = incoming;
+        // bool wasAddedToPinned = false;
 
         // Check pinned first
         if (_pinned.TryGetValue(incoming.Id, out var pinned))
@@ -47,14 +45,14 @@ public sealed class TrackRegistry
         else if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
         {
             cached.UpdateMetadata(incoming);
-            UpdatePinStatus(cached);
+            // wasAddedToPinned = UpdatePinStatusInternal(cached);
             result = cached;
         }
         else
         {
             // Register new
             _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
-            UpdatePinStatus(incoming);
+            // wasAddedToPinned = UpdatePinStatusInternal(incoming);
             result = incoming;
         }
 
@@ -62,7 +60,6 @@ public sealed class TrackRegistry
         {
             if (CacheManager.IsFullyCached(result.Id))
             {
-                // Подтягиваем метаданные кэша (битрейт, контейнер)
                 var meta = StreamCacheManager.TryGetMetadata(result.Id);
                 if (meta != null)
                 {
@@ -104,7 +101,6 @@ public sealed class TrackRegistry
         var fromDb = await _repository.GetByIdAsync(id, ct);
         if (fromDb == null) return null;
 
-        // Load InPlaylists
         if (_playlists != null)
         {
             fromDb.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(id, ct);
@@ -137,8 +133,9 @@ public sealed class TrackRegistry
 
     /// <summary>
     /// Updates pinning status based on track importance.
+    /// Returns true if track was added to pinned.
     /// </summary>
-    public void UpdatePinStatus(TrackInfo track)
+    private bool UpdatePinStatusInternal(TrackInfo track)
     {
         bool shouldPin = track.IsLiked ||
                         track.IsDownloaded ||
@@ -147,12 +144,29 @@ public sealed class TrackRegistry
 
         if (shouldPin)
         {
-            _pinned.TryAdd(track.Id, track);
+            if (_pinned.TryAdd(track.Id, track))
+            {
+                // ТРЕКИНГ: примерно 1KB на трек
+                MemoryDiagnostics.TrackBytes("TrackRegistry.Pinned", 1024);
+                return true;
+            }
         }
         else
         {
-            _pinned.TryRemove(track.Id, out _);
+            if (_pinned.TryRemove(track.Id, out _))
+            {
+                MemoryDiagnostics.UntrackBytes("TrackRegistry.Pinned", 1024);
+            }
         }
+        return false;
+    }
+
+    /// <summary>
+    /// Public version for external calls.
+    /// </summary>
+    public void UpdatePinStatus(TrackInfo track)
+    {
+        UpdatePinStatusInternal(track);
     }
 
     /// <summary>
@@ -168,30 +182,28 @@ public sealed class TrackRegistry
 
         var allLoaded = new List<TrackInfo>();
 
-        // 1. Load Liked
         var liked = await _repository.GetLikedAsync(500, 0, ct);
         allLoaded.AddRange(liked);
 
-        // 2. Load Downloaded
         var downloaded = await _repository.GetDownloadedAsync(500, 0, ct);
         allLoaded.AddRange(downloaded);
 
-        // 3. Load Recent
         var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
         allLoaded.AddRange(recent);
 
-        // Регистрация в памяти
         foreach (var t in allLoaded)
         {
             if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
-            RegisterOrUpdate(t); // Здесь сработает проверка IsFullyCached
+            RegisterOrUpdate(t);
         }
 
-        // Дополнительная пакетная проверка (оптимизация), если cacheManager доступен
         CacheManager?.HydrateCacheStatus(_pinned.Values);
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} tracks in {sw.ElapsedMilliseconds}ms");
+        
+        // ТРЕКИНГ: обновляем общее количество
+        MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", _pinned.Count * 1024);
     }
 
     /// <summary>
@@ -214,6 +226,7 @@ public sealed class TrackRegistry
             Log.Error($"[TrackRegistry] Flush failed: {ex.Message}");
         }
     }
+
     public IEnumerable<TrackInfo> GetPinnedTracks() => _pinned.Values;
 
     /// <summary>
@@ -234,6 +247,7 @@ public sealed class TrackRegistry
 
     public void Clear()
     {
+        MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", 0);
         _cache.Clear();
         _pinned.Clear();
     }

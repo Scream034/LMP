@@ -48,7 +48,7 @@ public class StorageSettings
     /// <summary>
     /// Максимальное количество изображений в RAM-кэше.
     /// </summary>
-    public int MaxBitmapCacheItems { get; set; } = 40;
+    public int MaxBitmapCacheItems { get; set; } = 25;
 
     /// <summary>
     /// Автоматически сохранять полностью закэшированные треки в папку Downloads.

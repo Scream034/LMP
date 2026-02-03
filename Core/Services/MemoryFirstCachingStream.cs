@@ -1,5 +1,4 @@
-﻿// === ФАЙЛ: Core/Services/MemoryFirstCachingStream.cs ===
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
@@ -149,6 +148,10 @@ public sealed class MemoryFirstCachingStream : Stream
             new BoundedChannelOptions(64) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
 
         _diskWriterTask = Task.Run(DiskWriterLoopAsync);
+
+        // ТРЕКИНГ
+        MemoryDiagnostics.TrackInstance("Stream.Active");
+        MemoryDiagnostics.TrackBytes("Stream.TotalSize", _contentLength);
 
         Log.Info($"Opened {_cacheId} (track: {_originalTrackId}): {contentLength / 1024 / 1024}MB");
     }
@@ -442,7 +445,7 @@ public sealed class MemoryFirstCachingStream : Stream
                 using var netStream = await resp.Content.ReadAsStreamAsync(cts.Token);
 
                 int totalRead = 0, bytesRead;
-                while ((bytesRead = await netStream.ReadAsync(buffer, totalRead, _chunkSize - totalRead, cts.Token)) > 0)
+                while ((bytesRead = await netStream.ReadAsync(buffer.AsMemory(totalRead, _chunkSize - totalRead), cts.Token)) > 0)
                     totalRead += bytesRead;
 
                 if (!_chunks.ContainsKey(idx) && !_disposing)
@@ -450,6 +453,8 @@ public sealed class MemoryFirstCachingStream : Stream
                     _chunks[idx] = buffer;
                     Interlocked.Add(ref _bytesDownloaded, totalRead);
                     _dataAvailable.Set();
+
+                    MemoryDiagnostics.TrackBytes("Stream.RAMChunks", buffer.Length);
 
                     if (_cacheFile != null && !_disposing)
                     {
@@ -507,7 +512,11 @@ public sealed class MemoryFirstCachingStream : Stream
         foreach (var i in toRemove)
         {
             if (_chunks.TryRemove(i, out var buf))
+            {
+                // ТРЕКИНГ
+                MemoryDiagnostics.UntrackBytes("Stream.RAMChunks", buf.Length);
                 ArrayPool<byte>.Shared.Return(buf);
+            }
         }
     }
 
@@ -609,13 +618,15 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (disposing)
         {
+            // ═══ TRACKING - сразу при начале dispose ═══
+            MemoryDiagnostics.UntrackInstance("Stream.Active");
+            MemoryDiagnostics.UntrackBytes("Stream.TotalSize", _contentLength);
+
             Try(_downloadCts.Cancel);
             Try(_disposeCts.Cancel);
-
-            // 1. Закрываем Writer, чтобы никто больше не писал
             Try(() => _diskChannel.Writer.TryComplete());
 
-            // 2. Очищаем канал и возвращаем буферы (УТЕЧКА БЫЛА ЗДЕСЬ)
+            // Очищаем канал
             while (_diskChannel.Reader.TryRead(out var item))
             {
                 ArrayPool<byte>.Shared.Return(item.Data);
@@ -641,9 +652,19 @@ public sealed class MemoryFirstCachingStream : Stream
                 catch { }
                 finally
                 {
-                    // 3. Возвращаем все чанки из RAM кэша
+                    // ═══ TRACKING - при финальной очистке чанков ═══
+                    long totalFreed = 0;
                     foreach (var buf in _chunks.Values)
+                    {
+                        totalFreed += buf.Length;
                         Try(() => ArrayPool<byte>.Shared.Return(buf));
+                    }
+
+                    if (totalFreed > 0)
+                    {
+                        MemoryDiagnostics.UntrackBytes("Stream.RAMChunks", totalFreed);
+                    }
+
                     _chunks.Clear();
 
                     Try(_fileSemaphore.Dispose);
