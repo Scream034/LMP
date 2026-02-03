@@ -201,6 +201,15 @@ public sealed class ImageCacheService : IDisposable
 
         lock (_lruLock)
         {
+            // ТРЕКИНГ - сбрасываем счётчики
+            MemoryDiagnostics.SetBytes("ImageCache.Bitmaps", 0);
+            MemoryDiagnostics.SetBytes("ImageCache.Items", 0);
+
+            foreach (var item in _memoryCache.Values)
+            {
+                item.Bitmap?.Dispose();
+            }
+
             _memoryCache.Clear();
             _lruOrder.Clear();
         }
@@ -274,10 +283,10 @@ public sealed class ImageCacheService : IDisposable
     #region Private Methods
 
     private async Task<Bitmap?> LoadFromDiskOrNetworkAsync(
-        string url,
-        string key,
-        int decodeWidth,
-        CancellationToken ct)
+      string url,
+      string key,
+      int decodeWidth,
+      CancellationToken ct)
     {
         try
         {
@@ -290,6 +299,7 @@ public sealed class ImageCacheService : IDisposable
 
         try
         {
+            // Double-check memory cache inside lock/semaphore
             if (_memoryCache.TryGetValue(key, out var cached))
             {
                 TouchLru(key);
@@ -298,7 +308,6 @@ public sealed class ImageCacheService : IDisposable
 
             ct.ThrowIfCancellationRequested();
 
-            // Для диска - базовый ключ без размера
             var diskKey = GetCacheKey(url);
             var fileLock = GetFileLock(diskKey);
             await fileLock.WaitAsync(ct);
@@ -311,9 +320,20 @@ public sealed class ImageCacheService : IDisposable
                 {
                     ct.ThrowIfCancellationRequested();
 
-                    var bytes = await _http.GetByteArrayAsync(url, ct);
-                    await File.WriteAllBytesAsync(diskPath, bytes, ct);
-                    Interlocked.Add(ref _currentDiskCacheBytes, bytes.Length);
+                    // ОПТИМИЗАЦИЯ: Скачиваем потоком, без выделения byte[] в RAM
+                    // Это снижает нагрузку на GC и LOH
+                    using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+
+                    if (!response.IsSuccessStatusCode)
+                        return null;
+
+                    using var networkStream = await response.Content.ReadAsStreamAsync(ct);
+                    using var fileStream = new FileStream(diskPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+
+                    await networkStream.CopyToAsync(fileStream, ct);
+
+                    // Обновляем размер кэша
+                    Interlocked.Add(ref _currentDiskCacheBytes, fileStream.Length);
 
                     long limitBytes = (long)_library.Settings.Storage.ImageCacheLimitMb * 1024 * 1024;
                     if (_currentDiskCacheBytes > limitBytes)
@@ -332,11 +352,11 @@ public sealed class ImageCacheService : IDisposable
                         {
                             using var stream = File.OpenRead(diskPath);
 
-                            // Если запрошен DecodeWidth, используем его строго.
-                            // Для списков и сеток это критично.
                             if (decodeWidth > 0)
                             {
-                                return Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.LowQuality);
+                                // ОПТИМИЗАЦИЯ: HighQuality лучше для обложек, 
+                                // LowQuality может давать "лесенки". Разница в памяти нулевая, в CPU - минимальная.
+                                return Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.HighQuality);
                             }
                             else
                             {
@@ -407,20 +427,43 @@ public sealed class ImageCacheService : IDisposable
 
     private void AddToMemoryCache(string key, Bitmap bitmap)
     {
+        // Точный расчёт размера
+        long pixelSize = (long)bitmap.PixelSize.Width * bitmap.PixelSize.Height;
+        long estimatedSize = pixelSize * 4; // RGBA
+
+        // Для LOH tracking (>85KB)
+        if (estimatedSize > 85000)
+        {
+            MemoryDiagnostics.TrackBytes("ImageCache.LOH", estimatedSize);
+        }
+
         lock (_lruLock)
         {
-            int limit = MaxMemoryItems;
-
-            while (_memoryCache.Count >= limit && _lruOrder.Count > 0)
+            while (_memoryCache.Count >= MaxMemoryItems && _lruOrder.Count > 0)
             {
                 var oldest = _lruOrder.Last!.Value;
                 _lruOrder.RemoveLast();
-                _memoryCache.TryRemove(oldest, out _);
+
+                if (_memoryCache.TryRemove(oldest, out var removed) && removed.Bitmap != null)
+                {
+                    long oldPixels = (long)removed.Bitmap.PixelSize.Width * removed.Bitmap.PixelSize.Height;
+                    long oldSize = oldPixels * 4;
+
+                    MemoryDiagnostics.UntrackBytes("ImageCache.Bitmaps", oldSize);
+                    MemoryDiagnostics.UntrackInstance("ImageCache.Items");
+
+                    if (oldSize > 85000)
+                    {
+                        MemoryDiagnostics.UntrackBytes("ImageCache.LOH", oldSize);
+                    }
+                }
             }
 
-            if (limit > 0 && _memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
+            if (MaxMemoryItems > 0 && _memoryCache.TryAdd(key, new CachedImage { Bitmap = bitmap, CachedAt = DateTime.UtcNow }))
             {
                 _lruOrder.AddFirst(key);
+                MemoryDiagnostics.TrackBytes("ImageCache.Bitmaps", estimatedSize);
+                MemoryDiagnostics.TrackInstance("ImageCache.Items");
             }
         }
     }

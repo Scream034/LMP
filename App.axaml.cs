@@ -38,8 +38,9 @@ public partial class App : Application
             LocalizationService.Instance.Initialize("en");
 
             // 3. Start Memory Monitor
-            var memoryMonitor = Program.Services.GetRequiredService<MemoryMonitor>();
-            memoryMonitor.OnMemoryWarning += Log.Warn;
+            MemoryDiagnostics.Instance.OnMemoryWarning += Log.Warn;
+            MemoryDiagnostics.Instance.WarningThresholdMb = 400;
+            MemoryDiagnostics.Instance.CriticalThresholdMb = 450;
 
             // 4. Create UI FIRST
             var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
@@ -61,6 +62,10 @@ public partial class App : Application
             {
                 try
                 {
+                    // Логируем финальный отчёт
+                    MemoryDiagnostics.LogReport();
+
+                    MemoryDiagnostics.Instance.Dispose();
                     await library.DisposeAsync();
                 }
                 catch (Exception ex)

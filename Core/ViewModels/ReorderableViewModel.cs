@@ -1,4 +1,3 @@
-// Core/ViewModels/ReorderableViewModel.cs
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
@@ -10,14 +9,13 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.ViewModels;
 
-public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase, IDisposable, IFilterable
+public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase, IFilterable
     where TViewModel : class, IDisposable
     where TSource : notnull
 {
     #region Fields
 
     protected readonly LibraryService LibService;
-    protected readonly CompositeDisposable Disposables = [];
 
     private List<string> _masterIds = [];
     private readonly Dictionary<string, TSource> _loadedSources = [];
@@ -78,7 +76,8 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             x => x.HasMoreItems,
             (more, init, hasMore) => !more && !init && hasMore);
 
-        LoadMoreCommand = ReactiveCommand.CreateFromTask(LoadNextBatchAsync, canLoadMore);
+        // FIX: Используем CreateCommand из базового класса
+        LoadMoreCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadNextBatchAsync, canLoadMore));
     }
 
     #endregion
@@ -296,20 +295,14 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #endregion
 
-    #region Reordering - ИСПРАВЛЕННАЯ ВЕРСИЯ
+    #region Reordering
 
-    /// <summary>
-    /// Перемещает элемент. newIndex - это ФИНАЛЬНАЯ позиция элемента
-    /// (как для ObservableCollection.Move).
-    /// CalculateDropIndex уже делает все корректировки.
-    /// </summary>
     public void MoveItem(int oldIndex, int newIndex)
     {
         if (oldIndex == newIndex) return;
         if (oldIndex < 0 || oldIndex >= _visibleItems.Count) return;
         if (newIndex < 0 || newIndex >= _visibleItems.Count) return;
 
-        // Reorder только без фильтра
         if (!CanReorder)
         {
             Log.Warn("[Move] Cannot reorder with active filter");
@@ -322,20 +315,12 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         Log.Info($"[Move] {oldIndex} → {newIndex}");
 
-        // Без фильтра visible и master индексы совпадают
-        // newIndex уже скорректирован в CalculateDropIndex
-
-        // 1. Обновляем master список
         _masterIds.RemoveAt(oldIndex);
         _masterIds.Insert(newIndex, movingId);
 
-        // 2. Обновляем UI
         _visibleItems.Move(oldIndex, newIndex);
     }
 
-    /// <summary>
-    /// Асинхронная версия с сохранением в БД.
-    /// </summary>
     public async Task MoveItemAsync(int oldIndex, int newIndex)
     {
         if (oldIndex == newIndex) return;
@@ -354,12 +339,10 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         Log.Info($"[Move] {oldIndex} → {newIndex}");
 
-        // 1. Обновляем master и UI синхронно
         _masterIds.RemoveAt(oldIndex);
         _masterIds.Insert(newIndex, movingId);
         _visibleItems.Move(oldIndex, newIndex);
 
-        // 2. Сохраняем в БД асинхронно
         try
         {
             await SaveMoveAsync(oldIndex, newIndex, CancellationToken.None);
@@ -368,7 +351,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         catch (Exception ex)
         {
             Log.Error($"[Move] Save failed: {ex.Message}");
-            // Откатываем
             _masterIds.RemoveAt(newIndex);
             _masterIds.Insert(oldIndex, movingId);
             _visibleItems.Move(newIndex, oldIndex);
@@ -406,25 +388,32 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #endregion
 
-    #region IDisposable
+    #region IDisposable - ИСПРАВЛЕНО: override вместо new
 
-    public virtual void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
+        
+        if (disposing)
+        {
+            Log.Debug($"[ReorderableVM] Disposing, cleaning {_vmCache.Count} cached VMs");
+            
+            CancelLoading();
+
+            // КРИТИЧНО: Диспозим все закешированные VM
+            foreach (var vm in _vmCache.Values)
+            {
+                vm.Dispose();
+            }
+
+            _vmCache.Clear();
+            _visibleItems.Clear();
+            _loadedSources.Clear();
+            _masterIds.Clear();
+        }
+        
+        base.Dispose(disposing);
         _isDisposed = true;
-
-        CancelLoading();
-
-        foreach (var vm in _vmCache.Values)
-            vm.Dispose();
-
-        _vmCache.Clear();
-        _visibleItems.Clear();
-        _loadedSources.Clear();
-        _masterIds.Clear();
-
-        Disposables.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     #endregion

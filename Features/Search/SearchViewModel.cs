@@ -10,6 +10,7 @@ using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using LMP.Core.Helpers;
+using System.Reactive.Disposables;
 
 namespace LMP.Features.Search;
 
@@ -89,43 +90,41 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         var canSearch = this.WhenAnyValue(x => x.SearchQuery, x => x.IsLoading,
             (q, loading) => !string.IsNullOrWhiteSpace(q) && !loading);
 
-        SearchCommand = ReactiveCommand.CreateFromTask(
+        SearchCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             () => ExecuteSearchAsync(forceNetwork: false),
-            canSearch);
+            canSearch));
 
         var canForceSearch = this.WhenAnyValue(x => x.IsFromCache, x => x.IsLoading,
             (cache, loading) => cache && !loading);
 
-        ForceSearchCommand = ReactiveCommand.CreateFromTask(
+        ForceSearchCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             () => ExecuteSearchAsync(forceNetwork: true),
-            canForceSearch);
+            canForceSearch));
 
-        HistoryClickCommand = ReactiveCommand.CreateFromTask<string>(async q =>
+        HistoryClickCommand = CreateCommand(ReactiveCommand.CreateFromTask<string>(async q =>
         {
             if (string.IsNullOrEmpty(q)) return;
             SearchQuery = q;
             await ExecuteSearchAsync(false);
-        });
+        }));
 
-        RemoveHistoryCommand = ReactiveCommand.Create<string>(q =>
+        RemoveHistoryCommand = CreateCommand(ReactiveCommand.Create<string>(q =>
         {
             RecentSearches.Remove(q);
             UpdateHistoryStorage();
-        });
+        }));
 
-        SetSourceCommand = ReactiveCommand.Create<string>(sourceStr =>
+        SetSourceCommand = CreateCommand(ReactiveCommand.Create<string>(sourceStr =>
         {
             if (Enum.TryParse<ContentSource>(sourceStr, true, out var result))
             {
                 Source = result;
             }
-        });
-
-        SearchCommand.ThrownExceptions.Subscribe(ex => LogError("SearchCommand", ex));
-        ForceSearchCommand.ThrownExceptions.Subscribe(ex => LogError("ForceSearchCommand", ex));
+        }));
 
         this.WhenAnyValue(x => x.IsFromCache, x => x.IsLoading)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowForceSearchButton)));
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowForceSearchButton)))
+            .DisposeWith(Disposables);
 
         // При изменении источника — обновляем UI и перезапускаем поиск
         this.WhenAnyValue(x => x.Source)
@@ -143,7 +142,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
                     Log.Debug($"[Search] Source changed to {source}, re-executing search...");
                     await ExecuteSearchAsync(forceNetwork: false);
                 }
-            });
+            })
+            .DisposeWith(Disposables);
 
         if (!string.IsNullOrEmpty(LibService.Settings.LastSearchQuery))
         {

@@ -1,5 +1,4 @@
-﻿// Features/Playlist/PlaylistViewModel.cs
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
@@ -17,6 +16,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 {
     #region Fields
 
+    private readonly StreamCacheManager _cacheManager;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
@@ -98,12 +98,14 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     #region Constructor
 
     public PlaylistViewModel(
+        StreamCacheManager cacheManager,
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
         IDialogService dialog,
         TrackViewModelFactory vmFactory)
     {
+        _cacheManager = cacheManager;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
@@ -118,9 +120,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
 
-        PlayAllCommand = ReactiveCommand.CreateFromTask(PlayAllAsync, hasTracks);
+        // FIX: ThrownExceptions subscription to prevent memory leak
+        // Используем CreateCommand из ReorderableViewModel
 
-        DeletePlaylistCommand = ReactiveCommand.CreateFromTask(async () =>
+        PlayAllCommand = CreateCommand(ReactiveCommand.CreateFromTask(PlayAllAsync, hasTracks));
+
+        DeletePlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             var confirmTitle = SL["Dialog_Confirm_Title"];
             var confirmMsg = string.Format(SL["Playlist_DeleteConfirm"], PlaylistName);
@@ -129,32 +134,32 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             {
                 await _manager.DeletePlaylistAsync(_currentPlaylistId);
             }
-        });
+        }));
 
-        UploadToCloudCommand = ReactiveCommand.CreateFromTask(async () =>
+        UploadToCloudCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             await _manager.UploadPlaylistToAccountAsync(_currentPlaylistId);
             await LoadPlaylistAsync(_currentPlaylistId);
-        });
+        }));
 
-        UnlinkFromCloudCommand = ReactiveCommand.CreateFromTask(async () =>
+        UnlinkFromCloudCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             await _manager.ConvertToLocalAsync(_currentPlaylistId);
             await LoadPlaylistAsync(_currentPlaylistId);
-        });
+        }));
 
-        RefreshPlaylistCommand = ReactiveCommand.CreateFromTask(() => LoadPlaylistAsync(_currentPlaylistId));
+        RefreshPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(() => LoadPlaylistAsync(_currentPlaylistId)));
 
-        ShufflePlayCommand = ReactiveCommand.CreateFromTask(ShufflePlayAsync, hasTracks);
-        DownloadAllCommand = ReactiveCommand.CreateFromTask(DownloadAllAsync, hasTracks);
-        MergePlaylistCommand = ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit));
+        ShufflePlayCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShufflePlayAsync, hasTracks));
+        DownloadAllCommand = CreateCommand(ReactiveCommand.CreateFromTask(DownloadAllAsync, hasTracks));
+        MergePlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit)));
 
-        AddToQueueCommand = ReactiveCommand.Create(() =>
+        AddToQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             _audio.EnqueueRange(GetLoadedItemsSnapshot());
-        }, hasTracks);
+        }, hasTracks));
 
-        MoveItemCommand = ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
+        MoveItemCommand = CreateCommand(ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
         {
             if (!CanReorderItems) return;
 
@@ -162,7 +167,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             InvalidateAllTracksCache();
 
             await MoveItemAsync(tuple.oldIndex, tuple.newIndex);
-        });
+        }));
 
         this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ =>
@@ -309,12 +314,44 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         FormatDuration();
 
         await InitializeAsync(allIds);
+
+        _ = HydrateCacheStatusInBackgroundAsync();
+
         await CheckPlaybackStateAsync();
     }
 
     #endregion
 
     #region Private Methods
+
+    private async Task HydrateCacheStatusInBackgroundAsync()
+    {
+        try
+        {
+            var tracks = GetLoadedItemsSnapshot();
+            await Task.Run(() =>
+            {
+                foreach (var track in tracks)
+                {
+                    if (!track.IsDownloaded && !track.IsCached)
+                    {
+                        if (_cacheManager.IsFullyCached(track.Id))
+                        {
+                            var meta = StreamCacheManager.TryGetMetadata(track.Id);
+                            if (meta != null)
+                                track.MarkAsCached(meta.Container, meta.Bitrate);
+                            else
+                                track.IsCached = true;
+                        }
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Playlist] Cache hydration error: {ex.Message}");
+        }
+    }
 
     private async Task CheckPlaybackStateAsync()
     {
@@ -451,14 +488,21 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #region Dispose
 
-    public override void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
-        _librarySubscription?.Dispose();
-        _audioStateSub?.Dispose();
-        _trackChangeSub?.Dispose();
+        if (disposing)
+        {
+            Log.Debug($"[PlaylistVM] Disposing playlist {_currentPlaylistId}");
 
-        base.Dispose();
+            LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
+            _librarySubscription?.Dispose();
+            _audioStateSub?.Dispose();
+            _trackChangeSub?.Dispose();
+
+            InvalidateAllTracksCache();
+        }
+
+        base.Dispose(disposing);  // Вызовет ReorderableViewModel.Dispose(bool), который очистит _vmCache
     }
 
     #endregion

@@ -158,10 +158,17 @@ public class SearchCacheService
 
     private void AddToMemoryCache(string key, CachedSearchResult result)
     {
+        // Примерный размер: 500 байт на трек
+        long estimatedSize = result.Tracks.Count * 500;
+
         lock (_memoryCache)
         {
-            if (_memoryCache.ContainsKey(key))
+            if (_memoryCache.TryGetValue(key, out CachedSearchResult? value))
             {
+                // Вычитаем старый размер
+                var oldSize = value.Tracks.Count * 500;
+                MemoryDiagnostics.UntrackBytes("SearchCache.Memory", oldSize);
+
                 _memoryCache[key] = result;
                 TouchLruUnsafe(key);
             }
@@ -171,12 +178,20 @@ public class SearchCacheService
                 {
                     var oldest = _lruOrder.Last!.Value;
                     _lruOrder.RemoveLast();
-                    _memoryCache.Remove(oldest);
+
+                    if (_memoryCache.TryGetValue(oldest, out var removed))
+                    {
+                        MemoryDiagnostics.UntrackBytes("SearchCache.Memory", removed.Tracks.Count * 500);
+                        _memoryCache.Remove(oldest);
+                    }
                 }
 
                 _memoryCache[key] = result;
                 _lruOrder.AddFirst(key);
             }
+
+            // ТРЕКИНГ
+            MemoryDiagnostics.TrackBytes("SearchCache.Memory", estimatedSize);
         }
     }
 
@@ -301,6 +316,7 @@ public class SearchCacheService
     {
         lock (_memoryCache)
         {
+            MemoryDiagnostics.SetBytes("SearchCache.Memory", 0);
             _memoryCache.Clear();
             _lruOrder.Clear();
         }

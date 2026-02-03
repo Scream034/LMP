@@ -1,8 +1,9 @@
-﻿using LMP.Core.ViewModels;
+﻿using System.Reactive;
+using System.Reactive.Disposables;
+using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
-using System.Reactive;
 
 namespace LMP.Features.Library;
 
@@ -14,7 +15,7 @@ public class MergeDecision(string playlistName, MergeAction action)
     public MergeAction Action { get; set; } = action;
 }
 
-public class MergeConflictItemViewModel : ViewModelBase
+public sealed class MergeConflictItemViewModel : ViewModelBase
 {
     public string PlaylistName { get; }
 
@@ -25,10 +26,19 @@ public class MergeConflictItemViewModel : ViewModelBase
     public MergeConflictItemViewModel(string name)
     {
         PlaylistName = name;
-        // Подписка для обеспечения radio-button поведения
-        this.WhenAnyValue(x => x.IsSkip).Subscribe(v => { if (v) { IsMerge = false; IsDuplicate = false; } });
-        this.WhenAnyValue(x => x.IsMerge).Subscribe(v => { if (v) { IsSkip = false; IsDuplicate = false; } });
-        this.WhenAnyValue(x => x.IsDuplicate).Subscribe(v => { if (v) { IsSkip = false; IsMerge = false; } });
+        
+        // Use DisposeWith to properly cleanup subscriptions
+        this.WhenAnyValue(x => x.IsSkip)
+            .Subscribe(v => { if (v) { IsMerge = false; IsDuplicate = false; } })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.IsMerge)
+            .Subscribe(v => { if (v) { IsSkip = false; IsDuplicate = false; } })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.IsDuplicate)
+            .Subscribe(v => { if (v) { IsSkip = false; IsMerge = false; } })
+            .DisposeWith(Disposables);
     }
 
     public MergeAction GetDecision()
@@ -46,8 +56,9 @@ public class MergeConflictItemViewModel : ViewModelBase
     }
 }
 
-public class MergeConflictResolutionViewModel : ViewModelBase
+public sealed class MergeConflictResolutionViewModel : ViewModelBase
 {
+    private bool _isDisposed;
     public ObservableCollection<MergeConflictItemViewModel> Conflicts { get; } = [];
 
     public ReactiveCommand<Unit, Unit> SetAllMergeCommand { get; }
@@ -63,16 +74,32 @@ public class MergeConflictResolutionViewModel : ViewModelBase
             Conflicts.Add(new MergeConflictItemViewModel(name));
         }
 
-        SetAllMergeCommand = ReactiveCommand.Create(() => SetAll(MergeAction.Merge));
-        SetAllDuplicateCommand = ReactiveCommand.Create(() => SetAll(MergeAction.Duplicate));
-        SetAllSkipCommand = ReactiveCommand.Create(() => SetAll(MergeAction.Skip));
+        // Use CreateCommand wrapper
+        SetAllMergeCommand = CreateCommand(ReactiveCommand.Create(() => SetAll(MergeAction.Merge)));
+        SetAllDuplicateCommand = CreateCommand(ReactiveCommand.Create(() => SetAll(MergeAction.Duplicate)));
+        SetAllSkipCommand = CreateCommand(ReactiveCommand.Create(() => SetAll(MergeAction.Skip)));
 
-        ConfirmCommand = ReactiveCommand.Create(() =>
-            Conflicts.Select(c => new MergeDecision(c.PlaylistName, c.GetDecision())).ToList());
+        ConfirmCommand = CreateCommand(ReactiveCommand.Create(() =>
+            Conflicts.Select(c => new MergeDecision(c.PlaylistName, c.GetDecision())).ToList()));
     }
 
     private void SetAll(MergeAction action)
     {
         foreach (var item in Conflicts) item.SetDecision(action);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (_isDisposed) return;
+        if (disposing)
+        {
+            foreach (var item in Conflicts)
+            {
+                item.Dispose();
+            }
+            Conflicts.Clear();
+        }
+        base.Dispose(disposing);
+        _isDisposed = true;
     }
 }

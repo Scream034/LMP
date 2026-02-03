@@ -17,6 +17,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private const int MaxHistorySize = 100;
     private const int RefreshTimeoutS = 60;
 
+    private const int VLCTimeout = 5000;
+
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;
     private readonly StreamCacheManager _cacheManager;
@@ -171,7 +173,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var caching = _currentStreamingConfig.VlcNetworkCachingMs;
 
         _libVLC = new LibVLC(
-            "--no-video", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
+            "--no-video", "--vout=none", "--no-video-title-show", "--no-embedded-video", "--no-spu", "--no-osd", "--no-stats",
             $"--network-caching={caching}",
             $"--file-caching={caching}",
             $"--live-caching={caching}",
@@ -294,6 +296,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 MaxRamChunks = 100
             }
         };
+    }
+
+    public void NotifyAppMinimized()
+    {
+        // 1. Сбрасываем буферы текущего потока
+        if (_currentStream is MemoryFirstCachingStream stream)
+        {
+            stream.ReleaseRamBuffers();
+        }
+
+        // 2. Если есть другие тяжелые ресурсы, можно почистить их здесь
+        // Например, историю, если она огромная (но она у нас ограничена 100 элементами)
     }
 
     // === Volume ===
@@ -788,29 +802,53 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (_isDisposed || _player == null) return;
 
-        await WithLock(_commandLock, () => Task.Run(() =>
+        var success = await WithLock(_commandLock, async () =>
         {
-            var state = _player.State;
-            if (shouldPlay)
-            {
-                if (state == VLCState.Paused) _player.SetPause(false);
-                else if (state is VLCState.Stopped or VLCState.Ended or VLCState.Error)
-                {
-                    if (CurrentTrack != null) _ = PlayCurrentIndexAsync();
-                }
-                else _player.Play();
+            // VLC с таймаутом!
+            using var cts = new CancellationTokenSource(VLCTimeout);
 
-                IsPlaying = true;
-                IsPaused = false;
-            }
-            else
+            await Task.Run(() =>
             {
-                if (state is VLCState.Playing or VLCState.Buffering or VLCState.Opening) _player.Pause();
-                IsPlaying = false;
-                IsPaused = true;
-            }
+                try
+                {
+                    var state = _player?.State ?? VLCState.Error;
+
+                    if (shouldPlay)
+                    {
+                        if (state == VLCState.Paused) _player?.SetPause(false);
+                        else if (state is VLCState.Stopped or VLCState.Ended or VLCState.Error)
+                        {
+                            if (CurrentTrack != null) _ = PlayCurrentIndexAsync();
+                        }
+                        else _player?.Play();
+
+                        IsPlaying = true;
+                        IsPaused = false;
+                    }
+                    else
+                    {
+                        if (state is VLCState.Playing or VLCState.Buffering or VLCState.Opening)
+                            _player?.Pause();
+                        IsPlaying = false;
+                        IsPaused = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[AudioEngine] VLC command error: {ex.Message}");
+                }
+            }).WaitAsync(cts.Token);
+
             NotifyPlaybackState();
-        }));
+        });
+
+        if (!success)
+        {
+            Log.Error("[AudioEngine] SetPlaybackState failed, resetting state");
+            IsPlaying = false;
+            IsPaused = true;
+            NotifyPlaybackState();
+        }
     }
 
     public async Task SeekAsync(TimeSpan position)
@@ -1277,42 +1315,77 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private static void Try(Action action) { try { action(); } catch { } }
 
-    private static async Task WithLock(SemaphoreSlim sem, Func<Task> action)
+    private static async Task<bool> WithLock(
+        SemaphoreSlim sem,
+        Func<Task> action,
+        int timeoutMs = 6000,
+        [System.Runtime.CompilerServices.CallerMemberName] string? caller = null)
     {
-        await sem.WaitAsync();
-        try { await action(); }
-        finally { sem.Release(); }
+        if (!await sem.WaitAsync(timeoutMs))
+        {
+            Log.Error($"[AudioEngine] {caller} LOCK TIMEOUT after {timeoutMs}ms!");
+            return false;
+        }
+
+        try
+        {
+            await action();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[AudioEngine] {caller} error: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            sem.Release();
+        }
     }
 
-    private static async Task<T?> WithLock<T>(SemaphoreSlim sem, Func<Task<T?>> action)
+    // Аналогично для версии с возвратом значения
+    private static async Task<T?> WithLock<T>(
+        SemaphoreSlim sem,
+        Func<Task<T?>> action,
+        int timeoutMs = 6000)
     {
-        await sem.WaitAsync();
+        if (!await sem.WaitAsync(timeoutMs))
+        {
+            Log.Error($"[AudioEngine] Lock timeout after {timeoutMs}ms");
+            return default;
+        }
+
         try { return await action(); }
         finally { sem.Release(); }
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
         _isDisposed = true;
 
-        SaveVolumeNow();
-        Try(() => _cts?.Cancel());
-        Try(() => _currentStream?.Dispose());
-
-        if (_player != null)
+        if (disposing)
         {
-            Try(_player.Stop);
-            Try(_player.Dispose);
+            SaveVolumeNow();
+            Try(() => _cts?.Cancel());
+            Try(() => _currentStream?.Dispose());
+
+            if (_player != null)
+            {
+                Try(_player.Stop);
+                Try(_player.Dispose);
+            }
+
+            Try(_libVLC!.Dispose);
+            Try(_loadLock.Dispose);
+            Try(_commandLock.Dispose);
+            Try(_navigationLock.Dispose);
+            Try(_apiLock.Dispose);
+            Try(_httpClient.Dispose);
+
+            Log.Info("[AudioEngine] Disposed");
         }
 
-        Try(_libVLC!.Dispose);
-        Try(_loadLock.Dispose);
-        Try(_commandLock.Dispose);
-        Try(_navigationLock.Dispose);
-        Try(_apiLock.Dispose);
-        Try(_httpClient.Dispose);
-
-        Log.Info("[AudioEngine] Disposed");
+        base.Dispose(disposing);
     }
 }

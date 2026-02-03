@@ -1,5 +1,4 @@
-﻿// Features/Home/HomeViewModel.cs
-using LMP.Core.Helpers;
+﻿using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -8,6 +7,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 
 namespace LMP.Features.Home;
@@ -74,14 +74,16 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         InitializeCategories();
 
-        ToggleDebugCommand = ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo);
-        RefreshCommand = ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true));
+        // Fix: Use CreateCommand wrapper
+        ToggleDebugCommand = CreateCommand(ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo));
+        RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true)));
 
         this.WhenAnyValue(x => x.SelectedCategory)
             .WhereNotNull()
             .Skip(1)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(async _ => await LoadTracksAsync());
+            .Subscribe(async _ => await LoadTracksAsync())
+            .DisposeWith(Disposables);
 
         _ = LoadTracksAsync();
     }
@@ -90,20 +92,11 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #region Overrides & Filter Implementation
 
-    /// <summary>
-    /// Фильтрация только по тексту (без типа контента).
-    /// </summary>
     protected override bool FilterItem(TrackInfo item, string query)
         => TrackFilters.MatchesTitleOrAuthor(item, query);
 
-    /// <summary>
-    /// Создаёт ViewModel для трека.
-    /// TrackViewModelFactory автоматически получает канонический экземпляр через TrackRegistry.
-    /// </summary>
     protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
     {
-        // Фабрика сама вызывает TrackRegistry.RegisterOrUpdate() внутри!
-        // Больше не нужна ручная синхронизация IsLiked/IsDownloaded
         return _vmFactory.GetOrCreate(track, PlayWithContext);
     }
 
@@ -280,29 +273,26 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #region IDisposable Implementation
 
-    public new void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        _isDisposed = true;
-
-        LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
-
-        _categoryCts?.Cancel();
-        _categoryCts?.Dispose();
-        CancelLoading();
-
-        foreach (var item in Items)
+        
+        if (disposing)
         {
-            item.Dispose();
+            Log.Debug("[HomeVM] Disposing");
+            LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
+            _categoryCts?.Cancel();
+            _categoryCts?.Dispose();
         }
-
-        base.Dispose();
+        
+        base.Dispose(disposing);
+        _isDisposed = true;
     }
 
     #endregion
 }
 
-public class CategoryItem
+public sealed class CategoryItem
 {
     public string Name { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
@@ -310,7 +300,7 @@ public class CategoryItem
     public string LocKey { get; set; } = "";
 }
 
-public class DebugStats : ReactiveObject
+public sealed class DebugStats : ReactiveObject
 {
     [Reactive] public int TotalTracks { get; set; }
     [Reactive] public int DisplayedTracks { get; set; }

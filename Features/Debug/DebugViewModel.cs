@@ -1,6 +1,4 @@
-using System.Collections.ObjectModel;
 using System.Reactive;
-using System.Text;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -8,13 +6,13 @@ using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using Microsoft.Extensions.DependencyInjection;
+using LMP.Features.Shared;
 
 namespace LMP.Features.Debug;
 
-public class DebugViewModel : ViewModelBase
+public sealed class DebugViewModel : ViewModelBase, IDisposable
 {
     private readonly YoutubeProvider _youtube;
-    private readonly YoutubeUserDataService _ytUser;
 
     [Reactive] public string LogOutput { get; set; } = "Debug Session Started...\n";
     [Reactive] public string SearchQuery { get; set; } = "Linkin Park";
@@ -26,22 +24,137 @@ public class DebugViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> SearchMusicCommand { get; }
     public ReactiveCommand<Unit, string> ClearLogCommand { get; }
 
+    public ReactiveCommand<Unit, Unit> DumpMemoryCommand { get; }
+    public ReactiveCommand<Unit, Unit> ForceGcCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearCachesCommand { get; }
+    public ReactiveCommand<Unit, Unit> CheckVmLeaksCommand { get; }
+
     public DebugViewModel()
     {
         _youtube = Program.Services.GetRequiredService<YoutubeProvider>();
-        _ytUser = Program.Services.GetRequiredService<YoutubeUserDataService>();
 
-        GetLikedVideosCommand = ReactiveCommand.CreateFromTask(ExecuteGetLikedVideos);
-        GetLikedMusicCommand = ReactiveCommand.CreateFromTask(ExecuteGetLikedMusic);
-        SearchVideosCommand = ReactiveCommand.CreateFromTask(ExecuteSearchVideos);
-        SearchMusicCommand = ReactiveCommand.CreateFromTask(ExecuteSearchMusic);
-        ClearLogCommand = ReactiveCommand.Create(() => LogOutput = "");
+        GetLikedVideosCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteGetLikedVideos));
+        GetLikedMusicCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteGetLikedMusic));
+        SearchVideosCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteSearchVideos));
+        SearchMusicCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteSearchMusic));
+        ClearLogCommand = CreateCommand(ReactiveCommand.Create(() => LogOutput = ""));
+
+        // Memory commands
+        DumpMemoryCommand = CreateCommand(ReactiveCommand.Create(ExecuteDumpMemory));
+        ForceGcCommand = CreateCommand(ReactiveCommand.Create(ExecuteForceGc));
+        ClearCachesCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteClearCaches));
+        
+        CheckVmLeaksCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
+
+            // Через reflection
+            var cacheField = vmFactory.GetType().GetField("_cache",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+
+            if (cacheField?.GetValue(vmFactory) is System.Collections.Concurrent.ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> cache)
+            {
+                int alive = 0;
+                int dead = 0;
+                int disposed = 0;
+
+                foreach (var kvp in cache)
+                {
+                    if (kvp.Value.TryGetTarget(out var vm))
+                    {
+                        if (vm.IsDisposed) disposed++;
+                        else alive++;
+                    }
+                    else
+                    {
+                        dead++;
+                    }
+                }
+
+                AppendLog($"\n--- TRACK VM CACHE ---");
+                AppendLog($"Total entries: {cache.Count}");
+                AppendLog($"Alive (not disposed): {alive}");
+                AppendLog($"Disposed but in cache: {disposed}");
+                AppendLog($"Dead (collected): {dead}");
+                AppendLog($"--- END ---\n");
+            }
+        }));
+    }
+
+    private void ExecuteDumpMemory()
+    {
+        var report = MemoryDiagnostics.Instance.GetFullReport();
+        AppendLog(report);
+
+        // Также логируем в файл
+        MemoryDiagnostics.LogReport();
+    }
+
+    private void ExecuteForceGc()
+    {
+        AppendLog("\n--- FORCING GARBAGE COLLECTION ---");
+
+        var before = GC.GetTotalMemory(false) / 1024 / 1024;
+        AppendLog($"Before: {before} MB");
+
+        MemoryDiagnostics.ForceCleanup();
+
+        var after = GC.GetTotalMemory(true) / 1024 / 1024;
+        AppendLog($"After:  {after} MB");
+        AppendLog($"Freed:  {before - after} MB");
+        AppendLog("--- GC COMPLETE ---\n");
+    }
+
+    private async Task ExecuteClearCaches()
+    {
+        AppendLog("\n--- CLEARING ALL CACHES ---");
+        IsBusy = true;
+
+        try
+        {
+            // Image cache
+            var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
+            imageCache.ClearMemoryCache();
+            AppendLog("✓ Image memory cache cleared");
+
+            // Search cache
+            var searchCache = Program.Services.GetRequiredService<SearchCacheService>();
+            searchCache.ClearAll();
+            AppendLog("✓ Search cache cleared");
+
+            // YouTube stream cache
+            _youtube.ClearCache();
+            AppendLog("✓ YouTube stream URL cache cleared");
+
+            // TrackViewModelFactory
+            var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
+            var cleaned = vmFactory.CleanupCache();
+            AppendLog($"✓ TrackVM cache: cleaned {cleaned} dead refs");
+
+            // Force GC after clearing
+            MemoryDiagnostics.ForceCleanup();
+            AppendLog("✓ GC completed");
+
+            // Show new memory state
+            var stats = MemoryDiagnostics.Instance.CurrentStats;
+            AppendLog($"\nCurrent memory: {stats.WorkingSetMb} MB (GC: {stats.GcTotalMemoryMb} MB)");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"ERROR: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+            AppendLog("--- CACHES CLEARED ---\n");
+        }
     }
 
     private async Task ExecuteGetLikedVideos()
     {
-        await RunSafe("YT LIKED (LL)", async () => {
-            // Используем прямой клиент плейлистов для "LL" (Liked Videos)
+        await RunSafe("YT LIKED (LL)", async () =>
+        {
             var videos = await _youtube.GetClient().Playlists
                 .GetVideosAsync(new Core.Youtube.Playlists.PlaylistId("LL"))
                 .Take(10)
@@ -52,8 +165,8 @@ public class DebugViewModel : ViewModelBase
 
     private async Task ExecuteGetLikedMusic()
     {
-        await RunSafe("YTM LIKED (VLLM)", async () => {
-            // Используем Music API для получения лайков
+        await RunSafe("YTM LIKED (VLLM)", async () =>
+        {
             var tracks = await _youtube.GetClient().Music.GetLikedTracksAsync();
             return tracks.Take(10).ToList();
         });
@@ -61,14 +174,16 @@ public class DebugViewModel : ViewModelBase
 
     private async Task ExecuteSearchVideos()
     {
-        await RunSafe($"YT SEARCH: {SearchQuery}", async () => {
+        await RunSafe($"YT SEARCH: {SearchQuery}", async () =>
+        {
             return await _youtube.SearchFastAsync(SearchQuery, 10, SearchFilter.Video);
         });
     }
 
     private async Task ExecuteSearchMusic()
     {
-        await RunSafe($"YTM SEARCH: {SearchQuery}", async () => {
+        await RunSafe($"YTM SEARCH: {SearchQuery}", async () =>
+        {
             return await _youtube.SearchFastAsync(SearchQuery, 10, SearchFilter.Music);
         });
     }

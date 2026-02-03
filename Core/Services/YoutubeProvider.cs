@@ -23,11 +23,14 @@ public partial class YoutubeProvider : IDisposable
     private const int MaxCacheSize = 200;
 
     private readonly TrackRegistry _trackRegistry;
-    private YoutubeClient _youtube = null!;
     private readonly CookieAuthService? _cookieAuth;
     private readonly LibraryService? _libraryService;
     private readonly Dictionary<string, StreamCacheEntry> _streamCache = [];
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
+
+    private YoutubeClient _youtube = null!;
+    private HttpClient? _currentHttpClient; // Храним ссылку для dispose
+    private bool _disposed;
 
     private class StreamCacheEntry
     {
@@ -66,6 +69,10 @@ public partial class YoutubeProvider : IDisposable
 
     public void ReloadClient()
     {
+        // 1. СНАЧАЛА диспозим старый клиент
+        DisposeCurrentClient();
+
+        // 2. Создаём новый
         var handler = new HttpClientHandler
         {
             UseCookies = false,
@@ -75,11 +82,36 @@ public partial class YoutubeProvider : IDisposable
 
         var baseHttpClient = new HttpClient(handler);
         var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, _cookieAuth, disposeClient: true);
-        var finalHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
+        _currentHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
 
-        _youtube = new YoutubeClient(finalHttpClient);
+        _youtube = new YoutubeClient(_currentHttpClient);
 
         Log.Info($"[YouTube] Client reloaded. Auth provided: {_cookieAuth?.IsAuthenticated ?? false}");
+    }
+
+    private void DisposeCurrentClient()
+    {
+        try
+        {
+            // Диспозим текущую сессию поиска
+            _currentSearchSession?.Dispose();
+            _currentSearchSession = null;
+
+            // YoutubeClient может иметь свой Dispose
+            // Если нет - диспозим HttpClient напрямую
+            if (_youtube is IDisposable disposableClient)
+            {
+                disposableClient.Dispose();
+            }
+
+            _currentHttpClient?.Dispose();
+            _currentHttpClient = null;
+            _youtube = null!;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[YouTube] Error disposing client: {ex.Message}");
+        }
     }
 
     public async Task InitializeAsync()
@@ -132,7 +164,7 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public YoutubeClient GetClient() => _youtube;
+    public YoutubeClient GetClient() => _youtube ?? throw new InvalidOperationException("YouTube client not initialized");
 
     // --- ПЕРСОНАЛИЗАЦИЯ ---
 
@@ -647,6 +679,7 @@ public partial class YoutubeProvider : IDisposable
         private bool _hasMore = true;
         private bool _disposed;
         private readonly List<TrackInfo> _buffer = [];
+        private readonly SemaphoreSlim _disposeLock = new(1, 1);
 
         public bool HasMore => (_hasMore || _buffer.Count > 0) && !_disposed && _seenIds.Count < _maxResults;
         public int LoadedCount => _seenIds.Count;
@@ -747,14 +780,36 @@ public partial class YoutubeProvider : IDisposable
         public void Dispose()
         {
             if (_disposed) return;
-            _disposed = true;
-            _hasMore = false;
-            _buffer.Clear();
 
-            if (_enumerator != null)
+            _disposeLock.Wait();
+            try
             {
-                _ = _enumerator.DisposeAsync().AsTask();
+                if (_disposed) return;
+                _disposed = true;
+                _hasMore = false;
+                _buffer.Clear();
+                _seenIds.Clear();
+
+                // Синхронно ждём dispose enumerator
+                if (_enumerator != null)
+                {
+                    try
+                    {
+                        _enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[SearchSession] Dispose error: {ex.Message}");
+                    }
+                    _enumerator = null;
+                }
             }
+            finally
+            {
+                _disposeLock.Release();
+                _disposeLock.Dispose();
+            }
+
             GC.SuppressFinalize(this);
         }
     }
@@ -1086,12 +1141,17 @@ public partial class YoutubeProvider : IDisposable
 
     public void Dispose()
     {
-        if (_cookieAuth != null)
-        {
-            _cookieAuth.OnAuthStateChanged -= ReloadClient;
-        }
+        if (_disposed) return;
+        _disposed = true;
+
+        _cookieAuth?.OnAuthStateChanged -= ReloadClient;
+
+        // КРИТИЧНО: Освобождаем все ресурсы
+        DisposeCurrentClient();
+        _streamCache.Clear();
 
         GC.SuppressFinalize(this);
+        Log.Info("[YouTube] Provider disposed");
     }
 
     [GeneratedRegex(
@@ -1115,11 +1175,11 @@ public class StreamOption : ReactiveObject
     public double Bitrate { get; set; }
     public string Codec { get; set; } = "";
     public double SizeMb { get; set; }
-    
+
     public string DisplayName => $"{Codec} {Bitrate:F0}kbps ({Container})";
-    
+
     [Reactive] public bool IsDownloaded { get; set; }
-    
+
     /// <summary>
     /// Текущий активный формат (который сейчас воспроизводится).
     /// </summary>

@@ -1,5 +1,4 @@
-﻿// Features/Library/LibraryViewModel.cs
-using LMP.Core.Models;
+﻿using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Features.Shell;
@@ -9,10 +8,11 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using LMP.Core.Youtube.Search;
+using System.Reactive.Disposables;
 
 namespace LMP.Features.Library;
 
-public class LibraryViewModel : ViewModelBase, IDisposable
+public class LibraryViewModel : ViewModelBase
 {
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
@@ -23,7 +23,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     private readonly MusicLibraryManager _manager;
 
     private CancellationTokenSource? _syncCts;
-    private readonly IDisposable? _librarySubscription;
     private bool _isDisposed;
 
     [Reactive] public bool IsLoading { get; private set; }
@@ -63,12 +62,12 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         IsAuthenticated = _auth.IsAuthenticated;
         _auth.OnAuthStateChanged += OnAuthChanged;
 
-        OpenCreateCommand = ReactiveCommand.Create(() => { IsCreatingPlaylist = true; NewPlaylistName = ""; });
-        CancelCreateCommand = ReactiveCommand.Create(() => { IsCreatingPlaylist = false; NewPlaylistName = ""; });
+        // FIX: Используем CreateCommand из ViewModelBase для предотвращения утечек
+        OpenCreateCommand = CreateCommand(ReactiveCommand.Create(() => { IsCreatingPlaylist = true; NewPlaylistName = ""; }));
+        CancelCreateCommand = CreateCommand(ReactiveCommand.Create(() => { IsCreatingPlaylist = false; NewPlaylistName = ""; }));
 
         var canSave = this.WhenAnyValue(x => x.NewPlaylistName, n => !string.IsNullOrWhiteSpace(n));
-        // Changed: Use async command
-        SavePlaylistCommand = ReactiveCommand.CreateFromTask(async () =>
+        SavePlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
             var playlist = await _library.CreatePlaylistAsync(NewPlaylistName.Trim());
             playlist.SyncMode = _auth.IsAuthenticated ? PlaylistSyncMode.TwoWaySync : PlaylistSyncMode.LocalOnly;
@@ -76,26 +75,27 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             IsCreatingPlaylist = false;
             NewPlaylistName = string.Empty;
             await LoadPlaylistsAsync();
-        }, canSave);
+        }, canSave));
 
         var canSync = this.WhenAnyValue(x => x.IsSyncing, syncing => !syncing);
-        SyncAccountPlaylistsCommand = ReactiveCommand.CreateFromTask(SyncAccountPlaylistsAsync, canSync);
+        SyncAccountPlaylistsCommand = CreateCommand(ReactiveCommand.CreateFromTask(SyncAccountPlaylistsAsync, canSync));
 
-        CancelSyncCommand = ReactiveCommand.Create(() =>
+        CancelSyncCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             _syncCts?.Cancel();
             SyncStatus = SL["Sync_Cancelling"];
-        });
+        }));
 
-        RefreshCommand = ReactiveCommand.CreateFromTask(LoadPlaylistsAsync);
+        RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadPlaylistsAsync));
 
-        _librarySubscription = Observable.FromEvent(
+        Observable.FromEvent(
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(300))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
-            .Subscribe(async _ => await LoadPlaylistsAsync());
+            .Subscribe(async _ => await LoadPlaylistsAsync())
+            .DisposeWith(Disposables); // Используем Disposables из базового класса
 
         _ = LoadPlaylistsAsync();
     }
@@ -153,7 +153,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     return;
                 }
             }
-            // Changed: Use Settings property
             else if (_library.HasFakeAccount && !string.IsNullOrEmpty(_library.Settings.FakeAccountChannelUrl))
             {
                 var result = await _youtube.GetChannelPlaylistsForSyncAsync(_library.Settings.FakeAccountChannelUrl, ct);
@@ -172,7 +171,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
             {
                 if (_auth.IsAuthenticated)
                 {
-                    // Спрашиваем пользователя вместо автоматического старта
                     var confirmSyncLikes = await _dialog.ConfirmAsync(
                         SL["Sync_ConfirmLikedOnly"] ?? "Playlists Not Found",
                         SL["Sync_NoPlaylistsFound_AskLiked"] ?? "We couldn't find any public playlists. Do you want to sync your Liked Songs instead?",
@@ -184,8 +182,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                     {
                         SyncStatus = SL["Sync_LikedSongs"];
                         await _manager.SyncLikedTracksAsync();
-
-                        // Сообщаем об успехе, так как это была единственная операция
                         await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"], SL["Sync_Success_Msg_LikedOnly"] ?? "Liked songs synced successfully.");
                     }
                 }
@@ -212,18 +208,11 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 Log.Info("[Sync] Starting background Liked Songs sync...");
                 likedSongsSyncTask = Task.Run(async () =>
                 {
-                    try
-                    {
-                        await _manager.SyncLikedTracksAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error($"[Sync] Background liked songs sync failed: {ex.Message}");
-                    }
+                    try { await _manager.SyncLikedTracksAsync(); }
+                    catch (Exception ex) { Log.Error($"[Sync] Background liked songs sync failed: {ex.Message}"); }
                 }, ct);
             }
 
-            // Changed: Use async method
             var allPlaylists = await _library.GetAllPlaylistsAsync(ct);
             var existingLocalPlaylists = allPlaylists
                 .Where(p => p.IsLocal)
@@ -258,15 +247,9 @@ public class LibraryViewModel : ViewModelBase, IDisposable
                 ct.ThrowIfCancellationRequested();
                 if (_isDisposed) return;
 
-                var decision = MergeAction.Duplicate;
-                if (decisionLookup.TryGetValue(candidate.Title, out var action))
-                {
-                    decision = action;
-                }
-                else if (!existingLocalPlaylists.ContainsKey(candidate.Title))
-                {
-                    decision = MergeAction.Duplicate;
-                }
+                var decision = decisionLookup.TryGetValue(candidate.Title, out var action)
+                    ? action
+                    : MergeAction.Duplicate;
 
                 if (decision == MergeAction.Skip)
                 {
@@ -362,7 +345,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         {
             await Task.Delay(300);
             _mainWindow.UnlockNavigation();
-
             if (!_isDisposed)
             {
                 IsSyncing = false;
@@ -377,14 +359,11 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
 
-        // Dispose old ViewModels
         foreach (var vm in Playlists) vm.Dispose();
         Playlists.Clear();
 
-        // GetAllPlaylistsAsync now returns playlists with TrackCount populated
         var allPlaylists = await _library.GetAllPlaylistsAsync();
 
-        // Sort: Liked first, then local, then by name
         var sorted = allPlaylists
             .OrderByDescending(p => p.Id == LibraryService.LikedPlaylistId)
             .ThenByDescending(p => p.IsLocal)
@@ -408,7 +387,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
     {
         if (_isDisposed) return;
 
-        // Changed: Use async method
         var playlist = await _library.GetPlaylistAsync(playlistId);
         if (playlist == null) return;
 
@@ -427,7 +405,6 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         if (!confirmed) return;
 
         _mainWindow.LockNavigation(SL["Playlist_Deleting"]);
-
         try
         {
             await _manager.DeletePlaylistAsync(playlistId);
@@ -439,18 +416,19 @@ public class LibraryViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        _isDisposed = true;
+        if (disposing)
+        {
+            _isDisposed = true; // Устанавливаем флаг в начале
+            foreach (var vm in Playlists) vm.Dispose();
+            Playlists.Clear();
 
-        foreach (var vm in Playlists) vm.Dispose();
-        Playlists.Clear();
-
-        _auth.OnAuthStateChanged -= OnAuthChanged;
-        _syncCts?.Cancel();
-        _syncCts?.Dispose();
-        _librarySubscription?.Dispose();
-        GC.SuppressFinalize(this);
+            _auth.OnAuthStateChanged -= OnAuthChanged;
+            _syncCts?.Cancel();
+            _syncCts?.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }
