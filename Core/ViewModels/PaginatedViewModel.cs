@@ -79,7 +79,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             .Transform(CreateItemViewModel)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out _items)
-            .DisposeMany()
             .Subscribe()
             .DisposeWith(_dynamicDataSubscriptions);
 
