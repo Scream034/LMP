@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;

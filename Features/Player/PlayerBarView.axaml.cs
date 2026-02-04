@@ -27,8 +27,8 @@ public partial class PlayerBarView : UserControl
 
     private void ForceHideTooltips()
     {
-        if (HoverTooltip != null) HoverTooltip.IsVisible = false;
-        if (VolumeTooltip != null) VolumeTooltip.IsVisible = false;
+        HoverTooltip?.IsVisible = false;
+        VolumeTooltip?.IsVisible = false;
         _isDraggingSeek = false;
         _isDraggingVolume = false;
     }

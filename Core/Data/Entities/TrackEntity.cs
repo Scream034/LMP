@@ -1,7 +1,6 @@
-// Core/Data/Entities/TrackEntity.cs
 namespace LMP.Core.Data.Entities;
 
-public class TrackEntity
+public sealed class TrackEntity
 {
     public string Id { get; set; } = string.Empty;
     

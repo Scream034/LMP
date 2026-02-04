@@ -4,14 +4,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace LMP.Core.Data.Repositories;
 
-public class PlaylistRepository : IPlaylistRepository
+public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> factory) : IPlaylistRepository
 {
-    private readonly IDbContextFactory<LibraryDbContext> _factory;
-
-    public PlaylistRepository(IDbContextFactory<LibraryDbContext> factory)
-    {
-        _factory = factory;
-    }
+    private readonly IDbContextFactory<LibraryDbContext> _factory = factory;
 
     public async Task<Playlist?> GetByIdAsync(string id, CancellationToken ct = default)
     {

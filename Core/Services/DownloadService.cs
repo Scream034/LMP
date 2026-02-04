@@ -2,7 +2,7 @@
 
 namespace LMP.Core.Services;
 
-public class DownloadService
+public sealed class DownloadService
 {
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;

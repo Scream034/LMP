@@ -8,13 +8,11 @@ public partial class YoutubeUserDataService
 {
     private readonly YoutubeProvider _provider;
     private readonly CookieAuthService _auth;
-    private readonly LibraryService _library;
 
-    public YoutubeUserDataService(YoutubeProvider provider, CookieAuthService auth, LibraryService library)
+    public YoutubeUserDataService(YoutubeProvider provider, CookieAuthService auth)
     {
         _provider = provider;
         _auth = auth;
-        _library = library;
     }
 
     /// <summary>

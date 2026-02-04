@@ -1,6 +1,6 @@
 ﻿namespace LMP.Core.Models;
 
-public class AuthState
+public sealed class AuthState
 {
     // --- Состояние авторизации ---
     public bool IsAuthenticated { get; set; }

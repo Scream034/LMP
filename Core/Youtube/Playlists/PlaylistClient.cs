@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
-using LMP.Core.Youtube.Videos;
 
 namespace LMP.Core.Youtube.Playlists;
 
@@ -58,7 +57,7 @@ public class PlaylistClient(HttpClient http)
                     cancellationToken
                 );
 
-                videos = browseResponse.Videos.ToList();
+                videos = [.. browseResponse.Videos];
                 continuationToken = browseResponse.ContinuationToken;
                 visitorData = browseResponse.VisitorData;
                 isFirstRequest = false;
@@ -74,7 +73,7 @@ public class PlaylistClient(HttpClient http)
                     cancellationToken
                 );
 
-                videos = contResponse.Videos.ToList();
+                videos = [.. contResponse.Videos];
                 continuationToken = contResponse.ContinuationToken;
                 visitorData ??= contResponse.VisitorData;
 

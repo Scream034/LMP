@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using LMP.Core.Models;
 using LMP.Core.Services;
 
 namespace LMP.Core.Models;
@@ -20,7 +19,7 @@ namespace LMP.Core.Models;
     WriteIndented = false, 
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
-public partial class AppJsonContext : JsonSerializerContext
+public sealed partial class AppJsonContext : JsonSerializerContext
 {
     public static AppJsonContext DefaultCompact { get; } = new(new JsonSerializerOptions
     {

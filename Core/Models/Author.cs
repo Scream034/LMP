@@ -6,7 +6,7 @@ namespace LMP.Core.Models;
 /// <summary>
 /// Reference to a channel that owns a specific YouTube video or playlist.
 /// </summary>
-public class Author(ChannelId channelId, string channelTitle)
+public sealed class Author(ChannelId channelId, string channelTitle)
 {
     /// <summary>
     /// Channel ID.

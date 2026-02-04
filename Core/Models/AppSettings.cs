@@ -1,4 +1,3 @@
-// Core/Models/AppSettings.cs
 namespace LMP.Core.Models;
 
 public enum YoutubeClientProfile
@@ -17,7 +16,7 @@ public enum InternetProfile
     Ultra     // Максимальное кэширование / Локальная сеть
 }
 
-public class ProxySettings
+public sealed class ProxySettings
 {
     public bool Enabled { get; set; } = false;
     public string Host { get; set; } = "";
@@ -30,7 +29,7 @@ public class ProxySettings
 /// <summary>
 /// Настройки хранения данных.
 /// </summary>
-public class StorageSettings
+public sealed class StorageSettings
 {
     /// <summary>
     /// Лимит кэша изображений в МБ.
@@ -57,7 +56,7 @@ public class StorageSettings
     public bool AutoSaveToDownloads { get; set; } = false;
 }
 
-public class StreamingConfig
+public sealed class StreamingConfig
 {
     // Генерируется динамически на основе InternetProfile, но можно переопределить
     public int ChunkSize { get; set; } = 128 * 1024;
@@ -84,7 +83,7 @@ public enum AudioQualityPreference
 /// <summary>
 /// Application settings. Stored as JSON in Settings table.
 /// </summary>
-public class AppSettings
+public sealed class AppSettings
 {
     // === Audio ===
     public float Volume { get; set; } = 0.5f;

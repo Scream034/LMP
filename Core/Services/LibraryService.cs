@@ -527,10 +527,7 @@ public sealed class LibraryService : IAsyncDisposable
     {
         var all = await _playlists.GetAllAsync(ct);
         var liked = all.FirstOrDefault(p => p.Id == LikedPlaylistId);
-        if (liked != null)
-        {
-            liked.Name = LocalizationService.Instance["Playlist_Liked"];
-        }
+        liked?.Name = LocalizationService.Instance["Playlist_Liked"];
         return all;
     }
 

@@ -1,7 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace LMP.Features.Playlist;
+namespace LMP.UI.Dialogs;
 
 public partial class DeletePlaylistDialog : Window
 {

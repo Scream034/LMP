@@ -1,20 +1,15 @@
-// Core/Data/LibraryDbContext.cs
 using LMP.Core.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace LMP.Core.Data;
 
-public class LibraryDbContext : DbContext
+public class LibraryDbContext(DbContextOptions<LibraryDbContext> options) : DbContext(options)
 {
     public DbSet<TrackEntity> Tracks => Set<TrackEntity>();
     public DbSet<PlaylistEntity> Playlists => Set<PlaylistEntity>();
     public DbSet<PlaylistTrackEntity> PlaylistTracks => Set<PlaylistTrackEntity>();
     public DbSet<RecentlyPlayedEntity> RecentlyPlayed => Set<RecentlyPlayedEntity>();
     public DbSet<SettingEntity> Settings => Set<SettingEntity>();
-
-    public LibraryDbContext(DbContextOptions<LibraryDbContext> options) : base(options)
-    {
-    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

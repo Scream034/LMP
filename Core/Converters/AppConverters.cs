@@ -12,7 +12,7 @@ using Avalonia.Data;
 
 namespace LMP.Core.Converters;
 
-public class TimeSpanToStringConverter : IValueConverter
+public sealed class TimeSpanToStringConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -23,13 +23,13 @@ public class TimeSpanToStringConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
-public class BoolToOpacityConverter : IValueConverter
+public sealed class BoolToOpacityConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => (value is bool b && b) ? 1.0 : 0.5;
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
-public class NullToVisibilityConverter : IValueConverter
+public sealed class NullToVisibilityConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -40,13 +40,13 @@ public class NullToVisibilityConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
-public class InverseBoolConverter : IValueConverter
+public sealed class InverseBoolConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is bool b ? !b : value;
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => value is bool b ? !b : value;
 }
 
-public class VolumeToIconConverter : IValueConverter
+public sealed class VolumeToIconConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -65,7 +65,7 @@ public class VolumeToIconConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
-public class BoolToSelectorConverter : IValueConverter
+public sealed class BoolToSelectorConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -113,7 +113,7 @@ public class BoolToSelectorConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
-public class BoolToCursorConverter : IValueConverter
+public sealed class BoolToCursorConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -179,7 +179,7 @@ public sealed class AudioQualityToStringConverter : IValueConverter
     }
 }
 
-public class BitmapAssetValueConverter : IValueConverter
+public sealed class BitmapAssetValueConverter : IValueConverter
 {
     public static readonly BitmapAssetValueConverter Instance = new();
 
@@ -215,7 +215,7 @@ public class BitmapAssetValueConverter : IValueConverter
     }
 }
 
-public class StringStartsWithConverter : IValueConverter
+public sealed class StringStartsWithConverter : IValueConverter
 {
     public static readonly StringStartsWithConverter Instance = new();
 
@@ -234,7 +234,7 @@ public class StringStartsWithConverter : IValueConverter
     }
 }
 
-public class WebUrlConverter : IValueConverter
+public sealed class WebUrlConverter : IValueConverter
 {
     public static readonly WebUrlConverter Instance = new();
 
@@ -253,7 +253,7 @@ public class WebUrlConverter : IValueConverter
     }
 }
 
-public class ProgressToWidthConverter : IMultiValueConverter
+public sealed class ProgressToWidthConverter : IMultiValueConverter
 {
     public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -267,7 +267,7 @@ public class ProgressToWidthConverter : IMultiValueConverter
     }
 }
 
-public class GreaterThanConverter : IValueConverter
+public sealed class GreaterThanConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -292,7 +292,7 @@ public class GreaterThanConverter : IValueConverter
 /// <summary>
 /// Конвертер для иконки режима повтора.
 /// </summary>
-public class RepeatModeIconConverter : IValueConverter
+public sealed class RepeatModeIconConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -308,7 +308,7 @@ public class RepeatModeIconConverter : IValueConverter
 /// <summary>
 /// Конвертер для цвета иконки режима повтора.
 /// </summary>
-public class RepeatModeActiveConverter : IValueConverter
+public sealed class RepeatModeActiveConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -322,7 +322,7 @@ public class RepeatModeActiveConverter : IValueConverter
 /// <summary>
 /// Конвертер для проверки конкретного режима повтора.
 /// </summary>
-public class RepeatModeEqualsConverter : IValueConverter
+public sealed class RepeatModeEqualsConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -347,7 +347,7 @@ public class RepeatModeEqualsConverter : IValueConverter
 /// Сравнивает Enum значение с параметром. Возвращает true, если совпадают.
 /// Используется для RadioButton GroupBinding.
 /// </summary>
-public class EnumToBoolConverter : IValueConverter
+public sealed class EnumToBoolConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -370,7 +370,7 @@ public class EnumToBoolConverter : IValueConverter
 /// <summary>
 /// Конвертирует bool в FontWeight (true = Bold, false = Normal)
 /// </summary>
-public class BoolToFontWeightConverter : IValueConverter
+public sealed class BoolToFontWeightConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -387,7 +387,7 @@ public class BoolToFontWeightConverter : IValueConverter
 /// Конвертирует bool в MaterialIconKind.
 /// Параметр: "TrueIcon|FalseIcon", например "Heart|HeartOutline"
 /// </summary>
-public class BoolToIconConverter : IValueConverter
+public sealed class BoolToIconConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -411,7 +411,7 @@ public class BoolToIconConverter : IValueConverter
 /// <summary>
 /// Конвертирует bool в видимость window buttons
 /// </summary>
-public class WindowButtonVisibilityConverter : IValueConverter
+public sealed class WindowButtonVisibilityConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {

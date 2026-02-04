@@ -1,5 +1,4 @@
-﻿using System;
-using System.Reactive.Disposables;
+﻿using System.Reactive.Disposables;
 using LMP.Core.Services;
 using ReactiveUI;
 
@@ -17,7 +16,7 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
     /// Контейнер для всех подписок и IDisposable объектов.
     /// Автоматически очищается при вызове Dispose().
     /// </summary>
-    protected CompositeDisposable Disposables { get; } = new();
+    protected CompositeDisposable Disposables { get; } = [];
 
     private bool _isDisposed;
 

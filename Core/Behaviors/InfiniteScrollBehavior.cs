@@ -1,5 +1,4 @@
-﻿// Core/Behaviors/InfiniteScrollBehavior.cs
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -11,7 +10,7 @@ namespace LMP.Core.Behaviors;
 /// <summary>
 /// Behavior для автоматической подгрузки с защитой от "мёртвой зоны".
 /// </summary>
-public class InfiniteScrollBehavior : Behavior<Control>
+public sealed class InfiniteScrollBehavior : Behavior<Control>
 {
     private IDisposable? _offsetSubscription;
     private ScrollViewer? _scrollViewer;
@@ -50,9 +49,9 @@ public class InfiniteScrollBehavior : Behavior<Control>
         {
             AttachToScrollViewer(sv);
         }
-        else if (AssociatedObject != null)
+        else
         {
-            AssociatedObject.Loaded += OnAssociatedObjectLoaded;
+            AssociatedObject?.Loaded += OnAssociatedObjectLoaded;
         }
 
         // НОВОЕ: Таймер для повторных проверок
@@ -129,7 +128,7 @@ public class InfiniteScrollBehavior : Behavior<Control>
 
         double scrollableHeight = sv.Extent.Height - sv.Viewport.Height;
         
-        // ИСПРАВЛЕНИЕ: Если контент меньше или равен вьюпорту, 
+        //  Если контент меньше или равен вьюпорту, 
         // и команда может выполниться — выполняем (нужно подгрузить ещё)
         if (scrollableHeight <= 0)
         {
@@ -142,7 +141,7 @@ public class InfiniteScrollBehavior : Behavior<Control>
 
         double distanceToEnd = scrollableHeight - sv.Offset.Y;
 
-        // ИСПРАВЛЕНИЕ: Более агрессивный триггер
+        //  Более агрессивный триггер
         // Срабатываем если близко к концу ИЛИ уже в самом конце
         bool nearEnd = distanceToEnd <= Threshold;
         bool atEnd = distanceToEnd <= 1; // Практически в конце
@@ -183,7 +182,7 @@ public class InfiniteScrollBehavior : Behavior<Control>
         }
         finally
         {
-            // ИСПРАВЛЕНИЕ: Короткая задержка вместо длинной
+            //  Короткая задержка вместо длинной
             await Task.Delay(50);
             _isExecuting = false;
             

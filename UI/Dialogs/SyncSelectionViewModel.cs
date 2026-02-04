@@ -5,7 +5,7 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using LMP.Core.Youtube.Search;
 
-namespace LMP.Features.Library;
+namespace LMP.UI.Dialogs;
 
 public class SyncSelectionViewModel : ViewModelBase
 {

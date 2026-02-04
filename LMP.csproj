@@ -10,6 +10,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ServerGarbageCollection>false</ServerGarbageCollection>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- YoutubeExplode anti-spam -->
     <NoWarn>$(NoWarn);CS0436</NoWarn>

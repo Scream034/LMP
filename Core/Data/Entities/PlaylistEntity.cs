@@ -1,7 +1,6 @@
-// Core/Data/Entities/PlaylistEntity.cs
 namespace LMP.Core.Data.Entities;
 
-public class PlaylistEntity
+public sealed class PlaylistEntity
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;

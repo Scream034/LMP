@@ -64,7 +64,7 @@
                 DragDrop.Drop="OnDrop"
                 DragDrop.DragLeave="OnDragLeave">
 
-                <!-- ★ ИСПРАВЛЕНИЕ: Переносим футер внутрь шаблона, чтобы он был частью прокрутки -->
+                <!-- ★  Переносим футер внутрь шаблона, чтобы он был частью прокрутки -->
                 <ListBox.Template>
                     <ControlTemplate TargetType="ListBox">
                         <Border Background="{TemplateBinding Background}"

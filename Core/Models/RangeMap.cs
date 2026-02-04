@@ -13,8 +13,8 @@ public class RangeItem
 
 public class RangeMap
 {
-    // ИСПРАВЛЕНИЕ: Используем класс вместо ValueTuple для надежной сериализации
-    private readonly List<RangeItem> _ranges = new();
+    //  Используем класс вместо ValueTuple для надежной сериализации
+    private readonly List<RangeItem> _ranges = [];
     private readonly Lock _lock = new();
 
     public long DownloadedBytes

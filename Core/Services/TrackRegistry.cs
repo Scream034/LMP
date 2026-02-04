@@ -196,10 +196,7 @@ public sealed class TrackRegistry
         }
 
         // Обновляем статусы кэша для всех запиненных треков
-        if (CacheManager != null)
-        {
-            CacheManager.HydrateCacheStatus(_pinned.Values);
-        }
+        CacheManager?.HydrateCacheStatus(_pinned.Values);
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} pinned tracks in {sw.ElapsedMilliseconds}ms");

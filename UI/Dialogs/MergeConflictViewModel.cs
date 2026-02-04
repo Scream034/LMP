@@ -3,7 +3,7 @@ using LMP.Core.ViewModels;
 using ReactiveUI;
 using System.Reactive;
 
-namespace LMP.Features.Library;
+namespace LMP.UI.Dialogs;
 
 // Теперь текст сообщения формируется через локализацию
 public class MergeConflictViewModel(string playlistName) : ViewModelBase

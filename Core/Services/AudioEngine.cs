@@ -238,11 +238,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         // 2. Explicitly dispose player FIRST
         // Уничтожаем плеер до того, как уничтожим _libVLC
-        if (_player != null)
-        {
-            _player.Dispose();
-            _player = null;
-        }
+        _player?.Dispose();
+        _player = null;
 
         // 3. Update config
         _currentStreamingConfig = GetConfigForProfile(profile);

@@ -168,7 +168,7 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         await RunSafe("YTM LIKED (VLLM)", async () =>
         {
             var tracks = await _youtube.GetClient().Music.GetLikedTracksAsync();
-            return tracks.Take(10).ToList();
+            return [.. tracks.Take(10)];
         });
     }
 

@@ -1,12 +1,10 @@
-// Core/Data/Repositories/TrackRepository.cs
-using System.Text.RegularExpressions;
 using LMP.Core.Data.Entities;
 using LMP.Core.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace LMP.Core.Data.Repositories;
 
-public partial class TrackRepository : ITrackRepository
+public sealed partial class TrackRepository : ITrackRepository
 {
     private readonly IDbContextFactory<LibraryDbContext> _factory;
 

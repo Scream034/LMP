@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Reactive;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Services;
@@ -125,7 +124,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         CancelLoading();
 
         var itemsList = items.ToList();
-        _masterIds = itemsList.Select(GetItemId).ToList();
+        _masterIds = [.. itemsList.Select(GetItemId)];
 
         _loadedSources.Clear();
         foreach (var item in itemsList)
@@ -378,17 +377,16 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     protected List<TSource> GetLoadedItemsSnapshot()
     {
-        return _masterIds
+        return [.. _masterIds
             .Where(_loadedSources.ContainsKey)
-            .Select(id => _loadedSources[id])
-            .ToList();
+            .Select(id => _loadedSources[id])];
     }
 
     protected List<string> GetAllIds() => [.. _masterIds];
 
     #endregion
 
-    #region IDisposable - ИСПРАВЛЕНО: override вместо new
+    #region IDisposable
 
     protected override void Dispose(bool disposing)
     {

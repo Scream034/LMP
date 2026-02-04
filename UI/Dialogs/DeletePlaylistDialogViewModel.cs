@@ -4,7 +4,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
 
-namespace LMP.Features.Playlist;
+namespace LMP.UI.Dialogs;
 
 /// <summary>
 /// Результат диалога удаления

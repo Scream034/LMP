@@ -4,8 +4,6 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using LMP.Core.Models;
-using LMP.Features.Library;
-using LMP.Features.Playlist;
 using LMP.UI.Dialogs;
 using LMP.Core.Youtube.Search;
 
@@ -141,7 +139,7 @@ public class DialogService : IDialogService
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
-            if (window == null) return new List<PlaylistSearchResult>();
+            if (window == null) return [];
             var vm = new SyncSelectionViewModel(items);
             var dialog = new SyncSelectionDialog { DataContext = vm };
             var result = await ShowDialogSafeAsync<List<PlaylistSearchResult>>(dialog, window);

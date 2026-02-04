@@ -253,9 +253,9 @@ public partial class TrackListControl : UserControl
         {
             _scrollViewer = _listBox.FindDescendantOfType<ScrollViewer>();
         }
-        else if (_listBox != null)
+        else
         {
-            _listBox.Loaded += OnListBoxLoaded;
+            _listBox?.Loaded += OnListBoxLoaded;
         }
 
         _autoScrollTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Render, OnAutoScrollTick);
@@ -270,10 +270,7 @@ public partial class TrackListControl : UserControl
         _autoScrollTimer?.Stop();
         _autoScrollTimer = null;
 
-        if (_listBox != null)
-        {
-            _listBox.Loaded -= OnListBoxLoaded;
-        }
+        _listBox?.Loaded -= OnListBoxLoaded;
         _listBox = null;
         _lastDragOverItem = null;
         _scrollViewer = null;
