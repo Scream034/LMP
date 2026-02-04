@@ -1,5 +1,4 @@
-﻿// Features/Settings/SettingsViewModel.cs
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -555,7 +554,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private async Task ClearImageCacheAsync()
     {
-        await _imageCache.ClearAllAsync();
+        await _imageCache.ClearDiskCacheAsync();
         UpdateCacheStats();
     }
 
@@ -567,16 +566,17 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void UpdateCacheStats()
     {
-        var (imgCount, imgSize) = _imageCache.GetStats();
+        var (memItems, memMb, imgCount, imgSizeMb) = _imageCache.GetStats();
         var (audioFileCount, audioSizeMb) = StreamCacheManager.GetStats();
         var (downloadFileCount, downloadSizeMb) = StreamCacheManager.GetDownloadsStats();
 
-        ImageCacheStats = $"{imgSize} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]})";
+        // Показываем disk stats (как раньше) + опционально memory
+        ImageCacheStats = $"{imgSizeMb} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]}, RAM: {memItems})";
         AudioCacheStats = $"{audioSizeMb} MB / {AudioCacheLimitMb} MB ({audioFileCount} {SL["Common_Files"]})";
         DownloadsStats = $"{downloadSizeMb} MB / {DownloadedTracksLimitMb} MB ({downloadFileCount} {SL["Common_Files"]})";
 
         ImageCacheUsagePercent = ImageCacheLimitMb > 0
-            ? Math.Clamp((double)imgSize / ImageCacheLimitMb, 0, 1) : 0;
+            ? Math.Clamp((double)imgSizeMb / ImageCacheLimitMb, 0, 1) : 0;
         AudioCacheUsagePercent = AudioCacheLimitMb > 0
             ? Math.Clamp((double)audioSizeMb / AudioCacheLimitMb, 0, 1) : 0;
         DownloadsUsagePercent = DownloadedTracksLimitMb > 0
@@ -700,11 +700,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (disposing)
         {        // FIX: Отписываемся от события локализации
             LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
-
-            // FIX: Диспозим локальные подписки и команды
-            Disposables.Dispose();
         }
 
-        base.Dispose();
+        base.Dispose(disposing);
     }
 }
