@@ -269,7 +269,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         
         if (disposing)
         {
-            Log.Debug($"[TrackVM] Disposing {Id} ({Title})");
+            // Log.Debug($"[TrackVM] Disposing {Id} ({Title})");
 
             // Очищаем делегаты
             _onPlay = null;
