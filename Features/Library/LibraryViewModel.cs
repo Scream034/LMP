@@ -9,6 +9,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using LMP.Core.Youtube.Search;
 using System.Reactive.Disposables;
+using LMP.UI.Dialogs;
 
 namespace LMP.Features.Library;
 

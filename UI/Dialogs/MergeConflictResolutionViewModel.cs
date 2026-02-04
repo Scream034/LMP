@@ -5,7 +5,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 
-namespace LMP.Features.Library;
+namespace LMP.UI.Dialogs;
 
 public enum MergeAction { Skip, Merge, Duplicate }
 

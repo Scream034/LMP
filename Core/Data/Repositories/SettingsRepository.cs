@@ -1,4 +1,3 @@
-// Core/Data/Repositories/SettingsRepository.cs
 using System.Text.Json;
 using LMP.Core.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -12,15 +11,10 @@ public interface ISettingsRepository
     Task SetAsync<T>(string key, T value, CancellationToken ct = default);
 }
 
-public class SettingsRepository : ISettingsRepository
+public sealed class SettingsRepository(IDbContextFactory<LibraryDbContext> factory) : ISettingsRepository
 {
-    private readonly IDbContextFactory<LibraryDbContext> _factory;
+    private readonly IDbContextFactory<LibraryDbContext> _factory = factory;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
-
-    public SettingsRepository(IDbContextFactory<LibraryDbContext> factory)
-    {
-        _factory = factory;
-    }
 
     public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default) where T : class
     {

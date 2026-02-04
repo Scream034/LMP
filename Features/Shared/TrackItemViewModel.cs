@@ -261,7 +261,7 @@ public sealed class TrackItemViewModel : ViewModelBase
 
     #endregion
 
-    #region IDisposable - ИСПРАВЛЕНО: override вместо new
+    #region IDisposable
 
     protected override void Dispose(bool disposing)
     {

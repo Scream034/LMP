@@ -99,7 +99,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
                 using var reader = new StreamReader(stream);
                 var json = reader.ReadToEnd();
                 _resources = JsonSerializer.Deserialize<Dictionary<string, string>>(json)
-                             ?? new Dictionary<string, string>();
+                             ?? [];
                 Log.Info($"Loaded {langCode}.json ({_resources.Count} keys)");
             }
             else

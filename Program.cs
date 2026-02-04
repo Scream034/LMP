@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Avalonia;
 using AsyncImageLoader;
+using LMP.UI.Dialogs;
 
 namespace LMP;
 

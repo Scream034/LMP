@@ -4,7 +4,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using DynamicData;
 using Microsoft.Extensions.DependencyInjection;
-using LMP.Core.Models;
 using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -21,7 +20,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     private readonly SourceList<TSource> _sourceList = new();
     private readonly ReadOnlyObservableCollection<TViewModel> _items;
-    private readonly CompositeDisposable _dynamicDataSubscriptions = new();
+    private readonly CompositeDisposable _dynamicDataSubscriptions = [];
 
     private int _consecutiveEmptyLoads;
     private const int MaxConsecutiveEmptyLoads = 5;
@@ -273,7 +272,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #endregion
 
-    #region IDisposable - ИСПРАВЛЕНО: override вместо new
+    #region IDisposable
 
     protected override void Dispose(bool disposing)
     {

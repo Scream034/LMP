@@ -1,5 +1,4 @@
-﻿using System.Buffers;
-using System.Collections.Frozen;
+﻿using System.Collections.Frozen;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -146,7 +145,7 @@ internal partial class SearchResponse
 
     /// <summary>
     /// Оптимизированный сборщик элементов.
-    /// ИСПРАВЛЕНИЕ: Инверсия порядка массива при добавлении в Stack, 
+    ///  Инверсия порядка массива при добавлении в Stack, 
     /// чтобы результаты извлекались в правильном порядке.
     /// </summary>
     private static IEnumerable<JsonElement> CollectItemsFast(JsonElement root)

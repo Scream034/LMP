@@ -1,6 +1,4 @@
-// Core/Data/DatabaseExtensions.cs
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace LMP.Core.Data;
 

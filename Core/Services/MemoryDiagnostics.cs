@@ -23,7 +23,6 @@ public sealed class MemoryDiagnostics : IDisposable
     private readonly ConcurrentDictionary<string, long> _counters = new();
     private readonly ConcurrentDictionary<string, int> _instanceCounts = new();
     private readonly Timer _monitorTimer;
-    private readonly object _lock = new();
     
     private MemoryStats _lastStats = new();
     private bool _disposed;

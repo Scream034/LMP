@@ -1,4 +1,3 @@
-// Core/Data/LegacyLibraryData.cs
 using LMP.Core.Models;
 
 namespace LMP.Core.Data;
@@ -46,7 +45,7 @@ internal class LegacyPlaylist
 /// <summary>
 /// Legacy model for JSON migration. Matches old LibraryData structure.
 /// </summary>
-internal class LegacyLibraryData
+internal sealed class LegacyLibraryData
 {
     public Dictionary<string, TrackInfo>? Tracks { get; set; }
     public Dictionary<string, LegacyPlaylist>? Playlists { get; set; }

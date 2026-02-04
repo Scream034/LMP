@@ -7,7 +7,7 @@ namespace LMP.Core.Data;
 /// Factory for EF Core design-time tools (migrations, scaffolding).
 /// Not used at runtime.
 /// </summary>
-public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<LibraryDbContext>
+public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<LibraryDbContext>
 {
     public LibraryDbContext CreateDbContext(string[] args)
     {

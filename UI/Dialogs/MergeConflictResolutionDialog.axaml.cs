@@ -1,7 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace LMP.Features.Library;
+namespace LMP.UI.Dialogs;
 
 public partial class MergeConflictResolutionDialog : Window
 {

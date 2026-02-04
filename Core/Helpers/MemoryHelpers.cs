@@ -3,11 +3,11 @@ using System.Runtime.InteropServices;
 
 namespace LMP.Core.Helpers;
 
-public static class MemoryHelpers
+public static partial class MemoryHelpers
 {
-    [DllImport("kernel32.dll", EntryPoint = "SetProcessWorkingSetSize")]
+    [LibraryImport("kernel32.dll", EntryPoint = "SetProcessWorkingSetSize")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool _SetProcessWorkingSetSize(IntPtr process, int minimumWorkingSetSize, int maximumWorkingSetSize);
+    private static partial bool _SetProcessWorkingSetSize(IntPtr process, int minimumWorkingSetSize, int maximumWorkingSetSize);
 
     /// <summary>
     /// Принудительно сбрасывает физическую память (Working Set) в файл подкачки.

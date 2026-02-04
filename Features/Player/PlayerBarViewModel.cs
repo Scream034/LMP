@@ -292,7 +292,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(t =>
             {
                 IsLiked = t.IsLiked;
-                if (CurrentTrack != null) CurrentTrack.IsLiked = t.IsLiked;
+                CurrentTrack?.IsLiked = t.IsLiked;
                 this.RaisePropertyChanged(nameof(LikeTooltip));
             })
             .DisposeWith(Disposables);
