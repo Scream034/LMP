@@ -637,19 +637,29 @@
                                 <Panel
                                     Name="VolumeSliderPanel"
                                     Width="20"
+                                    MinHeight="60"
+                                    Height="80"
                                     HorizontalAlignment="Center">
+                                    
+                                    <!--  Track  -->
                                     <Border
                                         Width="4"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Stretch"
                                         Classes="vol-track" />
+                                    
+                                    <!--  Fill - добавляем начальную Height  -->
                                     <Border
                                         Name="VolumeBar"
                                         Width="4"
+                                        Height="0"
+                                        MinHeight="0"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Bottom"
                                         Classes="vol-fill"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
+                                    
+                                    <!--  Thumb  -->
                                     <Ellipse
                                         Name="VolumeThumb"
                                         Width="12"
@@ -658,6 +668,8 @@
                                         VerticalAlignment="Top"
                                         Classes="vol-thumb"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
+                                    
+                                    <!--  Hit area  -->
                                     <Border
                                         Name="VolumeHitBox"
                                         Width="20"
