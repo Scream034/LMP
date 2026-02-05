@@ -128,12 +128,11 @@ public class MainWindowViewModel : ViewModelBase
         var sw = Stopwatch.StartNew();
         Log.Info($"Switching to page: {pageName} (Type: {pageName}ViewModel)");
 
-        // Диспозим текущую страницу если она IDisposable
-        if (CurrentPage is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
+        // 1. Сохраняем ссылку на старую страницу
+        var oldPage = CurrentPage;
+        var oldPageName = CurrentPageName;
 
+        // 2. Создаём и показываем новую страницу СРАЗУ
         CurrentPage = pageName switch
         {
             "Home" => _services.GetRequiredService<HomeViewModel>(),
@@ -144,26 +143,43 @@ public class MainWindowViewModel : ViewModelBase
             _ => CurrentPage
         };
 
-        // При смене страницы чистим мертвые VM из фабрики
-        Program.Services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
-
-        // И чистим мертвые ссылки в реестре треков
-        Program.Services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
-
-        // Если уходим с тяжелой страницы (Search/Library), форсируем очистку
-        if (CurrentPageName == "Search" || CurrentPageName == "Library")
-        {
-            // Очищаем кэш VM, так как при возврате мы все равно пересоздадим список
-            Program.Services.GetRequiredService<TrackViewModelFactory>().Clear();
-
-            // Компактификация LOH (убирает дыры от JSON строк и буферов)
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Forced);
-        }
-
         CurrentPageName = pageName;
+
         sw.Stop();
         Log.Info($"Successfully switched to {pageName} in {sw.ElapsedMilliseconds}ms");
+
+        // 3. ОТЛОЖЕННО диспозим старую страницу (после завершения render pass)
+        if (oldPage is IDisposable disposable)
+        {
+            _ = DisposePageDelayedAsync(disposable, oldPageName);
+        }
+    }
+
+    private async Task DisposePageDelayedAsync(IDisposable page, string pageName)
+    {
+        // Ждём 2 render frames (~32ms при 60fps) чтобы UI точно отвязался
+        await Task.Delay(50);
+
+        try
+        {
+            page.Dispose();
+            Log.Debug($"[Navigation] Disposed old page: {pageName}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Navigation] Error disposing {pageName}: {ex.Message}");
+        }
+
+        // Cleanup после dispose
+        _services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
+        _services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
+
+        // Компактификация только при уходе с тяжёлых страниц
+        if (pageName is "Search" or "Library" or "Home")
+        {
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+        }
     }
 
     public void NavigateToPlaylist(string playlistId)
@@ -172,18 +188,26 @@ public class MainWindowViewModel : ViewModelBase
 
         Log.Info($"Navigating to Playlist: {playlistId}");
 
-        // Диспозим текущую страницу
-        if (CurrentPage is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
+        var oldPage = CurrentPage;
 
+        // Создаём и загружаем плейлист
         _ = Task.Run(async () =>
         {
             var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
             await playlistVM.LoadPlaylistAsync(playlistId);
-            CurrentPage = playlistVM;
-            CurrentPageName = "Playlist";
+
+            // Переключаемся на UI потоке
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                CurrentPage = playlistVM;
+                CurrentPageName = "Playlist";
+            });
+
+            // Отложенный dispose
+            if (oldPage is IDisposable disposable)
+            {
+                await DisposePageDelayedAsync(disposable, "Previous");
+            }
         });
     }
 }

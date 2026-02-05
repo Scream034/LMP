@@ -1176,7 +1176,11 @@ public class StreamOption : ReactiveObject
     public string Codec { get; set; } = "";
     public double SizeMb { get; set; }
 
-    public string DisplayName => $"{Codec} {Bitrate:F0}kbps ({Container})";
+    public string DisplayName => $"{Codec} {string.Format(LocalizationService.Instance.Get("Stream_Bitrate"), Bitrate)} ({Container})";
+
+    public string SizeMbFormatted => string.Format(
+    LocalizationService.Instance.Get("Stream_Format_Mb", "{0:F1} MB"),
+    SizeMb);
 
     [Reactive] public bool IsDownloaded { get; set; }
 

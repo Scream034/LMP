@@ -391,25 +391,19 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        
+
         if (disposing)
         {
             Log.Debug($"[ReorderableVM] Disposing, cleaning {_vmCache.Count} cached VMs");
-            
-            CancelLoading();
 
-            // КРИТИЧНО: Диспозим все закешированные VM
-            foreach (var vm in _vmCache.Values)
-            {
-                vm.Dispose();
-            }
+            CancelLoading();
 
             _vmCache.Clear();
             _visibleItems.Clear();
             _loadedSources.Clear();
             _masterIds.Clear();
         }
-        
+
         base.Dispose(disposing);
         _isDisposed = true;
     }

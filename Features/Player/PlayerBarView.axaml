@@ -1,422 +1,1095 @@
-<UserControl xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:LMP.Features.Player"
-    xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:asyncImage="using:AsyncImageLoader"
+<UserControl
     x:Class="LMP.Features.Player.PlayerBarView"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:asyncImage="using:AsyncImageLoader"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    xmlns:vm="using:LMP.Features.Player"
+    x:CompileBindings="True"
     x:DataType="vm:PlayerBarViewModel"
-    x:CompileBindings="True">
+    Focusable="True"
+    UseLayoutRounding="True">
 
     <UserControl.Styles>
-        <Style Selector="Button.volumeBtn:pointerover /template/ ContentPresenter">
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  PLAYER BUTTON - элегантные кнопки управления  -->
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <Style Selector="Button.pb-btn">
             <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="ToolTip.Placement" Value="Top" />
+            <Setter Property="ToolTip.VerticalOffset" Value="-6" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="Button">
+                    <Border
+                        Padding="{TemplateBinding Padding}"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}">
+                        <ContentPresenter
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                    <TransformOperationsTransition
+                        Easing="CubicEaseOut"
+                        Property="RenderTransform"
+                        Duration="0:0:0.1" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.pb-btn:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        </Style>
+        <Style Selector="Button.pb-btn:pressed">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="RenderTransform" Value="scale(0.96)" />
+        </Style>
+        <Style Selector="Button.pb-btn.active">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style Selector="Button.pb-btn.active:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
 
-        <!-- Стиль для "пустых" палочек при муте -->
-        <Style Selector="Border.volume-bar.muted">
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  MAIN PLAY BUTTON - центральная кнопка воспроизведения  -->
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <Style Selector="Button.pb-main">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{DynamicResource TextMutedBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="ToolTip.Placement" Value="Top" />
+            <Setter Property="ToolTip.VerticalOffset" Value="-6" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="Button">
+                    <Border
+                        Padding="{TemplateBinding Padding}"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}">
+                        <ContentPresenter
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition
+                        Easing="CubicEaseOut"
+                        Property="RenderTransform"
+                        Duration="0:0:0.12" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.pb-main:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style Selector="Button.pb-main:pressed">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+            <Setter Property="RenderTransform" Value="scale(0.94)" />
+        </Style>
+
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  ICON BUTTON - кнопки с иконками (лайк, копировать, громкость)  -->
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <Style Selector="Button.ico-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="ToolTip.Placement" Value="Top" />
+            <Setter Property="ToolTip.VerticalOffset" Value="-6" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="Button">
+                    <Border
+                        Padding="{TemplateBinding Padding}"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}">
+                        <ContentPresenter
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                    <TransformOperationsTransition
+                        Easing="CubicEaseOut"
+                        Property="RenderTransform"
+                        Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.ico-btn:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        </Style>
+        <Style Selector="Button.ico-btn:pressed">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="RenderTransform" Value="scale(0.92)" />
+        </Style>
+        <Style Selector="Button.ico-btn.active mi|MaterialIcon">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style Selector="Button.ico-btn.popup-open">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!--  Анимация сердечка для лайка  -->
+        <Style Selector="Button.ico-btn mi|MaterialIcon.heart-icon">
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition
+                        Easing="BackEaseOut"
+                        Property="RenderTransform"
+                        Duration="0:0:0.2" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.ico-btn:pressed mi|MaterialIcon.heart-icon">
+            <Setter Property="RenderTransform" Value="scale(1.25)" />
+        </Style>
+
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  SEEK SLIDER STYLES  -->
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+
+        <!--  Loading spark border  -->
+        <Style Selector="Border.spark-border">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="Border.spark-border.loading">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+
+        <!--  Track container hover effect  -->
+        <Style Selector="Grid.track-container">
+            <Setter Property="RenderTransform" Value="scaleY(1)" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition
+                        Easing="CubicEaseOut"
+                        Property="RenderTransform"
+                        Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Grid.seek-container:pointerover Grid.track-container">
+            <Setter Property="RenderTransform" Value="scaleY(1.5)" />
+        </Style>
+        <Style Selector="Grid.seek-container.dragging Grid.track-container">
+            <Setter Property="RenderTransform" Value="scaleY(1.5)" />
+        </Style>
+
+        <!--  Seek thumb  -->
+        <Style Selector="Ellipse.slider-thumb">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Grid.seek-container:pointerover Ellipse.slider-thumb">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Grid.seek-container.dragging Ellipse.slider-thumb">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!--  Seek cursor  -->
+        <Style Selector="Border.seek-cursor">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Grid.seek-container:pointerover Border.seek-cursor">
+            <Setter Property="Opacity" Value="0.6" />
+        </Style>
+
+        <!--  Preview fill  -->
+        <Style Selector="Border.slider-preview">
+            <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="Border.slider-preview.active">
+            <Setter Property="Opacity" Value="0.5" />
+        </Style>
+
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  PLAYING GLOW - мягкое свечение при воспроизведении  -->
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <Style Selector="Border.playing-glow">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="IsHitTestVisible" Value="False" />
+        </Style>
+        <Style Selector="Border.playing-glow.active">
+            <Style.Animations>
+                <Animation IterationCount="Infinite" Duration="0:0:1.5">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.3" />
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="Opacity" Value="0.7" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.3" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- VOLUME SLIDER STYLES - плавные анимации                        -->
+
+        <Style Selector="Border.volume-preview">
+            <Setter Property="Background" Value="{DynamicResource TextMutedBrush}" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Height" Duration="0:0:0.08" Easing="CubicEaseOut" />
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.volume-preview.active">
+            <Setter Property="Opacity" Value="0.3" />
+        </Style>
+
+        <Style Selector="Ellipse.vol-thumb">
+            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Stroke" Value="{DynamicResource BgPrimaryBrush}" />
+            <Setter Property="StrokeThickness" Value="2" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                    <ThicknessTransition Property="Margin" Duration="0:0:0.08" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Fill" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Ellipse.vol-thumb:pointerover">
+            <Setter Property="RenderTransform" Value="scale(1.1)" />
+        </Style>
+        <Style Selector="Ellipse.vol-thumb.dragging">
+            <Setter Property="RenderTransform" Value="scale(1.15)" />
+            <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
+        </Style>
+        <Style Selector="Ellipse.vol-thumb.boosted">
+            <Setter Property="Fill" Value="{DynamicResource SystemWarnOrangeBrush}" />
+        </Style>
+
+        <Style Selector="Border.vol-track">
+            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Opacity" Value="0.5" />
+        </Style>
+
+        <Style Selector="Border.vol-fill">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Height" Duration="0:0:0.08" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Background" Duration="0:0:0.2" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Boost indicator (когда громкость > 100%) -->
+        <Style Selector="Border.vol-fill.boosted">
+            <Setter Property="Background">
+                <LinearGradientBrush StartPoint="0%,100%" EndPoint="0%,0%">
+                    <GradientStop Offset="0" Color="{DynamicResource Accent}" />
+                    <GradientStop Offset="0.6" Color="{DynamicResource Accent}" />
+                    <GradientStop Offset="1" Color="{DynamicResource SystemWarnOrange}" />
+                </LinearGradientBrush>
+            </Setter>
+        </Style>
+
+        <Style Selector="Border.vol-percent-badge">
+            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="BoxShadow" Value="0 2 8 0 #30000000" />
+        </Style>
+
+        <!--  Boost indicator (когда громкость > 100%)  -->
+        <Style Selector="Border.vol-fill.boosted">
+            <Setter Property="Background">
+                <LinearGradientBrush StartPoint="0%,100%" EndPoint="0%,0%">
+                    <GradientStop Offset="0" Color="{DynamicResource Accent}" />
+                    <GradientStop Offset="0.6" Color="{DynamicResource Accent}" />
+                    <GradientStop Offset="1" Color="{DynamicResource SystemWarnOrange}" />
+                </LinearGradientBrush>
+            </Setter>
+        </Style>
+
+        <Style Selector="Border.vol-percent-badge">
+            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="BoxShadow" Value="0 2 8 0 #30000000" />
+        </Style>
+
+        <Style Selector="Button.format-btn.popup-open">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
     </UserControl.Styles>
 
-    <Border Background="{DynamicResource BgSecondaryBrush}" Height="110"
-        BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="0,1,0,0">
-        <Grid>
-            <!-- Global Loading Progress (Top Line) -->
-            <ProgressBar VerticalAlignment="Top" Height="2" IsIndeterminate="True"
-                Background="Transparent" Foreground="{DynamicResource AccentBrush}"
-                IsVisible="{Binding IsLoading}" />
+    <!--  ═══════════════════════════════════════════════════════════════════  -->
+    <!--  MAIN CONTENT  -->
+    <!--  ═══════════════════════════════════════════════════════════════════  -->
+    <Border Background="{DynamicResource BgSecondaryBrush}">
+        <Grid RowDefinitions="Auto,*">
 
-            <Grid ColumnDefinitions="3*, 4*, 3*" Margin="16,0">
+            <!--  ROW 0: SEEK SLIDER  -->
+            <Grid
+                Name="SeekContainer"
+                Grid.Row="0"
+                Height="14"
+                Margin="0,1,0,0"
+                VerticalAlignment="Top"
+                Background="Transparent"
+                Classes="seek-container"
+                ClipToBounds="True"
+                Cursor="Hand">
 
-                <!-- LEFT: Track Info -->
-                <Grid Grid.Column="0" ColumnDefinitions="Auto, *, Auto">
-                    <!-- Thumbnail -->
-                    <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4"
-                        ClipToBounds="True" Background="{DynamicResource BgElevatedBrush}">
-                        <Panel>
-                            <mi:MaterialIcon Kind="MusicNote" Width="24" Height="24"
-                                Foreground="{DynamicResource TextMutedBrush}"
-                                IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}, ConverterParameter=invert}" />
-                            <Image asyncImage:ImageLoader.Source="{Binding SafeThumbnail}"
-                                Stretch="UniformToFill"
-                                IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}}" />
-                        </Panel>
+                <Grid
+                    Name="TrackContainer"
+                    Height="4"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Center"
+                    Classes="track-container"
+                    RenderTransformOrigin="0.5,0.5">
+
+                    <!--  Background track  -->
+                    <Border Classes="slider-track seek-track" CornerRadius="2" />
+
+                    <!--  Loading spark animation  -->
+                    <Border
+                        Name="SparkBorder"
+                        BorderThickness="1"
+                        Classes="spark-border"
+                        Classes.loading="{Binding IsLoading}"
+                        ClipToBounds="True"
+                        CornerRadius="2">
+                        <Border.BorderBrush>
+                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                                <GradientStop Offset="0" Color="Transparent" />
+                                <GradientStop Offset="0.5" Color="{DynamicResource Accent}" />
+                                <GradientStop Offset="1" Color="Transparent" />
+                            </LinearGradientBrush>
+                        </Border.BorderBrush>
+                        <Border.Styles>
+                            <Style Selector="Border.spark-border.loading">
+                                <Style.Animations>
+                                    <Animation IterationCount="Infinite" Duration="0:0:1.5">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="Opacity" Value="0.2" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="50%">
+                                            <Setter Property="Opacity" Value="1.0" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="Opacity" Value="0.2" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
+                        </Border.Styles>
                     </Border>
 
-                    <!-- Title & Author -->
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0">
-                        <TextBlock Text="{Binding SafeTitle}" FontWeight="SemiBold"
-                            Foreground="{DynamicResource TextPrimaryBrush}"
-                            TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding SafeAuthor}" FontSize="12"
-                            Foreground="{DynamicResource TextSecondaryBrush}"
-                            TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
+                    <!--  Buffer bar  -->
+                    <Border
+                        Name="BufferBar"
+                        HorizontalAlignment="Left"
+                        Classes="slider-buffer seek-track"
+                        CornerRadius="2" />
 
-                    <!-- Actions (Like / Copy) -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
-                        <!-- Like Button -->
-                        <Panel>
-                            <Button x:Name="LikeButton" Classes="icon-btn"
-                                Command="{Binding ToggleLikeCommand}"
-                                ToolTip.Tip="{Binding LikeTooltip}">
-                                <mi:MaterialIcon
-                                    Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}"
-                                    Classes.active="{Binding IsLiked}"
-                                    Width="18" Height="18" />
-                            </Button>
-                            <Popup PlacementTarget="{Binding #LikeButton}"
-                                Placement="Top" HorizontalOffset="-20" VerticalOffset="-8"
-                                IsOpen="{Binding IsLikeHintVisible}" IsLightDismissEnabled="False">
-                                <Border Classes="mode-hint"
-                                    Classes.visible="{Binding IsLikeHintVisible}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <mi:MaterialIcon Kind="Heart" Width="14" Height="14"
-                                            Foreground="{DynamicResource AccentBrush}" />
-                                        <TextBlock Text="{Binding LikeHintText}" FontSize="12"
-                                            FontWeight="SemiBold"
-                                            Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    </StackPanel>
-                                </Border>
-                            </Popup>
-                        </Panel>
+                    <!--  Preview fill  -->
+                    <Border
+                        Name="PreviewFill"
+                        HorizontalAlignment="Left"
+                        Classes="slider-preview seek-track"
+                        CornerRadius="2" />
 
-                        <!-- Copy Button -->
-                        <Panel>
-                            <Button x:Name="CopyButton" Classes="icon-btn"
-                                Command="{Binding CopyLinkCommand}"
-                                ToolTip.Tip="{Binding CopyTooltip}">
-                                <mi:MaterialIcon Kind="ContentCopy" Width="16" Height="16"
-                                    Classes.active="{Binding IsCopyHighlighted}" />
-                            </Button>
-                            <Popup PlacementTarget="{Binding #CopyButton}"
-                                Placement="Top" HorizontalOffset="-15" VerticalOffset="-8"
-                                IsOpen="{Binding IsCopyHintVisible}" IsLightDismissEnabled="False">
-                                <Border Classes="mode-hint"
-                                    Classes.visible="{Binding IsCopyHintVisible}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <mi:MaterialIcon Kind="Check" Width="14" Height="14"
-                                            Foreground="{DynamicResource AccentBrush}" />
-                                        <TextBlock Text="{Binding L[Track_Copied]}" FontSize="12"
-                                            FontWeight="SemiBold"
-                                            Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    </StackPanel>
-                                </Border>
-                            </Popup>
-                        </Panel>
-                    </StackPanel>
+                    <!--  Progress bar  -->
+                    <Border
+                        Name="ProgressBar"
+                        HorizontalAlignment="Left"
+                        Classes="slider-fill seek-track"
+                        CornerRadius="2" />
+
+                    <!--  Playing glow - мягкая пульсация на прогресс-баре  -->
+                    <Border
+                        Name="PlayingGlow"
+                        Height="4"
+                        HorizontalAlignment="Left"
+                        Classes="playing-glow"
+                        Classes.active="{Binding IsPlaying}"
+                        CornerRadius="2"
+                        IsHitTestVisible="False">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="100%,50%" EndPoint="0%,50%">
+                                <GradientStop Offset="0" Color="{DynamicResource AccentHover}" />
+                                <GradientStop Offset="0.3" Color="Transparent" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
                 </Grid>
 
-                <!-- CENTER: Controls -->
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                    <!-- Playback Buttons Row -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="12">
-                        <Button Classes="playback-btn"
-                            Classes.active="{Binding ShuffleEnabled}"
-                            Classes.disabled="{Binding IsLoading}"
-                            Command="{Binding ShuffleQueueCommand}"
-                            ToolTip.Tip="{Binding ShuffleTooltip}">
-                            <mi:MaterialIcon Kind="Shuffle" Width="20" Height="20" />
-                        </Button>
+                <!--  Thumb canvas  -->
+                <Canvas
+                    Name="ThumbCanvas"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Background="Transparent"
+                    IsHitTestVisible="False">
+                    <Border
+                        Name="SeekCursor"
+                        Canvas.Top="0"
+                        Width="2"
+                        Height="14"
+                        Background="{DynamicResource AccentBrush}"
+                        Classes="seek-cursor"
+                        CornerRadius="1" />
+                    <Ellipse
+                        Name="SeekThumb"
+                        Canvas.Top="0"
+                        Width="14"
+                        Height="14"
+                        Classes="slider-thumb"
+                        Fill="{DynamicResource AccentBrush}" />
+                </Canvas>
 
-                        <Button Classes="playback-btn"
-                            Classes.disabled="{Binding IsLoading}"
-                            Command="{Binding PreviousCommand}"
-                            ToolTip.Tip="{Binding PreviousTooltip}">
-                            <mi:MaterialIcon Kind="SkipPrevious" Width="24" Height="24" />
-                        </Button>
+                <!--  Hit area  -->
+                <Border
+                    Name="SeekHitBox"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    Background="Transparent"
+                    IsHitTestVisible="{Binding HasTrack}"
+                    PointerCaptureLost="OnSeekAreaCaptureLost"
+                    PointerExited="OnSeekAreaExited"
+                    PointerMoved="OnSeekAreaMoved"
+                    PointerPressed="OnSeekAreaPressed"
+                    PointerReleased="OnSeekAreaReleased" />
+            </Grid>
 
-                        <Button Classes="playback-btn-main"
-                            Classes.disabled="{Binding IsLoading}"
-                            Command="{Binding PlayPauseCommand}"
-                            ToolTip.Tip="{Binding PlayPauseTooltip}">
-                            <Panel>
-                                <mi:MaterialIcon Kind="Pause" Width="28" Height="28"
-                                    IsVisible="{Binding IsPlaying}" />
-                                <mi:MaterialIcon Kind="Play" Width="28" Height="28"
-                                    IsVisible="{Binding IsPaused}" />
-                            </Panel>
-                        </Button>
+            <!--  Seek Tooltip  -->
+            <Popup
+                Name="SeekTooltipPopup"
+                IsHitTestVisible="False"
+                IsLightDismissEnabled="False"
+                Placement="TopEdgeAlignedLeft"
+                PlacementTarget="{Binding #SeekContainer}"
+                VerticalOffset="-5">
+                <Border
+                    Name="SeekTooltipBorder"
+                    Padding="6,3"
+                    Background="{DynamicResource BgSkeletonBrush}"
+                    BorderBrush="{DynamicResource BgHighlightBrush}"
+                    BorderThickness="1"
+                    BoxShadow="0 2 8 0 #40000000"
+                    CornerRadius="4">
+                    <TextBlock
+                        Name="HoverTimeText"
+                        FontSize="12"
+                        FontWeight="Bold"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        Text="0:00" />
+                </Border>
+            </Popup>
 
-                        <Button Classes="playback-btn"
-                            Classes.disabled="{Binding IsLoading}"
-                            Command="{Binding NextCommand}"
-                            ToolTip.Tip="{Binding NextTooltip}">
-                            <mi:MaterialIcon Kind="SkipNext" Width="24" Height="24" />
-                        </Button>
+            <!--  ROW 1: CONTROLS  -->
+            <Grid
+                Grid.Row="1"
+                Margin="8,4,8,4"
+                ColumnDefinitions="Auto,Auto,*,Auto,Auto">
 
-                        <!-- Repeat Button -->
-                        <Panel>
-                            <Button x:Name="RepeatButton" Classes="playback-btn"
-                                Classes.active="{Binding RepeatMode, Converter={StaticResource RepeatModeActive}}"
-                                Command="{Binding ToggleRepeatCommand}"
-                                ToolTip.Tip="{Binding RepeatTooltip}">
-                                <Grid>
-                                    <mi:MaterialIcon
-                                        Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}"
-                                        Width="20" Height="20" />
-                                    <Border Classes="repeat-indicator"
-                                        Classes.visible="{Binding RepeatMode, Converter={StaticResource RepeatModeEquals}, ConverterParameter=RepeatAll}"
-                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Grid>
-                            </Button>
-                            <Popup PlacementTarget="{Binding #RepeatButton}" Placement="Top"
-                                HorizontalOffset="-30" VerticalOffset="-8"
-                                IsOpen="{Binding IsRepeatHintVisible}" IsLightDismissEnabled="False">
-                                <Border Classes="mode-hint"
-                                    Classes.visible="{Binding IsRepeatHintVisible}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <mi:MaterialIcon
-                                            Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}"
-                                            Foreground="{DynamicResource AccentBrush}" Width="14"
-                                            Height="14" />
-                                        <TextBlock Text="{Binding RepeatHintText}" FontSize="12"
-                                            FontWeight="SemiBold"
-                                            Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    </StackPanel>
-                                </Border>
-                            </Popup>
-                        </Panel>
-                    </StackPanel>
+                <!--  Left Controls  -->
+                <StackPanel
+                    Grid.Column="0"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="2">
 
-                    <!-- Seek Bar Row -->
-                    <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,4,0,0">
-                        <TextBlock
-                            Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}"
-                            FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"
-                            Width="40" VerticalAlignment="Center" />
-
-                        <Grid Grid.Column="1" Height="24" VerticalAlignment="Center">
-                            <Border Classes="seek-busy-indicator" CornerRadius="6" Margin="-6,-4"
-                                IsVisible="{Binding IsSeekBusy}"
-                                BorderBrush="{DynamicResource AccentBrush}" />
-                            <Canvas IsVisible="{Binding IsSeekBusy}" ClipToBounds="False"
-                                Margin="-2,0">
-                                <Border Canvas.Top="-2" Classes="seek-gradient-runner" />
-                            </Canvas>
-
-                            <Panel VerticalAlignment="Center" Height="12">
-                                <Border Classes="slider-track" />
-                                <Canvas VerticalAlignment="Center" ClipToBounds="True" Height="4">
-                                    <Border Name="BufferBar" Classes="slider-buffer" />
-                                </Canvas>
-                                <Canvas VerticalAlignment="Center" ClipToBounds="True" Height="4">
-                                    <Border Name="ProgressBar" Classes="slider-fill" />
-                                </Canvas>
-                                <Canvas VerticalAlignment="Center" ClipToBounds="False">
-                                    <Ellipse Name="SeekThumb" Classes="slider-thumb" Canvas.Top="-6" />
-                                </Canvas>
-                            </Panel>
-
-                            <Border Name="SeekHitBox" Classes="slider-area"
-                                PointerPressed="OnSeekAreaPressed"
-                                PointerMoved="OnSeekAreaMoved"
-                                PointerReleased="OnSeekAreaReleased"
-                                PointerExited="OnSeekAreaExited"
-                                PointerCaptureLost="OnSeekAreaCaptureLost"
-                                IsHitTestVisible="{Binding HasTrack}" />
-
-                            <Border Name="HoverTooltip" Classes="slider-tooltip" Margin="0,-30,0,0">
-                                <TextBlock Name="HoverTimeText" Classes="slider-tooltip-text"
-                                    Text="0:00" />
-                            </Border>
-                        </Grid>
-
-                        <TextBlock Grid.Column="2"
-                            Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}"
-                            FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}"
-                            Width="40" TextAlignment="Right" VerticalAlignment="Center" />
-                    </Grid>
-
-                    <!-- Bottom Info Row -->
-                    <Grid ColumnDefinitions="Auto, *, Auto" Margin="0,2,0,0">
-                        <TextBlock Text="{Binding QueuePositionText}" FontSize="10"
-                            Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center"
-                            IsVisible="{Binding TotalTracksInQueue, Converter={StaticResource GreaterThanConverter}, ConverterParameter=0}" />
-
-                        <StackPanel Grid.Column="1" Orientation="Horizontal"
-                            HorizontalAlignment="Center"
-                            Classes="stream-info" IsVisible="{Binding ShowStreamInfo}">
-                            <Button Classes="sidebar-btn" Padding="4,2"
-                                Command="{Binding LoadFormatsCommand}">
-                                <Button.Flyout>
-                                    <Flyout Placement="Top">
-                                        <StackPanel Spacing="4" MinWidth="200">
-                                            <TextBlock Text="{Binding L[Stream_SelectQuality]}"
-                                                FontWeight="Bold" Margin="4" />
-                                            <ItemsControl ItemsSource="{Binding AvailableFormats}">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Button Classes="sidebar-btn"
-                                                            HorizontalAlignment="Stretch"
-                                                            Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
-                                                            CommandParameter="{Binding}">
-                                                            <Grid
-                                                                ColumnDefinitions="Auto, *, Auto, Auto">
-                                                                <!-- Галочка для скачанного формата -->
-                                                                <Panel Grid.Column="0" Width="22">
-                                                                    <mi:MaterialIcon
-                                                                        Kind="CheckCircle"
-                                                                        Width="16" Height="16"
-                                                                        Foreground="{DynamicResource AccentBrush}"
-                                                                        IsVisible="{Binding IsDownloaded}"
-                                                                        VerticalAlignment="Center"
-                                                                        HorizontalAlignment="Left" />
-                                                                </Panel>
-
-                                                                <!-- Название формата -->
-                                                                <TextBlock Grid.Column="1"
-                                                                    Text="{Binding DisplayName}"
-                                                                    VerticalAlignment="Center"
-                                                                    FontWeight="{Binding IsActive, Converter={StaticResource BoolToFontWeight}}" />
-
-                                                                <!-- Индикатор активного формата -->
-                                                                <Panel Grid.Column="2" Width="20"
-                                                                    Margin="4,0">
-                                                                    <mi:MaterialIcon
-                                                                        Kind="VolumeHigh"
-                                                                        Width="14" Height="14"
-                                                                        Foreground="{DynamicResource AccentBrush}"
-                                                                        IsVisible="{Binding IsActive}"
-                                                                        VerticalAlignment="Center" />
-                                                                </Panel>
-
-                                                                <!-- Размер -->
-                                                                <TextBlock Grid.Column="3"
-                                                                    Text="{Binding SizeMb, StringFormat='{}{0:F1} MB'}" 
-                                                                    Foreground="{DynamicResource TextMutedBrush}"
-                                                                    FontSize="11"
-                                                                    VerticalAlignment="Center"
-                                                                    Margin="4,0,0,0" />
-                                                            </Grid>
-                                                        </Button>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </StackPanel>
-                                    </Flyout>
-                                </Button.Flyout>
-
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <TextBlock Text="{Binding StreamInfo}" FontSize="10"
-                                        Foreground="{DynamicResource TextMutedBrush}"
-                                        VerticalAlignment="Center" />
-                                    <mi:MaterialIcon Kind="ChevronUp" Width="12" Height="12"
-                                        Foreground="{DynamicResource TextMutedBrush}" />
-                                    <TextBlock Text="•" FontSize="9"
-                                        Foreground="{DynamicResource BgHighlightBrush}"
-                                        IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
-                                        VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding DownloadSpeedText}" FontSize="9"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
-                                        VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-
-                            <StackPanel Orientation="Horizontal" Spacing="3"
-                                IsVisible="{Binding IsSeekBusy}" VerticalAlignment="Center"
-                                Margin="4,0,0,0">
-                                <Ellipse Classes="loading-dot" Width="4" Height="4" />
-                                <Ellipse Classes="loading-dot loading-dot-2" Width="4" Height="4" />
-                                <Ellipse Classes="loading-dot loading-dot-3" Width="4" Height="4" />
-                            </StackPanel>
-                        </StackPanel>
-
-                        <Border Grid.Column="2" Width="30" />
-                    </Grid>
-                </StackPanel>
-
-                <!-- RIGHT: Volume Controls -->
-                <!-- Added PointerWheelChanged for scroll volume -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                    VerticalAlignment="Center" Spacing="12" Background="Transparent"
-                    PointerWheelChanged="OnVolumeScroll">
-
-                    <!-- Mute Button & Visualizer -->
-                    <Button Classes="icon-btn" Command="{Binding ToggleMuteCommand}" Padding="0"
-                        Width="40" ToolTip.Tip="{Binding VolumeTooltip}">
-                        <!-- Grid to overlay cross -->
-                        <Grid VerticalAlignment="Center" HorizontalAlignment="Center">
-                            <!-- Bars Stack -->
-                            <StackPanel Orientation="Horizontal" Spacing="2">
-                                <Border Classes="volume-bar"
-                                    Classes.boosted="{Binding IsVolumeBoosted}"
-                                    Classes.muted="{Binding IsMuted}"
-                                    Height="6" Opacity="{Binding Bar1Opacity}" />
-                                <Border Classes="volume-bar"
-                                    Classes.boosted="{Binding IsVolumeBoosted}"
-                                    Classes.muted="{Binding IsMuted}"
-                                    Height="9" Opacity="{Binding Bar2Opacity}" />
-                                <Border Classes="volume-bar"
-                                    Classes.boosted="{Binding IsVolumeBoosted}"
-                                    Classes.muted="{Binding IsMuted}"
-                                    Height="12" Opacity="{Binding Bar3Opacity}" />
-                                <Border Classes="volume-bar"
-                                    Classes.boosted="{Binding IsVolumeBoosted}"
-                                    Classes.muted="{Binding IsMuted}"
-                                    Height="15" Opacity="{Binding Bar4Opacity}" />
-                                <Border Classes="volume-bar"
-                                    Classes.boosted="{Binding IsVolumeBoosted}"
-                                    Classes.muted="{Binding IsMuted}"
-                                    Height="18" Opacity="{Binding Bar5Opacity}"
-                                    Width="{Binding Bar5Thickness}">
-                                    <Border.Transitions>
-                                        <Transitions>
-                                            <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                                            <DoubleTransition Property="Width" Duration="0:0:0.2"
-                                                Easing="BackEaseOut" />
-                                            <BrushTransition Property="Background"
-                                                Duration="0:0:0.2" />
-                                        </Transitions>
-                                    </Border.Transitions>
-                                </Border>
-                            </StackPanel>
-
-                            <!-- Mute Cross Overlay -->
-                            <mi:MaterialIcon Kind="Close" Width="24" Height="24"
-                                Foreground="{DynamicResource AccentBrush}"
-                                IsVisible="{Binding IsMuted}"
-                                IsHitTestVisible="False" />
-                        </Grid>
+                    <!--  Shuffle  -->
+                    <Button
+                        Width="40"
+                        Height="40"
+                        Classes="pb-btn"
+                        Classes.active="{Binding ShuffleEnabled}"
+                        Command="{Binding ShuffleQueueCommand}"
+                        CornerRadius="20"
+                        ToolTip.Tip="{Binding ShuffleTooltip}">
+                        <mi:MaterialIcon
+                            Width="18"
+                            Height="18"
+                            Kind="Shuffle" />
                     </Button>
 
-                    <!-- Volume Slider -->
-                    <Grid Width="{Binding VolumeSliderWidth}" Height="24">
-                        <Grid.Transitions>
-                            <Transitions>
-                                <DoubleTransition Property="Width" Duration="0:0:0.4"
-                                    Easing="CubicEaseOut" />
-                            </Transitions>
-                        </Grid.Transitions>
+                    <!--  Previous  -->
+                    <Button
+                        Width="40"
+                        Height="40"
+                        Classes="pb-btn"
+                        Command="{Binding PreviousCommand}"
+                        CornerRadius="20"
+                        ToolTip.Tip="{Binding PreviousTooltip}">
+                        <mi:MaterialIcon
+                            Width="24"
+                            Height="24"
+                            Kind="SkipPrevious" />
+                    </Button>
 
-                        <Panel VerticalAlignment="Center" Height="12">
-                            <Border Classes="slider-track"
-                                Background="{DynamicResource BgHighlightBrush}" />
-                            <Canvas VerticalAlignment="Center" ClipToBounds="True" Height="4">
-                                <Border Name="VolumeBar" Classes="slider-fill" />
-                            </Canvas>
-                            <Canvas VerticalAlignment="Center" ClipToBounds="False">
-                                <Ellipse Name="VolumeThumb" Classes="slider-thumb" Canvas.Top="-6" />
-                            </Canvas>
+                    <!--  Play/Pause  -->
+                    <Button
+                        Width="52"
+                        Height="52"
+                        Classes="pb-main"
+                        Command="{Binding PlayPauseCommand}"
+                        CornerRadius="26"
+                        ToolTip.Tip="{Binding PlayPauseTooltip}">
+                        <Panel>
+                            <mi:MaterialIcon
+                                Width="30"
+                                Height="30"
+                                IsVisible="{Binding IsPlaying}"
+                                Kind="Pause" />
+                            <mi:MaterialIcon
+                                Width="30"
+                                Height="30"
+                                IsVisible="{Binding IsPaused}"
+                                Kind="Play" />
                         </Panel>
+                    </Button>
 
-                        <!-- Hit Area -->
-                        <Border Name="VolumeHitBox" Classes="slider-area"
-                            PointerPressed="OnVolumeAreaPressed"
-                            PointerMoved="OnVolumeAreaMoved"
-                            PointerReleased="OnVolumeAreaReleased"
-                            PointerExited="OnVolumeAreaExited"
-                            PointerCaptureLost="OnVolumeAreaCaptureLost" />
+                    <!--  Next  -->
+                    <Button
+                        Width="40"
+                        Height="40"
+                        Classes="pb-btn"
+                        Command="{Binding NextCommand}"
+                        CornerRadius="20"
+                        ToolTip.Tip="{Binding NextTooltip}">
+                        <mi:MaterialIcon
+                            Width="24"
+                            Height="24"
+                            Kind="SkipNext" />
+                    </Button>
 
-                        <!-- Tooltip -->
-                        <Border Name="VolumeTooltip" Classes="slider-tooltip" Margin="0,-30,0,0">
-                            <TextBlock Name="VolumeTooltipText" Classes="slider-tooltip-text"
-                                Text="50%" />
-                        </Border>
+                    <!--  Repeat  -->
+                    <Panel>
+                        <Button
+                            x:Name="RepeatButton"
+                            Width="40"
+                            Height="40"
+                            Classes="pb-btn"
+                            Classes.active="{Binding RepeatMode, Converter={StaticResource RepeatModeActive}}"
+                            Command="{Binding ToggleRepeatCommand}"
+                            CornerRadius="20"
+                            ToolTip.Tip="{Binding RepeatTooltip}">
+                            <Grid>
+                                <mi:MaterialIcon
+                                    Width="18"
+                                    Height="18"
+                                    Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" />
+                                <Border
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Classes="repeat-indicator"
+                                    Classes.visible="{Binding RepeatMode, Converter={StaticResource RepeatModeEquals}, ConverterParameter=RepeatAll}" />
+                            </Grid>
+                        </Button>
+                        <Popup
+                            HorizontalOffset="-30"
+                            IsLightDismissEnabled="False"
+                            IsOpen="{Binding IsRepeatHintVisible}"
+                            Placement="Top"
+                            PlacementTarget="{Binding #RepeatButton}"
+                            VerticalOffset="-8">
+                            <Border Classes="mode-hint" Classes.visible="{Binding IsRepeatHintVisible}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <mi:MaterialIcon
+                                        Width="14"
+                                        Height="14"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Text="{Binding RepeatHintText}" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Panel>
+
+                    <Border
+                        Width="1"
+                        Height="28"
+                        Margin="6,0"
+                        Background="{DynamicResource BgHighlightBrush}" />
+
+                    <!--  Volume  -->
+                    <Panel Name="VolumePanel">
+                        <Button
+                            x:Name="VolumeButton"
+                            Width="38"
+                            Height="38"
+                            Classes="ico-btn"
+                            Classes.popup-open="{Binding #VolumePopup.IsOpen}"
+                            Command="{Binding ToggleMuteCommand}"
+                            CornerRadius="19"
+                            ToolTip.Tip="{Binding MuteTooltip}">
+                            <Grid>
+                                <!--  Динамические иконки громкости  -->
+                                <mi:MaterialIcon
+                                    Width="20"
+                                    Height="20"
+                                    Foreground="{DynamicResource TextMutedBrush}"
+                                    IsVisible="{Binding IsMuted}"
+                                    Kind="VolumeMute" />
+                                <mi:MaterialIcon
+                                    Width="20"
+                                    Height="20"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    IsVisible="{Binding IsVolumeLow}"
+                                    Kind="VolumeLow" />
+                                <mi:MaterialIcon
+                                    Width="20"
+                                    Height="20"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    IsVisible="{Binding IsVolumeMedium}"
+                                    Kind="VolumeMedium" />
+                                <mi:MaterialIcon
+                                    Width="20"
+                                    Height="20"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    IsVisible="{Binding IsVolumeHigh}"
+                                    Kind="VolumeHigh" />
+                                <!--  Boost indicator  -->
+                                <mi:MaterialIcon
+                                    Width="20"
+                                    Height="20"
+                                    Foreground="{DynamicResource SystemWarnOrangeBrush}"
+                                    IsVisible="{Binding IsVolumeBoosted}"
+                                    Kind="VolumeVibrate" />
+                            </Grid>
+                        </Button>
+
+                        <!--  Volume popup  -->
+                        <Popup
+                            x:Name="VolumePopup"
+                            HorizontalOffset="5"
+                            IsLightDismissEnabled="False"
+                            Placement="Top"
+                            PlacementTarget="{Binding #VolumeButton}"
+                            VerticalOffset="-8">
+                            <Panel PointerEntered="OnVolumePopupContentEntered" PointerExited="OnVolumePopupContentExited">
+                                <Grid Width="28" RowDefinitions="*,Auto">
+                                    <!--  Slider обёрнут в Border для padding  -->
+                                    <Border Grid.Row="0" Padding="0,7,0,7">
+                                        <Panel
+                                            Name="VolumeSliderPanel"
+                                            Height="66"
+                                            HorizontalAlignment="Center">
+                                            <Border
+                                                Width="6"
+                                                HorizontalAlignment="Center"
+                                                Classes="vol-track" />
+                                            <Border
+                                                Name="VolumePreviewBar"
+                                                Width="6"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Bottom"
+                                                Classes="volume-preview"
+                                                CornerRadius="3" />
+                                            <Border
+                                                Name="VolumeBar"
+                                                Width="6"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Bottom"
+                                                Classes="vol-fill"
+                                                Classes.boosted="{Binding IsVolumeBoosted}" />
+                                            <Ellipse
+                                                Name="VolumeThumb"
+                                                Width="14"
+                                                Height="14"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Top"
+                                                Classes="vol-thumb"
+                                                Classes.boosted="{Binding IsVolumeBoosted}"
+                                                RenderTransformOrigin="0.5,0.5" />
+                                            <Border
+                                                Name="VolumeHitBox"
+                                                Width="28"
+                                                Background="Transparent"
+                                                Cursor="Hand"
+                                                PointerCaptureLost="OnVolumeAreaCaptureLost"
+                                                PointerExited="OnVolumeAreaExited"
+                                                PointerMoved="OnVolumeAreaMoved"
+                                                PointerPressed="OnVolumeAreaPressed"
+                                                PointerReleased="OnVolumeAreaReleased"
+                                                PointerWheelChanged="OnVolumeScroll" />
+                                        </Panel>
+                                    </Border>
+
+                                    <!--  Percent badge  -->
+                                    <Border
+                                        Grid.Row="1"
+                                        Margin="0,6,0,0"
+                                        HorizontalAlignment="Center"
+                                        Classes="vol-percent-badge">
+                                        <TextBlock
+                                            HorizontalAlignment="Center"
+                                            FontSize="10"
+                                            FontWeight="SemiBold"
+                                            Foreground="{Binding VolumePercentBrush}"
+                                            Text="{Binding Volume, StringFormat={}{0}%}" />
+                                    </Border>
+                                </Grid>
+                            </Panel>
+                        </Popup>
+
+                        <Popup
+                            Name="VolumeTooltipPopup"
+                            HorizontalOffset="-6"
+                            IsHitTestVisible="False"
+                            IsLightDismissEnabled="False"
+                            Placement="Left"
+                            PlacementTarget="{Binding #VolumeHitBox}">
+                            <Border
+                                Padding="6,3"
+                                Background="{DynamicResource BgSkeletonBrush}"
+                                BorderBrush="{DynamicResource BgHighlightBrush}"
+                                BorderThickness="1"
+                                BoxShadow="0 2 6 0 #40000000"
+                                CornerRadius="4">
+                                <TextBlock
+                                    Name="VolumeTooltipText"
+                                    FontSize="11"
+                                    FontWeight="Bold"
+                                    Foreground="{DynamicResource TextPrimaryBrush}"
+                                    Text="50%" />
+                            </Border>
+                        </Popup>
+                    </Panel>
+
+                    <Border
+                        Width="1"
+                        Height="28"
+                        Margin="6,0"
+                        Background="{DynamicResource BgHighlightBrush}" />
+
+                    <!--  Like  -->
+                    <Panel>
+                        <Button
+                            x:Name="LikeButton"
+                            Width="36"
+                            Height="36"
+                            Classes="ico-btn"
+                            Command="{Binding ToggleLikeCommand}"
+                            CornerRadius="18"
+                            ToolTip.Tip="{Binding LikeTooltip}">
+                            <mi:MaterialIcon
+                                Width="18"
+                                Height="18"
+                                Classes="heart-icon"
+                                Classes.active="{Binding IsLiked}"
+                                Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}" />
+                        </Button>
+                        <Popup
+                            HorizontalOffset="-20"
+                            IsLightDismissEnabled="False"
+                            IsOpen="{Binding IsLikeHintVisible}"
+                            Placement="Top"
+                            PlacementTarget="{Binding #LikeButton}"
+                            VerticalOffset="-8">
+                            <Border Classes="mode-hint" Classes.visible="{Binding IsLikeHintVisible}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <mi:MaterialIcon
+                                        Width="14"
+                                        Height="14"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Kind="Heart" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Text="{Binding LikeHintText}" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Panel>
+
+                    <!--  Copy  -->
+                    <Panel>
+                        <Button
+                            x:Name="CopyButton"
+                            Width="36"
+                            Height="36"
+                            Classes="ico-btn"
+                            Command="{Binding CopyLinkCommand}"
+                            CornerRadius="18"
+                            ToolTip.Tip="{Binding CopyTooltip}">
+                            <mi:MaterialIcon
+                                Width="16"
+                                Height="16"
+                                Classes.active="{Binding IsCopyHighlighted}"
+                                Kind="ContentCopy" />
+                        </Button>
+                        <Popup
+                            HorizontalOffset="-15"
+                            IsLightDismissEnabled="False"
+                            IsOpen="{Binding IsCopyHintVisible}"
+                            Placement="Top"
+                            PlacementTarget="{Binding #CopyButton}"
+                            VerticalOffset="-8">
+                            <Border Classes="mode-hint" Classes.visible="{Binding IsCopyHintVisible}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <mi:MaterialIcon
+                                        Width="14"
+                                        Height="14"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Kind="Check" />
+                                    <TextBlock
+                                        FontSize="12"
+                                        FontWeight="SemiBold"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Text="{Binding L[Track_Copied]}" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Panel>
+                </StackPanel>
+
+                <!--  Divider  -->
+                <Border
+                    Grid.Column="1"
+                    Width="1"
+                    Margin="10,10"
+                    Background="{DynamicResource BgHighlightBrush}" />
+
+                <!--  Track Info  -->
+                <StackPanel
+                    Grid.Column="2"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="12">
+                    <Border
+                        Width="52"
+                        Height="52"
+                        Background="{DynamicResource BgElevatedBrush}"
+                        ClipToBounds="True"
+                        CornerRadius="6">
+                        <Panel>
+                            <mi:MaterialIcon
+                                Width="22"
+                                Height="22"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"
+                                Kind="MusicNote" />
+                            <Image
+                                asyncImage:ImageLoader.Source="{Binding SafeThumbnail}"
+                                IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}}"
+                                Stretch="UniformToFill" />
+                        </Panel>
+                    </Border>
+                    <StackPanel MaxWidth="350" VerticalAlignment="Center">
+                        <TextBlock
+                            FontSize="14"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource TextPrimaryBrush}"
+                            Text="{Binding SafeTitle}"
+                            TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            Margin="0,2,0,0"
+                            FontSize="12"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
+                            Text="{Binding SafeAuthor}"
+                            TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!--  Divider  -->
+                <Border
+                    Grid.Column="3"
+                    Width="1"
+                    Margin="10,10"
+                    Background="{DynamicResource BgHighlightBrush}" />
+
+                <!--  Queue + Duration + Format  -->
+                <StackPanel
+                    Grid.Column="4"
+                    Width="140"
+                    VerticalAlignment="Center"
+                    Spacing="4">
+                    <Grid ColumnDefinitions="*,*">
+                        <StackPanel
+                            Grid.Column="0"
+                            HorizontalAlignment="Left"
+                            IsVisible="{Binding TotalTracksInQueue, Converter={StaticResource GreaterThanConverter}, ConverterParameter=0}"
+                            Orientation="Horizontal"
+                            Spacing="3">
+                            <TextBlock
+                                FontSize="12"
+                                FontWeight="Bold"
+                                Foreground="{DynamicResource AccentBrush}"
+                                Text="{Binding CurrentTrackIndexDisplay}" />
+                            <TextBlock
+                                FontSize="11"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                Text="/" />
+                            <TextBlock
+                                FontSize="12"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                Text="{Binding TotalTracksInQueue}" />
+                        </StackPanel>
+                        <StackPanel
+                            Grid.Column="1"
+                            HorizontalAlignment="Right"
+                            Orientation="Horizontal"
+                            Spacing="2">
+                            <TextBlock
+                                FontSize="12"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource AccentBrush}"
+                                Text="{Binding Position, Converter={StaticResource TimeSpanConverter}}" />
+                            <TextBlock
+                                FontSize="11"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                Text="/" />
+                            <TextBlock
+                                FontSize="12"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                Text="{Binding Duration, Converter={StaticResource TimeSpanConverter}}" />
+                        </StackPanel>
                     </Grid>
+                    <Panel>
+                        <Button
+                            x:Name="FormatButton"
+                            Padding="6,3"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Center"
+                            Classes="sidebar-btn format-btn"
+                            Command="{Binding LoadFormatsCommand}"
+                            IsVisible="{Binding ShowStreamInfo}">
+                            <Button.Flyout>
+                                <Flyout Placement="Top">
+                                    <StackPanel MinWidth="220" Spacing="4">
+                                        <TextBlock
+                                            Margin="4"
+                                            FontWeight="Bold"
+                                            Text="{Binding L[Stream_SelectQuality]}" />
+                                        <ItemsControl ItemsSource="{Binding AvailableFormats}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button
+                                                        HorizontalAlignment="Stretch"
+                                                        Classes="sidebar-btn"
+                                                        Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
+                                                        CommandParameter="{Binding}">
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                                                            <Panel Grid.Column="0" Width="22">
+                                                                <mi:MaterialIcon
+                                                                    Width="16"
+                                                                    Height="16"
+                                                                    Foreground="{DynamicResource AccentBrush}"
+                                                                    IsVisible="{Binding IsDownloaded}"
+                                                                    Kind="CheckCircle" />
+                                                            </Panel>
+                                                            <TextBlock
+                                                                Grid.Column="1"
+                                                                FontWeight="{Binding IsActive, Converter={StaticResource BoolToFontWeight}}"
+                                                                Text="{Binding DisplayName}" />
+                                                            <Panel
+                                                                Grid.Column="2"
+                                                                Width="20"
+                                                                Margin="4,0">
+                                                                <mi:MaterialIcon
+                                                                    Width="14"
+                                                                    Height="14"
+                                                                    Foreground="{DynamicResource AccentBrush}"
+                                                                    IsVisible="{Binding IsActive}"
+                                                                    Kind="VolumeHigh" />
+                                                            </Panel>
+                                                            <TextBlock
+                                                                Grid.Column="3"
+                                                                Margin="4,0,0,0"
+                                                                FontSize="11"
+                                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                                Text="{Binding SizeMbFormatted}" />
+                                                        </Grid>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock
+                                    FontSize="10"
+                                    Foreground="{DynamicResource TextMutedBrush}"
+                                    Text="{Binding StreamInfo}" />
+                                <mi:MaterialIcon
+                                    Width="10"
+                                    Height="10"
+                                    Foreground="{DynamicResource TextMutedBrush}"
+                                    Kind="ChevronUp" />
+                                <TextBlock
+                                    FontSize="10"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
+                                    Text="{Binding DownloadSpeedText}" />
+                            </StackPanel>
+                        </Button>
+                    </Panel>
                 </StackPanel>
             </Grid>
         </Grid>

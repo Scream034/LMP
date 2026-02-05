@@ -14,9 +14,7 @@
     </Style>
 
 
-    <!-- BASE STYLES     -->
-
-
+    <!-- BASE STYLES -->
     <Style Selector="Window">
         <Setter Property="Background" Value="{DynamicResource BgPrimaryBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -24,7 +22,7 @@
     </Style>
 
 
-    <!-- WINDOW CONTROL BUTTONS                                               -->
+    <!-- WINDOW CONTROL BUTTONS -->
 
 
     <Style Selector="Button.window-btn">
@@ -347,7 +345,7 @@
     </Style>
 
 
-    <!-- MAIN PLAY/PAUSE BUTTON                                               -->
+    <!-- MAIN PLAY/PAUSE BUTTON -->
 
 
     <Style Selector="Button.playback-btn-main">
@@ -385,7 +383,7 @@
     </Style>
 
 
-    <!-- PLAY CIRCLE BUTTON                                                   -->
+    <!-- PLAY CIRCLE BUTTON -->
 
 
     <Style Selector="Button.play-circle">
@@ -462,7 +460,104 @@
     </Style>
 
 
-    <!-- SLIDER COMPONENTS                                                    -->
+    <!-- VOLUME STYLES (минимализм) -->
+
+    <Style Selector="Border.vol-track">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
+
+    <Style Selector="Border.vol-fill">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Height" Duration="0:0:0.12" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="Ellipse.vol-thumb">
+        <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Stroke" Value="{DynamicResource BgPrimaryBrush}" />
+        <Setter Property="StrokeThickness" Value="2" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="BackEaseOut" />
+                <ThicknessTransition Property="Margin" Duration="0:0:0.15" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="Ellipse.vol-thumb:pointerover">
+        <Setter Property="RenderTransform" Value="scale(1.2)" />
+        <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+
+    <Style Selector="Ellipse.vol-thumb.dragging">
+        <Setter Property="RenderTransform" Value="scale(1.3)" />
+        <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+
+    <Style Selector="Border.vol-percent-badge">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,3" />
+        <Setter Property="BoxShadow" Value="0 2 8 0 #30000000" />
+    </Style>
+
+    <Style Selector="Border.volume-preview">
+        <Setter Property="Background" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="CornerRadius" Value="3" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Height" Duration="0:0:0.08" Easing="CubicEaseOut" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="Border.volume-preview.active">
+        <Setter Property="Opacity" Value="0.3" />
+    </Style>
+
+    <!-- BUTTON ANIMATIONS -->
+
+    <Style Selector="Button.pb-btn mi|MaterialIcon">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="Button.pb-btn:pressed mi|MaterialIcon">
+        <Setter Property="RenderTransform" Value="scale(0.85)" />
+    </Style>
+
+    <Style Selector="Button.ico-btn mi|MaterialIcon">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2" Easing="BackEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="Button.ico-btn:pressed mi|MaterialIcon">
+        <Setter Property="RenderTransform" Value="scale(0.8)" />
+    </Style>
+
+    <!-- Heart animation -->
+    <Style Selector="mi|MaterialIcon.heart-anim.active">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- SLIDER COMPONENTS -->
 
 
     <Style Selector="Border.slider-track">
@@ -801,7 +896,7 @@
     </Style>
 
 
-    <!-- FILTER TYPE BUTTONS                                                  -->
+    <!-- FILTER TYPE BUTTONS -->
 
 
     <Style Selector="Button.filter-type-btn">
@@ -831,7 +926,7 @@
     </Style>
 
 
-    <!-- TRACK LIST STYLES                                                    -->
+    <!-- TRACK LIST STYLES -->
 
 
     <Style Selector="ListBox.track-list">
@@ -1166,12 +1261,11 @@
     </Style>
 
 
-    <!-- STANDARD AVALONIA CONTROLS OVERRIDE                                  -->
-
+    <!-- STANDARD AVALONIA CONTROLS OVERRIDE -->
 
     <!-- Standard Button -->
     <Style
-        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn)">
+        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):not(.pb-btn):not(.pb-main):not(.ico-btn):not(.format-btn)">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
@@ -1187,12 +1281,12 @@
     </Style>
 
     <Style
-        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):pointerover">
+        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):not(.pb-btn):not(.pb-main):not(.ico-btn):not(.format-btn):pointerover">
         <Setter Property="Background" Value="{DynamicResource BgHoverBrush}" />
     </Style>
 
     <Style
-        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):pressed">
+        Selector="Button:not(.accent):not(.primary-btn):not(.sidebar-btn):not(.icon-btn):not(.playback-btn):not(.playback-btn-main):not(.window-btn):not(.window-btn-close):not(.card-action-btn):not(.cover-btn):not(.like-btn):not(.more-btn):not(.remove-btn):not(.delete-btn):not(.play-circle):not(.filter-type-btn):not(.pb-btn):not(.pb-main):not(.ico-btn):not(.format-btn):pressed">
         <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
 

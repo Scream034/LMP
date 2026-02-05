@@ -1,9 +1,9 @@
 ﻿using System.Buffers;
 using System.Collections.Concurrent;
-using System.Runtime;
 using System.Security.Cryptography;
 using System.Text;
 using Avalonia.Media.Imaging;
+using LMP.Core.Models;
 using SkiaSharp;
 
 namespace LMP.Core.Services;
@@ -39,19 +39,9 @@ public sealed class ImageCacheService : IDisposable
     /// <summary>Размер буфера для загрузки (используем ArrayPool)</summary>
     private const int DownloadBufferSize = 81920; // 80KB
 
-    /// <summary>Минимальный размер для сжатия. Меньшие файлы не трогаем.</summary>
-    private const int MinSizeForCompression = 10 * 1024; // 10KB
-
     #endregion
 
     #region Nested Types
-
-    private sealed class CachedImage
-    {
-        public Bitmap? Bitmap { get; set; }
-        public long EstimatedBytes { get; set; }
-        public DateTime CachedAt { get; set; }
-    }
 
     private sealed class PendingLoad : IDisposable
     {
@@ -70,7 +60,7 @@ public sealed class ImageCacheService : IDisposable
     private readonly SemaphoreSlim _downloadSemaphore = new(4);
     private readonly SemaphoreSlim _processSemaphore = new(2); // Для CPU-bound операций
 
-    private readonly ConcurrentDictionary<string, CachedImage> _memoryCache = new();
+    private readonly ConcurrentDictionary<string, RefCountedBitmap> _memoryCache = new();
     private readonly LinkedList<string> _lruOrder = new();
     private readonly Lock _lruLock = new();
 
@@ -124,11 +114,11 @@ public sealed class ImageCacheService : IDisposable
     /// <summary>
     /// Загружает изображение с указанным качеством.
     /// </summary>
-    public Task<Bitmap?> GetImageAsync(
+    public async Task<Bitmap?> GetImageAsync(
         string url,
         ImageQuality quality = ImageQuality.Low,
         CancellationToken ct = default)
-        => GetImageAsync(url, (int)quality, ct);
+        => await GetImageAsync(url, (int)quality, ct);
 
     /// <summary>
     /// Загружает изображение с указанным размером декодирования.
@@ -140,14 +130,21 @@ public sealed class ImageCacheService : IDisposable
     {
         if (_isDisposed || string.IsNullOrEmpty(url)) return null;
 
-        // Ключ включает размер для разных качеств одной картинки
         var memoryKey = GetMemoryCacheKey(url, decodeWidth);
 
-        // 1. Memory cache (быстрый путь)
-        if (_memoryCache.TryGetValue(memoryKey, out var cached))
+        // 1. Memory cache (с AddRef)
+        if (_memoryCache.TryGetValue(memoryKey, out var refCounted))
         {
-            TouchLru(memoryKey);
-            return cached.Bitmap;
+            if (refCounted.AddRef()) // Увеличиваем счётчик
+            {
+                TouchLru(memoryKey);
+                return refCounted.Bitmap;
+            }
+            else
+            {
+                // Объект в процессе dispose, убираем из кэша
+                _memoryCache.TryRemove(memoryKey, out _);
+            }
         }
 
         // 2. Проверяем pending загрузки
@@ -155,7 +152,15 @@ public sealed class ImageCacheService : IDisposable
         {
             try
             {
-                return await (pending.Task ?? Task.FromResult<Bitmap?>(null));
+                var bitmap = await (pending.Task ?? Task.FromResult<Bitmap?>(null));
+
+                // Увеличиваем refCount для нового потребителя
+                if (bitmap != null && _memoryCache.TryGetValue(memoryKey, out refCounted))
+                {
+                    refCounted.AddRef();
+                }
+
+                return bitmap;
             }
             catch
             {
@@ -169,10 +174,19 @@ public sealed class ImageCacheService : IDisposable
 
         if (!_pendingLoads.TryAdd(memoryKey, loadEntry))
         {
-            // Кто-то успел раньше
             if (_pendingLoads.TryGetValue(memoryKey, out pending))
             {
-                try { return await (pending.Task ?? Task.FromResult<Bitmap?>(null)); }
+                try
+                {
+                    var bitmap = await (pending.Task ?? Task.FromResult<Bitmap?>(null));
+
+                    if (bitmap != null && _memoryCache.TryGetValue(memoryKey, out refCounted))
+                    {
+                        refCounted.AddRef();
+                    }
+
+                    return bitmap;
+                }
                 catch { return null; }
             }
             return null;
@@ -181,18 +195,39 @@ public sealed class ImageCacheService : IDisposable
         try
         {
             loadEntry.Task = LoadImageInternalAsync(url, memoryKey, decodeWidth, linkedCts.Token);
-            return await loadEntry.Task;
+            var result = await loadEntry.Task;
+
+            // Увеличиваем refCount для вызывающей стороны
+            if (result != null && _memoryCache.TryGetValue(memoryKey, out refCounted))
+            {
+                refCounted.AddRef();
+            }
+
+            return result;
         }
         finally
         {
             _pendingLoads.TryRemove(memoryKey, out var removed);
             removed?.Dispose();
 
-            // Периодическое обслуживание
             if (Interlocked.Increment(ref _loadCounter) % CleanupInterval == 0)
             {
                 _ = Task.Run(PerformMaintenanceAsync, CancellationToken.None);
             }
+        }
+    }
+
+    /// <summary>
+    /// Освобождает ссылку на Bitmap.
+    /// Должен вызываться когда Image больше не использует картинку.
+    /// </summary>
+    public void ReleaseBitmap(string url, int decodeWidth)
+    {
+        var key = GetMemoryCacheKey(url, decodeWidth);
+
+        if (_memoryCache.TryGetValue(key, out var refCounted))
+        {
+            refCounted.Release();
         }
     }
 
@@ -246,9 +281,10 @@ public sealed class ImageCacheService : IDisposable
 
         lock (_lruLock)
         {
-            foreach (var item in _memoryCache.Values)
+            // Освобождаем ссылку кэша на все битмапы
+            foreach (var refCounted in _memoryCache.Values)
             {
-                item.Bitmap?.Dispose();
+                refCounted.Release(); // Это уменьшит refCount на 1
             }
 
             _memoryCache.Clear();
@@ -256,15 +292,13 @@ public sealed class ImageCacheService : IDisposable
             Interlocked.Exchange(ref _currentMemoryCacheBytes, 0);
         }
 
-        // Обновляем диагностику
         MemoryDiagnostics.SetBytes("ImageCache.Memory", 0);
         MemoryDiagnostics.SetBytes("ImageCache.Items", 0);
 
-        // Компактим LOH где живут битмапы
-        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        // Мягкий GC
+        GC.Collect(1, GCCollectionMode.Optimized, false);
 
-        Log.Info("[ImageCache] Memory cache cleared and LOH compacted.");
+        Log.Info("[ImageCache] Memory cache cleared.");
     }
 
     public void EnforceLimits()
@@ -274,17 +308,20 @@ public sealed class ImageCacheService : IDisposable
             int removed = 0;
             long freedBytes = 0;
 
-            // Удаляем по количеству ИЛИ по памяти
             while ((_memoryCache.Count > MaxMemoryItems || _currentMemoryCacheBytes > MaxMemoryBytes)
                    && _lruOrder.Count > 0)
             {
                 var oldest = _lruOrder.Last!.Value;
                 _lruOrder.RemoveLast();
 
-                if (_memoryCache.TryRemove(oldest, out var item))
+                if (_memoryCache.TryRemove(oldest, out var refCounted))
                 {
-                    freedBytes += item.EstimatedBytes;
-                    item.Bitmap?.Dispose();
+                    freedBytes += refCounted.EstimatedBytes;
+
+                    // Освобождаем ссылку кэша
+                    // Bitmap будет disposed когда все Image закончат его использовать
+                    refCounted.Release();
+
                     removed++;
                 }
             }
@@ -359,10 +396,10 @@ public sealed class ImageCacheService : IDisposable
     #region Private Methods - Core Loading
 
     private async Task<Bitmap?> LoadImageInternalAsync(
-        string url,
-        string memoryKey,
-        int decodeWidth,
-        CancellationToken ct)
+          string url,
+          string memoryKey,
+          int decodeWidth,
+          CancellationToken ct)
     {
         try
         {
@@ -378,8 +415,11 @@ public sealed class ImageCacheService : IDisposable
             // Double-check после получения семафора
             if (_memoryCache.TryGetValue(memoryKey, out var cached))
             {
-                TouchLru(memoryKey);
-                return cached.Bitmap;
+                if (cached.AddRef())
+                {
+                    TouchLru(memoryKey);
+                    return cached.Bitmap;
+                }
             }
 
             ct.ThrowIfCancellationRequested();
@@ -391,7 +431,6 @@ public sealed class ImageCacheService : IDisposable
             await fileLock.WaitAsync(ct);
             try
             {
-                // Скачиваем если нет на диске
                 if (!File.Exists(diskPath))
                 {
                     ct.ThrowIfCancellationRequested();
@@ -400,7 +439,6 @@ public sealed class ImageCacheService : IDisposable
 
                 ct.ThrowIfCancellationRequested();
 
-                // Декодируем в Bitmap
                 if (File.Exists(diskPath))
                 {
                     var bitmap = await DecodeBitmapAsync(diskPath, decodeWidth, ct);
@@ -551,12 +589,7 @@ public sealed class ImageCacheService : IDisposable
                     bitmapToSave = originalBitmap.Resize(
                         new SKImageInfo(newWidth, newHeight),
                         SKFilterQuality.High
-                    );
-
-                    if (bitmapToSave == null)
-                    {
-                        bitmapToSave = originalBitmap;
-                    }
+                    ) ?? originalBitmap;
                 }
                 else
                 {
@@ -687,9 +720,8 @@ public sealed class ImageCacheService : IDisposable
 
     private void AddToMemoryCache(string key, Bitmap bitmap)
     {
-        // Считаем размер
-        long pixelCount = (long)bitmap.PixelSize.Width * bitmap.PixelSize.Height;
-        long estimatedBytes = pixelCount * 4; // RGBA
+        var refCounted = new RefCountedBitmap(bitmap);
+        long estimatedBytes = refCounted.EstimatedBytes;
 
         lock (_lruLock)
         {
@@ -703,29 +735,27 @@ public sealed class ImageCacheService : IDisposable
                 if (_memoryCache.TryRemove(oldest, out var removed))
                 {
                     Interlocked.Add(ref _currentMemoryCacheBytes, -removed.EstimatedBytes);
-                    removed.Bitmap?.Dispose();
+                    removed.Release(); // Уменьшаем refCount
                 }
             }
 
-            // Добавляем
-            var cacheItem = new CachedImage
-            {
-                Bitmap = bitmap,
-                EstimatedBytes = estimatedBytes,
-                CachedAt = DateTime.UtcNow
-            };
-
-            if (_memoryCache.TryAdd(key, cacheItem))
+            // Добавляем (refCount уже = 1 из конструктора)
+            if (_memoryCache.TryAdd(key, refCounted))
             {
                 _lruOrder.AddFirst(key);
                 Interlocked.Add(ref _currentMemoryCacheBytes, estimatedBytes);
             }
+            else
+            {
+                // Кто-то успел добавить раньше
+                refCounted.Release();
+            }
         }
 
-        // Обновляем диагностику
         MemoryDiagnostics.SetBytes("ImageCache.Memory", _currentMemoryCacheBytes);
         MemoryDiagnostics.SetBytes("ImageCache.Items", _memoryCache.Count);
     }
+
 
     private void TouchLru(string key)
     {
@@ -739,6 +769,7 @@ public sealed class ImageCacheService : IDisposable
             }
         }
     }
+
 
     private async Task PerformMaintenanceAsync()
     {
@@ -758,7 +789,7 @@ public sealed class ImageCacheService : IDisposable
         // 3. Чистим неиспользуемые file locks
         foreach (var kvp in _fileLocks.ToArray())
         {
-            if (kvp.Value.CurrentCount == 1) // Никто не держит
+            if (kvp.Value.CurrentCount == 1)
             {
                 _fileLocks.TryRemove(kvp.Key, out _);
             }
@@ -778,10 +809,10 @@ public sealed class ImageCacheService : IDisposable
                     var oldest = _lruOrder.Last!.Value;
                     _lruOrder.RemoveLast();
 
-                    if (_memoryCache.TryRemove(oldest, out var item))
+                    if (_memoryCache.TryRemove(oldest, out var refCounted))
                     {
-                        Interlocked.Add(ref _currentMemoryCacheBytes, -item.EstimatedBytes);
-                        item.Bitmap?.Dispose();
+                        Interlocked.Add(ref _currentMemoryCacheBytes, -refCounted.EstimatedBytes);
+                        refCounted.Release();
                     }
                 }
             }
@@ -926,7 +957,17 @@ public sealed class ImageCacheService : IDisposable
         _isDisposed = true;
 
         CancelAllLoads();
-        ClearMemoryCache();
+
+        lock (_lruLock)
+        {
+            foreach (var refCounted in _memoryCache.Values)
+            {
+                // При shutdown принудительно диспозим
+                refCounted.Dispose();
+            }
+            _memoryCache.Clear();
+            _lruOrder.Clear();
+        }
 
         _downloadSemaphore.Dispose();
         _processSemaphore.Dispose();

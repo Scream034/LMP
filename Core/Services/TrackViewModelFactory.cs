@@ -48,7 +48,7 @@ public class TrackViewModelFactory
             !existing.IsDisposed)
         {
             existing.UpdatePlayAction(playAction);
-            
+
             // Сбрасываем контекст, так как эта VM используется в общих списках
             existing.IsQueueContext = false;
             // existing.IsPlaylistContext - это свойство управляется извне (PlaylistViewModel), не трогаем его тут жестко
@@ -87,11 +87,11 @@ public class TrackViewModelFactory
 
         // Создаем ИЗОЛИРОВАННЫЙ экземпляр
         var vm = CreateVmInstance(canonical, playAction);
-        
+
         vm.IsQueueContext = true;
 
         MemoryDiagnostics.TrackInstance("TrackVM.Created(Queue)");
-        
+
         // НЕ добавляем в _cache!
         return vm;
     }
@@ -103,7 +103,7 @@ public class TrackViewModelFactory
             _audio,
             _downloads,
             _manager,
-            _cacheManager, 
+            _cacheManager,
             playAction);
     }
 
@@ -125,30 +125,69 @@ public class TrackViewModelFactory
 
     public int CleanupCache()
     {
-        var deadKeys = _cache
-            .Where(kvp => !kvp.Value.TryGetTarget(out var target) || target.IsDisposed)
-            .Select(kvp => kvp.Key)
-            .ToList();
+        var deadKeys = new List<string>();
+
+        foreach (var kvp in _cache)
+        {
+            if (!kvp.Value.TryGetTarget(out var target) || target.IsDisposed)
+            {
+                deadKeys.Add(kvp.Key);
+            }
+        }
 
         foreach (var key in deadKeys)
+        {
             _cache.TryRemove(key, out _);
+        }
 
         if (deadKeys.Count > 0)
         {
             MemoryDiagnostics.SetBytes("TrackVM.CacheSize", _cache.Count);
-            Log.Info($"[TrackFactory] Cleaned {deadKeys.Count} dead items.");
+            Log.Debug($"[TrackFactory] Cleaned {deadKeys.Count} dead references.");
         }
 
         return deadKeys.Count;
     }
 
-    public void Clear()
+
+    /// <summary>
+    /// Полная очистка с dispose всех VM.
+    /// Вызывается только при закрытии приложения или полном сбросе.
+    /// </summary>
+    public void ClearWithDispose()
     {
+        // Собираем все живые VM
+        var toDispose = new List<TrackItemViewModel>();
+
         foreach (var kvp in _cache)
         {
-            if (kvp.Value.TryGetTarget(out var vm))
-                vm.Dispose();
+            if (kvp.Value.TryGetTarget(out var vm) && !vm.IsDisposed)
+            {
+                toDispose.Add(vm);
+            }
         }
+
         _cache.Clear();
+
+        // Диспозим отложенно
+        Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            foreach (var vm in toDispose)
+            {
+                try { vm.Dispose(); } catch { }
+            }
+            Log.Info($"[TrackFactory] Disposed {toDispose.Count} VMs on clear.");
+        });
+    }
+
+    /// <summary>
+    /// Мягкая очистка — только удаляем ссылки, не диспозим.
+    /// Используется при навигации.
+    /// </summary>
+    public void Clear()
+    {
+        _cache.Clear();
+        MemoryDiagnostics.SetBytes("TrackVM.CacheSize", 0);
     }
 }
