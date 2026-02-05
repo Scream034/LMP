@@ -26,6 +26,9 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly int _maxConcurrentDownloads;
     private readonly int _maxRamChunks;
     private readonly int _downloadTimeoutMs;
+    
+    // Максимальный буфер вперёд (в чанках)
+    private readonly int _maxBufferAhead;
 
     #endregion
 
@@ -59,6 +62,10 @@ public sealed class MemoryFirstCachingStream : Stream
     private volatile bool _downloadComplete;
     private volatile bool _disposed;
     private volatile bool _disposing;
+    
+    // Флаг паузы и режим полного скачивания
+    private volatile bool _isPaused;
+    private volatile bool _downloadFullTrack;
 
     #endregion
 
@@ -139,6 +146,10 @@ public sealed class MemoryFirstCachingStream : Stream
         _maxConcurrentDownloads = config.MaxConcurrentDownloads;
         _maxRamChunks = config.MaxRamChunks > 0 ? config.MaxRamChunks : 50;
         _downloadTimeoutMs = config.DownloadTimeoutMs;
+        
+        // Ограничение буфера (по умолчанию 30 секунд при 128kbps ≈ 30 чанков)
+        _maxBufferAhead = config.MaxBufferAheadChunks > 0 ? config.MaxBufferAheadChunks : 30;
+        _downloadFullTrack = config.DownloadFullTrack;
 
         // Derived
         _cachePath = StreamCacheManager.GetCachePath(_cacheId);
@@ -175,7 +186,7 @@ public sealed class MemoryFirstCachingStream : Stream
         MemoryDiagnostics.TrackInstance("Stream.Active");
         MemoryDiagnostics.TrackBytes("Stream.TotalSize", _contentLength);
 
-        Log.Info($"[CacheStream] Opened {_cacheId}: {contentLength / 1024 / 1024}MB");
+        Log.Info($"[CacheStream] Opened {_cacheId}: {contentLength / 1024 / 1024}MB, maxAhead={_maxBufferAhead} chunks");
     }
 
     #endregion
@@ -215,6 +226,35 @@ public sealed class MemoryFirstCachingStream : Stream
     public void CancelPendingReads()
     {
         try { _disposeCts.Cancel(); } catch { }
+    }
+
+    /// <summary>
+    /// Уведомление о паузе воспроизведения
+    /// </summary>
+    public void NotifyPaused(bool paused)
+    {
+        _isPaused = paused;
+        if (paused)
+        {
+            Log.Debug($"[CacheStream] Paused, stopping background download");
+        }
+    }
+
+    /// <summary>
+    /// Включить полное скачивание (для "скачать трек")
+    /// </summary>
+    public void EnableFullDownload()
+    {
+        _downloadFullTrack = true;
+        // Добавляем все оставшиеся чанки в очередь
+        lock (_queueLock)
+        {
+            for (int i = 0; i < _totalChunks; i++)
+            {
+                TryEnqueue(i, 100 + i);
+            }
+        }
+        Log.Info($"[CacheStream] Full download enabled for {_cacheId}");
     }
 
     public void ReleaseRamBuffers()
@@ -281,7 +321,12 @@ public sealed class MemoryFirstCachingStream : Stream
             if (bytesRead > 0)
             {
                 Interlocked.Add(ref _position, bytesRead);
-                EnqueueReadAhead(chunkIndex);
+                
+                // ИСПРАВЛЕНИЕ: Read-ahead только если не на паузе и буфер не полон
+                if (!_isPaused || _downloadFullTrack)
+                {
+                    EnqueueReadAheadLimited(chunkIndex);
+                }
             }
             return bytesRead;
         }
@@ -378,12 +423,38 @@ public sealed class MemoryFirstCachingStream : Stream
         }
     }
 
-    private void EnqueueReadAhead(int current)
+    /// <summary>
+    /// Read-ahead с ограничением буфера
+    /// </summary>
+    private void EnqueueReadAheadLimited(int current)
     {
+        if (_downloadComplete) return;
+        
         lock (_queueLock)
         {
-            for (int i = 1; i <= _readAheadChunks && current + i < _totalChunks; i++)
+            // Считаем сколько чанков уже скачано/в процессе вперёд от текущей позиции
+            int bufferedAhead = 0;
+            for (int i = current + 1; i < _totalChunks && i <= current + _maxBufferAhead; i++)
+            {
+                if (HasChunk(i) || _pendingDownloads.ContainsKey(i) || _queuedChunks.Contains(i))
+                    bufferedAhead++;
+                else
+                    break; // Первый пропуск - прекращаем подсчёт
+            }
+
+            // Если буфер достаточен - не добавляем новые чанки
+            if (!_downloadFullTrack && bufferedAhead >= _maxBufferAhead)
+            {
+                return;
+            }
+
+            // Добавляем только недостающие чанки до лимита
+            int toAdd = _downloadFullTrack ? _readAheadChunks : Math.Min(_readAheadChunks, _maxBufferAhead - bufferedAhead);
+            
+            for (int i = 1; i <= toAdd && current + i < _totalChunks; i++)
+            {
                 TryEnqueue(current + i, 50 + i);
+            }
         }
     }
 
@@ -403,10 +474,26 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         while (!ct.IsCancellationRequested && !_disposing)
         {
+            // Если на паузе и не в режиме полного скачивания - ждём
+            if (_isPaused && !_downloadFullTrack)
+            {
+                await Task.Delay(500, ct).ConfigureAwait(false);
+                continue;
+            }
+
             int chunk = -1;
+            int currentPosition = (int)(Volatile.Read(ref _position) / _chunkSize);
 
             lock (_queueLock)
             {
+                // Проверяем нужно ли ещё качать
+                if (!_downloadFullTrack && !ShouldContinueDownloading(currentPosition))
+                {
+                    // Буфер полон - очищаем очередь
+                    _downloadQueue.Clear();
+                    _queuedChunks.Clear();
+                }
+                
                 while (_downloadQueue.Count > 0)
                 {
                     var c = _downloadQueue.Dequeue();
@@ -435,6 +522,25 @@ public sealed class MemoryFirstCachingStream : Stream
 
             _ = DownloadChunkAsync(chunk, ct);
         }
+    }
+
+    /// <summary>
+    /// Проверка нужно ли продолжать скачивание
+    /// </summary>
+    private bool ShouldContinueDownloading(int currentChunk)
+    {
+        if (_downloadFullTrack || _downloadComplete) return true;
+
+        // Считаем скачанные чанки впереди
+        int bufferedAhead = 0;
+        for (int i = currentChunk; i < _totalChunks && i <= currentChunk + _maxBufferAhead + 5; i++)
+        {
+            if (HasChunk(i) || _pendingDownloads.ContainsKey(i))
+                bufferedAhead++;
+        }
+
+        // Продолжаем только если буфер меньше лимита
+        return bufferedAhead < _maxBufferAhead;
     }
 
     private async Task DownloadChunkAsync(int idx, CancellationToken ct)
@@ -545,7 +651,6 @@ public sealed class MemoryFirstCachingStream : Stream
         int keepStart = current - 2;
         int keepEnd = current + _readAheadChunks * 2;
 
-        // Inline removal without LINQ allocation
         foreach (var key in _chunks.Keys)
         {
             if (key < keepStart || key > keepEnd)
@@ -596,7 +701,6 @@ public sealed class MemoryFirstCachingStream : Stream
                     _diskRanges.MarkComplete(pos, pos + len);
                     bytesWritten += len;
 
-                    // Check completion
                     if (!_downloadComplete && _diskRanges.IsFullyDownloaded(_contentLength))
                     {
                         _downloadComplete = true;
@@ -619,7 +723,6 @@ public sealed class MemoryFirstCachingStream : Stream
         catch (OperationCanceledException) { }
         finally
         {
-            // Final check
             if (!_downloadComplete && _diskRanges.IsFullyDownloaded(_contentLength))
             {
                 _downloadComplete = true;
@@ -691,14 +794,12 @@ public sealed class MemoryFirstCachingStream : Stream
             Try(_disposeCts.Cancel);
             Try(() => _diskChannel.Writer.TryComplete());
 
-            // Drain channel
             while (_diskChannel.Reader.TryRead(out var item))
                 ArrayPool<byte>.Shared.Return(item.Data);
 
             SaveRanges();
             _dataAvailable.Set();
 
-            // Async cleanup
             _ = Task.Run(async () =>
             {
                 try

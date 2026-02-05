@@ -153,7 +153,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<bool, bool>? OnPlaybackStateChanged;
     public event Action? OnQueueChanged;
     public event Action<string, string>? OnCriticalError;
-    
+
     // Событие для явного уведомления об изменении состояния загрузки
     public event Action<bool>? OnLoadingStateChanged;
 
@@ -168,13 +168,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _cacheManager = cacheManager;
 
         _httpClient = CreateHttpClient();
-        
+
         // DropOldest вместо Wait - новые команды вытесняют старые
         _commandQueue = Channel.CreateBounded<Func<ValueTask>>(
-            new BoundedChannelOptions(16) 
-            { 
-                SingleReader = true, 
-                FullMode = BoundedChannelFullMode.DropOldest 
+            new BoundedChannelOptions(16)
+            {
+                SingleReader = true,
+                FullMode = BoundedChannelFullMode.DropOldest
             });
 
         ShuffleEnabled = library.Settings.ShuffleEnabled;
@@ -421,13 +421,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         SetFlag(StateFlags.SuppressAutoNext, true);
         var newSession = Interlocked.Increment(ref _session);
-        
+
         // Отменяем текущую операцию загрузки
         try { _playbackCts?.Cancel(); } catch { }
-        
+
         // Отменяем чтение из стрима (быстрый выход из блокирующих операций)
         try { _currentStream?.CancelPendingReads(); } catch { }
-        
+
         return newSession;
     }
 
@@ -751,10 +751,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_session != currentSession || ct.IsCancellationRequested) return;
 
         ClearStreamInfo();
-        
+
         // Используем метод с уведомлением
         SetLoadingState(true);
-        
+
         SetFlag(StateFlags.Ready, false);
         CurrentTrack = track;
 
@@ -768,8 +768,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             await LoadAndPlayAsync(track, currentSession, ct);
         }
-        catch (OperationCanceledException) 
-        { 
+        catch (OperationCanceledException)
+        {
             Log.Debug($"[AudioEngine] Playback cancelled for session {currentSession}");
         }
         catch (Exception ex)
@@ -915,7 +915,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private async Task NavigateAsync(bool forward, bool userInitiated)
     {
         if (HasFlag(StateFlags.Disposed)) return;
-        
+
         // Убрана проверка Navigating - разрешаем прерывать навигацию
         // Немедленно отменяем текущую загрузку
         var newSession = CancelCurrentPlayback();
@@ -1080,12 +1080,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _consecutiveErrors = 0;
         SetFlag(StateFlags.SuppressAutoNext, false);
         SetFlag(StateFlags.Ready, true);
-        
+
         // Используем метод с уведомлением
         SetLoadingState(false);
-        
+
         SetFlag(StateFlags.Playing, true);
         SetFlag(StateFlags.Paused, false);
+
+        _currentStream?.NotifyPaused(false);
 
         ApplyVolume();
 
@@ -1104,6 +1106,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (HasFlag(StateFlags.Disposed)) return;
         SetFlag(StateFlags.Playing, false);
         SetFlag(StateFlags.Paused, true);
+        _currentStream?.NotifyPaused(true);
         NotifyPlaybackState();
     }
 
@@ -1219,7 +1222,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         bool changed = HasFlag(StateFlags.Loading) != value;
         SetFlag(StateFlags.Loading, value);
-        
+
         if (changed)
         {
             RaiseOnUI(() =>
@@ -1296,11 +1299,47 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private static StreamingConfig GetStreamingConfig(InternetProfile profile) => profile switch
     {
-        InternetProfile.Low => new() { ChunkSize = 64 * 1024, ReadAheadChunks = 2, MaxConcurrentDownloads = 2, VlcNetworkCachingMs = 4000, MaxRamChunks = 150 },
-        InternetProfile.Medium => new() { ChunkSize = 128 * 1024, ReadAheadChunks = 4, MaxConcurrentDownloads = 3, VlcNetworkCachingMs = 2000, MaxRamChunks = 100 },
-        InternetProfile.High => new() { ChunkSize = 256 * 1024, ReadAheadChunks = 6, MaxConcurrentDownloads = 4, VlcNetworkCachingMs = 1000, MaxRamChunks = 80 },
-        InternetProfile.Ultra => new() { ChunkSize = 512 * 1024, ReadAheadChunks = 10, MaxConcurrentDownloads = 6, VlcNetworkCachingMs = 500, MaxRamChunks = 60 },
-        _ => new() { ChunkSize = 128 * 1024, MaxRamChunks = 100 }
+        InternetProfile.Low => new()
+        {
+            ChunkSize = 64 * 1024,
+            ReadAheadChunks = 2,
+            MaxConcurrentDownloads = 2,
+            VlcNetworkCachingMs = 4000,
+            MaxRamChunks = 150,
+            MaxBufferAheadChunks = 20,      // ~20 сек буфер
+            DownloadFullTrack = false
+        },
+        InternetProfile.Medium => new()
+        {
+            ChunkSize = 128 * 1024,
+            ReadAheadChunks = 4,
+            MaxConcurrentDownloads = 3,
+            VlcNetworkCachingMs = 2000,
+            MaxRamChunks = 100,
+            MaxBufferAheadChunks = 30,      // ~30 сек буфер
+            DownloadFullTrack = false
+        },
+        InternetProfile.High => new()
+        {
+            ChunkSize = 256 * 1024,
+            ReadAheadChunks = 6,
+            MaxConcurrentDownloads = 4,
+            VlcNetworkCachingMs = 1000,
+            MaxRamChunks = 80,
+            MaxBufferAheadChunks = 50,      // ~50 сек буфер
+            DownloadFullTrack = false
+        },
+        InternetProfile.Ultra => new()
+        {
+            ChunkSize = 512 * 1024,
+            ReadAheadChunks = 10,
+            MaxConcurrentDownloads = 6,
+            VlcNetworkCachingMs = 500,
+            MaxRamChunks = 60,
+            MaxBufferAheadChunks = 100,     // Большой буфер
+            DownloadFullTrack = true        // Качать полностью!
+        },
+        _ => new() { ChunkSize = 128 * 1024, MaxRamChunks = 100, MaxBufferAheadChunks = 30 }
     };
 
     public void NotifyAppMinimized() => _currentStream?.ReleaseRamBuffers();

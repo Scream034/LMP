@@ -177,14 +177,18 @@ public partial class PlayerBarView : UserControl
         {
             _currentViewModel = vm;
             vm.PropertyChanged += OnViewModelPropertyChanged;
-            
-            // Синхронизируем начальное состояние
+
+            // Инициализируем размеры ДО открытия любых Popup
+            InitializeVolumeSlider(vm);
+
+            // Синхронизируем начальное состояние анимации
             if (vm.IsLoading)
                 StartSparkAnimation();
             else
                 StopSparkAnimation();
         }
     }
+
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -234,6 +238,34 @@ public partial class PlayerBarView : UserControl
         }
     }
 
+    private void InitializeVolumeSlider(PlayerBarViewModel vm)
+    {
+        try
+        {
+            int maxVolume = vm.MaxVolume > 0 ? vm.MaxVolume : 100;
+
+            // Устанавливаем высоту панели
+            double height = Math.Max(VolumeSliderMinHeight, maxVolume * VolumeSliderHeightPerPercent);
+            VolumeSliderPanel.Height = height;
+
+            // Устанавливаем начальное положение ползунка
+            int volume = Math.Clamp(vm.Volume, 0, maxVolume);
+            double ratio = (double)volume / maxVolume;
+
+            VolumeBar.Height = height * ratio;
+            double thumbTop = height * (1 - ratio) - VolumeThumbRadius;
+            VolumeThumb.Margin = new Thickness(0, Math.Max(0, thumbTop), 0, 0);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[PlayerBar] InitializeVolumeSlider error: {ex.Message}");
+            // Fallback к безопасным значениям
+            VolumeSliderPanel.Height = VolumeSliderMinHeight;
+            VolumeBar.Height = 0;
+            VolumeThumb.Margin = new Thickness(0);
+        }
+    }
+
     #endregion
 
     #region Spark Animation
@@ -248,7 +280,7 @@ public partial class PlayerBarView : UserControl
 
         _sparkPosition = -SparkWidth;
         SparkRunner.Margin = new Thickness(_sparkPosition, 0, 0, 0);
-        
+
         if (!_sparkAnimationTimer.IsEnabled)
         {
             _sparkAnimationTimer.Start();
@@ -299,9 +331,15 @@ public partial class PlayerBarView : UserControl
 
     private void OnVolumePopupOpened(object? sender, EventArgs e)
     {
+        // Только обновляем визуал, высота уже установлена
         if (DataContext is PlayerBarViewModel vm)
         {
-            UpdateVolumeSliderHeight(vm.MaxVolume);
+            // Высота уже должна быть установлена в InitializeVolumeSlider
+            // Здесь только синхронизируем визуал если что-то изменилось
+            if (VolumeSliderPanel.Height <= 0)
+            {
+                UpdateVolumeSliderHeight(vm.MaxVolume);
+            }
             UpdateVolumeVisual();
         }
     }
@@ -354,7 +392,17 @@ public partial class PlayerBarView : UserControl
 
     private void UpdateVolumeSliderHeight(int maxVolume)
     {
+        // Защита от невалидных значений
+        if (maxVolume <= 0) maxVolume = 100;
+
         double height = Math.Max(VolumeSliderMinHeight, maxVolume * VolumeSliderHeightPerPercent);
+
+        // Проверка на NaN/Infinity
+        if (double.IsNaN(height) || double.IsInfinity(height))
+        {
+            height = VolumeSliderMinHeight;
+        }
+
         VolumeSliderPanel.Height = height;
     }
 
@@ -365,7 +413,14 @@ public partial class PlayerBarView : UserControl
         double height = VolumeSliderPanel.Height;
         int maxVolume = vm.MaxVolume;
 
-        if (height <= 0 || maxVolume <= 0) return;
+        // Защита от деления на ноль и невалидных значений
+        if (height <= 0 || double.IsNaN(height))
+        {
+            height = VolumeSliderMinHeight;
+            VolumeSliderPanel.Height = height;
+        }
+
+        if (maxVolume <= 0) maxVolume = 100;
 
         double ratio = Math.Clamp((double)vm.Volume / maxVolume, 0, 1);
         UpdateVolumeVisualInternal(ratio, height);
@@ -373,9 +428,23 @@ public partial class PlayerBarView : UserControl
 
     private void UpdateVolumeVisualInternal(double ratio, double height)
     {
-        VolumeBar.Height = height * ratio;
+        // Защита от невалидных значений
+        if (double.IsNaN(ratio) || double.IsInfinity(ratio)) ratio = 0;
+        if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
+            height = VolumeSliderMinHeight;
+
+        ratio = Math.Clamp(ratio, 0, 1);
+
+        double barHeight = height * ratio;
+        if (double.IsNaN(barHeight) || barHeight < 0) barHeight = 0;
+
+        VolumeBar.Height = barHeight;
+
         double thumbTop = height * (1 - ratio) - VolumeThumbRadius;
-        VolumeThumb.Margin = new Thickness(0, Math.Max(0, thumbTop), 0, 0);
+        thumbTop = Math.Max(0, thumbTop);
+        if (double.IsNaN(thumbTop)) thumbTop = 0;
+
+        VolumeThumb.Margin = new Thickness(0, thumbTop, 0, 0);
     }
 
     private void UpdateSeekCursor(double x) =>
@@ -427,7 +496,25 @@ public partial class PlayerBarView : UserControl
     {
         _isVolumeButtonHovered = true;
         _volumePopupCloseTimer?.Stop();
-        VolumePopup.IsOpen = true;
+
+        // Проверяем валидность перед открытием
+        if (DataContext is PlayerBarViewModel vm)
+        {
+            try
+            {
+                // Убеждаемся что размеры валидны
+                if (VolumeSliderPanel.Height <= 0 || double.IsNaN(VolumeSliderPanel.Height))
+                {
+                    InitializeVolumeSlider(vm);
+                }
+
+                VolumePopup.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[PlayerBar] Failed to open volume popup: {ex.Message}");
+            }
+        }
     }
 
     private void OnVolumeButtonExited(object? sender, PointerEventArgs e)
@@ -611,13 +698,13 @@ public partial class PlayerBarView : UserControl
 
         // Обновляем текст и позицию тултипа
         UpdateVolumeTooltip(newVolume, vm.MaxVolume);
-        
+
         // Позиционируем относительно курсора мыши
         var point = e.GetPosition(VolumeSliderPanel);
         double height = VolumeSliderPanel.Height;
         double ratio = Math.Clamp((double)newVolume / vm.MaxVolume, 0, 1);
         double yOffset = height * (1 - ratio) - (height / 2);
-        
+
         // Принудительно ставим рядом с ползунком
         VolumeTooltipPopup.VerticalOffset = yOffset;
 
@@ -646,7 +733,7 @@ public partial class PlayerBarView : UserControl
         int volumePercent = (int)(ratio * vm.MaxVolume);
 
         UpdateVolumeTooltip(volumePercent, vm.MaxVolume);
-        
+
         // Тултип всегда слева от курсора (через Placement="Left" в XAML + VerticalOffset)
         double yOffset = height * (1 - ratio) - (height / 2);
         VolumeTooltipPopup.VerticalOffset = yOffset;
@@ -695,11 +782,11 @@ public partial class PlayerBarView : UserControl
 
         UpdateVolumeVisualInternal(ratio, height);
         vm.Volume = newVolume;
-        
+
         UpdateVolumeTooltip(newVolume, vm.MaxVolume);
         double yOffset = height * (1 - ratio) - (height / 2);
         VolumeTooltipPopup.VerticalOffset = yOffset;
-        
+
         VolumeTooltipPopup.IsOpen = true;
     }
 

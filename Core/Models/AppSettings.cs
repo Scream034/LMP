@@ -65,6 +65,8 @@ public sealed class StreamingConfig
     public int DownloadTimeoutMs { get; set; } = 45000;
     public int VlcNetworkCachingMs { get; set; } = 2000;
     public int MaxRamChunks { get; set; } = 128; // ~16MB при 128KB чанках
+    public int MaxBufferAheadChunks { get; init; } = 30;     // ~30 сек при 128kbps
+    public bool DownloadFullTrack { get; init; } = false;    // Качать весь трек?
 }
 
 public enum RepeatMode
