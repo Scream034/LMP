@@ -35,6 +35,7 @@ public sealed class LibraryService : IAsyncDisposable
     private string? _fakeAccountName;
     private string? _fakeAccountAvatarUrl;
 
+    public event Action? OnInitialized;
     public event Action? OnDataChanged;
     public event Action? OnFakeAccountChanged;
     public event Action<TrackInfo>? OnTrackUpdated;
@@ -96,6 +97,7 @@ public sealed class LibraryService : IAsyncDisposable
         await EnsureLikedPlaylistAsync(ct);
 
         sw.Stop();
+        OnInitialized?.Invoke();
         Log.Info($"[LibraryService] Initialized in {sw.ElapsedMilliseconds}ms");
     }
 

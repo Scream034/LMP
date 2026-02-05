@@ -566,7 +566,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void UpdateCacheStats()
     {
-        var (memItems, memMb, imgCount, imgSizeMb) = _imageCache.GetStats();
+        var (memItems, _, imgCount, imgSizeMb) = _imageCache.GetStats();
         var (audioFileCount, audioSizeMb) = StreamCacheManager.GetStats();
         var (downloadFileCount, downloadSizeMb) = StreamCacheManager.GetDownloadsStats();
 
