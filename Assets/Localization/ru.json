@@ -218,6 +218,10 @@
   "Player_NotPlaying": "Ничего не воспроизводится",
   "Player_StreamInfo_Loading": "Загрузка потока...",
   "Player_VolumeTooltip": "Громкость: {0}%",
+  "Player_TrackNumber": "Трек {0} из {1}",
+  "Player_Duration": "Длительность: {0} / {1}",
+  "Player_VolumeLevel": "Громкость: {0}% / {1}%",
+  "Player_Loading_Duration": "Загрузка длительности...",
 
   "Track_Like": "Добавить в избранное",
   "Track_Unlike": "Убрать из избранного",

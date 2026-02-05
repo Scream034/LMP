@@ -12,7 +12,7 @@
 
     <UserControl.Styles>
         <!--  ═══════════════════════════════════════════════════════════════  -->
-        <!--  PLAYER BUTTON - элегантные кнопки управления  -->
+        <!--  PLAYER BUTTONS                                                   -->
         <!--  ═══════════════════════════════════════════════════════════════  -->
         <Style Selector="Button.pb-btn">
             <Setter Property="Background" Value="Transparent" />
@@ -35,8 +35,7 @@
                         <ContentPresenter
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center"
-                            Content="{TemplateBinding Content}"
-                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                            Content="{TemplateBinding Content}" />
                     </Border>
                 </ControlTemplate>
             </Setter>
@@ -44,10 +43,7 @@
                 <Transitions>
                     <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition
-                        Easing="CubicEaseOut"
-                        Property="RenderTransform"
-                        Duration="0:0:0.1" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -67,9 +63,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
 
-        <!--  ═══════════════════════════════════════════════════════════════  -->
-        <!--  MAIN PLAY BUTTON - центральная кнопка воспроизведения  -->
-        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  MAIN PLAY BUTTON  -->
         <Style Selector="Button.pb-main">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -91,17 +85,13 @@
                         <ContentPresenter
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center"
-                            Content="{TemplateBinding Content}"
-                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                            Content="{TemplateBinding Content}" />
                     </Border>
                 </ControlTemplate>
             </Setter>
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition
-                        Easing="CubicEaseOut"
-                        Property="RenderTransform"
-                        Duration="0:0:0.12" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
@@ -114,9 +104,7 @@
             <Setter Property="RenderTransform" Value="scale(0.94)" />
         </Style>
 
-        <!--  ═══════════════════════════════════════════════════════════════  -->
-        <!--  ICON BUTTON - кнопки с иконками (лайк, копировать, громкость)  -->
-        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  ICON BUTTON  -->
         <Style Selector="Button.ico-btn">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
@@ -138,8 +126,7 @@
                         <ContentPresenter
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center"
-                            Content="{TemplateBinding Content}"
-                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                            Content="{TemplateBinding Content}" />
                     </Border>
                 </ControlTemplate>
             </Setter>
@@ -147,10 +134,7 @@
                 <Transitions>
                     <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition
-                        Easing="CubicEaseOut"
-                        Property="RenderTransform"
-                        Duration="0:0:0.15" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -170,15 +154,12 @@
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
 
-        <!--  Анимация сердечка для лайка  -->
+        <!--  Heart animation  -->
         <Style Selector="Button.ico-btn mi|MaterialIcon.heart-icon">
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition
-                        Easing="BackEaseOut"
-                        Property="RenderTransform"
-                        Duration="0:0:0.2" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2" Easing="BackEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -187,26 +168,15 @@
         </Style>
 
         <!--  ═══════════════════════════════════════════════════════════════  -->
-        <!--  SEEK SLIDER STYLES  -->
+        <!--  SEEK SLIDER                                                      -->
         <!--  ═══════════════════════════════════════════════════════════════  -->
 
-        <!--  Loading spark border  -->
-        <Style Selector="Border.spark-border">
-            <Setter Property="IsVisible" Value="False" />
-        </Style>
-        <Style Selector="Border.spark-border.loading">
-            <Setter Property="IsVisible" Value="True" />
-        </Style>
-
-        <!--  Track container hover effect  -->
+        <!--  Track container hover  -->
         <Style Selector="Grid.track-container">
             <Setter Property="RenderTransform" Value="scaleY(1)" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition
-                        Easing="CubicEaseOut"
-                        Property="RenderTransform"
-                        Duration="0:0:0.15" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -256,9 +226,7 @@
             <Setter Property="Opacity" Value="0.5" />
         </Style>
 
-        <!--  ═══════════════════════════════════════════════════════════════  -->
-        <!--  PLAYING GLOW - мягкое свечение при воспроизведении  -->
-        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  Playing glow  -->
         <Style Selector="Border.playing-glow">
             <Setter Property="Opacity" Value="0" />
             <Setter Property="IsHitTestVisible" Value="False" />
@@ -279,42 +247,27 @@
             </Style.Animations>
         </Style>
 
-        <!-- VOLUME SLIDER STYLES - плавные анимации                        -->
-
-        <Style Selector="Border.volume-preview">
-            <Setter Property="Background" Value="{DynamicResource TextMutedBrush}" />
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="CornerRadius" Value="3" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Height" Duration="0:0:0.08" Easing="CubicEaseOut" />
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Border.volume-preview.active">
-            <Setter Property="Opacity" Value="0.3" />
-        </Style>
+        <!--  ═══════════════════════════════════════════════════════════════  -->
+        <!--  VOLUME SLIDER (Minimalist)                                       -->
+        <!--  ═══════════════════════════════════════════════════════════════  -->
 
         <Style Selector="Ellipse.vol-thumb">
-            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Stroke" Value="{DynamicResource BgPrimaryBrush}" />
-            <Setter Property="StrokeThickness" Value="2" />
+            <Setter Property="Fill" Value="{DynamicResource TextPrimaryBrush}" />
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
-                    <ThicknessTransition Property="Margin" Duration="0:0:0.08" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
                     <BrushTransition Property="Fill" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
         </Style>
         <Style Selector="Ellipse.vol-thumb:pointerover">
-            <Setter Property="RenderTransform" Value="scale(1.1)" />
+            <Setter Property="RenderTransform" Value="scale(1.15)" />
         </Style>
         <Style Selector="Ellipse.vol-thumb.dragging">
-            <Setter Property="RenderTransform" Value="scale(1.15)" />
-            <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
+            <Setter Property="RenderTransform" Value="scale(1.2)" />
+            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
         </Style>
         <Style Selector="Ellipse.vol-thumb.boosted">
             <Setter Property="Fill" Value="{DynamicResource SystemWarnOrangeBrush}" />
@@ -322,55 +275,22 @@
 
         <Style Selector="Border.vol-track">
             <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-            <Setter Property="CornerRadius" Value="3" />
-            <Setter Property="Opacity" Value="0.5" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Opacity" Value="0.6" />
         </Style>
 
         <Style Selector="Border.vol-fill">
-            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="CornerRadius" Value="2" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <DoubleTransition Property="Height" Duration="0:0:0.08" Easing="CubicEaseOut" />
-                    <BrushTransition Property="Background" Duration="0:0:0.2" />
+                    <DoubleTransition Property="Height" Duration="0:0:0.06" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
         </Style>
-
-        <!-- Boost indicator (когда громкость > 100%) -->
         <Style Selector="Border.vol-fill.boosted">
-            <Setter Property="Background">
-                <LinearGradientBrush StartPoint="0%,100%" EndPoint="0%,0%">
-                    <GradientStop Offset="0" Color="{DynamicResource Accent}" />
-                    <GradientStop Offset="0.6" Color="{DynamicResource Accent}" />
-                    <GradientStop Offset="1" Color="{DynamicResource SystemWarnOrange}" />
-                </LinearGradientBrush>
-            </Setter>
-        </Style>
-
-        <Style Selector="Border.vol-percent-badge">
-            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="8,3" />
-            <Setter Property="BoxShadow" Value="0 2 8 0 #30000000" />
-        </Style>
-
-        <!--  Boost indicator (когда громкость > 100%)  -->
-        <Style Selector="Border.vol-fill.boosted">
-            <Setter Property="Background">
-                <LinearGradientBrush StartPoint="0%,100%" EndPoint="0%,0%">
-                    <GradientStop Offset="0" Color="{DynamicResource Accent}" />
-                    <GradientStop Offset="0.6" Color="{DynamicResource Accent}" />
-                    <GradientStop Offset="1" Color="{DynamicResource SystemWarnOrange}" />
-                </LinearGradientBrush>
-            </Setter>
-        </Style>
-
-        <Style Selector="Border.vol-percent-badge">
-            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="8,3" />
-            <Setter Property="BoxShadow" Value="0 2 8 0 #30000000" />
+            <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
         </Style>
 
         <Style Selector="Button.format-btn.popup-open">
@@ -379,7 +299,7 @@
     </UserControl.Styles>
 
     <!--  ═══════════════════════════════════════════════════════════════════  -->
-    <!--  MAIN CONTENT  -->
+    <!--  MAIN CONTENT                                                         -->
     <!--  ═══════════════════════════════════════════════════════════════════  -->
     <Border Background="{DynamicResource BgSecondaryBrush}">
         <Grid RowDefinitions="Auto,*">
@@ -407,38 +327,26 @@
                     <!--  Background track  -->
                     <Border Classes="slider-track seek-track" CornerRadius="2" />
 
-                    <!--  Loading spark animation  -->
+                    <!--  SPARK (движется через code-behind)  -->
                     <Border
-                        Name="SparkBorder"
-                        BorderThickness="1"
-                        Classes="spark-border"
-                        Classes.loading="{Binding IsLoading}"
+                        Name="SparkContainer"
                         ClipToBounds="True"
-                        CornerRadius="2">
-                        <Border.BorderBrush>
-                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
-                                <GradientStop Offset="0" Color="Transparent" />
-                                <GradientStop Offset="0.5" Color="{DynamicResource Accent}" />
-                                <GradientStop Offset="1" Color="Transparent" />
-                            </LinearGradientBrush>
-                        </Border.BorderBrush>
-                        <Border.Styles>
-                            <Style Selector="Border.spark-border.loading">
-                                <Style.Animations>
-                                    <Animation IterationCount="Infinite" Duration="0:0:1.5">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="Opacity" Value="0.2" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="50%">
-                                            <Setter Property="Opacity" Value="1.0" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="Opacity" Value="0.2" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-                        </Border.Styles>
+                        CornerRadius="2"
+                        IsVisible="{Binding IsLoading}">
+                        <Border
+                            Name="SparkRunner"
+                            Width="80"
+                            Height="4"
+                            HorizontalAlignment="Left"
+                            CornerRadius="2">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                                    <GradientStop Offset="0" Color="Transparent" />
+                                    <GradientStop Offset="0.5" Color="{DynamicResource Accent}" />
+                                    <GradientStop Offset="1" Color="Transparent" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
                     </Border>
 
                     <!--  Buffer bar  -->
@@ -462,7 +370,7 @@
                         Classes="slider-fill seek-track"
                         CornerRadius="2" />
 
-                    <!--  Playing glow - мягкая пульсация на прогресс-баре  -->
+                    <!--  Playing glow  -->
                     <Border
                         Name="PlayingGlow"
                         Height="4"
@@ -565,10 +473,7 @@
                         Command="{Binding ShuffleQueueCommand}"
                         CornerRadius="20"
                         ToolTip.Tip="{Binding ShuffleTooltip}">
-                        <mi:MaterialIcon
-                            Width="18"
-                            Height="18"
-                            Kind="Shuffle" />
+                        <mi:MaterialIcon Width="18" Height="18" Kind="Shuffle" />
                     </Button>
 
                     <!--  Previous  -->
@@ -579,10 +484,7 @@
                         Command="{Binding PreviousCommand}"
                         CornerRadius="20"
                         ToolTip.Tip="{Binding PreviousTooltip}">
-                        <mi:MaterialIcon
-                            Width="24"
-                            Height="24"
-                            Kind="SkipPrevious" />
+                        <mi:MaterialIcon Width="24" Height="24" Kind="SkipPrevious" />
                     </Button>
 
                     <!--  Play/Pause  -->
@@ -615,10 +517,7 @@
                         Command="{Binding NextCommand}"
                         CornerRadius="20"
                         ToolTip.Tip="{Binding NextTooltip}">
-                        <mi:MaterialIcon
-                            Width="24"
-                            Height="24"
-                            Kind="SkipNext" />
+                        <mi:MaterialIcon Width="24" Height="24" Kind="SkipNext" />
                     </Button>
 
                     <!--  Repeat  -->
@@ -684,9 +583,8 @@
                             Classes.popup-open="{Binding #VolumePopup.IsOpen}"
                             Command="{Binding ToggleMuteCommand}"
                             CornerRadius="19"
-                            ToolTip.Tip="{Binding MuteTooltip}">
+                            PointerWheelChanged="OnVolumeScroll">
                             <Grid>
-                                <!--  Динамические иконки громкости  -->
                                 <mi:MaterialIcon
                                     Width="20"
                                     Height="20"
@@ -711,7 +609,6 @@
                                     Foreground="{DynamicResource TextSecondaryBrush}"
                                     IsVisible="{Binding IsVolumeHigh}"
                                     Kind="VolumeHigh" />
-                                <!--  Boost indicator  -->
                                 <mi:MaterialIcon
                                     Width="20"
                                     Height="20"
@@ -721,89 +618,73 @@
                             </Grid>
                         </Button>
 
-                        <!--  Volume popup  -->
+                        <!--  Volume Popup  -->
                         <Popup
                             x:Name="VolumePopup"
                             HorizontalOffset="5"
                             IsLightDismissEnabled="False"
                             Placement="Top"
                             PlacementTarget="{Binding #VolumeButton}"
-                            VerticalOffset="-8">
-                            <Panel PointerEntered="OnVolumePopupContentEntered" PointerExited="OnVolumePopupContentExited">
-                                <Grid Width="28" RowDefinitions="*,Auto">
-                                    <!--  Slider обёрнут в Border для padding  -->
-                                    <Border Grid.Row="0" Padding="0,7,0,7">
-                                        <Panel
-                                            Name="VolumeSliderPanel"
-                                            Height="66"
-                                            HorizontalAlignment="Center">
-                                            <Border
-                                                Width="6"
-                                                HorizontalAlignment="Center"
-                                                Classes="vol-track" />
-                                            <Border
-                                                Name="VolumePreviewBar"
-                                                Width="6"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Bottom"
-                                                Classes="volume-preview"
-                                                CornerRadius="3" />
-                                            <Border
-                                                Name="VolumeBar"
-                                                Width="6"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Bottom"
-                                                Classes="vol-fill"
-                                                Classes.boosted="{Binding IsVolumeBoosted}" />
-                                            <Ellipse
-                                                Name="VolumeThumb"
-                                                Width="14"
-                                                Height="14"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Top"
-                                                Classes="vol-thumb"
-                                                Classes.boosted="{Binding IsVolumeBoosted}"
-                                                RenderTransformOrigin="0.5,0.5" />
-                                            <Border
-                                                Name="VolumeHitBox"
-                                                Width="28"
-                                                Background="Transparent"
-                                                Cursor="Hand"
-                                                PointerCaptureLost="OnVolumeAreaCaptureLost"
-                                                PointerExited="OnVolumeAreaExited"
-                                                PointerMoved="OnVolumeAreaMoved"
-                                                PointerPressed="OnVolumeAreaPressed"
-                                                PointerReleased="OnVolumeAreaReleased"
-                                                PointerWheelChanged="OnVolumeScroll" />
-                                        </Panel>
-                                    </Border>
-
-                                    <!--  Percent badge  -->
+                            VerticalOffset="-4">
+                            <Border
+                                Padding="4"
+                                Background="{DynamicResource BgElevatedBrush}"
+                                BorderBrush="{DynamicResource BgHighlightBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                PointerEntered="OnVolumePopupContentEntered"
+                                PointerExited="OnVolumePopupContentExited">
+                                <Panel
+                                    Name="VolumeSliderPanel"
+                                    Width="20"
+                                    HorizontalAlignment="Center">
                                     <Border
-                                        Grid.Row="1"
-                                        Margin="0,6,0,0"
+                                        Width="4"
                                         HorizontalAlignment="Center"
-                                        Classes="vol-percent-badge">
-                                        <TextBlock
-                                            HorizontalAlignment="Center"
-                                            FontSize="10"
-                                            FontWeight="SemiBold"
-                                            Foreground="{Binding VolumePercentBrush}"
-                                            Text="{Binding Volume, StringFormat={}{0}%}" />
-                                    </Border>
-                                </Grid>
-                            </Panel>
+                                        VerticalAlignment="Stretch"
+                                        Classes="vol-track" />
+                                    <Border
+                                        Name="VolumeBar"
+                                        Width="4"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Bottom"
+                                        Classes="vol-fill"
+                                        Classes.boosted="{Binding IsVolumeBoosted}" />
+                                    <Ellipse
+                                        Name="VolumeThumb"
+                                        Width="12"
+                                        Height="12"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Top"
+                                        Classes="vol-thumb"
+                                        Classes.boosted="{Binding IsVolumeBoosted}" />
+                                    <Border
+                                        Name="VolumeHitBox"
+                                        Width="20"
+                                        HorizontalAlignment="Stretch"
+                                        VerticalAlignment="Stretch"
+                                        Background="Transparent"
+                                        Cursor="Hand"
+                                        PointerCaptureLost="OnVolumeAreaCaptureLost"
+                                        PointerExited="OnVolumeAreaExited"
+                                        PointerMoved="OnVolumeAreaMoved"
+                                        PointerPressed="OnVolumeAreaPressed"
+                                        PointerReleased="OnVolumeAreaReleased"
+                                        PointerWheelChanged="OnVolumeScroll" />
+                                </Panel>
+                            </Border>
                         </Popup>
 
+                        <!--  Volume Tooltip  -->
                         <Popup
                             Name="VolumeTooltipPopup"
-                            HorizontalOffset="-6"
+                            HorizontalOffset="-8"
                             IsHitTestVisible="False"
                             IsLightDismissEnabled="False"
                             Placement="Left"
                             PlacementTarget="{Binding #VolumeHitBox}">
                             <Border
-                                Padding="6,3"
+                                Padding="6,4"
                                 Background="{DynamicResource BgSkeletonBrush}"
                                 BorderBrush="{DynamicResource BgHighlightBrush}"
                                 BorderThickness="1"
@@ -812,9 +693,8 @@
                                 <TextBlock
                                     Name="VolumeTooltipText"
                                     FontSize="11"
-                                    FontWeight="Bold"
-                                    Foreground="{DynamicResource TextPrimaryBrush}"
-                                    Text="50%" />
+                                    FontWeight="SemiBold"
+                                    Foreground="{DynamicResource TextPrimaryBrush}" />
                             </Border>
                         </Popup>
                     </Panel>
@@ -975,7 +855,8 @@
                             HorizontalAlignment="Left"
                             IsVisible="{Binding TotalTracksInQueue, Converter={StaticResource GreaterThanConverter}, ConverterParameter=0}"
                             Orientation="Horizontal"
-                            Spacing="3">
+                            Spacing="3"
+                            ToolTip.Tip="{Binding TrackNumberTooltip}">
                             <TextBlock
                                 FontSize="12"
                                 FontWeight="Bold"
@@ -994,7 +875,8 @@
                             Grid.Column="1"
                             HorizontalAlignment="Right"
                             Orientation="Horizontal"
-                            Spacing="2">
+                            Spacing="2"
+                            ToolTip.Tip="{Binding DurationTooltip}">
                             <TextBlock
                                 FontSize="12"
                                 FontWeight="SemiBold"
