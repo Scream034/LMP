@@ -216,6 +216,10 @@
   "Player_NotPlaying": "Not Playing",
   "Player_StreamInfo_Loading": "Loading stream...",
   "Player_VolumeTooltip": "Volume: {0}%",
+  "Player_TrackNumber": "Track {0} of {1}",
+  "Player_Duration": "Duration: {0} / {1}",
+  "Player_VolumeLevel": "Volume: {0}% / {1}%",
+  "Player_Loading_Duration": "Loading duration...",
 
   "Track_Like": "Add to Liked",
   "Track_Unlike": "Remove from Liked",
