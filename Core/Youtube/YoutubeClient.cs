@@ -62,39 +62,4 @@ public class YoutubeClient : IDisposable
 
     /// <inheritdoc />
     public void Dispose() => _youtubeHttp.Dispose();
-
-    // Вспомогательный метод для извлечения куки из контейнера в строку
-    private static string ConvertContainerToString(CookieContainer container)
-    {
-        // Собираем куки с основных доменов, чтобы сформировать полную строку
-        var uris = new[] 
-        { 
-            new Uri("https://youtube.com"), 
-            new Uri("https://music.youtube.com"), 
-            new Uri("https://google.com") 
-        };
-
-        var uniqueCookies = new Dictionary<string, string>();
-
-        foreach (var uri in uris)
-        {
-            var collection = container.GetCookies(uri);
-            foreach (Cookie cookie in collection)
-            {
-                if (!uniqueCookies.ContainsKey(cookie.Name))
-                {
-                    uniqueCookies[cookie.Name] = cookie.Value;
-                }
-            }
-        }
-
-        var sb = new StringBuilder();
-        foreach (var kvp in uniqueCookies)
-        {
-            if (sb.Length > 0) sb.Append("; ");
-            sb.Append($"{kvp.Key}={kvp.Value}");
-        }
-
-        return sb.ToString();
-    }
 }

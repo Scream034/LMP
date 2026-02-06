@@ -41,11 +41,6 @@ public static class QualityImage
         LoadImage(image);
     }
 
-    private static void OnDecodeSizeChanged(Image image, AvaloniaPropertyChangedEventArgs e)
-    {
-        LoadImage(image);
-    }
-
     private static async void LoadImage(Image image)
     {
         var url = GetSource(image);

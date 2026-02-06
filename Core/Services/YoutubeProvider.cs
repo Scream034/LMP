@@ -47,9 +47,6 @@ public partial class YoutubeProvider : IDisposable
     public event Action<string>? OnStatusChanged;
     public event Action<string>? OnError;
 
-    [GeneratedRegex("\"VISITOR_DATA\":\"([^\"]+)\"")]
-    private static partial Regex VisitorDataRegex();
-
     private static readonly Regex YoutubeVideoRegex = _YoutubeVideoRegex();
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
@@ -1060,65 +1057,7 @@ public partial class YoutubeProvider : IDisposable
     }
 
     #endregion
-
     #region Helpers
-    private static TrackInfo ConvertPlaylistToTrackInfo(Playlist playlist)
-    {
-        return new TrackInfo
-        {
-            Id = playlist.Id,
-            Title = playlist.Name,
-            Author = playlist.Author ?? "Unknown Playlist",
-            Url = playlist.Url,
-            Duration = TimeSpan.Zero,
-            ThumbnailUrl = playlist.ThumbnailUrl ?? "",
-            IsMusic = false,
-        };
-    }
-
-    private static TrackInfo ConvertToTrackInfo(Video video)
-    {
-        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault();
-        return new TrackInfo
-        {
-            Id = $"yt_{video.Id.Value}",
-            Title = video.Title,
-            Author = video.Author.ChannelTitle,
-            Url = video.Url,
-            Duration = video.Duration ?? TimeSpan.Zero,
-            ThumbnailUrl = thumb?.Url ?? ""
-        };
-    }
-
-    private static TrackInfo ConvertSearchResultToTrackInfo(VideoSearchResult video)
-    {
-        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
-        return new TrackInfo
-        {
-            Id = $"yt_{video.Id.Value}",
-            Title = video.Title,
-            Author = video.Author.ChannelTitle,
-            Url = video.Url,
-            Duration = video.Duration ?? TimeSpan.Zero,
-            ThumbnailUrl = thumb?.Url ?? "",
-            IsOfficialArtist = video.IsOfficialArtist,
-            IsMusic = video.IsMusic
-        };
-    }
-
-    private static TrackInfo ConvertPlaylistVideoToTrackInfo(PlaylistVideo video)
-    {
-        var thumb = video.Thumbnails.OrderByDescending(t => t.Resolution.Width).Skip(1).FirstOrDefault();
-        return new TrackInfo
-        {
-            Id = $"yt_{video.Id.Value}",
-            Title = video.Title,
-            Author = video.Author.ChannelTitle,
-            Url = video.Url,
-            Duration = video.Duration ?? TimeSpan.Zero,
-            ThumbnailUrl = thumb?.Url ?? ""
-        };
-    }
 
     private static string SanitizeFileName(string name)
     {

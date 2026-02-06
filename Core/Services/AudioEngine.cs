@@ -11,10 +11,6 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.Services;
 
-/// <summary>
-/// High-performance audio playback engine.
-/// Uses command queue pattern for thread-safe operations.
-/// </summary>
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {
     #region Constants
@@ -387,6 +383,25 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var ms = (long)Math.Clamp(position.TotalMilliseconds, 0, TotalDuration.TotalMilliseconds);
         Volatile.Write(ref _cachedTimeMs, ms);
 
+        Log.Info($"[AudioEngine] Seeking to {position.TotalSeconds:F1}s");
+
+        // Уведомляем stream
+        if (_currentStream != null)
+        {
+            try
+            {
+                _currentStream.NotifySeek(ms);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[AudioEngine] NotifySeek failed: {ex.Message}");
+            }
+        }
+        else
+        {
+            Log.Warn($"[AudioEngine] Cannot notify seek - stream is null");
+        }
+
         _ = Task.Run(() => { try { _player.Time = ms; } catch { } });
 
         return ValueTask.CompletedTask;
@@ -421,6 +436,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         SetFlag(StateFlags.SuppressAutoNext, true);
         var newSession = Interlocked.Increment(ref _session);
+
+        Log.Info($"[AudioEngine] Cancelling current playback. New session: {newSession}");
 
         // Отменяем текущую операцию загрузки
         try { _playbackCts?.Cancel(); } catch { }
@@ -835,14 +852,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 // 4. Инициализируем кэш-стрим
                 if (size > 0)
                 {
+                    var trackDuration = track.Duration.TotalMilliseconds;
+
                     cacheStream = new MemoryFirstCachingStream(
-                        cacheId, stream.Url, size, _httpClient, _cacheManager, _streamingConfig,
+                        cacheId,
+                        stream.Url,
+                        size,
+                        _httpClient,
+                        _cacheManager,
+                        _streamingConfig,
                         urlRefresher: async token =>
                         {
                             var s = await GetStreamAsync(track, forceRefresh: true, token);
                             return s?.Url;
                         },
-                        originalTrackId: track.Id);
+                        originalTrackId: track.Id,
+                        getPlaybackTimeMs: () => Volatile.Read(ref _cachedTimeMs),
+                        totalDurationMs: (long)trackDuration);
 
                     // Пребуферизация с проверкой отмены
                     if (!await cacheStream.PreBufferAsync(ct))
@@ -1302,44 +1328,40 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         InternetProfile.Low => new()
         {
             ChunkSize = 64 * 1024,
-            ReadAheadChunks = 2,
-            MaxConcurrentDownloads = 2,
+            ReadAheadChunks = 1,
+            MaxConcurrentDownloads = 2,      // Было 1, стало 2
             VlcNetworkCachingMs = 4000,
             MaxRamChunks = 150,
-            MaxBufferAheadChunks = 20,      // ~20 сек буфер
             DownloadFullTrack = false
         },
         InternetProfile.Medium => new()
         {
-            ChunkSize = 128 * 1024,
-            ReadAheadChunks = 4,
-            MaxConcurrentDownloads = 3,
+            ChunkSize = 256 * 1024,           // Было 128KB, стало 256KB
+            ReadAheadChunks = 1,
+            MaxConcurrentDownloads = 4,       // Было 2, стало 4
             VlcNetworkCachingMs = 2000,
             MaxRamChunks = 100,
-            MaxBufferAheadChunks = 30,      // ~30 сек буфер
             DownloadFullTrack = false
         },
         InternetProfile.High => new()
         {
-            ChunkSize = 256 * 1024,
-            ReadAheadChunks = 6,
-            MaxConcurrentDownloads = 4,
+            ChunkSize = 512 * 1024,           // Было 256KB
+            ReadAheadChunks = 2,
+            MaxConcurrentDownloads = 6,       // Было 3, стало 6
             VlcNetworkCachingMs = 1000,
             MaxRamChunks = 80,
-            MaxBufferAheadChunks = 50,      // ~50 сек буфер
             DownloadFullTrack = false
         },
         InternetProfile.Ultra => new()
         {
-            ChunkSize = 512 * 1024,
+            ChunkSize = 1024 * 1024,          // 1MB чанки
             ReadAheadChunks = 10,
-            MaxConcurrentDownloads = 6,
+            MaxConcurrentDownloads = 8,
             VlcNetworkCachingMs = 500,
             MaxRamChunks = 60,
-            MaxBufferAheadChunks = 100,     // Большой буфер
-            DownloadFullTrack = true        // Качать полностью!
+            DownloadFullTrack = true
         },
-        _ => new() { ChunkSize = 128 * 1024, MaxRamChunks = 100, MaxBufferAheadChunks = 30 }
+        _ => new() { ChunkSize = 256 * 1024, MaxRamChunks = 100 }
     };
 
     public void NotifyAppMinimized() => _currentStream?.ReleaseRamBuffers();

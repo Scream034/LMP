@@ -30,7 +30,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
-    private ContentSource _currentSource = ContentSource.YouTubeMusic;
     private CancellationTokenSource? _searchCts;
     private YoutubeProvider.SearchSession? _searchSession;
     private DateTime _lastSearchTime = DateTime.MinValue;
@@ -150,14 +149,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             SearchQuery = LibService.Settings.LastSearchQuery;
             _ = ExecuteSearchAsync(false);
         }
-    }
-
-    private void LogError(string source, Exception ex)
-    {
-        if (ex is OperationCanceledException) return;
-        Log.Error($"[{source}] Unhandled error: {ex.Message}");
-        ErrorMessage = SL["Search_NetworkError"];
-        IsLoading = false;
     }
 
     /// <summary>
@@ -303,7 +294,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
             HasResults = false;
             _currentQuery = SearchQuery.Trim();
-            _currentSource = Source;
 
             try
             {
