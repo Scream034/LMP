@@ -26,6 +26,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     private bool _isDisposed;
 
+    // LIFECYCLE: Флаг для пропуска UI-обновлений когда окно свёрнуто
+    private volatile bool _isSuspended;
+
     [Reactive] public bool IsEmpty { get; private set; } = true;
     [Reactive] public bool CanReorderItems { get; private set; } = true;
     [Reactive] public string FilterQuery { get; set; } = string.Empty;
@@ -67,7 +70,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             MoveItem(tuple.oldIndex, tuple.newIndex);
         }));
 
-        // Use DisposeWith to prevent memory leaks!
+        // ИЗМЕНЕНО: Добавлена проверка _isSuspended для пропуска UI-обновлений
         Observable.FromEvent(
                 h => _audio.OnQueueChanged += h,
                 h => _audio.OnQueueChanged -= h)
@@ -75,6 +78,9 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
+                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
+                if (_isSuspended) return;
+                
                 if (!_isMovingInternally)
                 {
                     RefreshFromAudioEngine();
@@ -82,11 +88,18 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             })
             .DisposeWith(Disposables);
 
+        // ИЗМЕНЕНО: Добавлена проверка _isSuspended
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdateActiveStates())
+            .Subscribe(_ =>
+            {
+                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
+                if (_isSuspended) return;
+                
+                UpdateActiveStates();
+            })
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.FilterQuery)
@@ -94,6 +107,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
+                // Фильтрация может сработать только при активном окне
+                // (пользователь вводит текст), проверка не нужна
                 CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);
                 RebuildVisibleItems();
             })
@@ -101,6 +116,33 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
         RefreshFromAudioEngine();
     }
+
+    // LIFECYCLE IMPLEMENTATION
+
+    /// <summary>
+    /// Окно свёрнуто — пропускаем UI-обновления от событий AudioEngine.
+    /// Очередь продолжает работать, но UI не обновляется.
+    /// </summary>
+    protected override void OnSuspend()
+    {
+        _isSuspended = true;
+        Log.Debug($"[{GetType().Name}] Suspended — UI updates paused");
+    }
+
+    /// <summary>
+    /// Окно развёрнуто — синхронизируем UI с актуальным состоянием очереди.
+    /// </summary>
+    protected override void OnResume()
+    {
+        _isSuspended = false;
+        
+        // Синхронизируем данные которые могли измениться пока окно было свёрнуто
+        // (треки могли проигрываться, очередь могла измениться)
+        RefreshFromAudioEngine();
+        
+        Log.Debug($"[{GetType().Name}] Resumed — UI synchronized");
+    }
+
 
     private void RefreshFromAudioEngine()
     {
@@ -223,7 +265,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         {
             Log.Debug("[QueueVM] Disposing");
             
-            // Dispose all cached ViewModels
             foreach (var vm in _vmCache.Values)
                 vm.Dispose();
 

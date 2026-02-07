@@ -50,6 +50,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private bool _justFinishedSeeking;
     private bool _wasPlayingBeforeSeek;
     private bool _isInitialized;
+    private volatile bool _isSuspended;
 
     private DateTime _lastSeekTime = DateTime.MinValue;
     private long _lastDownloadedBytes;
@@ -389,10 +390,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => UpdateStreamInfo())
             .DisposeWith(Disposables);
 
-        // BUFFER PROGRESS - обновляем регулярно
+        // BUFFER PROGRESS
         Observable.Interval(TimeSpan.FromMilliseconds(BufferUpdateIntervalMs))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdateBufferProgress())
+            .Subscribe(_ =>
+            {
+                if (!_isSuspended) UpdateBufferProgress();
+            })
             .DisposeWith(Disposables);
 
         // CACHE & LIBRARY EVENTS
@@ -1102,7 +1106,28 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #endregion
 
-    #region IDisposable
+    #region LifeCycle
+
+    protected override void OnSuspend()
+    {
+        _isSuspended = true;
+        _fallbackPositionTimer.Stop();
+        _speedUpdateTimer.Stop();
+        Log.Debug("[PlayerBar] Suspended");
+    }
+
+    protected override void OnResume()
+    {
+        _isSuspended = false;
+        _fallbackPositionTimer.Start();
+        _speedUpdateTimer.Start();
+
+        // Обновляем данные которые могли измениться
+        FallbackPositionUpdate();
+        UpdateBufferProgress();
+
+        Log.Debug("[PlayerBar] Resumed");
+    }
 
     protected override void Dispose(bool disposing)
     {

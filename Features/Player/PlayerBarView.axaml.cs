@@ -308,6 +308,9 @@ public partial class PlayerBarView : UserControl
 
     private void OnSparkAnimationTick(object? sender, EventArgs e)
     {
+        // Не анимируем когда окно не видно
+        if (!_isWindowActive) return;
+
         double containerWidth = SeekContainer.Bounds.Width;
         if (containerWidth <= 0) containerWidth = 600;
 

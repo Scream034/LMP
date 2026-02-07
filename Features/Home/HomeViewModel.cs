@@ -74,7 +74,6 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         InitializeCategories();
 
-        // Fix: Use CreateCommand wrapper
         ToggleDebugCommand = CreateCommand(ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo));
         RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true)));
 
