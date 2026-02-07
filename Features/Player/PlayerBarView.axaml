@@ -41,7 +41,8 @@
                 <Transitions>
                     <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1"
+                        Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -89,7 +90,8 @@
             </Setter>
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
+                        Easing="CubicEaseOut" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
@@ -132,7 +134,8 @@
                 <Transitions>
                     <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                        Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -157,7 +160,8 @@
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2" Easing="BackEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2"
+                        Easing="BackEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -172,7 +176,8 @@
             <Setter Property="RenderTransform" Value="scaleY(1)" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                        Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
         </Style>
@@ -250,7 +255,8 @@
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
             <Setter Property="Transitions">
                 <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
+                        Easing="CubicEaseOut" />
                     <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
                     <BrushTransition Property="Fill" Duration="0:0:0.15" />
                 </Transitions>
@@ -344,11 +350,12 @@
                     </Border>
 
                     <!--  Buffer bar  -->
-                    <Border
-                        Name="BufferBar"
-                        HorizontalAlignment="Left"
-                        Classes="slider-buffer seek-track"
-                        CornerRadius="2" />
+                    <Canvas
+                        Name="BufferSegmentsCanvas"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        Height="4"
+                        ClipToBounds="True" />
 
                     <!--  Preview fill  -->
                     <Border
@@ -544,7 +551,8 @@
                             Placement="Top"
                             PlacementTarget="{Binding #RepeatButton}"
                             VerticalOffset="-8">
-                            <Border Classes="mode-hint" Classes.visible="{Binding IsRepeatHintVisible}">
+                            <Border Classes="mode-hint"
+                                Classes.visible="{Binding IsRepeatHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                     <mi:MaterialIcon
                                         Width="14"
@@ -634,14 +642,14 @@
                                     MinHeight="60"
                                     Height="80"
                                     HorizontalAlignment="Center">
-                                    
+
                                     <!--  Track  -->
                                     <Border
                                         Width="4"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Stretch"
                                         Classes="vol-track" />
-                                    
+
                                     <!--  Fill - добавляем начальную Height  -->
                                     <Border
                                         Name="VolumeBar"
@@ -652,7 +660,7 @@
                                         VerticalAlignment="Bottom"
                                         Classes="vol-fill"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
-                                    
+
                                     <!--  Thumb  -->
                                     <Ellipse
                                         Name="VolumeThumb"
@@ -662,7 +670,7 @@
                                         VerticalAlignment="Top"
                                         Classes="vol-thumb"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
-                                    
+
                                     <!--  Hit area  -->
                                     <Border
                                         Name="VolumeHitBox"
@@ -735,7 +743,8 @@
                             Placement="Top"
                             PlacementTarget="{Binding #LikeButton}"
                             VerticalOffset="-8">
-                            <Border Classes="mode-hint" Classes.visible="{Binding IsLikeHintVisible}">
+                            <Border Classes="mode-hint"
+                                Classes.visible="{Binding IsLikeHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                     <mi:MaterialIcon
                                         Width="14"
@@ -775,7 +784,8 @@
                             Placement="Top"
                             PlacementTarget="{Binding #CopyButton}"
                             VerticalOffset="-8">
-                            <Border Classes="mode-hint" Classes.visible="{Binding IsCopyHintVisible}">
+                            <Border Classes="mode-hint"
+                                Classes.visible="{Binding IsCopyHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                     <mi:MaterialIcon
                                         Width="14"

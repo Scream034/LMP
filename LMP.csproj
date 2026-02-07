@@ -1,20 +1,30 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
-
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
-
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
-    <ServerGarbageCollection>true</ServerGarbageCollection>
-    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
-    <RetainVMGarbageCollection>true</RetainVMGarbageCollection>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    
+    <!-- Workstation GC - меньше памяти, быстрее отдаёт ОС -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    
+    <!-- Concurrent GC - UI не фризит во время сборки -->
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    
+    <!-- НЕ удерживать VM сегменты (отдавать память ОС) -->
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
+    
+    <!-- Компактификация LOH (борьба с фрагментацией) -->
+    <GCLargeObjectHeapCompactionMode>CompactOnce</GCLargeObjectHeapCompactionMode>
+    
+    <!-- Tiered compilation для быстрого старта -->
+    <TieredCompilation>true</TieredCompilation>
+    <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
 
-    <!-- YoutubeExplode anti-spam -->
     <NoWarn>$(NoWarn);CS0436</NoWarn>
   </PropertyGroup>
 

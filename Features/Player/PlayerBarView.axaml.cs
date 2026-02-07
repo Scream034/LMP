@@ -42,6 +42,7 @@ public partial class PlayerBarView : UserControl
 
     private double _seekDragRatio;
     private double _sparkPosition = -SparkWidth;
+    private readonly List<Border> _bufferSegments = [];
 
     private DispatcherTimer? _volumePopupCloseTimer;
     private DispatcherTimer? _volumeTooltipHideTimer;
@@ -151,11 +152,11 @@ public partial class PlayerBarView : UserControl
         VolumePopup.Opened -= OnVolumePopupOpened;
 
         // Отписываемся от ViewModel
-        if (_currentViewModel != null)
-        {
-            _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
-            _currentViewModel = null;
-        }
+        if (_currentViewModel != null) _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _currentViewModel = null;
+
+        _bufferSegments.Clear();
+        BufferSegmentsCanvas.Children.Clear();
     }
 
     private void OnWindowActivated(object? sender, EventArgs e) => _isWindowActive = true;
@@ -378,7 +379,7 @@ public partial class PlayerBarView : UserControl
 
     /// <summary>
     /// Обновляет визуал буфера.
-    /// Использует BufferProgressPercent (0-100) напрямую.
+    /// Поддерживает сегментную визуализацию для прерывистого кэша.
     /// </summary>
     private void UpdateBufferVisual()
     {
@@ -387,14 +388,63 @@ public partial class PlayerBarView : UserControl
         double width = SeekContainer.Bounds.Width;
         if (width <= 0) return;
 
-        // Используем процент напрямую (0-100 → 0-1)
-        double ratio = Math.Clamp(vm.BufferProgressPercent / 100.0, 0, 1);
+        IReadOnlyList<(double Start, double End)> ranges = vm.BufferedRanges;
 
-        // Защита от NaN
-        if (double.IsNaN(ratio) || double.IsInfinity(ratio))
-            ratio = 0;
+        // Если нет диапазонов, но трек полностью загружен - показываем полную полосу
+        if (ranges.Count == 0 && vm.IsFullyBuffered)
+        {
+            ranges = [(0.0, 1.0)];
+        }
 
-        BufferBar.Width = width * ratio;
+        // Синхронизируем количество сегментов
+        EnsureBufferSegmentCount(ranges.Count);
+
+        // Позиционируем каждый сегмент
+        for (int i = 0; i < ranges.Count; i++)
+        {
+            var (start, end) = ranges[i];
+            var segment = _bufferSegments[i];
+
+            // Защита от NaN/Infinity
+            start = double.IsNaN(start) || double.IsInfinity(start) ? 0 : Math.Clamp(start, 0, 1);
+            end = double.IsNaN(end) || double.IsInfinity(end) ? 0 : Math.Clamp(end, 0, 1);
+
+            double left = width * start;
+            double segmentWidth = width * (end - start);
+
+            Canvas.SetLeft(segment, left);
+            segment.Width = Math.Max(1, segmentWidth); // Минимум 1px чтобы было видно
+        }
+    }
+
+    /// <summary>
+    /// Обеспечивает нужное количество Border'ов для сегментов буфера.
+    /// </summary>
+    private void EnsureBufferSegmentCount(int count)
+    {
+        // Добавляем недостающие
+        while (_bufferSegments.Count < count)
+        {
+            var segment = new Border
+            {
+                Height = 4,
+                CornerRadius = new CornerRadius(2),
+                // Применяем те же классы что были у BufferBar
+            };
+            segment.Classes.Add("slider-buffer");
+            segment.Classes.Add("seek-track");
+
+            _bufferSegments.Add(segment);
+            BufferSegmentsCanvas.Children.Add(segment);
+        }
+
+        // Удаляем лишние
+        while (_bufferSegments.Count > count)
+        {
+            var toRemove = _bufferSegments[^1];
+            _bufferSegments.RemoveAt(_bufferSegments.Count - 1);
+            BufferSegmentsCanvas.Children.Remove(toRemove);
+        }
     }
 
     /// <summary>
