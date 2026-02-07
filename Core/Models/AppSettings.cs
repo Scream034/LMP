@@ -56,19 +56,6 @@ public sealed class StorageSettings
     public bool AutoSaveToDownloads { get; set; } = false;
 }
 
-public sealed class StreamingConfig
-{
-    // Генерируется динамически на основе InternetProfile, но можно переопределить
-    public int ChunkSize { get; set; } = 128 * 1024;
-    public int ReadAheadChunks { get; set; } = 3;
-    public int MaxConcurrentDownloads { get; set; } = 4;
-    public int DownloadTimeoutMs { get; set; } = 45000;
-    public int VlcNetworkCachingMs { get; set; } = 2000;
-    public int MaxRamChunks { get; set; } = 128; // ~16MB при 128KB чанках
-    public int MaxBufferAheadChunks { get; init; } = 30;     // ~30 сек при 128kbps
-    public bool DownloadFullTrack { get; init; } = false;    // Качать весь трек?
-}
-
 public enum RepeatMode
 {
     None,

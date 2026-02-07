@@ -133,7 +133,30 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Прогресс буферизации в процентах (0-100).
+    /// Учитывает RAM-чанки и данные на диске.
+    /// </summary>
     public double BufferProgress => _currentStream?.DownloadProgress ?? 0;
+
+    /// <summary>
+    /// Количество загруженных байт для текущего трека.
+    /// </summary>
+    public long GetDownloadedBytes() =>
+        _currentStream?.BufferedBytes ?? 0;
+
+    /// <summary>
+    /// Получает закэшированные диапазоны для визуализации.
+    /// </summary>
+    /// <returns>Список диапазонов (start, end) от 0 до 1.</returns>
+    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() =>
+        _currentStream?.GetBufferedRanges() ?? [];
+
+    /// <summary>
+    /// Трек полностью загружен.
+    /// </summary>
+    public bool IsFullyBuffered => _currentStream?.IsFullyDownloaded ?? false;
+
     public string VlcStateString => _player?.State.ToString() ?? "None";
 
     #endregion
@@ -351,13 +374,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (shouldPlay)
             {
-                if (state == VLCState.Paused) _player?.SetPause(false);
-                else if (state is VLCState.Stopped or VLCState.Ended)
+                // Уведомляем stream что пауза снята (важно для приоритетов)
+                _currentStream?.NotifyPaused(false);
+
+                if (state is VLCState.Paused or VLCState.Stopped)
+                {
+                    // VLC.Play() работает и из Paused, и из Stopped
+                    _player?.Play();
+                }
+                else if (state is VLCState.Ended)
                 {
                     var session = CancelCurrentPlayback();
                     _ = EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
                 }
-                else _player?.Play();
+                else
+                {
+                    _player?.Play();
+                }
 
                 SetFlag(StateFlags.Playing, true);
                 SetFlag(StateFlags.Paused, false);
@@ -366,6 +399,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             {
                 if (state is VLCState.Playing or VLCState.Buffering or VLCState.Opening)
                     _player?.Pause();
+
+                _currentStream?.NotifyPaused(true);
 
                 SetFlag(StateFlags.Playing, false);
                 SetFlag(StateFlags.Paused, true);
@@ -381,11 +416,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             return ValueTask.CompletedTask;
 
         var ms = (long)Math.Clamp(position.TotalMilliseconds, 0, TotalDuration.TotalMilliseconds);
-        Volatile.Write(ref _cachedTimeMs, ms);
 
-        Log.Info($"[AudioEngine] Seeking to {position.TotalSeconds:F1}s");
+        Log.Info($"[AudioEngine] Seeking to {position.TotalSeconds:F1}s (ms={ms})");
 
-        // Уведомляем stream
+        // ИЗМЕНЕНО: Устанавливаем SuppressAutoNext на время seek
+        SetFlag(StateFlags.SuppressAutoNext, true);
+
+        // Сначала уведомляем stream о seek
         if (_currentStream != null)
         {
             try
@@ -397,12 +434,31 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 Log.Warn($"[AudioEngine] NotifySeek failed: {ex.Message}");
             }
         }
-        else
-        {
-            Log.Warn($"[AudioEngine] Cannot notify seek - stream is null");
-        }
 
-        _ = Task.Run(() => { try { _player.Time = ms; } catch { } });
+        // Затем устанавливаем позицию в VLC
+        Volatile.Write(ref _cachedTimeMs, ms);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Seek в VLC
+                _player.Time = ms;
+
+                // ДОБАВЛЕНО: Ждём завершения seek и сбрасываем флаг
+                await Task.Delay(300);
+
+                if (!HasFlag(StateFlags.Disposed))
+                {
+                    SetFlag(StateFlags.SuppressAutoNext, false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[AudioEngine] VLC seek failed: {ex.Message}");
+                SetFlag(StateFlags.SuppressAutoNext, false);
+            }
+        });
 
         return ValueTask.CompletedTask;
     }
@@ -701,6 +757,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Stream Info
 
+    /// <summary>
+    /// Получает информацию о текущем потоке.
+    /// </summary>
+    /// <returns>Формат, битрейт и флаг готовности.</returns>
     public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo()
     {
         if (!string.IsNullOrEmpty(_activeCodec))
@@ -720,9 +780,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         return ("", 0, false);
     }
-
-    public long GetDownloadedBytes() =>
-        _currentStream != null ? (long)(_currentStream.DownloadProgress / 100 * _currentStream.Length) : 0;
 
     #endregion
 
@@ -1104,15 +1161,24 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (HasFlag(StateFlags.Disposed)) return;
 
         _consecutiveErrors = 0;
-        SetFlag(StateFlags.SuppressAutoNext, false);
+
+        // НЕ сбрасываем SuppressAutoNext сразу!
+        // Даём задержку чтобы избежать race condition с EndReached
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            if (!HasFlag(StateFlags.Disposed))
+            {
+                SetFlag(StateFlags.SuppressAutoNext, false);
+            }
+        });
+
         SetFlag(StateFlags.Ready, true);
-
-        // Используем метод с уведомлением
-        SetLoadingState(false);
-
+        SetFlag(StateFlags.Loading, false);
         SetFlag(StateFlags.Playing, true);
         SetFlag(StateFlags.Paused, false);
 
+        _currentStream?.NotifyPlaybackStarted();
         _currentStream?.NotifyPaused(false);
 
         ApplyVolume();
@@ -1147,6 +1213,28 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private void OnVlcEndReached()
     {
+        // Игнорируем EndReached если недавно был seek
+        long lastSeek = Volatile.Read(ref _cachedTimeMs);
+        long totalDur = Volatile.Read(ref _cachedLengthMs);
+
+        // Если текущая позиция < 95% от длительности - это ложный EndReached
+        if (totalDur > 0 && lastSeek < totalDur * 0.95)
+        {
+            Log.Warn($"[AudioEngine] Ignoring false EndReached (pos={lastSeek}ms, dur={totalDur}ms)");
+            return;
+        }
+
+        // ДОБАВЛЕНО: Дополнительная проверка через VLC.Time
+        if (_player != null)
+        {
+            long vlcTime = _player.Time;
+            if (totalDur > 0 && vlcTime > 0 && vlcTime < totalDur * 0.95)
+            {
+                Log.Warn($"[AudioEngine] Ignoring false EndReached (VLC.Time={vlcTime}ms, dur={totalDur}ms)");
+                return;
+            }
+        }
+
         if (HasFlag(StateFlags.Disposed | StateFlags.SuppressAutoNext)) return;
 
         SetFlag(StateFlags.Playing, false);
@@ -1157,7 +1245,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var session = Interlocked.Increment(ref _session);
         _ = Task.Run(async () =>
         {
+            // ДОБАВЛЕНО: Задержка для окончательной проверки
+            await Task.Delay(100);
+
             if (_session != session || HasFlag(StateFlags.Disposed)) return;
+
+            // Финальная проверка перед автопереключением
+            if (_player != null)
+            {
+                long finalPos = _player.Time;
+                long finalDur = _player.Length;
+
+                if (finalDur > 0 && finalPos < finalDur * 0.95)
+                {
+                    Log.Warn($"[AudioEngine] Cancelled auto-next after final check (pos={finalPos}, dur={finalDur})");
+                    return;
+                }
+            }
 
             bool canAdvance;
             lock (_queueLock) { canAdvance = TryMoveNext(userInitiated: false); }
@@ -1192,15 +1296,31 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         try { stream?.CancelPendingReads(); } catch { }
 
-        if (_player?.Media == media) _player!.Media = null;
-        if (_player?.State is not (VLCState.Stopped or VLCState.Error))
+        // Плавная остановка VLC
+        if (_player?.State is VLCState.Playing or VLCState.Buffering)
         {
-            try { _player?.Stop(); } catch { }
+            try
+            {
+                _player?.Pause();
+                await Task.Delay(50);
+            }
+            catch { }
         }
 
+        if (_player?.Media == media)
+        {
+            try
+            {
+                _player!.Media = null;
+                _player.Stop();
+            }
+            catch { }
+        }
+
+        // Отложенная очистка
         _ = Task.Run(() =>
         {
-            Thread.Sleep(100);
+            Thread.Sleep(200);
             try { stream?.Dispose(); } catch { }
             try { media?.Dispose(); } catch { }
         });
@@ -1323,46 +1443,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Configuration
 
-    private static StreamingConfig GetStreamingConfig(InternetProfile profile) => profile switch
-    {
-        InternetProfile.Low => new()
-        {
-            ChunkSize = 64 * 1024,
-            ReadAheadChunks = 1,
-            MaxConcurrentDownloads = 2,      // Было 1, стало 2
-            VlcNetworkCachingMs = 4000,
-            MaxRamChunks = 150,
-            DownloadFullTrack = false
-        },
-        InternetProfile.Medium => new()
-        {
-            ChunkSize = 256 * 1024,           // Было 128KB, стало 256KB
-            ReadAheadChunks = 1,
-            MaxConcurrentDownloads = 4,       // Было 2, стало 4
-            VlcNetworkCachingMs = 2000,
-            MaxRamChunks = 100,
-            DownloadFullTrack = false
-        },
-        InternetProfile.High => new()
-        {
-            ChunkSize = 512 * 1024,           // Было 256KB
-            ReadAheadChunks = 2,
-            MaxConcurrentDownloads = 6,       // Было 3, стало 6
-            VlcNetworkCachingMs = 1000,
-            MaxRamChunks = 80,
-            DownloadFullTrack = false
-        },
-        InternetProfile.Ultra => new()
-        {
-            ChunkSize = 1024 * 1024,          // 1MB чанки
-            ReadAheadChunks = 10,
-            MaxConcurrentDownloads = 8,
-            VlcNetworkCachingMs = 500,
-            MaxRamChunks = 60,
-            DownloadFullTrack = true
-        },
-        _ => new() { ChunkSize = 256 * 1024, MaxRamChunks = 100 }
-    };
+    /// <summary>
+    /// Получает конфигурацию стриминга для указанного профиля.
+    /// </summary>
+    private static StreamingConfig GetStreamingConfig(InternetProfile profile) =>
+        StreamingProfiles.GetConfig(profile);
 
     public void NotifyAppMinimized() => _currentStream?.ReleaseRamBuffers();
 

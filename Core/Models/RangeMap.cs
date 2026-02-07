@@ -111,6 +111,18 @@ public class RangeMap
         }
     }
 
+    /// <summary>
+    /// Возвращает все закэшированные диапазоны.
+    /// </summary>
+    /// <returns>Список пар (начало, конец) в байтах.</returns>
+    public IReadOnlyList<(long Start, long End)> GetRanges()
+    {
+        lock (_lock)
+        {
+            return _ranges.Select(r => (r.Start, r.End)).ToList();
+        }
+    }
+
     public static RangeMap Deserialize(string json)
     {
         var map = new RangeMap();

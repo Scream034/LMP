@@ -11,9 +11,7 @@
     UseLayoutRounding="True">
 
     <UserControl.Styles>
-        <!--  ═══════════════════════════════════════════════════════════════  -->
         <!--  PLAYER BUTTONS                                                   -->
-        <!--  ═══════════════════════════════════════════════════════════════  -->
         <Style Selector="Button.pb-btn">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
@@ -167,9 +165,7 @@
             <Setter Property="RenderTransform" Value="scale(1.25)" />
         </Style>
 
-        <!--  ═══════════════════════════════════════════════════════════════  -->
         <!--  SEEK SLIDER                                                      -->
-        <!--  ═══════════════════════════════════════════════════════════════  -->
 
         <!--  Track container hover  -->
         <Style Selector="Grid.track-container">
@@ -247,9 +243,7 @@
             </Style.Animations>
         </Style>
 
-        <!--  ═══════════════════════════════════════════════════════════════  -->
         <!--  VOLUME SLIDER (Minimalist)                                       -->
-        <!--  ═══════════════════════════════════════════════════════════════  -->
 
         <Style Selector="Ellipse.vol-thumb">
             <Setter Property="Fill" Value="{DynamicResource TextPrimaryBrush}" />

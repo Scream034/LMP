@@ -6,6 +6,10 @@ using Avalonia.Threading;
 
 namespace LMP.Features.Player;
 
+/// <summary>
+/// Code-behind для панели управления плеером.
+/// Обрабатывает взаимодействие с seek/volume слайдерами и визуальные обновления.
+/// </summary>
 public partial class PlayerBarView : UserControl
 {
     #region Constants
@@ -155,6 +159,7 @@ public partial class PlayerBarView : UserControl
     }
 
     private void OnWindowActivated(object? sender, EventArgs e) => _isWindowActive = true;
+
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
         _isWindowActive = false;
@@ -186,9 +191,11 @@ public partial class PlayerBarView : UserControl
                 StartSparkAnimation();
             else
                 StopSparkAnimation();
+
+            // Инициализируем буфер
+            UpdateBufferVisual();
         }
     }
-
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -222,7 +229,9 @@ public partial class PlayerBarView : UserControl
                 }
                 break;
 
-            case nameof(PlayerBarViewModel.BufferedSeconds):
+            case nameof(PlayerBarViewModel.BufferProgressPercent):
+            case nameof(PlayerBarViewModel.BufferedRanges):
+            case nameof(PlayerBarViewModel.IsFullyBuffered):
                 UpdateBufferVisual();
                 break;
 
@@ -348,6 +357,9 @@ public partial class PlayerBarView : UserControl
 
     #region Visual Updates
 
+    /// <summary>
+    /// Обновляет визуал seek-слайдера (позиция воспроизведения).
+    /// </summary>
     private void UpdateSeekVisual()
     {
         if (DataContext is not PlayerBarViewModel vm) return;
@@ -364,19 +376,30 @@ public partial class PlayerBarView : UserControl
         Canvas.SetLeft(SeekThumb, position - SeekThumbRadius);
     }
 
+    /// <summary>
+    /// Обновляет визуал буфера.
+    /// Использует BufferProgressPercent (0-100) напрямую.
+    /// </summary>
     private void UpdateBufferVisual()
     {
         if (DataContext is not PlayerBarViewModel vm) return;
 
         double width = SeekContainer.Bounds.Width;
-        double duration = vm.DurationSeconds;
+        if (width <= 0) return;
 
-        if (width <= 0 || duration <= 0) return;
+        // Используем процент напрямую (0-100 → 0-1)
+        double ratio = Math.Clamp(vm.BufferProgressPercent / 100.0, 0, 1);
 
-        double ratio = Math.Clamp(vm.BufferedSeconds / duration, 0, 1);
+        // Защита от NaN
+        if (double.IsNaN(ratio) || double.IsInfinity(ratio))
+            ratio = 0;
+
         BufferBar.Width = width * ratio;
     }
 
+    /// <summary>
+    /// Обновляет эффект свечения за прогресс-баром.
+    /// </summary>
     private void UpdatePlayingGlow()
     {
         if (DataContext is not PlayerBarViewModel vm) return;
@@ -390,6 +413,9 @@ public partial class PlayerBarView : UserControl
         PlayingGlow.Width = Math.Max(20, width * ratio);
     }
 
+    /// <summary>
+    /// Обновляет высоту слайдера громкости.
+    /// </summary>
     private void UpdateVolumeSliderHeight(int maxVolume)
     {
         // Защита от невалидных значений
@@ -406,6 +432,9 @@ public partial class PlayerBarView : UserControl
         VolumeSliderPanel.Height = height;
     }
 
+    /// <summary>
+    /// Обновляет визуал слайдера громкости.
+    /// </summary>
     private void UpdateVolumeVisual()
     {
         if (DataContext is not PlayerBarViewModel vm) return;
@@ -426,6 +455,9 @@ public partial class PlayerBarView : UserControl
         UpdateVolumeVisualInternal(ratio, height);
     }
 
+    /// <summary>
+    /// Внутренний метод обновления визуала громкости.
+    /// </summary>
     private void UpdateVolumeVisualInternal(double ratio, double height)
     {
         // Защита от невалидных значений
@@ -447,9 +479,15 @@ public partial class PlayerBarView : UserControl
         VolumeThumb.Margin = new Thickness(0, thumbTop, 0, 0);
     }
 
+    /// <summary>
+    /// Обновляет позицию курсора seek.
+    /// </summary>
     private void UpdateSeekCursor(double x) =>
         Canvas.SetLeft(SeekCursor, x - SeekCursorHalfWidth);
 
+    /// <summary>
+    /// Обновляет тултип времени при наведении на seek-слайдер.
+    /// </summary>
     private void UpdateSeekTooltip(double x, double seconds)
     {
         var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
@@ -462,9 +500,15 @@ public partial class PlayerBarView : UserControl
         SeekTooltipPopup.HorizontalOffset = x - (tooltipWidth / 2);
     }
 
+    /// <summary>
+    /// Обновляет превью seek при наведении.
+    /// </summary>
     private void UpdateSeekPreview(double x) =>
         PreviewFill.Width = Math.Max(0, x);
 
+    /// <summary>
+    /// Обновляет тултип громкости.
+    /// </summary>
     private void UpdateVolumeTooltip(int currentVolume, int maxVolume)
     {
         VolumeTooltipText.Text = $"{currentVolume}% / {maxVolume}%";
@@ -482,6 +526,7 @@ public partial class PlayerBarView : UserControl
     }
 
     private void ShowSeekPreview() => PreviewFill.Classes.Add("active");
+
     private void HideSeekPreview()
     {
         PreviewFill.Classes.Remove("active");
@@ -700,7 +745,6 @@ public partial class PlayerBarView : UserControl
         UpdateVolumeTooltip(newVolume, vm.MaxVolume);
 
         // Позиционируем относительно курсора мыши
-        var point = e.GetPosition(VolumeSliderPanel);
         double height = VolumeSliderPanel.Height;
         double ratio = Math.Clamp((double)newVolume / vm.MaxVolume, 0, 1);
         double yOffset = height * (1 - ratio) - (height / 2);
