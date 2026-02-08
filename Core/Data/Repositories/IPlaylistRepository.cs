@@ -20,6 +20,13 @@ public interface IPlaylistRepository
     Task<bool> ContainsTrackAsync(string playlistId, string trackId, CancellationToken ct = default);
     Task<HashSet<string>> GetPlaylistsForTrackAsync(string trackId, CancellationToken ct = default);
     /// <summary>
+    /// Batch-загрузка плейлистов для нескольких треков за один SQL-запрос.
+    /// Возвращает словарь: trackId → набор playlistId.
+    /// </summary>
+    Task<Dictionary<string, HashSet<string>>> GetPlaylistsForTracksAsync(
+        IEnumerable<string> trackIds,
+        CancellationToken ct = default);
+    /// <summary>
     /// Gets all playlists with their track counts (more efficient than loading all track IDs).
     /// </summary>
     Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(CancellationToken ct = default);

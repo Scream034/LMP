@@ -274,14 +274,21 @@ public sealed class LibraryService : IAsyncDisposable
     /// Full-text search in database.
     /// </summary>
     public async Task<List<TrackInfo>> SearchTracksAsync(
-        string query, int limit = 50, int offset = 0, CancellationToken ct = default)
+     string query, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
         var tracks = await _tracks.SearchAsync(query, limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        // ОПТИМИЗАЦИЯ: Один SQL-запрос вместо N
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -303,11 +310,17 @@ public sealed class LibraryService : IAsyncDisposable
         CancellationToken ct = default)
     {
         var tracks = await _tracks.GetAllAsync(limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -320,11 +333,17 @@ public sealed class LibraryService : IAsyncDisposable
         CancellationToken ct = default)
     {
         var tracks = await _tracks.GetLocalTracksAsync(limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -349,17 +368,15 @@ public sealed class LibraryService : IAsyncDisposable
     /// Uses FTS for fast full-text search.
     /// </summary>
     public async Task<List<TrackInfo>> SearchLocalTracksAsync(
-        string query,
-        int limit = 100,
-        CancellationToken ct = default)
+     string query,
+     int limit = 100,
+     CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
             return await GetLocalTracksAsync(limit, 0, ct);
 
-        // Сначала получаем все локальные треки
         var allLocal = await _tracks.GetLocalTracksAsync(limit * 2, 0, ct);
 
-        // Фильтруем в памяти (для небольших коллекций это быстрее чем SQL LIKE)
         var filtered = allLocal
             .Where(t =>
                 t.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -367,9 +384,14 @@ public sealed class LibraryService : IAsyncDisposable
             .Take(limit)
             .ToList();
 
+        if (filtered.Count == 0) return filtered;
+
+        var trackIds = filtered.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in filtered)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
 
@@ -449,14 +471,20 @@ public sealed class LibraryService : IAsyncDisposable
     }
 
     public async Task<List<TrackInfo>> GetLikedTracksAsync(
-        int limit = 100, int offset = 0, CancellationToken ct = default)
+     int limit = 100, int offset = 0, CancellationToken ct = default)
     {
         var tracks = await _tracks.GetLikedAsync(limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -542,14 +570,19 @@ public sealed class LibraryService : IAsyncDisposable
         var trackIds = await _playlists.GetTrackIdsAsync(playlistId, ct);
         var pageIds = trackIds.Skip(offset).Take(limit).ToList();
 
+        if (pageIds.Count == 0) return [];
+
+        // Preload загрузит все треки в кэш одним batch-запросом
         await _registry.PreloadAsync(pageIds, ct);
 
+        // Теперь берём из кэша синхронно
         var tracks = new List<TrackInfo>(pageIds.Count);
         foreach (var id in pageIds)
         {
-            var track = await _registry.GetOrLoadAsync(id, ct);
+            var track = _registry.TryGet(id);
             if (track != null) tracks.Add(track);
         }
+
         return tracks;
     }
 

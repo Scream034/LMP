@@ -278,6 +278,39 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         return [.. ids];
     }
 
+    public async Task<Dictionary<string, HashSet<string>>> GetPlaylistsForTracksAsync(
+    IEnumerable<string> trackIds,
+    CancellationToken ct = default)
+    {
+        var ids = trackIds as IList<string> ?? [.. trackIds];
+
+        if (ids.Count == 0)
+            return [];
+
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        // Один SQL-запрос вместо N
+        var links = await ctx.PlaylistTracks
+            .Where(pt => ids.Contains(pt.TrackId))
+            .Select(pt => new { pt.TrackId, pt.PlaylistId })
+            .ToListAsync(ct);
+
+        // Группируем в памяти
+        var result = new Dictionary<string, HashSet<string>>(ids.Count);
+
+        foreach (var link in links)
+        {
+            if (!result.TryGetValue(link.TrackId, out var set))
+            {
+                set = [];
+                result[link.TrackId] = set;
+            }
+            set.Add(link.PlaylistId);
+        }
+
+        return result;
+    }
+
     public async Task<long> GetTotalDurationTicksAsync(string playlistId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);

@@ -106,8 +106,8 @@ public sealed class TrackRegistry
 
         // Автоматически пиним при загрузке из БД, если нужно
         var canonical = RegisterOrUpdate(fromDb);
-        UpdatePinStatusInternal(canonical); 
-        
+        UpdatePinStatusInternal(canonical);
+
         return canonical;
     }
 
@@ -122,13 +122,23 @@ public sealed class TrackRegistry
         if (toLoad.Count == 0) return;
 
         var loaded = await _repository.GetByIdsAsync(toLoad, ct);
+        if (loaded.Count == 0) return;
+
+        // Batch загрузка плейлистов
+        Dictionary<string, HashSet<string>>? playlistsMap = null;
+        if (_playlists != null)
+        {
+            var loadedIds = loaded.Select(t => t.Id).ToList();
+            playlistsMap = await _playlists.GetPlaylistsForTracksAsync(loadedIds, ct);
+        }
 
         foreach (var track in loaded)
         {
-            if (_playlists != null)
+            if (playlistsMap != null)
             {
-                track.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(track.Id, ct);
+                track.InPlaylists = playlistsMap.TryGetValue(track.Id, out var pls) ? pls : [];
             }
+
             var t = RegisterOrUpdate(track);
             UpdatePinStatusInternal(t);
         }
@@ -183,24 +193,34 @@ public sealed class TrackRegistry
         var downloaded = await _repository.GetDownloadedAsync(1000, 0, ct);
         allLoaded.AddRange(downloaded);
 
-        // Recent tracks might not need to be pinned permanently, but useful to have in cache
         var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
         allLoaded.AddRange(recent);
 
+        // Один batch-запрос для всех плейлистов
+        var allIds = allLoaded.Select(t => t.Id).Distinct().ToList();
+        Dictionary<string, HashSet<string>>? playlistsMap = null;
+
+        if (_playlists != null && allIds.Count > 0)
+        {
+            playlistsMap = await _playlists.GetPlaylistsForTracksAsync(allIds, ct);
+        }
+
         foreach (var t in allLoaded)
         {
-            if (_playlists != null) t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
-            
+            if (playlistsMap != null)
+            {
+                t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
+            }
+
             var canonical = RegisterOrUpdate(t);
             UpdatePinStatusInternal(canonical);
         }
 
-        // Обновляем статусы кэша для всех запиненных треков
         CacheManager?.HydrateCacheStatus(_pinned.Values);
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} pinned tracks in {sw.ElapsedMilliseconds}ms");
-        
+
         MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", _pinned.Count * 1024);
     }
 
