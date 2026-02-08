@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
@@ -6,42 +8,113 @@ namespace LMP.Core.Youtube.Utils;
 
 internal static class Json
 {
-    public static string Extract(string source)
+    /// <summary>
+    /// Извлекает первый JSON-объект используя Span — zero string allocation.
+    /// </summary>
+    public static ReadOnlySpan<char> ExtractSpan(ReadOnlySpan<char> source)
     {
-        var buffer = new StringBuilder();
-
         var depth = 0;
         var isInsideString = false;
+        var startIndex = -1;
 
-        // We trust that the source contains valid json, we just need to extract it.
-        // To do it, we will be matching curly braces until we even out.
-        foreach (var (i, ch) in source.Index())
+        for (int i = 0; i < source.Length; i++)
         {
+            var ch = source[i];
             var prev = i > 0 ? source[i - 1] : default;
 
-            buffer.Append(ch);
-
-            // Detect if inside a string
             if (ch == '"' && prev != '\\')
+            {
                 isInsideString = !isInsideString;
-            // Opening brace
+            }
             else if (ch == '{' && !isInsideString)
+            {
+                if (depth == 0) startIndex = i;
                 depth++;
-            // Closing brace
+            }
             else if (ch == '}' && !isInsideString)
+            {
                 depth--;
+            }
 
-            // Break when evened out
-            if (depth == 0)
-                break;
+            if (depth == 0 && startIndex >= 0)
+                return source.Slice(startIndex, i - startIndex + 1);
         }
 
-        return buffer.ToString();
+        return startIndex >= 0 ? source[startIndex..] : source;
     }
 
+    /// <summary>
+    /// Обратная совместимость — аллоцирует строку.
+    /// </summary>
+    public static string Extract(string source)
+    {
+        var span = ExtractSpan(source.AsSpan());
+        return span.ToString();
+    }
+
+    /// <summary>
+    /// парсит JSON из ReadOnlySpan char с использованием ArrayPool.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static JsonElement ParseSpan(ReadOnlySpan<char> json)
+    {
+        // Конвертируем в UTF-8 используя ArrayPool
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(json.Length);
+        var utf8Buffer = ArrayPool<byte>.Shared.Rent(maxByteCount);
+        
+        try
+        {
+            var actualByteCount = Encoding.UTF8.GetBytes(json, utf8Buffer);
+            
+            // ИСПРАВЛЕНИЕ: используем ReadOnlyMemory<byte> вместо Span<byte>
+            var utf8Memory = new ReadOnlyMemory<byte>(utf8Buffer, 0, actualByteCount);
+            
+            using var document = JsonDocument.Parse(utf8Memory);
+            return document.RootElement.Clone();
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(utf8Buffer);
+        }
+    }
+
+    /// <summary>
+    /// Парсит JSON строку. Клонирует RootElement для отвязки от документа.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static JsonElement Parse(string source)
     {
+        // Для строк используем стандартный парсер — он оптимизирован
         using var document = JsonDocument.Parse(source);
+        return document.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// парсит JSON из UTF-8 байтов — zero-copy для HTTP responses.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static JsonElement Parse(ReadOnlyMemory<byte> utf8Json)
+    {
+        using var document = JsonDocument.Parse(utf8Json);
+        return document.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Парсит JSON из массива байтов.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static JsonElement Parse(byte[] utf8Json)
+    {
+        using var document = JsonDocument.Parse(utf8Json);
+        return document.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Парсит JSON из потока — zero-copy для сетевых ответов.
+    /// </summary>
+    public static async ValueTask<JsonElement> ParseAsync(Stream stream, CancellationToken ct = default)
+    {
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
         return document.RootElement.Clone();
     }
 
@@ -57,34 +130,56 @@ internal static class Json
         }
     }
 
+    /// <summary>
+    /// кодирует строку для JSON используя ArrayPool.
+    /// </summary>
     public static string Encode(string value)
     {
-        var buffer = new StringBuilder(value.Length);
+        if (!NeedsEncoding(value))
+            return value;
 
-        foreach (var c in value)
+        var maxLen = value.Length * 2;
+        var buffer = ArrayPool<char>.Shared.Rent(maxLen);
+        
+        try
         {
-            if (c == '\n')
-                buffer.Append("\\n");
-            else if (c == '\r')
-                buffer.Append("\\r");
-            else if (c == '\t')
-                buffer.Append("\\t");
-            else if (c == '\\')
-                buffer.Append("\\\\");
-            else if (c == '"')
-                buffer.Append("\\\"");
-            else
-                buffer.Append(c);
+            var pos = 0;
+            foreach (var c in value)
+            {
+                switch (c)
+                {
+                    case '\n': buffer[pos++] = '\\'; buffer[pos++] = 'n'; break;
+                    case '\r': buffer[pos++] = '\\'; buffer[pos++] = 'r'; break;
+                    case '\t': buffer[pos++] = '\\'; buffer[pos++] = 't'; break;
+                    case '\\': buffer[pos++] = '\\'; buffer[pos++] = '\\'; break;
+                    case '"': buffer[pos++] = '\\'; buffer[pos++] = '"'; break;
+                    default: buffer[pos++] = c; break;
+                }
+            }
+            return new string(buffer, 0, pos);
         }
-
-        return buffer.ToString();
+        finally
+        {
+            ArrayPool<char>.Shared.Return(buffer);
+        }
     }
 
-    // AOT-compatible serialization
-    public static string Serialize(string? value) =>
-        value is not null ? '"' + Encode(value) + '"' : "null";
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool NeedsEncoding(string value)
+    {
+        foreach (var c in value)
+        {
+            if (c is '\n' or '\r' or '\t' or '\\' or '"')
+                return true;
+        }
+        return false;
+    }
 
-    // AOT-compatible serialization
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static string Serialize(string? value) =>
+        value is not null ? $"\"{Encode(value)}\"" : "null";
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Serialize(int? value) =>
         value is not null ? value.Value.ToString(CultureInfo.InvariantCulture) : "null";
 }

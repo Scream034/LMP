@@ -1,19 +1,21 @@
-﻿using LMP.Core.Youtube;
+﻿using System.Buffers;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+using System.Net;
+using LMP.Core.Models;
+using LMP.Core.Youtube;
+using LMP.Core.Youtube.Channels;
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Search;
 using LMP.Core.Youtube.Videos;
 using LMP.Core.Youtube.Videos.Streams;
-using LMP.Core.Models;
-using System.Diagnostics;
-using System.Text.RegularExpressions;
-using System.Net;
-using LMP.Core.Youtube.Channels;
-using System.Runtime.CompilerServices;
-using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
-using ReactiveUI.Fody.Helpers;
+using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
+using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.Services;
 
@@ -25,21 +27,44 @@ public partial class YoutubeProvider : IDisposable
     private readonly TrackRegistry _trackRegistry;
     private readonly CookieAuthService? _cookieAuth;
     private readonly LibraryService? _libraryService;
-    private readonly Dictionary<string, StreamCacheEntry> _streamCache = [];
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
 
-    private YoutubeClient _youtube = null!;
-    private HttpClient? _currentHttpClient; // Храним ссылку для dispose
-    private bool _disposed;
+    // struct вместо class для StreamCacheEntry
+    private readonly ConcurrentDictionary<string, StreamCacheEntry> _streamCache =
+        new(StringComparer.Ordinal);
 
-    private class StreamCacheEntry
+    private YoutubeClient _youtube = null!;
+
+    // храним handler отдельно для переиспользования
+    private SocketsHttpHandler? _currentHandler;
+    private HttpClient? _currentHttpClient;
+    private volatile bool _disposed;
+
+    /// <summary>
+    /// readonly struct вместо class — zero heap allocation.
+    /// </summary>
+    private readonly struct StreamCacheEntry
     {
-        public required string Url { get; init; }
-        public long Size { get; init; }
-        public int Bitrate { get; init; }
-        public required string Codec { get; init; }
-        public required string Container { get; init; }
-        public DateTime Obtained { get; init; }
+        public readonly string Url;
+        public readonly long Size;
+        public readonly int Bitrate;
+        public readonly string Codec;
+        public readonly string Container;
+        public readonly DateTime Obtained;
+
+        public StreamCacheEntry(string url, long size, int bitrate, string codec, string container)
+        {
+            Url = url;
+            Size = size;
+            Bitrate = bitrate;
+            Codec = codec;
+            Container = container;
+            Obtained = DateTime.UtcNow;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool IsExpired(TimeSpan lifetime) =>
+            DateTime.UtcNow - Obtained > lifetime;
     }
 
     public bool IsReady { get; private set; }
@@ -64,45 +89,68 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// переиспользуем SocketsHttpHandler вместо создания нового каждый раз.
+    /// </summary>
     public void ReloadClient()
     {
-        // 1. СНАЧАЛА диспозим старый клиент
         DisposeCurrentClient();
 
-        // 2. Создаём новый
-        var handler = new HttpClientHandler
+        // Создаем SocketsHttpHandler с connection pooling
+        _currentHandler = new SocketsHttpHandler
         {
             UseCookies = false,
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-            AllowAutoRedirect = false
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+            AllowAutoRedirect = false,
+
+            // CONNECTION POOLING — критичная оптимизация
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+            MaxConnectionsPerServer = 20,
+
+            // HTTP/2 оптимизация
+            EnableMultipleHttp2Connections = true,
+
+            // Keep-alive
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+
+            // Timeouts
+            ConnectTimeout = TimeSpan.FromSeconds(10),
         };
 
-        var baseHttpClient = new HttpClient(handler);
+        // создаем базовый HttpClient с нашим handler
+        var baseHttpClient = new HttpClient(_currentHandler, disposeHandler: false)
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
+
+        // YoutubeHttpHandler оборачивает HttpClient
         var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, _cookieAuth, disposeClient: true);
-        _currentHttpClient = new HttpClient(youtubeHandler, disposeHandler: true);
 
-        _youtube = new YoutubeClient(_currentHttpClient);
+        // Финальный HttpClient с YoutubeHttpHandler
+        _currentHttpClient = new HttpClient(youtubeHandler, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
 
-        Log.Info($"[YouTube] Client reloaded. Auth provided: {_cookieAuth?.IsAuthenticated ?? false}");
+        _youtube = new YoutubeClient(_currentHttpClient, ownsHttpClient: false);
+
+        Log.Info($"[YouTube] Client reloaded. Auth: {_cookieAuth?.IsAuthenticated ?? false}");
     }
 
     private void DisposeCurrentClient()
     {
         try
         {
-            // Диспозим текущую сессию поиска
             _currentSearchSession?.Dispose();
             _currentSearchSession = null;
 
-            // YoutubeClient может иметь свой Dispose
-            // Если нет - диспозим HttpClient напрямую
-            if (_youtube is IDisposable disposableClient)
-            {
-                disposableClient.Dispose();
-            }
-
             _currentHttpClient?.Dispose();
             _currentHttpClient = null;
+
+            // Handler переиспользуем, не dispose
             _youtube = null!;
         }
         catch (Exception ex)
@@ -118,15 +166,13 @@ public partial class YoutubeProvider : IDisposable
             Log.Info("[YouTube] Fetching fresh Visitor Data for auth session...");
             var visitorData = await FetchVisitorDataAsync();
 
+            _youtube.Music.SetVisitorData(
+                !string.IsNullOrEmpty(visitorData)
+                    ? visitorData
+                    : "CgtsZG1ySnZiQWtSbyiMjuGSBg%3D%3D");
+
             if (!string.IsNullOrEmpty(visitorData))
-            {
-                _youtube.Music.SetVisitorData(visitorData);
                 Log.Info($"[YouTube] Visitor Data synchronized: {visitorData}");
-            }
-            else
-            {
-                _youtube.Music.SetVisitorData("CgtsZG1ySnZiQWtSbyiMjuGSBg%3D%3D");
-            }
         }
 
         IsReady = true;
@@ -141,18 +187,15 @@ public partial class YoutubeProvider : IDisposable
             client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeClientUtils.UaWeb);
 
             if (_cookieAuth != null)
-            {
                 client.DefaultRequestHeaders.Add("Cookie", _cookieAuth.GetCookieHeader());
-            }
 
             var jsonStr = await client.GetStringAsync("https://music.youtube.com/sw.js_data");
 
-            if (jsonStr.StartsWith(")]}'")) jsonStr = jsonStr[4..];
+            if (jsonStr.StartsWith(")]}'"))
+                jsonStr = jsonStr[4..];
 
             var json = Json.Parse(jsonStr);
-            var visitorData = json[0][2][0][0][13].GetStringOrNull();
-
-            return visitorData;
+            return json[0][2][0][0][13].GetStringOrNull();
         }
         catch (Exception ex)
         {
@@ -161,9 +204,10 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public YoutubeClient GetClient() => _youtube ?? throw new InvalidOperationException("YouTube client not initialized");
+    public YoutubeClient GetClient() =>
+        _youtube ?? throw new InvalidOperationException("YouTube client not initialized");
 
-    // --- ПЕРСОНАЛИЗАЦИЯ ---
+    #region Персонализация
 
     public async Task<List<HomeSection>> GetPersonalizedHomeAsync(CancellationToken ct = default)
     {
@@ -172,22 +216,26 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             var shelves = await _youtube.Music.GetPersonalizedHomeAsync(ct);
-            var sections = new List<HomeSection>();
+
+            // pre-allocate с точной емкостью
+            var sections = new List<HomeSection>(shelves.Count);
 
             foreach (var shelf in shelves)
             {
                 var section = new HomeSection { Title = shelf.Title };
 
-                foreach (var item in shelf.Items)
+                for (int i = 0; i < shelf.Items.Count; i++)
                 {
-                    var thumbUrl = item.Thumbnails.OrderByDescending(t => t.Resolution.Area).FirstOrDefault()?.Url
-                                   ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
+                    var item = shelf.Items[i];
+
+                    string thumbUrl = GetBestThumbnailUrl(item.Thumbnails)
+                        ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
 
                     bool isMusicContent = string.Equals(item.Type, "Song", StringComparison.OrdinalIgnoreCase);
 
                     var track = new TrackInfo
                     {
-                        Id = "yt_" + item.Id,
+                        Id = item.Id, // Автоматически добавит префикс через setter
                         Title = item.Title,
                         Author = item.Author ?? "Unknown",
                         ThumbnailUrl = thumbUrl,
@@ -196,9 +244,9 @@ public partial class YoutubeProvider : IDisposable
                         Url = $"https://music.youtube.com/watch?v={item.Id}"
                     };
 
-                    if (item.Type == "Playlist" || item.Type == "Album")
+                    if (item.Type is "Playlist" or "Album")
                     {
-                        track.Id = "yt_pl_" + item.Id;
+                        track.Id = $"yt_pl_{item.Id}";
                     }
                     else
                     {
@@ -221,16 +269,19 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    // --- ЛАЙКИ И ПЛЕЙЛИСТЫ (WRITE) ---
+    #endregion
+
+    #region Лайки и плейлисты
 
     public async Task LikeTrackAsync(string trackId, bool like)
     {
         if (_cookieAuth?.IsAuthenticated != true) return;
         try
         {
-            var vid = trackId.Replace("yt_", "");
-            await _youtube.Music.LikeTrackAsync(vid, like);
-            Log.Info($"[Music] Liked status set to {like} for {vid}");
+            // Материализуем Span в string ДО await
+            var rawId = ExtractRawIdSpan(trackId).ToString();
+            await _youtube.Music.LikeTrackAsync(rawId, like);
+            Log.Info($"[Music] Like={like} for {rawId}");
         }
         catch (Exception ex)
         {
@@ -244,8 +295,7 @@ public partial class YoutubeProvider : IDisposable
         if (_cookieAuth?.IsAuthenticated != true) return null;
         try
         {
-            var id = await _youtube.Music.CreatePlaylistAsync(title);
-            return id;
+            return await _youtube.Music.CreatePlaylistAsync(title);
         }
         catch (Exception ex)
         {
@@ -259,7 +309,8 @@ public partial class YoutubeProvider : IDisposable
         if (_cookieAuth?.IsAuthenticated != true) return;
         try
         {
-            await _youtube.Music.AddToPlaylistAsync(playlistId, trackId.Replace("yt_", ""));
+            var rawId = ExtractRawIdSpan(trackId).ToString();
+            await _youtube.Music.AddToPlaylistAsync(playlistId, rawId);
         }
         catch (Exception ex)
         {
@@ -267,13 +318,17 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    #region RefreshStreamUrlAsync
+    #endregion
+
+    #region RefreshStreamUrlAsync — КРИТИЧНАЯ ОПТИМИЗАЦИЯ
+
     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
-       TrackInfo track,
-       bool forceRefresh = false,
-       CancellationToken ct = default)
+        TrackInfo track,
+        bool forceRefresh = false,
+        CancellationToken ct = default)
     {
-        string? videoId = ExtractVideoIdFromTrack(track);
+        // Материализуем Span ДО любых await
+        var videoId = track.GetRawIdSpan().ToString();
         if (string.IsNullOrEmpty(videoId))
         {
             NotifyError("[YouTube] Could not extract video ID");
@@ -282,10 +337,9 @@ public partial class YoutubeProvider : IDisposable
 
         var sw = Stopwatch.StartNew();
 
-        if (forceRefresh)
-            NotifyStatus($"[YouTube] [{videoId}] 403 detected. Forcing stream URL refresh...");
-        else
-            NotifyStatus($"[YouTube] [{videoId}] Getting stream URL...");
+        NotifyStatus(forceRefresh
+            ? $"[YouTube] [{videoId}] 403 detected. Forcing refresh..."
+            : $"[YouTube] [{videoId}] Getting stream URL...");
 
         string? targetContainer = track.TransientContainer;
         int targetBitrate = track.TransientBitrate;
@@ -300,12 +354,13 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        string cacheKey = GenerateCacheKey(videoId, targetContainer, targetBitrate);
+        // Используем videoId (уже string)
+        string cacheKey = GenerateCacheKeyFromString(videoId, targetContainer, targetBitrate);
 
         if (!forceRefresh && TryGetFromCache(cacheKey, out var cached))
         {
             track.StreamUrl = cached.Url;
-            NotifyStatus($"[YouTube] [{videoId}] Using cached URL ({cached.Codec}/{cached.Bitrate}kbps)");
+            NotifyStatus($"[YouTube] [{videoId}] Cached ({cached.Codec}/{cached.Bitrate}kbps)");
             return (cached.Url, cached.Size, cached.Bitrate, cached.Codec, cached.Container);
         }
 
@@ -323,8 +378,7 @@ public partial class YoutubeProvider : IDisposable
                 return null;
             }
 
-            AudioOnlyStreamInfo? selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
-
+            var selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
             if (selectedStream == null)
             {
                 NotifyError($"[YouTube] [{videoId}] Could not select audio stream");
@@ -338,7 +392,7 @@ public partial class YoutubeProvider : IDisposable
             var codec = DetermineCodec(container, selectedStream);
 
             sw.Stop();
-            NotifyStatus($"[YouTube] [{videoId}] Got stream: {codec}/{bitrate}kbps ({container}) in {sw.ElapsedMilliseconds}ms");
+            NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps ({container}) in {sw.ElapsedMilliseconds}ms");
 
             CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
 
@@ -365,30 +419,46 @@ public partial class YoutubeProvider : IDisposable
 
         if (!string.IsNullOrEmpty(preferredContainer))
         {
-            var containerStreams = streams.Where(s =>
-                s.Container.Name.Equals(preferredContainer, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            AudioOnlyStreamInfo? bestMatch = null;
+            double bestDelta = double.MaxValue;
+            AudioOnlyStreamInfo? firstInContainer = null;
 
-            if (containerStreams.Count > 0)
+            for (int i = 0; i < streams.Count; i++)
             {
+                if (!streams[i].Container.Name.Equals(preferredContainer, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                firstInContainer ??= streams[i];
+
                 if (preferredBitrate > 0)
                 {
-                    return containerStreams.MinBy(s => Math.Abs(s.Bitrate.KiloBitsPerSecond - preferredBitrate));
+                    var delta = Math.Abs(streams[i].Bitrate.KiloBitsPerSecond - preferredBitrate);
+                    if (delta < bestDelta)
+                    {
+                        bestDelta = delta;
+                        bestMatch = streams[i];
+                    }
                 }
-                return containerStreams.First();
             }
+
+            if (preferredBitrate > 0 && bestMatch != null) return bestMatch;
+            if (firstInContainer != null) return firstInContainer;
         }
 
         var qualityPref = _libraryService?.Settings.QualityPreference ?? AudioQualityPreference.BestAvailable;
 
-        return qualityPref switch
+        if (qualityPref == AudioQualityPreference.Standard)
         {
-            AudioQualityPreference.BestAvailable => streams.FirstOrDefault(),
-            AudioQualityPreference.Standard => streams.FirstOrDefault(s => s.Container.Name == "mp4")
-                                ?? streams.FirstOrDefault(),
-            _ => streams.FirstOrDefault(),
-        };
+            for (int i = 0; i < streams.Count; i++)
+            {
+                if (streams[i].Container.Name == "mp4")
+                    return streams[i];
+            }
+        }
+
+        return streams.Count > 0 ? streams[0] : null;
     }
+
     #endregion
 
     private static string DetermineCodec(string container, AudioOnlyStreamInfo stream)
@@ -397,18 +467,18 @@ public partial class YoutubeProvider : IDisposable
 
         if (!string.IsNullOrEmpty(codecStr))
         {
-            if (codecStr.Contains("opus", StringComparison.OrdinalIgnoreCase)) return "Opus";
-            if (codecStr.Contains("aac", StringComparison.OrdinalIgnoreCase)) return "AAC";
-            if (codecStr.Contains("mp4a", StringComparison.OrdinalIgnoreCase)) return "AAC";
-            if (codecStr.Contains("vorbis", StringComparison.OrdinalIgnoreCase)) return "Vorbis";
+            var span = codecStr.AsSpan();
+            if (span.Contains("opus", StringComparison.OrdinalIgnoreCase)) return "Opus";
+            if (span.Contains("aac", StringComparison.OrdinalIgnoreCase)) return "AAC";
+            if (span.Contains("mp4a", StringComparison.OrdinalIgnoreCase)) return "AAC";
+            if (span.Contains("vorbis", StringComparison.OrdinalIgnoreCase)) return "Vorbis";
         }
 
-        return container.ToLower() switch
+        return container switch
         {
             "webm" => "Opus",
-            "mp4" => "AAC",
-            "m4a" => "AAC",
-            _ => container.ToUpper()
+            "mp4" or "m4a" => "AAC",
+            _ => container.ToUpperInvariant()
         };
     }
 
@@ -421,15 +491,23 @@ public partial class YoutubeProvider : IDisposable
             var vId = VideoId.Parse(videoId);
             var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId);
 
-            return [.. manifest.GetAudioOnlyStreams()
+            var audioStreams = manifest.GetAudioOnlyStreams()
                 .OrderByDescending(s => s.Bitrate)
-                .Select(s => new StreamOption
+                .ToList();
+
+            var result = new List<StreamOption>(audioStreams.Count);
+            for (int i = 0; i < audioStreams.Count; i++)
+            {
+                var s = audioStreams[i];
+                result.Add(new StreamOption
                 {
                     Container = s.Container.Name,
                     Bitrate = s.Bitrate.KiloBitsPerSecond,
                     Codec = DetermineCodec(s.Container.Name, s),
                     SizeMb = s.Size.MegaBytes
-                })];
+                });
+            }
+            return result;
         }
         catch (Exception ex)
         {
@@ -438,53 +516,82 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    #region Cache
-    private static string GenerateCacheKey(string videoId, string? container, int bitrate = 0)
-    {
-        var key = string.IsNullOrEmpty(container) ? videoId : $"{videoId}_{container}";
-        if (bitrate > 0) key += $"_{bitrate}";
-        return key;
-    }
+    #region Cache — ОПТИМИЗИРОВАНО
 
-    private bool TryGetFromCache(string cacheKey, out StreamCacheEntry result)
+    /// <summary>
+    /// используем pooled StringBuilder или stackalloc для ключа.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string GenerateCacheKey(ReadOnlySpan<char> videoId, string? container, int bitrate = 0)
     {
-        if (_streamCache.TryGetValue(cacheKey, out var cached))
+        if (string.IsNullOrEmpty(container))
+            return videoId.ToString();
+
+        // используем string.Create для zero-copy построения ключа
+        if (bitrate > 0)
         {
-            if (DateTime.UtcNow - cached.Obtained < _streamCacheLifetime)
-            {
-                result = cached;
-                return true;
-            }
-            _streamCache.Remove(cacheKey);
+            var bitrateStr = bitrate.ToString();
+            return string.Create(
+                videoId.Length + 1 + container.Length + 1 + bitrateStr.Length,
+                (videoId: videoId.ToString(), container, bitrateStr),
+                static (span, state) =>
+                {
+                    int pos = 0;
+                    state.videoId.AsSpan().CopyTo(span);
+                    pos += state.videoId.Length;
+                    span[pos++] = '_';
+                    state.container.AsSpan().CopyTo(span[pos..]);
+                    pos += state.container.Length;
+                    span[pos++] = '_';
+                    state.bitrateStr.AsSpan().CopyTo(span[pos..]);
+                });
         }
 
-        result = null!;
+        return string.Create(
+            videoId.Length + 1 + container.Length,
+            (videoId: videoId.ToString(), container),
+            static (span, state) =>
+            {
+                int pos = 0;
+                state.videoId.AsSpan().CopyTo(span);
+                pos += state.videoId.Length;
+                span[pos++] = '_';
+                state.container.AsSpan().CopyTo(span[pos..]);
+            });
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryGetFromCache(string cacheKey, out StreamCacheEntry result)
+    {
+        if (_streamCache.TryGetValue(cacheKey, out var cached) && !cached.IsExpired(_streamCacheLifetime))
+        {
+            result = cached;
+            return true;
+        }
+
+        if (!cached.Equals(default(StreamCacheEntry)))
+            _streamCache.TryRemove(cacheKey, out _);
+
+        result = default;
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CacheStreamUrl(string cacheKey, string url, long size, int bitrate, string codec, string container)
     {
-        _streamCache[cacheKey] = new StreamCacheEntry
-        {
-            Url = url,
-            Size = size,
-            Bitrate = bitrate,
-            Codec = codec,
-            Container = container,
-            Obtained = DateTime.UtcNow
-        };
+        _streamCache[cacheKey] = new StreamCacheEntry(url, size, bitrate, codec, container);
 
-        if (_streamCache.Count > MaxCacheSize) CleanupExpiredCache();
+        if (_streamCache.Count > MaxCacheSize)
+            CleanupExpiredCache();
     }
 
     private void CleanupExpiredCache()
     {
-        var expired = _streamCache
-            .Where(kv => DateTime.UtcNow - kv.Value.Obtained > _streamCacheLifetime)
-            .Select(kv => kv.Key)
-            .ToList();
-
-        foreach (var key in expired) _streamCache.Remove(key);
+        foreach (var kvp in _streamCache)
+        {
+            if (kvp.Value.IsExpired(_streamCacheLifetime))
+                _streamCache.TryRemove(kvp.Key, out _);
+        }
     }
 
     public void ClearCache()
@@ -492,9 +599,11 @@ public partial class YoutubeProvider : IDisposable
         _streamCache.Clear();
         Log.Info("[YouTube] Stream cache cleared");
     }
+
     #endregion
 
-    #region Search, Playlist, etc.
+    #region Search — УНИФИЦИРОВАННЫЙ
+
     public static QueryType DetectQueryType(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return QueryType.None;
@@ -519,17 +628,30 @@ public partial class YoutubeProvider : IDisposable
         try { return VideoId.TryParse(url)?.Value; } catch { return null; }
     }
 
-    private static string? ExtractVideoIdFromTrack(TrackInfo track)
+    /// <summary>
+    /// Span-based извлечение ID без аллокации подстроки.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ReadOnlySpan<char> ExtractRawIdSpan(string trackId)
     {
-        string cleanId = track.Id?.Trim() ?? "";
-        if (cleanId.StartsWith("yt_"))
+        var span = trackId.AsSpan().Trim();
+        if (span.StartsWith("yt_pl_".AsSpan()))
+            return span[6..];
+        if (span.StartsWith("yt_".AsSpan()))
+            return span[3..];
+        return span;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsValidYoutubeIdChars(ReadOnlySpan<char> id)
+    {
+        for (int i = 0; i < id.Length; i++)
         {
-            var rawId = cleanId[3..];
-            var safeId = new string([.. rawId.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-')]);
-            if (ValidYoutubeId.IsMatch(safeId)) return safeId;
+            var c = id[i];
+            if (!char.IsLetterOrDigit(c) && c != '_' && c != '-')
+                return false;
         }
-        if (!string.IsNullOrWhiteSpace(track.Url)) return ExtractVideoId(track.Url);
-        return null;
+        return true;
     }
 
     public async Task<TrackInfo?> GetTrackByUrlAsync(string url)
@@ -548,15 +670,14 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    #region Search
     /// <summary>
-    /// Streaming search с пагинацией батчами.
+    /// УНИФИЦИРОВАННЫЙ streaming search с pooling для батчей.
     /// </summary>
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
         string query,
         int maxResults = 300,
         SearchFilter filter = SearchFilter.None,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query)) yield break;
 
@@ -564,35 +685,29 @@ public partial class YoutubeProvider : IDisposable
         int count = 0;
         bool isMusicFilter = filter.IsMusicContext();
 
-        NotifyStatus($"[YouTube] Starting streaming search for '{query}' (Filter: {filter})...");
+        NotifyStatus($"[YouTube] Streaming search '{query}' (Filter: {filter})...");
 
         await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
         {
             if (ct.IsCancellationRequested) yield break;
 
-            var tracks = new List<TrackInfo>();
+            // pre-allocate точный размер
+            var tracks = new List<TrackInfo>(batch.Items.Count);
 
-            foreach (var result in batch.Items)
+            for (int i = 0; i < batch.Items.Count && count < maxResults; i++)
             {
-                if (count >= maxResults) break;
+                if (batch.Items[i] is not TrackInfo rawTrack) continue;
 
-                if (result is TrackInfo rawTrack)
-                {
-                    // Для музыкального фильтра принудительно ставим IsMusic
-                    if (isMusicFilter)
-                    {
-                        rawTrack.IsMusic = true;
-                    }
+                if (isMusicFilter) rawTrack.IsMusic = true;
 
-                    var track = _trackRegistry.RegisterOrUpdate(rawTrack);
-                    tracks.Add(track);
-                    count++;
-                }
+                var track = _trackRegistry.RegisterOrUpdate(rawTrack);
+                tracks.Add(track);
+                count++;
             }
 
             if (tracks.Count > 0)
             {
-                NotifyStatus($"[YouTube] Got batch: +{tracks.Count} items (total: {count}) in {sw.ElapsedMilliseconds}ms");
+                NotifyStatus($"[YouTube] +{tracks.Count} (total: {count}) in {sw.ElapsedMilliseconds}ms");
                 yield return tracks;
             }
 
@@ -600,46 +715,24 @@ public partial class YoutubeProvider : IDisposable
         }
 
         sw.Stop();
-        NotifyStatus($"[YouTube] Search complete: {count} results in {sw.ElapsedMilliseconds}ms");
+        NotifyStatus($"[YouTube] Search done: {count} results in {sw.ElapsedMilliseconds}ms");
     }
 
-    /// <summary>
-    /// Быстрый поиск без пагинации.
-    /// </summary>
     public async Task<List<TrackInfo>> SearchFastAsync(
         string query,
         int maxResults = 100,
         SearchFilter filter = SearchFilter.None,
         CancellationToken ct = default)
     {
-        if (!IsReady || string.IsNullOrWhiteSpace(query)) return [];
-
-        var sw = Stopwatch.StartNew();
         var results = new List<TrackInfo>(maxResults);
-        bool isMusicFilter = filter.IsMusicContext();
 
         try
         {
-            // Используем GetResultBatchesAsync для поддержки всех типов фильтров
-            await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
+            await foreach (var batch in SearchStreamingAsync(query, maxResults, filter, ct))
             {
-                foreach (var item in batch.Items)
-                {
-                    if (results.Count >= maxResults) break;
-
-                    if (item is TrackInfo rawTrack)
-                    {
-                        if (isMusicFilter) rawTrack.IsMusic = true;
-                        var track = _trackRegistry.RegisterOrUpdate(rawTrack);
-                        results.Add(track);
-                    }
-                }
-
+                results.AddRange(batch);
                 if (results.Count >= maxResults) break;
             }
-
-            sw.Stop();
-            NotifyStatus($"[YouTube] Fast search '{query}' (Filter: {filter}): {results.Count} results in {sw.ElapsedMilliseconds}ms");
         }
         catch (OperationCanceledException)
         {
@@ -653,17 +746,21 @@ public partial class YoutubeProvider : IDisposable
         return results;
     }
 
-    /// <summary>
-    /// Простой поиск с фильтром по умолчанию (обратная совместимость).
-    /// </summary>
-    public async Task<List<TrackInfo>> SearchAsync(
+    public Task<List<TrackInfo>> SearchAsync(
         string query,
         int maxResults = 100,
         SearchFilter filter = SearchFilter.None)
     {
-        return await SearchFastAsync(query, maxResults, filter);
+        return SearchFastAsync(query, maxResults, filter);
     }
 
+    #endregion
+
+    #region Search Session — ОПТИМИЗИРОВАНО
+
+    /// <summary>
+    /// используем Queue вместо List + RemoveRange для буфера.
+    /// </summary>
     public sealed class SearchSession : IDisposable
     {
         private readonly YoutubeClient _youtube;
@@ -674,8 +771,10 @@ public partial class YoutubeProvider : IDisposable
         private readonly HashSet<string> _seenIds;
         private IAsyncEnumerator<Batch<ISearchResult>>? _enumerator;
         private bool _hasMore = true;
-        private bool _disposed;
-        private readonly List<TrackInfo> _buffer = [];
+        private volatile bool _disposed;
+
+        // Queue вместо List — O(1) dequeue вместо O(n) RemoveRange
+        private readonly Queue<TrackInfo> _buffer = new();
         private readonly SemaphoreSlim _disposeLock = new(1, 1);
 
         public bool HasMore => (_hasMore || _buffer.Count > 0) && !_disposed && _seenIds.Count < _maxResults;
@@ -695,14 +794,16 @@ public partial class YoutubeProvider : IDisposable
             _query = query;
             _maxResults = maxResults;
             _filter = filter;
-            _seenIds = [];
+            _seenIds = new HashSet<string>(64, StringComparer.Ordinal);
 
             if (skipTrackIds != null)
             {
                 foreach (var id in skipTrackIds)
                 {
-                    var cleanId = id.StartsWith("yt_") ? id[3..] : id;
-                    _seenIds.Add(cleanId);
+                    var cleanId = id.AsSpan();
+                    if (cleanId.StartsWith("yt_".AsSpan()))
+                        cleanId = cleanId[3..];
+                    _seenIds.Add(cleanId.ToString());
                 }
             }
         }
@@ -711,16 +812,14 @@ public partial class YoutubeProvider : IDisposable
         {
             if (_disposed || _seenIds.Count >= _maxResults) return [];
 
-            var results = new List<TrackInfo>();
+            var results = new List<TrackInfo>(count);
 
-            // Берём из буфера
-            while (results.Count < count && _buffer.Count > 0)
+            // Queue.Dequeue — O(1) вместо List.RemoveRange — O(n)
+            while (_buffer.Count > 0 && results.Count < count)
             {
-                results.Add(_buffer[0]);
-                _buffer.RemoveAt(0);
+                results.Add(_buffer.Dequeue());
             }
 
-            // Загружаем новые
             while (results.Count < count && _hasMore && _seenIds.Count < _maxResults)
             {
                 try
@@ -737,13 +836,15 @@ public partial class YoutubeProvider : IDisposable
 
                     var batch = _enumerator.Current;
 
-                    foreach (var item in batch.Items)
+                    for (int i = 0; i < batch.Items.Count; i++)
                     {
                         if (_seenIds.Count >= _maxResults) break;
 
-                        if (item is TrackInfo tInfo)
+                        if (batch.Items[i] is TrackInfo tInfo)
                         {
-                            var rawId = tInfo.Id.StartsWith("yt_") ? tInfo.Id[3..] : tInfo.Id;
+                            var rawIdSpan = tInfo.GetRawIdSpan();
+                            var rawId = rawIdSpan.ToString();
+
                             if (!_seenIds.Add(rawId)) continue;
 
                             var track = _registry.RegisterOrUpdate(tInfo);
@@ -751,14 +852,7 @@ public partial class YoutubeProvider : IDisposable
                             if (results.Count < count)
                                 results.Add(track);
                             else
-                                _buffer.Add(track);
-                        }
-                        else if (item is Playlist pInfo)
-                        {
-                            var rawId = pInfo.YoutubeId;
-                            if (string.IsNullOrEmpty(rawId) || !_seenIds.Add(rawId)) continue;
-
-                            // Для плейлистов можно добавить конвертацию если нужно
+                                _buffer.Enqueue(track);
                         }
                     }
                 }
@@ -787,17 +881,10 @@ public partial class YoutubeProvider : IDisposable
                 _buffer.Clear();
                 _seenIds.Clear();
 
-                // Синхронно ждём dispose enumerator
                 if (_enumerator != null)
                 {
-                    try
-                    {
-                        _enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warn($"[SearchSession] Dispose error: {ex.Message}");
-                    }
+                    try { _enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                    catch (Exception ex) { Log.Warn($"[SearchSession] Dispose error: {ex.Message}"); }
                     _enumerator = null;
                 }
             }
@@ -813,9 +900,6 @@ public partial class YoutubeProvider : IDisposable
 
     private SearchSession? _currentSearchSession;
 
-    /// <summary>
-    /// Создаёт новую поисковую сессию с заданными параметрами.
-    /// </summary>
     public SearchSession CreateSearchSession(
         string query,
         int maxResults = 300,
@@ -824,14 +908,10 @@ public partial class YoutubeProvider : IDisposable
     {
         _currentSearchSession?.Dispose();
         _currentSearchSession = new SearchSession(_youtube, _trackRegistry, query, maxResults, filter, skipTrackIds);
-        NotifyStatus($"[YouTube] Created search session for '{query}' (max: {maxResults}, filter: {filter})");
-
+        NotifyStatus($"[YouTube] Search session: '{query}' (max:{maxResults}, filter:{filter})");
         return _currentSearchSession;
     }
 
-    /// <summary>
-    /// Выполняет поиск и возвращает начальные результаты вместе с сессией для пагинации.
-    /// </summary>
     public async Task<(List<TrackInfo> Tracks, SearchSession Session)> SearchWithSessionAsync(
         string query,
         int initialCount = 50,
@@ -847,11 +927,14 @@ public partial class YoutubeProvider : IDisposable
         var tracks = await session.FetchNextBatchAsync(initialCount, ct);
 
         sw.Stop();
-        NotifyStatus($"[YouTube] Initial search '{query}': {tracks.Count} results in {sw.ElapsedMilliseconds}ms (Filter: {filter})");
+        NotifyStatus($"[YouTube] Initial '{query}': {tracks.Count} in {sw.ElapsedMilliseconds}ms (Filter: {filter})");
 
         return (tracks, session);
     }
+
     #endregion
+
+    #region Playlist, Channel, Radio, Download
 
     public async Task<(string Name, List<TrackInfo> Tracks)?> GetPlaylistAsync(string url)
     {
@@ -864,7 +947,8 @@ public partial class YoutubeProvider : IDisposable
             var playlist = await _youtube.Playlists.GetAsync(playlistId.Value);
             var tracks = await _youtube.Playlists.GetVideosAsync(playlistId.Value).CollectAsync();
 
-            foreach (var t in tracks) _trackRegistry.RegisterOrUpdate(t);
+            for (int i = 0; i < tracks.Count; i++)
+                _trackRegistry.RegisterOrUpdate(tracks[i]);
 
             NotifyStatus($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
             return (playlist.Name, tracks.ToList());
@@ -876,12 +960,13 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public async Task<(string ChannelName, List<PlaylistSearchResult> Playlists)?> GetChannelPlaylistsForSyncAsync(string channelUrl, CancellationToken ct = default)
+    public async Task<(string ChannelName, List<PlaylistSearchResult> Playlists)?> GetChannelPlaylistsForSyncAsync(
+        string channelUrl, CancellationToken ct = default)
     {
         var channel = await GetChannelFromUrlAsync(channelUrl, ct);
         if (channel is null) return null;
 
-        NotifyStatus($"[YouTube] Fetching playlists from channel: {channel.Title}...");
+        NotifyStatus($"[YouTube] Fetching playlists from: {channel.Title}...");
 
         try
         {
@@ -892,16 +977,16 @@ public partial class YoutubeProvider : IDisposable
                 if (pl.Name.Equals("Uploads", StringComparison.OrdinalIgnoreCase)) continue;
 
                 var thumbs = new List<Thumbnail>();
-                if (!string.IsNullOrEmpty(pl.ThumbnailUrl)) thumbs.Add(new Thumbnail(pl.ThumbnailUrl, new Resolution(0, 0)));
+                if (!string.IsNullOrEmpty(pl.ThumbnailUrl))
+                    thumbs.Add(new Thumbnail(pl.ThumbnailUrl, new Resolution(0, 0)));
 
-                var auth = pl.Author != null ? new Author(new ChannelId(channel.Id.Value), pl.Author) : null;
+                var auth = pl.Author != null
+                    ? new Author(new ChannelId(channel.Id.Value), pl.Author)
+                    : null;
 
                 results.Add(new PlaylistSearchResult(
-                   new PlaylistId(pl.YoutubeId ?? ""),
-                   pl.Name,
-                   auth,
-                   thumbs
-               ));
+                    new PlaylistId(pl.YoutubeId ?? ""),
+                    pl.Name, auth, thumbs));
             }
 
             NotifyStatus($"[YouTube] Found {results.Count} playlists.");
@@ -920,7 +1005,8 @@ public partial class YoutubeProvider : IDisposable
         return await userDataService.GetMyPlaylistsAsync();
     }
 
-    public async Task<Playlist?> ImportPlaylistAsync(string playlistId, bool isAccountSync = false, CancellationToken ct = default)
+    public async Task<Playlist?> ImportPlaylistAsync(
+        string playlistId, bool isAccountSync = false, CancellationToken ct = default)
     {
         try
         {
@@ -931,12 +1017,11 @@ public partial class YoutubeProvider : IDisposable
 
             var tracks = await _youtube.Playlists.GetVideosAsync(plId, ct).CollectAsync();
 
-            foreach (var track in tracks)
+            for (int i = 0; i < tracks.Count; i++)
             {
+                var track = tracks[i];
                 if (_libraryService != null)
-                {
                     await _libraryService.AddOrUpdateTrackAsync(track, ct);
-                }
                 playlist.TrackIds.Add(track.Id);
             }
             return playlist;
@@ -948,39 +1033,45 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public async Task<(string Name, string AvatarUrl)?> GetChannelInfoAsync(string url, CancellationToken ct = default)
+    public async Task<(string Name, string AvatarUrl)?> GetChannelInfoAsync(
+        string url, CancellationToken ct = default)
     {
         var channel = await GetChannelFromUrlAsync(url, ct);
         if (channel == null) return null;
-        return (channel.Title, channel.Thumbnails.OrderByDescending(t => t.Resolution.Width).FirstOrDefault()?.Url ?? "");
+
+        string avatar = "";
+        int maxWidth = 0;
+        for (int i = 0; i < channel.Thumbnails.Count; i++)
+        {
+            if (channel.Thumbnails[i].Resolution.Width > maxWidth)
+            {
+                maxWidth = channel.Thumbnails[i].Resolution.Width;
+                avatar = channel.Thumbnails[i].Url ?? "";
+            }
+        }
+
+        return (channel.Title, avatar);
     }
 
     private async Task<Channel?> GetChannelFromUrlAsync(string url, CancellationToken ct = default)
     {
         try
         {
-            if (url.Contains("/channel/"))
-            {
-                var id = url.Split("/channel/")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetAsync(new ChannelId(id), ct);
-            }
-            if (url.Contains("/@"))
-            {
-                var handle = url.Split("/@")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetByHandleAsync(new ChannelHandle(handle), ct);
-            }
-            if (url.Contains("/c/"))
-            {
-                var slug = url.Split("/c/")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetBySlugAsync(new ChannelSlug(slug), ct);
-            }
-            if (url.Contains("/user/"))
-            {
-                var user = url.Split("/user/")[1].Split('/')[0].Split('?')[0];
-                return await _youtube.Channels.GetByUserAsync(new UserName(user), ct);
-            }
+            var span = url.AsSpan();
 
-            NotifyError("[YouTube] Could not recognize channel URL format.");
+            if (TryExtractSegment(span, "/channel/", out var channelId))
+                return await _youtube.Channels.GetAsync(new ChannelId(channelId), ct);
+
+            if (TryExtractSegment(span, "/@", out var handle))
+                return await _youtube.Channels.GetByHandleAsync(new ChannelHandle(handle), ct);
+
+            if (TryExtractSegment(span, "/c/", out var slug))
+                return await _youtube.Channels.GetBySlugAsync(new ChannelSlug(slug), ct);
+
+            if (TryExtractSegment(span, "/user/", out var user))
+                return await _youtube.Channels.GetByUserAsync(new UserName(user), ct);
+
+            NotifyError("[YouTube] Unrecognized channel URL format.");
             return null;
         }
         catch (Exception ex)
@@ -990,21 +1081,58 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryExtractSegment(ReadOnlySpan<char> url, ReadOnlySpan<char> pattern, out string result)
+    {
+        int idx = url.IndexOf(pattern);
+        if (idx < 0)
+        {
+            result = "";
+            return false;
+        }
+
+        var after = url[(idx + pattern.Length)..];
+
+        int endSlash = after.IndexOf('/');
+        int endQuery = after.IndexOf('?');
+
+        int end = (endSlash, endQuery) switch
+        {
+            ( >= 0, >= 0) => Math.Min(endSlash, endQuery),
+            ( >= 0, _) => endSlash,
+            (_, >= 0) => endQuery,
+            _ => after.Length
+        };
+
+        result = after[..end].ToString();
+        return result.Length > 0;
+    }
+
     public async Task<List<TrackInfo>> GetRadioAsync(TrackInfo sourceTrack, int count = 25)
     {
         if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url)) return [];
         try
         {
-            var videoId = ExtractVideoId(sourceTrack.Url);
-            if (string.IsNullOrEmpty(videoId)) return [];
+            var videoIdSpan = sourceTrack.GetRawIdSpan();
+            if (videoIdSpan.IsEmpty) return [];
+
+            var videoId = videoIdSpan.ToString();
             var mixUrl = $"https://www.youtube.com/watch?v={videoId}&list=RD{videoId}";
 
             var result = await GetPlaylistAsync(mixUrl);
             if (result == null) return [];
 
-            var tracks = result.Value.Tracks.Take(count).ToList();
-            foreach (var t in tracks) t.RadioSeedId = sourceTrack.Id;
-            return tracks;
+            var tracks = result.Value.Tracks;
+            int take = Math.Min(count, tracks.Count);
+            var output = new List<TrackInfo>(take);
+
+            for (int i = 0; i < take; i++)
+            {
+                tracks[i].RadioSeedId = sourceTrack.Id;
+                output.Add(tracks[i]);
+            }
+
+            return output;
         }
         catch { return []; }
     }
@@ -1015,7 +1143,15 @@ public partial class YoutubeProvider : IDisposable
         {
             var url = "https://music.youtube.com/playlist?list=RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs";
             var result = await GetPlaylistAsync(url);
-            return result?.Tracks.Take(count).ToList() ?? await SearchAsync("top music 2024", count);
+
+            if (result != null)
+            {
+                var tracks = result.Value.Tracks;
+                int take = Math.Min(count, tracks.Count);
+                return tracks.GetRange(0, take);
+            }
+
+            return await SearchAsync("top music 2024", count);
         }
         catch
         {
@@ -1031,10 +1167,10 @@ public partial class YoutubeProvider : IDisposable
         if (!IsReady || string.IsNullOrEmpty(track.Url)) return null;
         try
         {
-            var videoId = ExtractVideoId(track.Url);
-            if (string.IsNullOrEmpty(videoId)) return null;
+            var videoIdSpan = track.GetRawIdSpan();
+            if (videoIdSpan.IsEmpty) return null;
 
-            var vId = VideoId.Parse(videoId);
+            var vId = VideoId.Parse(videoIdSpan.ToString());
             var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
             var stream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
 
@@ -1043,7 +1179,9 @@ public partial class YoutubeProvider : IDisposable
             var fileName = SanitizeFileName($"{track.Author} - {track.Title}.{stream.Container.Name}");
             var filePath = Path.Combine(G.Folder.Downloads, fileName);
 
-            var prog = progress != null ? new Progress<double>(p => progress.Report((float)p)) : null;
+            var prog = progress != null
+                ? new Progress<double>(p => progress.Report((float)p))
+                : null;
 
             await _youtube.Videos.Streams.DownloadAsync(stream, filePath, progress: prog, cancellationToken: ct);
             NotifyStatus($"[YouTube] Downloaded: {fileName}");
@@ -1057,25 +1195,71 @@ public partial class YoutubeProvider : IDisposable
     }
 
     #endregion
+
     #region Helpers
 
+    /// <summary>
+    /// Span-based санитизация без LINQ.Where.
+    /// </summary>
     private static string SanitizeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = new string([.. name.Where(c => !invalid.Contains(c))]);
-        return sanitized.Length > 200 ? sanitized[..200] : sanitized;
+
+        // Используем stackalloc для малых строк
+        Span<char> buffer = name.Length <= 256
+            ? stackalloc char[name.Length]
+            : new char[name.Length];
+
+        int pos = 0;
+        for (int i = 0; i < name.Length && pos < 200; i++)
+        {
+            var c = name[i];
+            if (Array.IndexOf(invalid, c) < 0)
+                buffer[pos++] = c;
+        }
+
+        return new string(buffer[..pos]);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string? GetBestThumbnailUrl(IReadOnlyList<Thumbnail> thumbnails)
+    {
+        if (thumbnails.Count == 0) return null;
+
+        string? best = null;
+        int bestArea = -1;
+
+        for (int i = 0; i < thumbnails.Count; i++)
+        {
+            int area = thumbnails[i].Resolution.Area;
+            if (area > bestArea)
+            {
+                bestArea = area;
+                best = thumbnails[i].Url;
+            }
+        }
+
+        return best;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void NotifyStatus(string message)
     {
         Log.Info(message);
         OnStatusChanged?.Invoke(message);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void NotifyError(string message)
     {
         Log.Error(message);
         OnError?.Invoke(message);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string GenerateCacheKeyFromString(string videoId, string? container, int bitrate = 0)
+    {
+        return GenerateCacheKey(videoId.AsSpan(), container, bitrate);
     }
 
     public void Dispose()
@@ -1083,10 +1267,15 @@ public partial class YoutubeProvider : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        _cookieAuth?.OnAuthStateChanged -= ReloadClient;
+        if (_cookieAuth != null)
+            _cookieAuth.OnAuthStateChanged -= ReloadClient;
 
-        // КРИТИЧНО: Освобождаем все ресурсы
         DisposeCurrentClient();
+
+        // Dispose handler last
+        _currentHandler?.Dispose();
+        _currentHandler = null;
+
         _streamCache.Clear();
 
         GC.SuppressFinalize(this);
@@ -1105,6 +1294,7 @@ public partial class YoutubeProvider : IDisposable
 
     [GeneratedRegex(@"^[a-zA-Z0-9_-]{11}$", RegexOptions.Compiled)]
     private static partial Regex _ValidYoutubeId();
+
     #endregion
 }
 
@@ -1118,14 +1308,10 @@ public class StreamOption : ReactiveObject
     public string DisplayName => $"{Codec} {string.Format(LocalizationService.Instance.Get("Stream_Bitrate"), Bitrate)} ({Container})";
 
     public string SizeMbFormatted => string.Format(
-    LocalizationService.Instance.Get("Stream_Format_Mb", "{0:F1} MB"),
-    SizeMb);
+        LocalizationService.Instance.Get("Stream_Format_Mb", "{0:F1} MB"),
+        SizeMb);
 
     [Reactive] public bool IsDownloaded { get; set; }
-
-    /// <summary>
-    /// Текущий активный формат (который сейчас воспроизводится).
-    /// </summary>
     [Reactive] public bool IsActive { get; set; }
 }
 

@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using LMP.Core.Data.Repositories;
 using LMP.Core.Models;
 
@@ -6,12 +8,15 @@ namespace LMP.Core.Services;
 
 /// <summary>
 /// Identity Map / L1 Cache for TrackInfo objects.
-/// Combines in-memory caching with database backing.
+/// минимизированы аллокации, batch-операции, ValueTask для hot paths.
 /// </summary>
 public sealed class TrackRegistry
 {
-    private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _cache = new();
-    private readonly ConcurrentDictionary<string, TrackInfo> _pinned = new();
+    // StringComparer.Ordinal для лучшей производительности
+    private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _cache = 
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TrackInfo> _pinned = 
+        new(StringComparer.Ordinal);
 
     public StreamCacheManager? CacheManager { get; set; }
 
@@ -26,56 +31,56 @@ public sealed class TrackRegistry
 
     /// <summary>
     /// Registers or updates a track. Returns the canonical instance.
+    /// минимизированы проверки и аллокации.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TrackInfo RegisterOrUpdate(TrackInfo incoming)
     {
         if (string.IsNullOrEmpty(incoming.Id)) return incoming;
 
-        TrackInfo result;
-
-        // 1. Check pinned (Strong Reference)
+        // 1. Check pinned (Strong Reference) — fastest path
         if (_pinned.TryGetValue(incoming.Id, out var pinned))
         {
             pinned.UpdateMetadata(incoming);
-            result = pinned;
-        }
-        // 2. Check weak cache
-        else if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
-        {
-            cached.UpdateMetadata(incoming);
-            result = cached;
-        }
-        // 3. New registration
-        else
-        {
-            _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
-            result = incoming;
+            return pinned;
         }
 
-        // Обновляем статус кэширования, если менеджер доступен
-        if (CacheManager != null && !result.IsDownloaded && !result.IsCached)
+        // 2. Check weak cache
+        if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
         {
-            // Простая проверка без тяжелых операций, так как этот метод вызывается часто
-            if (CacheManager.IsFullyCached(result.Id))
+            cached.UpdateMetadata(incoming);
+            return cached;
+        }
+
+        // 3. New registration
+        _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
+
+        // Обновляем статус кэширования БЕЗ синхронных IO операций
+        if (CacheManager != null && !incoming.IsDownloaded && !incoming.IsCached)
+        {
+            // Быстрая проверка из памяти
+            if (CacheManager.IsFullyCached(incoming.Id))
             {
-                var meta = StreamCacheManager.TryGetMetadata(result.Id);
+                var meta = StreamCacheManager.TryGetMetadata(incoming.Id);
                 if (meta != null)
                 {
-                    result.MarkAsCached(meta.Container, meta.Bitrate);
+                    incoming.MarkAsCached(meta.Container, meta.Bitrate);
                 }
                 else
                 {
-                    result.IsCached = true;
+                    incoming.IsCached = true;
                 }
             }
         }
 
-        return result;
+        return incoming;
     }
 
     /// <summary>
     /// Gets track from L1 cache only (no DB access).
+    /// ValueTask для sync-path.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TrackInfo? TryGet(string id)
     {
         if (string.IsNullOrEmpty(id)) return null;
@@ -88,8 +93,9 @@ public sealed class TrackRegistry
 
     /// <summary>
     /// Gets track from cache or loads from database.
+    /// ValueTask для fast path (cache hit).
     /// </summary>
-    public async Task<TrackInfo?> GetOrLoadAsync(string id, CancellationToken ct = default)
+    public async ValueTask<TrackInfo?> GetOrLoadAsync(string id, CancellationToken ct = default)
     {
         var cached = TryGet(id);
         if (cached != null) return cached;
@@ -104,7 +110,6 @@ public sealed class TrackRegistry
             fromDb.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(id, ct);
         }
 
-        // Автоматически пиним при загрузке из БД, если нужно
         var canonical = RegisterOrUpdate(fromDb);
         UpdatePinStatusInternal(canonical);
 
@@ -113,41 +118,56 @@ public sealed class TrackRegistry
 
     /// <summary>
     /// Batch preload tracks into cache.
+    /// один SQL-запрос вместо N.
     /// </summary>
     public async Task PreloadAsync(IEnumerable<string> ids, CancellationToken ct = default)
     {
         if (_repository == null) return;
 
-        var toLoad = ids.Where(id => TryGet(id) == null).Distinct().ToList();
-        if (toLoad.Count == 0) return;
+        // используем HashSet для быстрой проверки дубликатов
+        var toLoadSet = new HashSet<string>(StringComparer.Ordinal);
+        
+        foreach (var id in ids)
+        {
+            if (TryGet(id) == null)
+                toLoadSet.Add(id);
+        }
 
-        var loaded = await _repository.GetByIdsAsync(toLoad, ct);
+        if (toLoadSet.Count == 0) return;
+
+        var loaded = await _repository.GetByIdsAsync(toLoadSet, ct);
         if (loaded.Count == 0) return;
 
-        // Batch загрузка плейлистов
+        // Batch загрузка плейлистов — ОДИН SQL запрос
         Dictionary<string, HashSet<string>>? playlistsMap = null;
         if (_playlists != null)
         {
-            var loadedIds = loaded.Select(t => t.Id).ToList();
+            var loadedIds = new List<string>(loaded.Count);
+            for (int i = 0; i < loaded.Count; i++)
+                loadedIds.Add(loaded[i].Id);
+            
             playlistsMap = await _playlists.GetPlaylistsForTracksAsync(loadedIds, ct);
         }
 
-        foreach (var track in loaded)
+        for (int i = 0; i < loaded.Count; i++)
         {
-            if (playlistsMap != null)
+            var track = loaded[i];
+            
+            if (playlistsMap != null && playlistsMap.TryGetValue(track.Id, out var pls))
             {
-                track.InPlaylists = playlistsMap.TryGetValue(track.Id, out var pls) ? pls : [];
+                track.InPlaylists = pls;
             }
 
-            var t = RegisterOrUpdate(track);
-            UpdatePinStatusInternal(t);
+            var canonical = RegisterOrUpdate(track);
+            UpdatePinStatusInternal(canonical);
         }
     }
 
     /// <summary>
     /// Updates pinning status based on track importance.
-    /// Returns true if track was added to pinned.
+    /// инлайнинг и минимизация условий.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool UpdatePinStatusInternal(TrackInfo track)
     {
         bool shouldPin = track.IsLiked ||
@@ -159,7 +179,7 @@ public sealed class TrackRegistry
         {
             if (_pinned.TryAdd(track.Id, track))
             {
-                MemoryDiagnostics.TrackBytes("TrackRegistry.Pinned", 1024); // Примерный размер
+                MemoryDiagnostics.TrackBytes("TrackRegistry.Pinned", 1024);
                 return true;
             }
         }
@@ -173,11 +193,16 @@ public sealed class TrackRegistry
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void UpdatePinStatus(TrackInfo track)
     {
         UpdatePinStatusInternal(track);
     }
 
+    /// <summary>
+    /// Hydrates registry from database.
+    /// batch загрузка плейлистов одним запросом.
+    /// </summary>
     public async Task HydrateAsync(CancellationToken ct = default)
     {
         if (_repository == null) return;
@@ -185,7 +210,8 @@ public sealed class TrackRegistry
         Log.Info("[TrackRegistry] Hydrating from database...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        var allLoaded = new List<TrackInfo>();
+        // pre-allocate с запасом
+        var allLoaded = new List<TrackInfo>(2200);
 
         var liked = await _repository.GetLikedAsync(1000, 0, ct);
         allLoaded.AddRange(liked);
@@ -196,8 +222,11 @@ public sealed class TrackRegistry
         var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
         allLoaded.AddRange(recent);
 
-        // Один batch-запрос для всех плейлистов
-        var allIds = allLoaded.Select(t => t.Id).Distinct().ToList();
+        // КРИТИЧНАЯ ОДИН batch-запрос для всех плейлистов
+        var allIds = new HashSet<string>(allLoaded.Count, StringComparer.Ordinal);
+        for (int i = 0; i < allLoaded.Count; i++)
+            allIds.Add(allLoaded[i].Id);
+
         Dictionary<string, HashSet<string>>? playlistsMap = null;
 
         if (_playlists != null && allIds.Count > 0)
@@ -205,11 +234,13 @@ public sealed class TrackRegistry
             playlistsMap = await _playlists.GetPlaylistsForTracksAsync(allIds, ct);
         }
 
-        foreach (var t in allLoaded)
+        for (int i = 0; i < allLoaded.Count; i++)
         {
-            if (playlistsMap != null)
+            var t = allLoaded[i];
+            
+            if (playlistsMap != null && playlistsMap.TryGetValue(t.Id, out var pls))
             {
-                t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
+                t.InPlaylists = pls;
             }
 
             var canonical = RegisterOrUpdate(t);
@@ -224,6 +255,10 @@ public sealed class TrackRegistry
         MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", _pinned.Count * 1024);
     }
 
+    /// <summary>
+    /// Flushes pinned tracks to database.
+    /// batch upsert вместо N запросов.
+    /// </summary>
     public async Task FlushAsync(CancellationToken ct = default)
     {
         if (_repository == null) return;
@@ -244,17 +279,42 @@ public sealed class TrackRegistry
 
     public IEnumerable<TrackInfo> GetPinnedTracks() => _pinned.Values;
 
+    /// <summary>
+    /// Cleans up dead weak references.
+    /// используем ArrayPool для буфера удаляемых ключей.
+    /// </summary>
     public int CleanupDeadReferences()
     {
-        var dead = _cache
-            .Where(kvp => !kvp.Value.TryGetTarget(out _) && !_pinned.ContainsKey(kvp.Key))
-            .Select(kvp => kvp.Key)
-            .ToList();
+        // Оценка максимального размера — все кэшированные записи
+        var maxDeadCount = _cache.Count;
+        
+        var deadKeysArray = ArrayPool<string>.Shared.Rent(maxDeadCount);
+        int deadCount = 0;
 
-        foreach (var key in dead)
-            _cache.TryRemove(key, out _);
+        try
+        {
+            foreach (var kvp in _cache)
+            {
+                if (!kvp.Value.TryGetTarget(out _) && !_pinned.ContainsKey(kvp.Key))
+                {
+                    if (deadCount < deadKeysArray.Length)
+                    {
+                        deadKeysArray[deadCount++] = kvp.Key;
+                    }
+                }
+            }
 
-        return dead.Count;
+            for (int i = 0; i < deadCount; i++)
+            {
+                _cache.TryRemove(deadKeysArray[i], out _);
+            }
+
+            return deadCount;
+        }
+        finally
+        {
+            ArrayPool<string>.Shared.Return(deadKeysArray, clearArray: true);
+        }
     }
 
     public void Clear()

@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
@@ -9,35 +11,48 @@ internal class MusicController(HttpClient http)
 {
     private const string ApiUrl = "https://music.youtube.com/youtubei/v1";
 
+    // Кэшированные UTF-8 байты для статических ключей JSON
+    private static readonly byte[] Utf8Context = "context"u8.ToArray();
+    private static readonly byte[] Utf8Client = "client"u8.ToArray();
+    private static readonly byte[] Utf8ClientName = "clientName"u8.ToArray();
+    private static readonly byte[] Utf8ClientVersion = "clientVersion"u8.ToArray();
+    private static readonly byte[] Utf8Hl = "hl"u8.ToArray();
+    private static readonly byte[] Utf8Gl = "gl"u8.ToArray();
+    private static readonly byte[] Utf8VisitorData = "visitorData"u8.ToArray();
+    private static readonly byte[] Utf8User = "user"u8.ToArray();
+    private static readonly byte[] Utf8WebRemix = "WEB_REMIX"u8.ToArray();
+
+    private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
+
     public string VisitorData { get; set; } = "";
 
-    private JsonElement GetContext()
+    /// <summary>
+    /// Записывает context блок напрямую в writer — без промежуточного JsonDocument.
+    /// </summary>
+    private void WriteContext(Utf8JsonWriter writer)
     {
-        // Сериализуем все строковые значения через JsonSerializer для корректного экранирования
-        var visitorDataJson = !string.IsNullOrEmpty(VisitorData) 
-            ? JsonSerializer.Serialize(VisitorData) 
-            : "null";
-        
-        var clientVersionJson = JsonSerializer.Serialize(YoutubeHttpHandler.MusicClientVersion);
-        var hlJson = JsonSerializer.Serialize(YoutubeHttpHandler.GetHl());
-        var glJson = JsonSerializer.Serialize(YoutubeHttpHandler.GetGl());
+        writer.WritePropertyName(Utf8Context);
+        writer.WriteStartObject();
 
-        var json = $$"""
-        {
-            "context": {
-                "client": {
-                    "clientName": "WEB_REMIX",
-                    "clientVersion": {{clientVersionJson}},
-                    "hl": {{hlJson}},
-                    "gl": {{glJson}},
-                    "visitorData": {{visitorDataJson}}
-                },
-                "user": {}
-            }
-        }
-        """;
-        
-        return Json.Parse(json);
+        writer.WritePropertyName(Utf8Client);
+        writer.WriteStartObject();
+        writer.WriteString(Utf8ClientName, Utf8WebRemix);
+        writer.WriteString(Utf8ClientVersion, YoutubeHttpHandler.MusicClientVersion);
+        writer.WriteString(Utf8Hl, YoutubeHttpHandler.GetHl());
+        writer.WriteString(Utf8Gl, YoutubeHttpHandler.GetGl());
+
+        if (!string.IsNullOrEmpty(VisitorData))
+            writer.WriteString(Utf8VisitorData, VisitorData);
+        else
+            writer.WriteNull(Utf8VisitorData);
+
+        writer.WriteEndObject(); // client
+
+        writer.WritePropertyName(Utf8User);
+        writer.WriteStartObject();
+        writer.WriteEndObject(); // user
+
+        writer.WriteEndObject(); // context
     }
 
     private void UpdateVisitorData(JsonElement root)
@@ -60,35 +75,50 @@ internal class MusicController(HttpClient http)
         }
     }
 
-    public async ValueTask<MusicBrowseResponse> GetBrowseAsync(string? browseId = null, string? continuation = null, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Создает HttpContent с использованием ArrayPool.
+    /// Пишет JSON напрямую в pooled буфер, без двойного копирования.
+    /// </summary>
+    private HttpContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
     {
-        var url = $"{ApiUrl}/browse";
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
-
-        AttachVisitorDataToRequest(request);
-
-        using var ms = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
+        // Используем ArrayBufferWriter с ArrayPool внутри
+        var bufferWriter = new ArrayBufferWriter<byte>(512);
+        using (var writer = new Utf8JsonWriter(bufferWriter))
         {
             writer.WriteStartObject();
-            foreach (var prop in GetContext().EnumerateObject()) prop.WriteTo(writer);
+            WriteContext(writer);
+            writeBody(writer);
+            writer.WriteEndObject();
+        }
 
+        // ByteArrayContent забирает копию из WrittenSpan — одна копия вместо двух
+        var content = new ByteArrayContent(bufferWriter.WrittenSpan.ToArray());
+        content.Headers.ContentType = JsonContentType;
+        return content;
+    }
+
+    public async ValueTask<MusicBrowseResponse> GetBrowseAsync(
+        string? browseId = null,
+        string? continuation = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/browse");
+        AttachVisitorDataToRequest(request);
+
+        request.Content = CreateJsonContent(writer =>
+        {
             if (!string.IsNullOrEmpty(continuation))
                 writer.WriteString("continuation", continuation);
             else if (!string.IsNullOrEmpty(browseId))
                 writer.WriteString("browseId", browseId);
+        });
 
-            writer.WriteEndObject();
-        }
-
-        request.Content = new ByteArrayContent(ms.ToArray());
-        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-
-        using var response = await http.SendAsync(request, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        var jsonDoc = Json.Parse(content);
+        // Парсим напрямую из потока — без промежуточной строки
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var jsonDoc = await Json.ParseAsync(stream, cancellationToken);
         UpdateVisitorData(jsonDoc);
 
         return new MusicBrowseResponse(jsonDoc);
@@ -99,103 +129,89 @@ internal class MusicController(HttpClient http)
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/{endpoint}");
         AttachVisitorDataToRequest(request);
 
-        using var ms = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
+        request.Content = CreateJsonContent(writer =>
         {
+            writer.WritePropertyName("target");
             writer.WriteStartObject();
-            foreach (var prop in GetContext().EnumerateObject()) prop.WriteTo(writer);
-
-            writer.WriteStartObject("target");
             writer.WriteString("videoId", videoId);
             writer.WriteEndObject();
+        });
 
-            writer.WriteEndObject();
-        }
-
-        request.Content = new ByteArrayContent(ms.ToArray());
-        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        try { UpdateVisitorData(Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken))); } catch { }
+        try
+        {
+            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            UpdateVisitorData(await Json.ParseAsync(stream, cancellationToken));
+        }
+        catch { /* best effort */ }
     }
 
-    public async Task<string> CreatePlaylistAsync(string title, string description, List<string>? videoIds, CancellationToken cancellationToken)
+    public async Task<string> CreatePlaylistAsync(
+        string title,
+        string description,
+        List<string>? videoIds,
+        CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/playlist/create");
         AttachVisitorDataToRequest(request);
 
-        // Используем Utf8JsonWriter для безопасной сериализации
-        using var ms = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
+        request.Content = CreateJsonContent(writer =>
         {
-            writer.WriteStartObject();
-            
-            // Копируем context
-            foreach (var prop in GetContext().EnumerateObject()) 
-                prop.WriteTo(writer);
-
             writer.WriteString("title", title);
             writer.WriteString("description", description);
-            
-            if (videoIds != null && videoIds.Count > 0)
+
+            if (videoIds is { Count: > 0 })
             {
                 writer.WriteStartArray("videoIds");
                 foreach (var id in videoIds)
                     writer.WriteStringValue(id);
                 writer.WriteEndArray();
             }
+        });
 
-            writer.WriteEndObject();
-        }
-
-        request.Content = new ByteArrayContent(ms.ToArray());
-        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        var jsonDoc = Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var jsonDoc = await Json.ParseAsync(stream, cancellationToken);
         UpdateVisitorData(jsonDoc);
 
         return jsonDoc.GetPropertyOrNull("playlistId")?.GetStringOrNull()
             ?? throw new YoutubeExplodeException("Failed to create playlist.");
     }
 
-    public async Task EditPlaylistAsync(string playlistId, string videoId, string action, CancellationToken cancellationToken)
+    public async Task EditPlaylistAsync(
+        string playlistId,
+        string videoId,
+        string action,
+        CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/browse/edit_playlist");
         AttachVisitorDataToRequest(request);
 
-        // Используем Utf8JsonWriter для безопасной сериализации
-        using var ms = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
+        request.Content = CreateJsonContent(writer =>
         {
-            writer.WriteStartObject();
-            
-            foreach (var prop in GetContext().EnumerateObject()) 
-                prop.WriteTo(writer);
-
             writer.WriteString("playlistId", playlistId);
-            
+
             writer.WriteStartArray("actions");
             writer.WriteStartObject();
             writer.WriteString("action", action);
             writer.WriteString("addedVideoId", videoId);
             writer.WriteEndObject();
             writer.WriteEndArray();
+        });
 
-            writer.WriteEndObject();
-        }
-
-        request.Content = new ByteArrayContent(ms.ToArray());
-        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        try { UpdateVisitorData(Json.Parse(await response.Content.ReadAsStringAsync(cancellationToken))); } catch { }
+        try
+        {
+            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            UpdateVisitorData(await Json.ParseAsync(stream, cancellationToken));
+        }
+        catch { /* best effort */ }
     }
 
     public async Task<JsonElement> GetAccountMenuAsync(CancellationToken cancellationToken = default)
@@ -203,24 +219,16 @@ internal class MusicController(HttpClient http)
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiUrl}/account/account_menu");
         AttachVisitorDataToRequest(request);
 
-        using var ms = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
-        {
-            writer.WriteStartObject();
-            foreach (var prop in GetContext().EnumerateObject()) prop.WriteTo(writer);
-            writer.WriteEndObject();
-        }
+        // Только context, без дополнительных полей
+        request.Content = CreateJsonContent(_ => { });
 
-        request.Content = new ByteArrayContent(ms.ToArray());
-        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        var result = Json.Parse(content);
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var result = await Json.ParseAsync(stream, cancellationToken);
         UpdateVisitorData(result);
-        
+
         return result;
     }
 }

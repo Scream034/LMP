@@ -1,24 +1,18 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
-
 using LMP.Core.Youtube.Utils.Extensions;
 
 namespace LMP.Core.Youtube.Music;
 
-public class MusicShelf
+public sealed class MusicShelf(string title, List<MusicItem> items)
 {
-    public string Title { get; }
-    public List<MusicItem> Items { get; }
-
-    public MusicShelf(string title, List<MusicItem> items)
-    {
-        Title = title;
-        Items = items;
-    }
+    public string Title { get; } = title;
+    public List<MusicItem> Items { get; } = items;
 }
 
-public class MusicItem
+public sealed class MusicItem
 {
     public string Id { get; set; } = "";
     public string Title { get; set; } = "";
@@ -29,11 +23,15 @@ public class MusicItem
     public string Type { get; set; } = "Song";
 }
 
-internal class MusicBrowseResponse
+internal sealed class MusicBrowseResponse
 {
     public List<MusicShelf> Shelves { get; } = [];
     public string? Title { get; private set; }
     public string? ContinuationToken { get; private set; }
+
+    // Кэшированные форматы парсинга длительности
+    private static readonly string[] DurationFormats =
+        [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"];
 
     public MusicBrowseResponse(JsonElement root)
     {
@@ -41,15 +39,18 @@ internal class MusicBrowseResponse
         var header = root.GetPropertyOrNull("header")?.GetPropertyOrNull("musicDetailHeaderRenderer")
             ?? root.GetPropertyOrNull("header")?.GetPropertyOrNull("musicResponsiveHeaderRenderer");
 
-        Title = header?.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull()
-             ?? header?.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
+        if (header.HasValue)
+        {
+            Title = header.Value.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")
+                        ?.GetFirstArrayElementOrNull()?.GetPropertyOrNull("text")?.GetStringOrNull()
+                    ?? header.Value.GetPropertyOrNull("title")?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
+        }
 
-        // 2. Сначала ищем Continuation (Пагинацию)
-        // Если это ответ на подгрузку, в нем структура отличается
+        // 2. Continuation
         if (TryParseContinuation(root))
             return;
 
-        // 3. Если это не пагинация, парсим как обычную страницу (Browse)
+        // 3. Browse
         var sectionList = root.GetPropertyOrNull("contents")
             ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
             ?.GetPropertyOrNull("secondaryContents")
@@ -58,11 +59,18 @@ internal class MusicBrowseResponse
 
         if (sectionList == null)
         {
-            sectionList = root.GetPropertyOrNull("contents")
+            var tabs = root.GetPropertyOrNull("contents")
                 ?.GetPropertyOrNull("singleColumnBrowseResultsRenderer")
-                ?.GetPropertyOrNull("tabs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-                .GetPropertyOrNull("tabRenderer")?.GetPropertyOrNull("content")
-                ?.GetPropertyOrNull("sectionListRenderer")?.GetPropertyOrNull("contents");
+                ?.GetPropertyOrNull("tabs");
+
+            if (tabs != null)
+            {
+                var firstTab = tabs.Value.GetFirstArrayElementOrNull();
+                sectionList = firstTab?.GetPropertyOrNull("tabRenderer")
+                    ?.GetPropertyOrNull("content")
+                    ?.GetPropertyOrNull("sectionListRenderer")
+                    ?.GetPropertyOrNull("contents");
+            }
         }
 
         if (sectionList != null)
@@ -71,11 +79,12 @@ internal class MusicBrowseResponse
             {
                 if (section.TryGetProperty("musicPlaylistShelfRenderer", out var playlistShelf))
                 {
-                    ParseShelfContent(playlistShelf, "Tracks"); // Парсим треки
+                    ParseShelfContent(playlistShelf, "Tracks");
 
-                    // Токен первой страницы (100+)
-                    ContinuationToken ??= playlistShelf.GetPropertyOrNull("continuations")?.EnumerateArrayOrNull()?.FirstOrDefault()
-                        .GetPropertyOrNull("nextContinuationData")?.GetPropertyOrNull("continuation")?.GetStringOrNull();
+                    ContinuationToken ??= playlistShelf.GetPropertyOrNull("continuations")
+                        ?.GetFirstArrayElementOrNull()
+                        ?.GetPropertyOrNull("nextContinuationData")
+                        ?.GetPropertyOrNull("continuation")?.GetStringOrNull();
                 }
                 else if (section.TryGetProperty("gridRenderer", out var grid))
                 {
@@ -93,33 +102,33 @@ internal class MusicBrowseResponse
     {
         bool foundAny = false;
 
-        // Вариант А: onResponseReceivedActions (Используется для подгрузки лайков VLLM)
         var actions = root.GetPropertyOrNull("onResponseReceivedActions");
         if (actions != null)
         {
             foreach (var action in actions.Value.EnumerateArrayOrEmpty())
             {
-                var continuationItems = action.GetPropertyOrNull("appendContinuationItemsAction")?.GetPropertyOrNull("continuationItems");
+                var continuationItems = action.GetPropertyOrNull("appendContinuationItemsAction")
+                    ?.GetPropertyOrNull("continuationItems");
                 if (continuationItems != null)
                 {
-                    // ВАЖНО: Передаем весь массив items, метод сам найдет там и треки, и токен
                     ParseMixedContent(continuationItems.Value, "Continuation");
                     foundAny = true;
                 }
             }
         }
 
-        // Вариант Б: continuationContents (Старый формат)
-        var contContents = root.GetPropertyOrNull("continuationContents")?.GetPropertyOrNull("musicPlaylistShelfContinuation");
+        var contContents = root.GetPropertyOrNull("continuationContents")
+            ?.GetPropertyOrNull("musicPlaylistShelfContinuation");
         if (contContents != null)
         {
             var contents = contContents.Value.GetPropertyOrNull("contents");
             if (contents != null)
                 ParseMixedContent(contents.Value, "Continuation");
 
-            // В этом формате токен лежит отдельно
-            ContinuationToken ??= contContents.Value.GetPropertyOrNull("continuations")?.EnumerateArrayOrNull()?.FirstOrDefault()
-                .GetPropertyOrNull("nextContinuationData")?.GetPropertyOrNull("continuation")?.GetStringOrNull();
+            ContinuationToken ??= contContents.Value.GetPropertyOrNull("continuations")
+                ?.GetFirstArrayElementOrNull()
+                ?.GetPropertyOrNull("nextContinuationData")
+                ?.GetPropertyOrNull("continuation")?.GetStringOrNull();
 
             foundAny = true;
         }
@@ -127,14 +136,12 @@ internal class MusicBrowseResponse
         return foundAny;
     }
 
-    // Этот метод бежит по массиву и выдергивает всё полезное: и треки, и токен
     private void ParseMixedContent(JsonElement itemsArray, string? shelfTitle)
     {
-        var tracks = new List<MusicItem>();
+        var tracks = new List<MusicItem>(16);
 
         foreach (var item in itemsArray.EnumerateArrayOrEmpty())
         {
-            // 1. Это Трек?
             if (item.TryGetProperty("musicResponsiveListItemRenderer", out var trackJson))
             {
                 var musicItem = ParseMusicItem(trackJson);
@@ -142,7 +149,6 @@ internal class MusicBrowseResponse
                 continue;
             }
 
-            // 2. Это Трек (в сетке)?
             if (item.TryGetProperty("musicTwoRowItemRenderer", out var twoRowJson))
             {
                 var musicItem = ParseTwoRowItem(twoRowJson);
@@ -150,37 +156,38 @@ internal class MusicBrowseResponse
                 continue;
             }
 
-            // 3. ЭТО ТОКЕН? (Вот он, родимый, лежит прямо в списке элементов)
             if (item.TryGetProperty("continuationItemRenderer", out var contItem))
             {
                 var token = contItem.GetPropertyOrNull("continuationEndpoint")
-                    ?.GetPropertyOrNull("continuationCommand")?.GetPropertyOrNull("token")?.GetStringOrNull();
+                    ?.GetPropertyOrNull("continuationCommand")
+                    ?.GetPropertyOrNull("token")?.GetStringOrNull();
 
                 if (!string.IsNullOrEmpty(token))
-                {
                     ContinuationToken = token;
-                }
             }
         }
 
         if (tracks.Count > 0)
-        {
             Shelves.Add(new MusicShelf(shelfTitle ?? "Music", tracks));
-        }
     }
 
-    // Обертка для старого метода
     private void ParseShelfContent(JsonElement shelf, string? title)
     {
-        var displayTitle = title
-            ?? shelf.GetPropertyOrNull("header")?.GetPropertyOrNull("musicCarouselShelfBasicHeaderRenderer")?.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull()
-            ?? "Tracks";
+        var displayTitle = title;
+        if (displayTitle == null)
+        {
+            displayTitle = shelf.GetPropertyOrNull("header")
+                ?.GetPropertyOrNull("musicCarouselShelfBasicHeaderRenderer")
+                ?.GetPropertyOrNull("title")
+                ?.GetPropertyOrNull("runs")
+                ?.GetFirstArrayElementOrNull()
+                ?.GetPropertyOrNull("text")?.GetStringOrNull()
+                ?? "Tracks";
+        }
 
         var contents = shelf.GetPropertyOrNull("contents");
         if (contents != null)
-        {
             ParseMixedContent(contents.Value, displayTitle);
-        }
     }
 
     private void ParseGridContent(JsonElement grid, string title)
@@ -191,18 +198,28 @@ internal class MusicBrowseResponse
 
     private MusicItem? ParseMusicItem(JsonElement json)
     {
-        var id = json.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull()
-              ?? json.EnumerateDescendantProperties("videoId").FirstOrDefault().GetStringOrNull();
+        var id = json.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+        if (id == null)
+        {
+            // Fallback: FindFirstDescendantProperty вместо EnumerateDescendantProperties + LINQ
+            id = json.FindFirstDescendantProperty("videoId")?.GetStringOrNull();
+        }
 
         if (id == null) return null;
 
-        var title = json.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(0)
-            ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")
-            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("text")?.GetStringOrNull() ?? "";
+        // Без LINQ: GetArrayElementOrNull(index)
+        var flexCols = json.GetPropertyOrNull("flexColumns");
 
-        var metaRuns = json.GetPropertyOrNull("flexColumns")?.EnumerateArrayOrNull()?.ElementAtOrNull(1)
-            ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")?.GetPropertyOrNull("text")
+        var title = flexCols?.GetArrayElementOrNull(0)
+            ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")
+            ?.GetPropertyOrNull("text")
+            ?.GetPropertyOrNull("runs")
+            ?.GetFirstArrayElementOrNull()
+            ?.GetPropertyOrNull("text")?.GetStringOrNull() ?? "";
+
+        var metaRuns = flexCols?.GetArrayElementOrNull(1)
+            ?.GetPropertyOrNull("musicResponsiveListItemFlexColumnRenderer")
+            ?.GetPropertyOrNull("text")
             ?.GetPropertyOrNull("runs");
 
         string? author = null;
@@ -214,6 +231,7 @@ internal class MusicBrowseResponse
             {
                 var text = run.GetPropertyOrNull("text")?.GetStringOrNull();
                 if (text == null) continue;
+
                 var nav = run.GetPropertyOrNull("navigationEndpoint");
                 if (nav != null)
                 {
@@ -225,72 +243,98 @@ internal class MusicBrowseResponse
                     if (pageType == "MUSIC_PAGE_TYPE_ARTIST") author = text;
                     else if (pageType == "MUSIC_PAGE_TYPE_ALBUM") album = text;
                 }
-                else if (author == null && !text.Contains("views") && !text.Contains("Song") && !text.Contains("Video") && !text.Contains(":"))
+                else if (author == null && !ContainsAnyOf(text, "views", "Song", "Video", ":"))
                 {
                     author = text;
                 }
             }
         }
 
-        var durationText = json.GetPropertyOrNull("fixedColumns")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("musicResponsiveListItemFixedColumnRenderer")?.GetPropertyOrNull("text")
-            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("text")?.GetStringOrNull();
+        var durationText = json.GetPropertyOrNull("fixedColumns")
+            ?.GetFirstArrayElementOrNull()
+            ?.GetPropertyOrNull("musicResponsiveListItemFixedColumnRenderer")
+            ?.GetPropertyOrNull("text")
+            ?.GetPropertyOrNull("runs")
+            ?.GetFirstArrayElementOrNull()
+            ?.GetPropertyOrNull("text")?.GetStringOrNull();
 
         TimeSpan? duration = null;
         if (durationText != null)
+            TryParseDurationFast(durationText, out duration);
+
+        var thumbs = ExtractThumbnails(
+            json.GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("musicThumbnailRenderer")
+                ?.GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("thumbnails"));
+
+        return new MusicItem
         {
-            var parts = durationText.Split(':');
-            if (parts.Length == 2 && int.TryParse(parts[0], out var m) && int.TryParse(parts[1], out var s))
-                duration = new TimeSpan(0, m, s);
-            else if (parts.Length == 3 && int.TryParse(parts[0], out var h) && int.TryParse(parts[1], out var m2) && int.TryParse(parts[2], out var s2))
-                duration = new TimeSpan(h, m2, s2);
-        }
-
-        var thumbs = json.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("musicThumbnailRenderer")
-            ?.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()
-            ?.Select(static j => new ThumbnailData(j))
-            .Select(static d => new Thumbnail(d.Url!, new Resolution(d.Width ?? 0, d.Height ?? 0)))
-            .ToArray() ?? [];
-
-        return new MusicItem { Id = id, Title = title, Author = author, Album = album, Duration = duration, Thumbnails = thumbs, Type = "Song" };
+            Id = id,
+            Title = title,
+            Author = author,
+            Album = album,
+            Duration = duration,
+            Thumbnails = thumbs,
+            Type = "Song"
+        };
     }
 
     private MusicItem? ParseTwoRowItem(JsonElement json)
     {
-        var title = json.GetPropertyOrNull("title")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("text")?.GetStringOrNull() ?? "";
+        var title = json.GetPropertyOrNull("title")
+            ?.GetPropertyOrNull("runs")
+            ?.GetFirstArrayElementOrNull()
+            ?.GetPropertyOrNull("text")?.GetStringOrNull() ?? "";
 
-        var subtitle = json.GetPropertyOrNull("subtitle")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.Select(static r => r.GetPropertyOrNull("text")?.GetStringOrNull()).FirstOrDefault();
+        var subtitle = json.GetPropertyOrNull("subtitle")
+            ?.GetPropertyOrNull("runs")
+            ?.GetFirstArrayElementOrNull()
+            ?.GetPropertyOrNull("text")?.GetStringOrNull();
 
         var nav = json.GetPropertyOrNull("navigationEndpoint");
-        var browseId = nav?.GetPropertyOrNull("browseEndpoint")?.GetPropertyOrNull("browseId")?.GetStringOrNull();
-        var watchId = nav?.GetPropertyOrNull("watchEndpoint")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+        var browseId = nav?.GetPropertyOrNull("browseEndpoint")
+            ?.GetPropertyOrNull("browseId")?.GetStringOrNull();
+        var watchId = nav?.GetPropertyOrNull("watchEndpoint")
+            ?.GetPropertyOrNull("videoId")?.GetStringOrNull();
 
-        string id = "";
-        string type = "Video";
+        string id;
+        string type;
 
         if (browseId != null)
         {
             id = browseId;
-            if (id.StartsWith("VL")) id = id[2..];
-            if (id.StartsWith("PL") || id.StartsWith("RD") || id == "LM") type = "Playlist";
-            else if (id.StartsWith("MPRE") || id.StartsWith("OLAK")) type = "Album";
-            else if (id.StartsWith("UC")) type = "Artist";
+            var span = id.AsSpan();
+            if (span.StartsWith("VL") && span.Length > 2)
+                id = id[2..];
+
+            span = id.AsSpan();
+            if (span.StartsWith("PL") || span.StartsWith("RD") || id == "LM")
+                type = "Playlist";
+            else if (span.StartsWith("MPRE") || span.StartsWith("OLAK"))
+                type = "Album";
+            else if (span.StartsWith("UC"))
+                type = "Artist";
+            else
+                type = "Video";
         }
         else if (watchId != null)
         {
             id = watchId;
             type = "Song";
         }
+        else
+        {
+            return null;
+        }
 
         if (string.IsNullOrEmpty(id)) return null;
 
-        var thumbs = json.GetPropertyOrNull("thumbnailRenderer")?.GetPropertyOrNull("musicThumbnailRenderer")
-            ?.GetPropertyOrNull("thumbnail")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()
-            ?.Select(static j => new ThumbnailData(j))
-            .Select(static d => new Thumbnail(d.Url!, new Resolution(d.Width ?? 0, d.Height ?? 0)))
-            .ToArray() ?? [];
+        var thumbs = ExtractThumbnails(
+            json.GetPropertyOrNull("thumbnailRenderer")
+                ?.GetPropertyOrNull("musicThumbnailRenderer")
+                ?.GetPropertyOrNull("thumbnail")
+                ?.GetPropertyOrNull("thumbnails"));
 
         return new MusicItem
         {
@@ -300,5 +344,82 @@ internal class MusicBrowseResponse
             Thumbnails = thumbs,
             Type = type
         };
+    }
+
+    /// <summary>
+    /// Извлекает thumbnails без LINQ Select/ToArray.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Thumbnail[] ExtractThumbnails(JsonElement? thumbsElement)
+    {
+        if (thumbsElement == null) return [];
+
+        var len = thumbsElement.Value.GetArrayLength();
+        if (len == 0) return [];
+
+        var result = new Thumbnail[len];
+        int idx = 0;
+        foreach (var j in thumbsElement.Value.EnumerateArray())
+        {
+            var td = new ThumbnailData(j);
+            result[idx++] = new Thumbnail(td.Url ?? "", new Resolution(td.Width ?? 0, td.Height ?? 0));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Быстрый парсинг длительности без string.Split (аллокация массива).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void TryParseDurationFast(string text, out TimeSpan? duration)
+    {
+        var span = text.AsSpan();
+        int colonCount = 0;
+        int firstColon = -1, secondColon = -1;
+
+        for (int i = 0; i < span.Length; i++)
+        {
+            if (span[i] == ':')
+            {
+                colonCount++;
+                if (colonCount == 1) firstColon = i;
+                else if (colonCount == 2) secondColon = i;
+            }
+        }
+
+        if (colonCount == 1 && firstColon > 0)
+        {
+            if (int.TryParse(span[..firstColon], out var m) &&
+                int.TryParse(span[(firstColon + 1)..], out var s))
+            {
+                duration = new TimeSpan(0, m, s);
+                return;
+            }
+        }
+        else if (colonCount == 2 && firstColon > 0 && secondColon > firstColon)
+        {
+            if (int.TryParse(span[..firstColon], out var h) &&
+                int.TryParse(span[(firstColon + 1)..secondColon], out var m) &&
+                int.TryParse(span[(secondColon + 1)..], out var s))
+            {
+                duration = new TimeSpan(h, m, s);
+                return;
+            }
+        }
+
+        duration = null;
+    }
+
+    /// <summary>
+    /// Проверка наличия любой из подстрок без множественных string.Contains.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ContainsAnyOf(string text, string a, string b, string c, string d)
+    {
+        var span = text.AsSpan();
+        return span.Contains(a, StringComparison.Ordinal) ||
+               span.Contains(b, StringComparison.Ordinal) ||
+               span.Contains(c, StringComparison.Ordinal) ||
+               span.Contains(d, StringComparison.Ordinal);
     }
 }

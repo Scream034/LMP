@@ -11,12 +11,23 @@
             "cwd": "${workspaceFolder}",
             "stopAtEntry": false,
             "console": "internalConsole",
+            
+            // КЛЮЧЕВЫЕ НАСТРОЙКИ ДЛЯ ОТЛАДКИ ИСКЛЮЧЕНИЙ
+            "justMyCode": false,
+            "enableStepFiltering": false,
+            "suppressJITOptimizations": true,
+            
             "logging": {
-                "moduleLoad": false
+                "moduleLoad": false,
+                "exceptions": true,
+                "programOutput": true
             },
+            
             "env": {
                 "ASPNETCORE_ENVIRONMENT": "Development",
-                "DOTNET_MODERN_CONTROLS": "1"
+                "DOTNET_MODERN_CONTROLS": "1",
+                // Отключает оптимизации для лучшей отладки
+                "COMPlus_JITMinOpts": "1"
             }
         }
     ]

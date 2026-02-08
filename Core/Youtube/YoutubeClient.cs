@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text;
 using LMP.Core.Youtube.Channels;
 using LMP.Core.Youtube.Music;
 using LMP.Core.Youtube.Playlists;
@@ -11,19 +10,20 @@ namespace LMP.Core.Youtube;
 
 /// <summary>
 /// Client for interacting with YouTube.
+/// Configures SocketsHttpHandler with connection pooling.
 /// </summary>
 public class YoutubeClient : IDisposable
 {
     private readonly HttpClient _youtubeHttp;
+    private readonly bool _ownsHttpClient;
 
     /// <summary>
-    /// Основной конструктор.
-    /// Принимает готовый HttpClient. Если вы используете YoutubeProvider,
-    /// сюда передается клиент, уже настроенный через YoutubeHttpHandler.
+    /// Основной конструктор с готовым HttpClient.
     /// </summary>
-    public YoutubeClient(HttpClient http)
+    public YoutubeClient(HttpClient http, bool ownsHttpClient = false)
     {
         _youtubeHttp = http;
+        _ownsHttpClient = ownsHttpClient;
 
         Videos = new VideoClient(_youtubeHttp);
         Playlists = new PlaylistClient(_youtubeHttp);
@@ -33,33 +33,51 @@ public class YoutubeClient : IDisposable
     }
 
     /// <summary>
-    /// Initializes an instance of <see cref="YoutubeClient" />.
+    /// Конструктор по умолчанию с оптимальными настройками connection pooling.
     /// </summary>
     public YoutubeClient()
-        : this(Http.Client) { }
+        : this(CreateOptimizedClient(), ownsHttpClient: true) { }
 
     /// <summary>
-    /// Operations related to YouTube videos.
+    /// Создает HttpClient с оптимизированным SocketsHttpHandler.
     /// </summary>
+    private static HttpClient CreateOptimizedClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            // Connection pooling
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+            MaxConnectionsPerServer = 20,
+
+            // Keep-alive
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+
+            // Performance
+            EnableMultipleHttp2Connections = true,
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Brotli,
+
+            // Timeouts
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        };
+
+        return new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
+    }
+
     public VideoClient Videos { get; }
-
-    /// <summary>
-    /// Operations related to YouTube playlists.
-    /// </summary>
     public PlaylistClient Playlists { get; }
-
-    /// <summary>
-    /// Operations related to YouTube channels.
-    /// </summary>
     public ChannelClient Channels { get; }
-
-    /// <summary>
-    /// Operations related to YouTube search.
-    /// </summary>
     public SearchClient Search { get; }
+    public MusicClient Music { get; }
 
-    public MusicClient Music { get; } 
-
-    /// <inheritdoc />
-    public void Dispose() => _youtubeHttp.Dispose();
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _youtubeHttp.Dispose();
+    }
 }

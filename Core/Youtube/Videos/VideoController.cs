@@ -13,8 +13,7 @@ internal class VideoController(HttpClient http)
     protected HttpClient Http { get; } = http;
 
     private async ValueTask<string> ResolveVisitorDataAsync(
-        CancellationToken cancellationToken = default
-    )
+        CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(_visitorData))
             return _visitorData;
@@ -25,23 +24,17 @@ internal class VideoController(HttpClient http)
         );
 
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-        request.Headers.Add(
-            "User-Agent",
-            "com.google.android.youtube/20.10.38 (Linux; U; ANDROID 11) gzip"
-        );
+        request.Headers.Add("User-Agent", YoutubeClientUtils.UaWeb);
 
         using var response = await Http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
-        // TODO: move this to a bridge wrapper
         var jsonString = await response.Content.ReadAsStringAsync(cancellationToken);
         if (jsonString.StartsWith(")]}'"))
             jsonString = jsonString[4..];
 
         var json = Json.Parse(jsonString);
 
-        // This is just an ordered (but unstructured) blob of data
         var value = json[0][2][0][0][13].GetStringOrNull();
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -53,8 +46,7 @@ internal class VideoController(HttpClient http)
 
     public async ValueTask<VideoWatchPage> GetVideoWatchPageAsync(
         VideoId videoId,
-        CancellationToken cancellationToken = default
-    )
+        CancellationToken cancellationToken = default)
     {
         for (var retriesRemaining = 5; ; retriesRemaining--)
         {
@@ -82,11 +74,29 @@ internal class VideoController(HttpClient http)
         }
     }
 
+    /// <summary>
+    /// Стандартный запрос с текущим профилем клиента.
+    /// </summary>
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        Log.Info($"GetPlayerResponse START ({YoutubeClientUtils.CurrentProfile}): {videoId}");
+        var clientName = YoutubeClientUtils.CurrentProfile.ToString().ToUpperInvariant();
+        if (clientName == "ANDROIDVR") clientName = "ANDROID_VR";
+        
+        return await GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
+    }
+
+    /// <summary>
+    /// Запрос с конкретным клиентом.
+    /// </summary>
+    public async ValueTask<PlayerResponse> GetPlayerResponseWithClientAsync(
+        VideoId videoId,
+        string clientName,
+        CancellationToken cancellationToken = default,
+        string? signatureTimestamp = null)
+    {
+        Log.Info($"GetPlayerResponse START ({clientName}): {videoId}");
 
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
@@ -95,77 +105,86 @@ internal class VideoController(HttpClient http)
             "https://www.youtube.com/youtubei/v1/player"
         );
 
-        // Ставим флаг для Handler-а
+        // Флаг для Handler'а
         request.Options.Set(YoutubeHttpHandler.IsPlayerContext, true);
 
-        // Генерируем JSON на основе текущего статического профиля
-        string jsonBody = YoutubeClientUtils.GeneratePlayerContext(videoId.Value, visitorData);
+        // Устанавливаем User-Agent для конкретного клиента
+        request.Headers.Remove("User-Agent");
+        request.Headers.Add("User-Agent", YoutubeClientUtils.GetUserAgentForClient(clientName));
 
-        request.Content = new StringContent(jsonBody);
+        string jsonBody = YoutubeClientUtils.GeneratePlayerContextForClient(
+            clientName, 
+            videoId.Value, 
+            visitorData,
+            signatureTimestamp
+        );
+
+        request.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
 
         using var response = await Http.SendAsync(request, cancellationToken);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
+        
+        if (!response.IsSuccessStatusCode)
+        {
+            Log.Warn($"[VideoController] [{videoId}] {clientName} HTTP {(int)response.StatusCode}");
+            throw new YoutubeExplodeException($"HTTP {response.StatusCode} for client {clientName}");
+        }
 
         return PlayerResponse.Parse(content);
     }
 
+    /// <summary>
+    /// Пробует получить PlayerResponse через несколько клиентов по очереди.
+    /// Возвращает первый успешный результат.
+    /// </summary>
+    public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
+        VideoId videoId,
+        CancellationToken cancellationToken = default)
+    {
+        var errors = new List<string>();
+
+        foreach (var clientName in YoutubeClientUtils.FallbackClients)
+        {
+            try
+            {
+                var response = await GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
+
+                if (response.IsPlayable && response.Streams.Any())
+                {
+                    Log.Info($"[VideoController] [{videoId}] SUCCESS with {clientName}");
+                    return (response, clientName);
+                }
+
+                var error = response.PlayabilityError ?? "Not playable / No streams";
+                Log.Warn($"[VideoController] [{videoId}] {clientName}: {error}");
+                errors.Add($"{clientName}: {error}");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[VideoController] [{videoId}] {clientName} exception: {ex.Message}");
+                errors.Add($"{clientName}: {ex.Message}");
+            }
+        }
+
+        // Все клиенты провалились
+        var allErrors = string.Join("; ", errors);
+        throw new VideoUnplayableException($"All clients failed for {videoId}: {allErrors}");
+    }
+
+    /// <summary>
+    /// Fallback с signatureTimestamp (для age-restricted).
+    /// </summary>
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(
         VideoId videoId,
         string? signatureTimestamp,
-        CancellationToken cancellationToken = default
-    )
+        CancellationToken cancellationToken = default)
     {
-        var visitorData = await ResolveVisitorDataAsync(cancellationToken);
-
-        // The only client that can handle age-restricted videos without authentication is the
-        // TVHTML5_SIMPLY_EMBEDDED_PLAYER client.
-        // This client does require signature deciphering, so we only use it as a fallback.
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            "https://www.youtube.com/youtubei/v1/player"
+        // Используем TVHTML5 для age-restricted
+        return await GetPlayerResponseWithClientAsync(
+            videoId, 
+            "TVHTML5_SIMPLY_EMBEDDED_PLAYER", 
+            cancellationToken,
+            signatureTimestamp
         );
-
-        var hl = YoutubeHttpHandler.GetHl();
-        var gl = YoutubeHttpHandler.GetGl();
-
-        request.Content = new StringContent(
-            // lang=json
-            $$"""
-            {
-              "videoId": {{Json.Serialize(videoId)}},
-              "context": {
-                "client": {
-                  "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-                  "clientVersion": "2.0",
-                  "visitorData": {{Json.Serialize(visitorData)}},
-                  "hl": {{Json.Serialize(hl)}},
-                  "gl": {{Json.Serialize(gl)}},
-                  "utcOffsetMinutes": 0
-                },
-                "thirdParty": {
-                  "embedUrl": "https://www.youtube.com"
-                }
-              },
-              "playbackContext": {
-                "contentPlaybackContext": {
-                  "signatureTimestamp": {{Json.Serialize(signatureTimestamp)}}
-                }
-              }
-            }
-            """
-        );
-
-        using var response = await Http.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var playerResponse = PlayerResponse.Parse(
-            await response.Content.ReadAsStringAsync(cancellationToken)
-        );
-
-        if (!playerResponse.IsAvailable)
-            throw new VideoUnavailableException($"Video '{videoId}' is not available.");
-
-        return playerResponse;
     }
 }

@@ -64,6 +64,12 @@ public sealed class MemoryFirstCachingStream : Stream
 
         /// <summary>Время ожидания после seek для сброса target (мс).</summary>
         public const int SeekTargetResetDelayMs = 500;
+
+        /// <summary>Максимум постоянных 403 ошибок для одного чанка перед тем как сдаться.</summary>
+        public const int MaxPermanentFailures = 3;
+
+        /// <summary>Задержка между повторными попытками скачать permanently-failed чанк (мс).</summary>
+        public const int PermanentFailRetryDelayMs = 10000;
     }
 
     #endregion
@@ -113,6 +119,19 @@ public sealed class MemoryFirstCachingStream : Stream
     private readonly ConcurrentDictionary<int, Task> _pendingDownloads = new();
     private readonly RangeMap _diskRanges;
 
+    /// <summary>
+    /// Счётчик постоянных 403-ошибок для каждого чанка.
+    /// Если чанк получил 403 больше MaxPermanentFailures раз подряд,
+    /// он помечается как permanently failed и не ставится в очередь повторно.
+    /// </summary>
+    private readonly ConcurrentDictionary<int, int> _chunkFailureCounts = new();
+
+    /// <summary>
+    /// Чанки, для которых все попытки исчерпаны.
+    /// Периодически сбрасывается при смене URL.
+    /// </summary>
+    private readonly ConcurrentDictionary<int, DateTime> _permanentlyFailedChunks = new();
+
     private long _position;
     private long _bytesDownloaded;
     private volatile bool _downloadComplete;
@@ -128,6 +147,11 @@ public sealed class MemoryFirstCachingStream : Stream
     /// Используется для правильного throttling после перемотки.
     /// </summary>
     private int _seekTargetChunk = -1;
+
+    /// <summary>
+    /// Счётчик глобальных refresh URL. Используется для сброса permanent failures.
+    /// </summary>
+    private volatile int _urlRefreshGeneration;
 
     private readonly SemaphoreSlim _urgentDownloadSemaphore;
     private readonly SemaphoreSlim _downloadSemaphore;
@@ -209,7 +233,7 @@ public sealed class MemoryFirstCachingStream : Stream
             long total = 0;
             for (int i = 0; i < _totalChunks; i++)
             {
-                if (HasChunk(i)) // Этот метод проверяет и RAM и DiskRanges атомарно
+                if (HasChunk(i))
                 {
                     long chunkStart = (long)i * _chunkSize;
                     long chunkEnd = Math.Min(chunkStart + _chunkSize, _contentLength);
@@ -329,8 +353,17 @@ public sealed class MemoryFirstCachingStream : Stream
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool CanEnqueue(int idx) =>
-        !HasChunk(idx) && !_pendingDownloads.ContainsKey(idx) && !_queuedChunks.Contains(idx);
+    private bool CanEnqueue(int idx)
+    {
+        if (HasChunk(idx) || _pendingDownloads.ContainsKey(idx) || _queuedChunks.Contains(idx))
+            return false;
+
+        // Не ставим в очередь permanently failed чанки (до сброса)
+        if (_permanentlyFailedChunks.ContainsKey(idx))
+            return false;
+
+        return true;
+    }
 
     private int TimeToChunk(long timeMs)
     {
@@ -388,6 +421,56 @@ public sealed class MemoryFirstCachingStream : Stream
         return Invariants.PriorityFar + distance;
     }
 
+    /// <summary>
+    /// Проверяет, является ли чанк permanently failed.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsPermanentlyFailed(int idx) => _permanentlyFailedChunks.ContainsKey(idx);
+
+    /// <summary>
+    /// Регистрирует 403-ошибку для чанка.
+    /// Возвращает true, если чанк стал permanently failed.
+    /// </summary>
+    private bool RegisterChunkFailure(int idx)
+    {
+        int count = _chunkFailureCounts.AddOrUpdate(idx, 1, (_, c) => c + 1);
+
+        if (count >= Invariants.MaxPermanentFailures)
+        {
+            _permanentlyFailedChunks[idx] = DateTime.UtcNow;
+            Log.Warn($"[Buffer] Chunk {idx} permanently failed after {count} attempts, will retry after URL change");
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Сбрасывает все permanent failures (вызывается при успешном получении нового URL).
+    /// </summary>
+    private void ResetPermanentFailures()
+    {
+        if (_permanentlyFailedChunks.IsEmpty) return;
+
+        var failedChunks = _permanentlyFailedChunks.Keys.ToList();
+        _permanentlyFailedChunks.Clear();
+        _chunkFailureCounts.Clear();
+
+        Log.Info($"[Buffer] Reset {failedChunks.Count} permanently failed chunks after URL refresh");
+
+        // Переставляем failed чанки обратно в очередь
+        lock (_queueLock)
+        {
+            foreach (var idx in failedChunks)
+            {
+                if (CanEnqueue(idx) && _queuedChunks.Add(idx))
+                {
+                    _downloadQueue.Enqueue(idx, CalculatePriority(idx));
+                }
+            }
+        }
+    }
+
     #endregion
 
     #region Public API
@@ -438,7 +521,7 @@ public sealed class MemoryFirstCachingStream : Stream
         if (_playbackStarted) return;
 
         _playbackStarted = true;
-        _seekTargetChunk = -1; // Сбрасываем seek target только при СТАРТЕ воспроизведения
+        _seekTargetChunk = -1;
         Log.Debug($"[Buffer] Playback started, unlocking throttled reads");
         _dataAvailable.Set();
     }
@@ -451,20 +534,17 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         int newChunk = TimeToChunk(positionMs);
 
-        // Запоминаем целевой чанк
         _seekTargetChunk = newChunk;
 
         Log.Debug($"[Buffer] NotifySeek: {positionMs}ms → chunk {newChunk}");
 
-        // Планируем загрузку от новой позиции с высоким приоритетом
         ScheduleChunksFromSeek(newChunk);
         _dataAvailable.Set();
 
-        // ДОБАВЛЕНО: Сбрасываем seek target через задержку
         _ = Task.Run(async () =>
         {
             await Task.Delay(Invariants.SeekTargetResetDelayMs);
-            if (_seekTargetChunk == newChunk) // Только если не было нового seek
+            if (_seekTargetChunk == newChunk)
             {
                 _seekTargetChunk = -1;
                 Log.Debug($"[Buffer] Seek target reset after timeout");
@@ -555,16 +635,13 @@ public sealed class MemoryFirstCachingStream : Stream
         if (_contentLength <= 0) return [];
         if (_downloadComplete) return [(0.0, 1.0)];
 
-        // Собираем все закэшированные чанки
         var cachedChunks = new SortedSet<int>();
 
-        // RAM-чанки
         foreach (var idx in _chunks.Keys)
         {
             cachedChunks.Add(idx);
         }
 
-        // Диск-чанки
         for (int i = 0; i < _totalChunks; i++)
         {
             if (cachedChunks.Contains(i)) continue;
@@ -580,7 +657,6 @@ public sealed class MemoryFirstCachingStream : Stream
 
         if (cachedChunks.Count == 0) return [];
 
-        // Группируем последовательные чанки в диапазоны
         var ranges = new List<(double, double)>();
         int? rangeStart = null;
         int? rangeLast = null;
@@ -598,14 +674,12 @@ public sealed class MemoryFirstCachingStream : Stream
             }
             else
             {
-                // Закрываем текущий диапазон
                 AddChunkRange(ranges, rangeStart.Value, rangeLast!.Value);
                 rangeStart = idx;
                 rangeLast = idx;
             }
         }
 
-        // Добавляем последний диапазон
         if (rangeStart != null)
         {
             AddChunkRange(ranges, rangeStart.Value, rangeLast!.Value);
@@ -629,21 +703,18 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         lock (_queueLock)
         {
-            // Header чанки
             for (int i = 0; i < Math.Min(_headerChunks, _totalChunks); i++)
             {
                 if (CanEnqueue(i) && _queuedChunks.Add(i))
                     _downloadQueue.Enqueue(i, Invariants.PriorityHeader);
             }
 
-            // Tail чанки
             for (int i = _tailStartChunk; i < _totalChunks; i++)
             {
                 if (CanEnqueue(i) && _queuedChunks.Add(i))
                     _downloadQueue.Enqueue(i, Invariants.PriorityTail);
             }
 
-            // Начальный буфер
             int initialLimit = Math.Min(_headerChunks + SecondsToChunks(_initialBufferSeconds), _tailStartChunk);
             for (int i = _headerChunks; i < initialLimit; i++)
             {
@@ -663,21 +734,18 @@ public sealed class MemoryFirstCachingStream : Stream
 
         lock (_queueLock)
         {
-            // Headers
             for (int i = 0; i < Math.Min(_headerChunks, _totalChunks); i++)
             {
                 if (CanEnqueue(i) && _queuedChunks.Add(i))
                     _downloadQueue.Enqueue(i, Invariants.PriorityHeader);
             }
 
-            // Tails
             for (int i = _tailStartChunk; i < _totalChunks; i++)
             {
                 if (CanEnqueue(i) && _queuedChunks.Add(i))
                     _downloadQueue.Enqueue(i, Invariants.PriorityTail);
             }
 
-            // От позиции в пределах окна
             int limit = Math.Min(fromChunk + _maxDownloadAheadChunks, _tailStartChunk);
             for (int i = Math.Max(fromChunk, _headerChunks); i < limit; i++)
             {
@@ -692,11 +760,10 @@ public sealed class MemoryFirstCachingStream : Stream
     /// </summary>
     private void ScheduleChunksFromSeek(int targetChunk)
     {
-        _lastScheduledFromChunk = -1; // Сбрасываем чтобы гарантировать планирование
+        _lastScheduledFromChunk = -1;
 
         lock (_queueLock)
         {
-            // Целевой чанк и окрестности с максимальным приоритетом
             int windowStart = Math.Max(0, targetChunk - 1);
             int windowEnd = Math.Min(_totalChunks - 1, targetChunk + _maxReadAheadFromPlayback);
 
@@ -704,7 +771,6 @@ public sealed class MemoryFirstCachingStream : Stream
             {
                 if (CanEnqueue(i) && _queuedChunks.Add(i))
                 {
-                    // Чанки рядом с seek target - максимальный приоритет
                     int priority = Math.Abs(i - targetChunk) <= 2
                         ? Invariants.PriorityPlayback
                         : Invariants.PriorityNear + Math.Abs(i - targetChunk);
@@ -712,7 +778,6 @@ public sealed class MemoryFirstCachingStream : Stream
                 }
             }
 
-            // Headers и Tails тоже нужны
             for (int i = 0; i < Math.Min(_headerChunks, _totalChunks); i++)
             {
                 if (CanEnqueue(i) && _queuedChunks.Add(i))
@@ -739,6 +804,9 @@ public sealed class MemoryFirstCachingStream : Stream
         {
             while (!_disposeCts.IsCancellationRequested && !_downloadComplete && !_disposing)
             {
+                // Периодически пробуем сбросить permanently failed чанки
+                RetryPermanentlyFailedChunks();
+
                 if (_downloadFullTrack)
                     ScheduleChunksFrom(0);
                 else if (_playbackStarted)
@@ -748,6 +816,47 @@ public sealed class MemoryFirstCachingStream : Stream
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// Периодически сбрасывает permanently failed чанки,
+    /// которые старше PermanentFailRetryDelayMs, и переставляет их в очередь.
+    /// </summary>
+    private void RetryPermanentlyFailedChunks()
+    {
+        if (_permanentlyFailedChunks.IsEmpty) return;
+
+        var now = DateTime.UtcNow;
+        var toRetry = new List<int>();
+
+        foreach (var kvp in _permanentlyFailedChunks)
+        {
+            if ((now - kvp.Value).TotalMilliseconds >= Invariants.PermanentFailRetryDelayMs)
+            {
+                toRetry.Add(kvp.Key);
+            }
+        }
+
+        if (toRetry.Count == 0) return;
+
+        foreach (var idx in toRetry)
+        {
+            _permanentlyFailedChunks.TryRemove(idx, out _);
+            _chunkFailureCounts.TryRemove(idx, out _);
+        }
+
+        Log.Debug($"[Buffer] Retrying {toRetry.Count} previously failed chunks");
+
+        lock (_queueLock)
+        {
+            foreach (var idx in toRetry)
+            {
+                if (CanEnqueue(idx) && _queuedChunks.Add(idx))
+                {
+                    _downloadQueue.Enqueue(idx, CalculatePriority(idx));
+                }
+            }
+        }
     }
 
     #endregion
@@ -772,7 +881,7 @@ public sealed class MemoryFirstCachingStream : Stream
         try
         {
             // ═══════════════════════════════════════════════════════════════
-            // FAST PATH: Данные есть - отдаём МГНОВЕННО (никакого throttling!)
+            // FAST PATH: Данные есть - отдаём МГНОВЕННО
             // ═══════════════════════════════════════════════════════════════
             if (HasChunk(chunkIndex))
             {
@@ -780,7 +889,6 @@ public sealed class MemoryFirstCachingStream : Stream
                 return ReadAndAdvance(chunkIndex, offsetInChunk, buffer, offset, toRead);
             }
 
-            // Чанка нет - нужно скачать
             Interlocked.Increment(ref _cacheMisses);
 
             int seekTarget = _seekTargetChunk;
@@ -788,49 +896,59 @@ public sealed class MemoryFirstCachingStream : Stream
             bool isMetadata = chunkIndex < _headerChunks || chunkIndex >= _tailStartChunk;
 
             // ═══════════════════════════════════════════════════════════════
-            // УСТАРЕВШИЙ ЗАПРОС: VLC просит данные далеко от текущей позиции
-            // НЕ возвращаем 0 (это вызовет EndReached!), а ждём КОРОТКО
+            // PERMANENTLY FAILED: Чанк не может быть загружен
+            // Пропускаем его — VLC справится с gap
+            // ═══════════════════════════════════════════════════════════════
+            if (IsPermanentlyFailed(chunkIndex))
+            {
+                Log.Debug($"[Buffer] Skipping permanently failed chunk {chunkIndex}");
+                // Перемещаем позицию на следующий чанк
+                long nextChunkStart = ((long)chunkIndex + 1) * _chunkSize;
+                if (nextChunkStart < _contentLength)
+                {
+                    Interlocked.Exchange(ref _position, nextChunkStart);
+                    return 0; // VLC перечитает с новой позиции
+                }
+                return 0;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // УСТАРЕВШИЙ ЗАПРОС
             // ═══════════════════════════════════════════════════════════════
             if (!isMetadata && seekTarget >= 0)
             {
                 int distanceFromSeek = Math.Abs(chunkIndex - seekTarget);
 
-                // Если VLC просит чанк ОЧЕНЬ далеко от seek target (старый буфер VLC)
                 if (distanceFromSeek > _maxReadAheadFromPlayback * 3)
                 {
                     Log.Debug($"[Buffer] STALE request for chunk {chunkIndex} (seek={seekTarget}, distance={distanceFromSeek})");
 
-                    // Ждём ОЧЕНЬ коротко - может данные появятся
                     var staleSw = Stopwatch.StartNew();
                     while (!HasChunk(chunkIndex) && staleSw.ElapsedMilliseconds < 500)
                     {
                         if (_disposed || _disposing) return 0;
 
-                        // Если seek target изменился - выходим
                         if (_seekTargetChunk != seekTarget)
                         {
                             Log.Debug($"[Buffer] Seek target changed during stale wait");
-                            return 0; // Тут 0 безопасен - новый seek уже в процессе
+                            return 0;
                         }
 
                         try { _dataAvailable.Wait(100, GetReadToken()); }
                         catch (OperationCanceledException) { return 0; }
                     }
 
-                    // Если данные появились - отдаём
                     if (HasChunk(chunkIndex))
                     {
                         return ReadAndAdvance(chunkIndex, offsetInChunk, buffer, offset, toRead);
                     }
 
-                    // Данных нет, но это устаревший запрос - скачиваем с низким приоритетом
-                    // и ждём ещё немного
                     EnqueueWithPriority(chunkIndex, Invariants.PriorityFar + distanceFromSeek);
                 }
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // THROTTLING: Только для новых данных ВПЕРЕДИ playback
+            // THROTTLING
             // ═══════════════════════════════════════════════════════════════
             if (!isMetadata && _playbackStarted)
             {
@@ -847,21 +965,17 @@ public sealed class MemoryFirstCachingStream : Stream
                     {
                         if (_disposed || _disposing) return 0;
 
-                        // Если seek изменился - пересчитываем
                         int newSeekTarget = _seekTargetChunk;
                         if (newSeekTarget != seekTarget && newSeekTarget >= 0)
                         {
-                            // Новый seek! Проверяем актуальность текущего запроса
                             if (Math.Abs(chunkIndex - newSeekTarget) > _maxReadAheadFromPlayback * 2)
                             {
-                                // Запрос устарел из-за нового seek
                                 Log.Debug($"[Buffer] Chunk {chunkIndex} obsolete after new seek to {newSeekTarget}");
                                 break;
                             }
                             seekTarget = newSeekTarget;
                         }
 
-                        // Таймаут throttle - 3 секунды
                         if (sw.ElapsedMilliseconds > 3000)
                         {
                             Log.Debug($"[Buffer] Throttle timeout for chunk {chunkIndex}");
@@ -874,10 +988,8 @@ public sealed class MemoryFirstCachingStream : Stream
                         }
                         catch (OperationCanceledException) { return 0; }
 
-                        // Может чанк уже скачался?
                         if (HasChunk(chunkIndex)) break;
 
-                        // Обновляем окно
                         effectivePlayback = GetEffectivePlaybackChunk();
                         maxAllowed = _seekTargetChunk >= 0
                             ? Math.Max(_seekTargetChunk, effectivePlayback) + _maxReadAheadFromPlayback
@@ -889,7 +1001,7 @@ public sealed class MemoryFirstCachingStream : Stream
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // DOWNLOAD: Качаем нужный чанк
+            // DOWNLOAD
             // ═══════════════════════════════════════════════════════════════
             EnqueueWithPriority(chunkIndex, Invariants.PriorityPlayback);
 
@@ -898,10 +1010,21 @@ public sealed class MemoryFirstCachingStream : Stream
             {
                 if (_disposed || _disposing) return 0;
 
+                // Если чанк стал permanently failed во время ожидания — выходим
+                if (IsPermanentlyFailed(chunkIndex))
+                {
+                    Log.Debug($"[Buffer] Chunk {chunkIndex} became permanently failed during wait");
+                    long nextChunkStart = ((long)chunkIndex + 1) * _chunkSize;
+                    if (nextChunkStart < _contentLength)
+                    {
+                        Interlocked.Exchange(ref _position, nextChunkStart);
+                    }
+                    return 0;
+                }
+
                 if (waitSw.ElapsedMilliseconds > _maxReadBlockMs)
                 {
                     Log.Warn($"[Buffer] Download timeout for chunk {chunkIndex}");
-                    // НЕ возвращаем 0! Пробуем вернуть сколько есть
                     break;
                 }
 
@@ -914,17 +1037,17 @@ public sealed class MemoryFirstCachingStream : Stream
                 if (!HasChunk(chunkIndex))
                 {
                     _dataAvailable.Reset();
-                    EnqueueWithPriority(chunkIndex, Invariants.PriorityPlayback);
+                    // Только если чанк не permanently failed
+                    if (!IsPermanentlyFailed(chunkIndex))
+                        EnqueueWithPriority(chunkIndex, Invariants.PriorityPlayback);
                 }
             }
 
-            // Финальная проверка
             if (HasChunk(chunkIndex))
             {
                 return ReadAndAdvance(chunkIndex, offsetInChunk, buffer, offset, toRead);
             }
 
-            // Данных так и нет - возвращаем 0 (крайний случай)
             Log.Warn($"[Buffer] No data for chunk {chunkIndex} after all attempts");
             return 0;
         }
@@ -1083,7 +1206,7 @@ public sealed class MemoryFirstCachingStream : Stream
 
                 _queuedChunks.Remove(chunk);
 
-                if (!HasChunk(chunk) && !_pendingDownloads.ContainsKey(chunk))
+                if (!HasChunk(chunk) && !_pendingDownloads.ContainsKey(chunk) && !IsPermanentlyFailed(chunk))
                     return (chunk, priority);
             }
 
@@ -1095,6 +1218,7 @@ public sealed class MemoryFirstCachingStream : Stream
     {
         byte[]? buffer = null;
         int retry = 0;
+        int consecutiveForbidden = 0;
 
         try
         {
@@ -1118,16 +1242,40 @@ public sealed class MemoryFirstCachingStream : Stream
 
                     using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
 
-                    if (resp.StatusCode == HttpStatusCode.Forbidden &&
-                        retry < _maxRetries &&
-                        _urlRefresher != null)
+                    if (resp.StatusCode == HttpStatusCode.Forbidden)
                     {
-                        await RefreshUrlAsync(cts.Token);
-                        retry++;
-                        continue;
+                        consecutiveForbidden++;
+
+                        if (retry < _maxRetries && _urlRefresher != null)
+                        {
+                            var refreshed = await RefreshUrlWithTrackingAsync(cts.Token);
+                            
+                            if (!refreshed && consecutiveForbidden >= 2)
+                            {
+                                // URL refresh не помогает — помечаем чанк как permanently failed
+                                Log.Warn($"[Buffer] Chunk {idx} gets 403 even after URL refresh ({consecutiveForbidden} times)");
+                                if (RegisterChunkFailure(idx))
+                                {
+                                    tcs.TrySetResult();
+                                    return; // Прекращаем попытки
+                                }
+                            }
+
+                            retry++;
+                            await Task.Delay(_retryDelayMs * retry, ct); // Экспоненциальная задержка
+                            continue;
+                        }
+
+                        // Все retry исчерпаны
+                        RegisterChunkFailure(idx);
+                        resp.EnsureSuccessStatusCode(); // Бросит исключение
                     }
 
+                    consecutiveForbidden = 0; // Сброс при успехе
                     resp.EnsureSuccessStatusCode();
+
+                    // Успешная загрузка — сбрасываем счётчик ошибок для этого чанка
+                    _chunkFailureCounts.TryRemove(idx, out _);
 
                     buffer = ArrayPool<byte>.Shared.Rent(_chunkSize);
                     using var netStream = await resp.Content.ReadAsStreamAsync(cts.Token);
@@ -1160,21 +1308,30 @@ public sealed class MemoryFirstCachingStream : Stream
                             TrimRamCache();
                     }
 
-                    tcs.SetResult();
+                    tcs.TrySetResult();
                     break;
                 }
                 catch (Exception ex) when (retry < _maxRetries && ex is not OperationCanceledException)
                 {
                     Log.Warn($"[Buffer] Chunk {idx} retry {retry + 1}: {ex.Message}");
-                    await Task.Delay(_retryDelayMs, ct);
+                    await Task.Delay(_retryDelayMs * (retry + 1), ct);
                     retry++;
                 }
             }
+
+            // Если после всех retry чанк так и не загружен — помечаем
+            if (!HasChunk(idx))
+            {
+                RegisterChunkFailure(idx);
+            }
+
+            tcs.TrySetResult();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Warn($"[Buffer] Chunk {idx} failed: {ex.Message}");
+            RegisterChunkFailure(idx);
         }
         finally
         {
@@ -1184,15 +1341,41 @@ public sealed class MemoryFirstCachingStream : Stream
         }
     }
 
-    private async ValueTask RefreshUrlAsync(CancellationToken ct)
+    /// <summary>
+    /// Обновляет URL и отслеживает, произошло ли реальное изменение.
+    /// При реальном изменении URL сбрасывает permanent failures.
+    /// Возвращает true если URL реально изменился.
+    /// </summary>
+    private async ValueTask<bool> RefreshUrlWithTrackingAsync(CancellationToken ct)
     {
-        if (!await _refreshLock.WaitAsync(Invariants.SemaphoreTimeoutMs, ct)) return;
+        if (!await _refreshLock.WaitAsync(Invariants.SemaphoreTimeoutMs, ct)) return false;
         try
         {
+            var oldUrl = _url;
             var newUrl = await _urlRefresher!(ct);
-            if (!string.IsNullOrEmpty(newUrl)) _url = newUrl;
+
+            if (string.IsNullOrEmpty(newUrl))
+                return false;
+
+            bool changed = !string.Equals(oldUrl, newUrl, StringComparison.Ordinal);
+            _url = newUrl;
+
+            if (changed)
+            {
+                _urlRefreshGeneration++;
+                // URL реально изменился — сбрасываем permanent failures
+                ResetPermanentFailures();
+                Log.Debug($"[Buffer] URL actually changed (generation={_urlRefreshGeneration})");
+            }
+
+            return changed;
         }
         finally { _refreshLock.Release(); }
+    }
+
+    private async ValueTask RefreshUrlAsync(CancellationToken ct)
+    {
+        await RefreshUrlWithTrackingAsync(ct);
     }
 
     private void TrimRamCache()
@@ -1224,7 +1407,10 @@ public sealed class MemoryFirstCachingStream : Stream
     private bool IsAllDownloaded()
     {
         for (int i = 0; i < _totalChunks; i++)
-            if (!HasChunk(i)) return false;
+        {
+            if (!HasChunk(i) && !IsPermanentlyFailed(i))
+                return false;
+        }
         return true;
     }
 
@@ -1339,7 +1525,8 @@ public sealed class MemoryFirstCachingStream : Stream
         _disposing = true;
         _disposed = true;
 
-        Log.Debug($"[Buffer] Disposing: hits={_cacheHits}, misses={_cacheMisses}");
+        Log.Debug($"[Buffer] Disposing: hits={_cacheHits}, misses={_cacheMisses}, " +
+                  $"permFailed={_permanentlyFailedChunks.Count}");
 
         if (disposing)
         {
