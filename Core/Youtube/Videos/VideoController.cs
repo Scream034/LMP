@@ -83,7 +83,7 @@ internal class VideoController(HttpClient http)
     {
         var clientName = YoutubeClientUtils.CurrentProfile.ToString().ToUpperInvariant();
         if (clientName == "ANDROIDVR") clientName = "ANDROID_VR";
-        
+
         return await GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
     }
 
@@ -113,8 +113,8 @@ internal class VideoController(HttpClient http)
         request.Headers.Add("User-Agent", YoutubeClientUtils.GetUserAgentForClient(clientName));
 
         string jsonBody = YoutubeClientUtils.GeneratePlayerContextForClient(
-            clientName, 
-            videoId.Value, 
+            clientName,
+            videoId.Value,
             visitorData,
             signatureTimestamp
         );
@@ -123,7 +123,7 @@ internal class VideoController(HttpClient http)
 
         using var response = await Http.SendAsync(request, cancellationToken);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        
+
         if (!response.IsSuccessStatusCode)
         {
             Log.Warn($"[VideoController] [{videoId}] {clientName} HTTP {(int)response.StatusCode}");
@@ -134,8 +134,8 @@ internal class VideoController(HttpClient http)
     }
 
     /// <summary>
-    /// Пробует получить PlayerResponse через несколько клиентов по очереди.
-    /// Возвращает первый успешный результат.
+    /// Пробует получить PlayerResponse с работающими стримами.
+    /// НЕ использует IOS для обычных стримов.
     /// </summary>
     public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
         VideoId videoId,
@@ -143,7 +143,8 @@ internal class VideoController(HttpClient http)
     {
         var errors = new List<string>();
 
-        foreach (var clientName in YoutubeClientUtils.FallbackClients)
+        // Пробуем клиенты для обычных стримов (без IOS!)
+        foreach (var clientName in YoutubeClientUtils.StreamFallbackClients)
         {
             try
             {
@@ -166,9 +167,38 @@ internal class VideoController(HttpClient http)
             }
         }
 
-        // Все клиенты провалились
         var allErrors = string.Join("; ", errors);
-        throw new VideoUnplayableException($"All clients failed for {videoId}: {allErrors}");
+        throw new VideoUnplayableException($"All stream clients failed for {videoId}: {allErrors}");
+    }
+
+    /// <summary>
+    /// Получает HLS манифест URL. IOS в приоритете.
+    /// </summary>
+    public async ValueTask<string?> GetHlsManifestUrlAsync(
+        VideoId videoId,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var clientName in YoutubeClientUtils.HlsFallbackClients)
+        {
+            try
+            {
+                var response = await GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
+
+                var hlsUrl = response.HlsManifestUrl;
+                if (!string.IsNullOrEmpty(hlsUrl))
+                {
+                    Log.Info($"[VideoController] [{videoId}] HLS found via {clientName}");
+                    return hlsUrl;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"[VideoController] [{videoId}] HLS via {clientName} failed: {ex.Message}");
+            }
+        }
+
+        Log.Warn($"[VideoController] [{videoId}] No HLS manifest available from any client");
+        return null;
     }
 
     /// <summary>
@@ -181,8 +211,8 @@ internal class VideoController(HttpClient http)
     {
         // Используем TVHTML5 для age-restricted
         return await GetPlayerResponseWithClientAsync(
-            videoId, 
-            "TVHTML5_SIMPLY_EMBEDDED_PLAYER", 
+            videoId,
+            "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
             cancellationToken,
             signatureTimestamp
         );

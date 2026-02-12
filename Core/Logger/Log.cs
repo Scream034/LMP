@@ -45,12 +45,7 @@ public static class Log
         // Если сообщение null, ничего не пишем (или пишем "null")
         string msg = message ?? "null";
 
-        // Используем имя вызывающего метода как категорию, если не передана явно
-        // Это очень удобно: Log.Info("Test") внутри PlayerService автоматически пометит лог как [PlayerService] или [MethodName]
-        // Но для красоты лучше передавать категорию явно, или оставить "Global".
-        // В данной реализации: Категория = Имя Метода (CallerMemberName) для быстрой отладки.
-
-        _processor.Enqueue(new LogMessage(level, memberName, msg, ex));
+        _processor.Enqueue(new LogMessage(level, msg, ex));
     }
 
     // --- API, совместимое с Debug.WriteLine ---
@@ -60,7 +55,6 @@ public static class Log
 
     // Info - основной метод
     public static void Info(string message) => Enqueue(LogLevel.Info, message);
-    public static void Info(string message, string category) => _processor?.Enqueue(new LogMessage(LogLevel.Info, category, message));
 
     public static void Warn(string message) => Enqueue(LogLevel.Warning, message);
 

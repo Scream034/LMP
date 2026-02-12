@@ -1,4 +1,5 @@
 using System.Net;
+using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Channels;
 using LMP.Core.Youtube.Music;
 using LMP.Core.Youtube.Playlists;
@@ -75,9 +76,16 @@ public class YoutubeClient : IDisposable
     public SearchClient Search { get; }
     public MusicClient Music { get; }
 
+    internal ValueTask<PlayerResponse> GetPlayerResponseAsync(VideoId videoId, CancellationToken ct = default)
+    {
+        return Videos.GetPlayerResponseAsync(videoId, ct);
+    }
+
     public void Dispose()
     {
         if (_ownsHttpClient)
             _youtubeHttp.Dispose();
+        
+        GC.SuppressFinalize(this);
     }
 }

@@ -1,9 +1,9 @@
 ﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using System.Net;
 using LMP.Core.Models;
 using LMP.Core.Youtube;
 using LMP.Core.Youtube.Channels;
@@ -16,6 +16,7 @@ using LMP.Core.Youtube.Utils.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using LMP.Core.Youtube.Exceptions;
 
 namespace LMP.Core.Services;
 
@@ -25,7 +26,7 @@ public partial class YoutubeProvider : IDisposable
     private const int MaxCacheSize = 200;
 
     private readonly TrackRegistry _trackRegistry;
-    private readonly CookieAuthService? _cookieAuth;
+    public readonly CookieAuthService? AuthService;
     private readonly LibraryService? _libraryService;
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
 
@@ -80,12 +81,12 @@ public partial class YoutubeProvider : IDisposable
     {
         _trackRegistry = trackRegistry;
         _libraryService = libraryService;
-        _cookieAuth = cookieAuth;
+        AuthService = cookieAuth;
 
-        if (_cookieAuth != null)
+        if (AuthService != null)
         {
             ReloadClient();
-            _cookieAuth.OnAuthStateChanged += ReloadClient;
+            AuthService.OnAuthStateChanged += ReloadClient;
         }
     }
 
@@ -127,7 +128,7 @@ public partial class YoutubeProvider : IDisposable
         };
 
         // YoutubeHttpHandler оборачивает HttpClient
-        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, _cookieAuth, disposeClient: true);
+        var youtubeHandler = new YoutubeHttpHandler(baseHttpClient, AuthService, disposeClient: true);
 
         // Финальный HttpClient с YoutubeHttpHandler
         _currentHttpClient = new HttpClient(youtubeHandler, disposeHandler: true)
@@ -137,7 +138,7 @@ public partial class YoutubeProvider : IDisposable
 
         _youtube = new YoutubeClient(_currentHttpClient, ownsHttpClient: false);
 
-        Log.Info($"[YouTube] Client reloaded. Auth: {_cookieAuth?.IsAuthenticated ?? false}");
+        Log.Info($"[YouTube] Client reloaded. Auth: {AuthService?.IsAuthenticated ?? false}");
     }
 
     private void DisposeCurrentClient()
@@ -150,7 +151,6 @@ public partial class YoutubeProvider : IDisposable
             _currentHttpClient?.Dispose();
             _currentHttpClient = null;
 
-            // Handler переиспользуем, не dispose
             _youtube = null!;
         }
         catch (Exception ex)
@@ -161,7 +161,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task InitializeAsync()
     {
-        if (_cookieAuth?.IsAuthenticated == true)
+        if (AuthService?.IsAuthenticated == true)
         {
             Log.Info("[YouTube] Fetching fresh Visitor Data for auth session...");
             var visitorData = await FetchVisitorDataAsync();
@@ -186,8 +186,8 @@ public partial class YoutubeProvider : IDisposable
             using var client = new HttpClient();
             client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeClientUtils.UaWeb);
 
-            if (_cookieAuth != null)
-                client.DefaultRequestHeaders.Add("Cookie", _cookieAuth.GetCookieHeader());
+            if (AuthService != null)
+                client.DefaultRequestHeaders.Add("Cookie", AuthService.GetCookieHeader());
 
             var jsonStr = await client.GetStringAsync("https://music.youtube.com/sw.js_data");
 
@@ -211,7 +211,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task<List<HomeSection>> GetPersonalizedHomeAsync(CancellationToken ct = default)
     {
-        if (_cookieAuth?.IsAuthenticated != true) return [];
+        if (AuthService?.IsAuthenticated != true) return [];
 
         try
         {
@@ -235,7 +235,7 @@ public partial class YoutubeProvider : IDisposable
 
                     var track = new TrackInfo
                     {
-                        Id = item.Id, // Автоматически добавит префикс через setter
+                        Id = item.Id,
                         Title = item.Title,
                         Author = item.Author ?? "Unknown",
                         ThumbnailUrl = thumbUrl,
@@ -275,10 +275,9 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task LikeTrackAsync(string trackId, bool like)
     {
-        if (_cookieAuth?.IsAuthenticated != true) return;
+        if (AuthService?.IsAuthenticated != true) return;
         try
         {
-            // Материализуем Span в string ДО await
             var rawId = ExtractRawIdSpan(trackId).ToString();
             await _youtube.Music.LikeTrackAsync(rawId, like);
             Log.Info($"[Music] Like={like} for {rawId}");
@@ -292,7 +291,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task<string?> CreatePlaylistAsync(string title)
     {
-        if (_cookieAuth?.IsAuthenticated != true) return null;
+        if (AuthService?.IsAuthenticated != true) return null;
         try
         {
             return await _youtube.Music.CreatePlaylistAsync(title);
@@ -306,7 +305,7 @@ public partial class YoutubeProvider : IDisposable
 
     public async Task AddToPlaylistAsync(string playlistId, string trackId)
     {
-        if (_cookieAuth?.IsAuthenticated != true) return;
+        if (AuthService?.IsAuthenticated != true) return;
         try
         {
             var rawId = ExtractRawIdSpan(trackId).ToString();
@@ -320,14 +319,17 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region RefreshStreamUrlAsync — КРИТИЧНАЯ ОПТИМИЗАЦИЯ
+    #region RefreshStreamUrlAsync
 
+    /// <summary>
+    /// Получает URL аудио-потока для трека.
+    /// Для заблокированных треков использует HLS через IOS.
+    /// </summary>
     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
         TrackInfo track,
         bool forceRefresh = false,
         CancellationToken ct = default)
     {
-        // Материализуем Span ДО любых await
         var videoId = track.GetRawIdSpan().ToString();
         if (string.IsNullOrEmpty(videoId))
         {
@@ -337,8 +339,31 @@ public partial class YoutubeProvider : IDisposable
 
         var sw = Stopwatch.StartNew();
 
+        // ══════════════════════════════════════════════════════════════════
+        // Если трек уже помечен как HLS-only — сразу возвращаем HLS
+        // ══════════════════════════════════════════════════════════════════
+        if (track.IsHlsOnly)
+        {
+            if (!string.IsNullOrEmpty(track.HlsManifestUrl) && !forceRefresh)
+            {
+                NotifyStatus($"[YouTube] [{videoId}] Using cached HLS manifest");
+                return (track.HlsManifestUrl, 0, 128, "HLS", "m3u8");
+            }
+
+            // Нужен свежий HLS URL
+            var freshHls = await GetHlsManifestAsync(videoId, ct);
+            if (freshHls != null)
+            {
+                track.HlsManifestUrl = freshHls;
+                return (freshHls, 0, 128, "HLS", "m3u8");
+            }
+
+            NotifyError($"[YouTube] [{videoId}] Failed to refresh HLS manifest");
+            return null;
+        }
+
         NotifyStatus(forceRefresh
-            ? $"[YouTube] [{videoId}] 403 detected. Forcing refresh..."
+            ? $"[YouTube] [{videoId}] Forcing URL refresh..."
             : $"[YouTube] [{videoId}] Getting stream URL...");
 
         string? targetContainer = track.TransientContainer;
@@ -354,9 +379,9 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
-        // Используем videoId (уже string)
         string cacheKey = GenerateCacheKeyFromString(videoId, targetContainer, targetBitrate);
 
+        // Проверяем кэш
         if (!forceRefresh && TryGetFromCache(cacheKey, out var cached))
         {
             track.StreamUrl = cached.Url;
@@ -367,37 +392,87 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             var vId = VideoId.Parse(videoId);
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
-            var audioStreams = manifest.GetAudioOnlyStreams()
-                .OrderByDescending(s => s.Bitrate)
-                .ToList();
 
-            if (audioStreams.Count == 0)
+            // ══════════════════════════════════════════════════════════════════
+            // STEP 1: Пробуем получить обычные audio-only стримы
+            //         (ANDROID_VR, ANDROID_MUSIC, WEB, TVHTML5 — БЕЗ IOS!)
+            // ══════════════════════════════════════════════════════════════════
+
+            try
             {
-                NotifyError($"[YouTube] [{videoId}] No audio streams found");
-                return null;
+                var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
+                var audioStreams = manifest.GetAudioOnlyStreams()
+                    .OrderByDescending(s => s.Bitrate)
+                    .ToList();
+
+                if (audioStreams.Count > 0)
+                {
+                    var selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
+                    if (selectedStream != null)
+                    {
+                        var url = selectedStream.Url;
+                        var size = selectedStream.Size.Bytes;
+                        var bitrate = (int)selectedStream.Bitrate.KiloBitsPerSecond;
+                        var container = selectedStream.Container.Name;
+                        var codec = DetermineCodec(container, selectedStream);
+
+                        sw.Stop();
+                        NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps in {sw.ElapsedMilliseconds}ms");
+
+                        CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
+
+                        track.StreamUrl = url;
+                        track.TransientContainer = container;
+                        track.TransientSize = size;
+                        track.CachedCodec = codec;
+                        track.CachedBitrate = bitrate;
+                        track.CachedContainer = container;
+                        track.IsHlsOnly = false;
+                        track.HlsManifestUrl = null;
+
+                        return (url, size, bitrate, codec, container);
+                    }
+                }
+
+                Log.Warn($"[YouTube] [{videoId}] No audio-only streams available");
+            }
+            catch (VideoUnplayableException ex)
+            {
+                Log.Warn($"[YouTube] [{videoId}] Video unplayable: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[YouTube] [{videoId}] Stream manifest failed: {ex.Message}");
             }
 
-            var selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
-            if (selectedStream == null)
+            // ══════════════════════════════════════════════════════════════════
+            // STEP 2: HLS Fallback (IOS в приоритете!)
+            // ══════════════════════════════════════════════════════════════════
+
+            Log.Info($"[YouTube] [{videoId}] Falling back to HLS (IOS priority)...");
+
+            var hlsUrl = await GetHlsManifestAsync(videoId, ct);
+
+            if (!string.IsNullOrEmpty(hlsUrl))
             {
-                NotifyError($"[YouTube] [{videoId}] Could not select audio stream");
-                return null;
+                // Помечаем трек как HLS-only
+                track.IsHlsOnly = true;
+                track.HlsManifestUrl = hlsUrl;
+                track.StreamUrl = hlsUrl;
+                track.TransientContainer = "m3u8";
+                track.CachedCodec = "HLS";
+                track.CachedBitrate = 128; // Примерный битрейт
+                track.CachedContainer = "m3u8";
+
+                sw.Stop();
+                NotifyStatus($"[YouTube] [{videoId}] ⚠️ HLS-only track (via IOS) in {sw.ElapsedMilliseconds}ms");
+                Log.Warn($"[YouTube] [{videoId}] Track marked as HLS-only — normal streams unavailable");
+
+                return (hlsUrl, 0, 128, "HLS", "m3u8");
             }
 
-            var url = selectedStream.Url;
-            var size = selectedStream.Size.Bytes;
-            var bitrate = (int)selectedStream.Bitrate.KiloBitsPerSecond;
-            var container = selectedStream.Container.Name;
-            var codec = DetermineCodec(container, selectedStream);
-
-            sw.Stop();
-            NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps ({container}) in {sw.ElapsedMilliseconds}ms");
-
-            CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
-
-            track.StreamUrl = url;
-            return (url, size, bitrate, codec, container);
+            NotifyError($"[YouTube] [{videoId}] No streams available (including HLS)");
+            return null;
         }
         catch (OperationCanceledException)
         {
@@ -410,6 +485,59 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Получает HLS манифест URL (IOS в приоритете).
+    /// </summary>
+    private async Task<string?> GetHlsManifestAsync(string videoId, CancellationToken ct)
+    {
+        try
+        {
+            var vId = VideoId.Parse(videoId);
+
+            // Используем VideoController для получения HLS
+            var controller = new VideoController(_currentHttpClient!);
+            return await controller.GetHlsManifestUrlAsync(vId, ct);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[YouTube] [{videoId}] GetHlsManifest failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Получает HLS манифест для видео.
+    /// </summary>
+    private async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> TryGetHlsStreamAsync(
+        VideoId videoId, CancellationToken ct)
+    {
+        try
+        {
+            Log.Debug($"[YouTube] [{videoId}] Trying HLS...");
+
+            // Получаем PlayerResponse с HLS URL
+            var playerResponse = await _youtube.GetPlayerResponseAsync(videoId, ct);
+            var hlsUrl = playerResponse.HlsManifestUrl;
+
+            if (string.IsNullOrEmpty(hlsUrl))
+            {
+                Log.Debug($"[YouTube] [{videoId}] No HLS manifest available");
+                return null;
+            }
+
+            Log.Info($"[YouTube] [{videoId}] ✓ HLS manifest found");
+
+            // Для HLS размер неизвестен заранее, ставим 0
+            // Bitrate примерный для аудио
+            return (hlsUrl, 0, 128, "HLS", "m3u8");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[YouTube] [{videoId}] HLS lookup failed: {ex.Message}");
+            return null;
+        }
+    }
+
     private AudioOnlyStreamInfo? SelectBestStream(
         List<AudioOnlyStreamInfo> streams,
         string? preferredContainer,
@@ -417,6 +545,7 @@ public partial class YoutubeProvider : IDisposable
     {
         if (streams.Count == 0) return null;
 
+        // Если указан предпочтительный контейнер — ищем его
         if (!string.IsNullOrEmpty(preferredContainer))
         {
             AudioOnlyStreamInfo? bestMatch = null;
@@ -445,17 +574,20 @@ public partial class YoutubeProvider : IDisposable
             if (firstInContainer != null) return firstInContainer;
         }
 
+        // Fallback: по настройкам качества
         var qualityPref = _libraryService?.Settings.QualityPreference ?? AudioQualityPreference.BestAvailable;
 
         if (qualityPref == AudioQualityPreference.Standard)
         {
+            // Предпочитаем mp4/m4a для совместимости
             for (int i = 0; i < streams.Count; i++)
             {
-                if (streams[i].Container.Name == "mp4")
+                if (streams[i].Container.Name is "mp4" or "m4a")
                     return streams[i];
             }
         }
 
+        // По умолчанию — лучший битрейт (первый в списке, т.к. отсортирован)
         return streams.Count > 0 ? streams[0] : null;
     }
 
@@ -482,18 +614,55 @@ public partial class YoutubeProvider : IDisposable
         };
     }
 
+    /// <summary>
+    /// Возвращает доступные форматы для трека.
+    /// Для HLS-only треков возвращает только HLS.
+    /// </summary>
     public async Task<List<StreamOption>> GetStreamOptionsAsync(string videoId)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(videoId)) return [];
 
         try
         {
+            // Проверяем, HLS-only ли этот трек
+            var track = _trackRegistry.TryGet($"yt_{videoId}");
+            if (track?.IsHlsOnly == true)
+            {
+                // Для HLS-only треков — только один вариант
+                return
+                [
+                    new StreamOption
+                {
+                    Container = "m3u8",
+                    Bitrate = 128,
+                    Codec = "HLS (Adaptive)",
+                    SizeMb = 0,
+                    IsActive = true
+                }
+                ];
+            }
+
             var vId = VideoId.Parse(videoId);
             var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId);
 
             var audioStreams = manifest.GetAudioOnlyStreams()
                 .OrderByDescending(s => s.Bitrate)
                 .ToList();
+
+            if (audioStreams.Count == 0)
+            {
+                // Нет стримов — только HLS
+                return
+                [
+                    new StreamOption
+                {
+                    Container = "m3u8",
+                    Bitrate = 128,
+                    Codec = "HLS (Adaptive)",
+                    SizeMb = 0
+                }
+                ];
+            }
 
             var result = new List<StreamOption>(audioStreams.Count);
             for (int i = 0; i < audioStreams.Count; i++)
@@ -512,22 +681,28 @@ public partial class YoutubeProvider : IDisposable
         catch (Exception ex)
         {
             Log.Error($"[YouTube] GetStreamOptions error: {ex.Message}");
-            return [];
+
+            // При ошибке — только HLS
+            return
+            [
+                new StreamOption
+                {
+                    Container = "m3u8",
+                    Bitrate = 128,
+                    Codec = "HLS (Adaptive)",
+                    SizeMb = 0
+                }
+            ];
         }
     }
+    #region Cache
 
-    #region Cache — ОПТИМИЗИРОВАНО
-
-    /// <summary>
-    /// используем pooled StringBuilder или stackalloc для ключа.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string GenerateCacheKey(ReadOnlySpan<char> videoId, string? container, int bitrate = 0)
     {
         if (string.IsNullOrEmpty(container))
             return videoId.ToString();
 
-        // используем string.Create для zero-copy построения ключа
         if (bitrate > 0)
         {
             var bitrateStr = bitrate.ToString();
@@ -602,7 +777,7 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region Search — УНИФИЦИРОВАННЫЙ
+    #region Search
 
     public static QueryType DetectQueryType(string query)
     {
@@ -628,9 +803,6 @@ public partial class YoutubeProvider : IDisposable
         try { return VideoId.TryParse(url)?.Value; } catch { return null; }
     }
 
-    /// <summary>
-    /// Span-based извлечение ID без аллокации подстроки.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ReadOnlySpan<char> ExtractRawIdSpan(string trackId)
     {
@@ -670,9 +842,6 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    /// <summary>
-    /// УНИФИЦИРОВАННЫЙ streaming search с pooling для батчей.
-    /// </summary>
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
         string query,
         int maxResults = 300,
@@ -691,7 +860,6 @@ public partial class YoutubeProvider : IDisposable
         {
             if (ct.IsCancellationRequested) yield break;
 
-            // pre-allocate точный размер
             var tracks = new List<TrackInfo>(batch.Items.Count);
 
             for (int i = 0; i < batch.Items.Count && count < maxResults; i++)
@@ -756,11 +924,8 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region Search Session — ОПТИМИЗИРОВАНО
+    #region Search Session
 
-    /// <summary>
-    /// используем Queue вместо List + RemoveRange для буфера.
-    /// </summary>
     public sealed class SearchSession : IDisposable
     {
         private readonly YoutubeClient _youtube;
@@ -773,7 +938,6 @@ public partial class YoutubeProvider : IDisposable
         private bool _hasMore = true;
         private volatile bool _disposed;
 
-        // Queue вместо List — O(1) dequeue вместо O(n) RemoveRange
         private readonly Queue<TrackInfo> _buffer = new();
         private readonly SemaphoreSlim _disposeLock = new(1, 1);
 
@@ -814,7 +978,6 @@ public partial class YoutubeProvider : IDisposable
 
             var results = new List<TrackInfo>(count);
 
-            // Queue.Dequeue — O(1) вместо List.RemoveRange — O(n)
             while (_buffer.Count > 0 && results.Count < count)
             {
                 results.Add(_buffer.Dequeue());
@@ -1198,14 +1361,10 @@ public partial class YoutubeProvider : IDisposable
 
     #region Helpers
 
-    /// <summary>
-    /// Span-based санитизация без LINQ.Where.
-    /// </summary>
     private static string SanitizeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
 
-        // Используем stackalloc для малых строк
         Span<char> buffer = name.Length <= 256
             ? stackalloc char[name.Length]
             : new char[name.Length];
@@ -1267,12 +1426,11 @@ public partial class YoutubeProvider : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_cookieAuth != null)
-            _cookieAuth.OnAuthStateChanged -= ReloadClient;
+        if (AuthService != null)
+            AuthService.OnAuthStateChanged -= ReloadClient;
 
         DisposeCurrentClient();
 
-        // Dispose handler last
         _currentHandler?.Dispose();
         _currentHandler = null;
 

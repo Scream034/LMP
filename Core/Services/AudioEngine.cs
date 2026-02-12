@@ -1,8 +1,11 @@
-﻿using System.Diagnostics;
+﻿// Core/Services/AudioEngine.cs
+
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using LibVLCSharp.Shared;
 using LMP.Core.Models;
+using LMP.Core.Services.Streaming;
 using LMP.Core.ViewModels;
 using LMP.Core.Youtube;
 using LMP.Core.Youtube.Utils;
@@ -39,7 +42,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private LibVLC? _libVLC;
     private MediaPlayer? _player;
     private Media? _currentMedia;
-    private MemoryFirstCachingStream? _currentStream;
+
+    /// <summary>
+    /// Унифицированный стрим (HLS или MemoryFirst)
+    /// </summary>
+    private MediaStreamBase? _currentStream;
 
     #endregion
 
@@ -55,7 +62,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
-    #region State (consolidated)
+    #region State
 
     [Flags]
     private enum StateFlags
@@ -80,7 +87,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private string _activeCodec = "";
     private int _activeBitrate;
-
     private StreamingConfig _streamingConfig;
 
     #endregion
@@ -91,7 +97,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private readonly List<TrackInfo> _history = new(MaxHistorySize);
     private readonly Lock _queueLock = new();
     private int _currentIndex = -1;
-
     private IReadOnlyList<TrackInfo>? _queueSnapshot;
     private int _queueVersion;
 
@@ -101,7 +106,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
 
-    // Теперь это реактивные свойства с уведомлениями
     public bool IsPlaying => HasFlag(StateFlags.Playing);
     public bool IsPaused => HasFlag(StateFlags.Paused);
     public bool IsLoading => HasFlag(StateFlags.Loading);
@@ -112,7 +116,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             lock (_queueLock)
             {
-                _queueSnapshot ??= _queue.ToArray();
+                _queueSnapshot ??= [.. _queue];
                 return _queueSnapshot;
             }
         }
@@ -134,26 +138,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Прогресс буферизации в процентах (0-100).
-    /// Учитывает RAM-чанки и данные на диске.
+    /// Прогресс буферизации (0-100).
     /// </summary>
     public double BufferProgress => _currentStream?.DownloadProgress ?? 0;
 
     /// <summary>
-    /// Количество загруженных байт для текущего трека.
+    /// Количество загруженных байт.
     /// </summary>
-    public long GetDownloadedBytes() =>
-        _currentStream?.BufferedBytes ?? 0;
+    public long GetDownloadedBytes() => _currentStream?.BufferedBytes ?? 0;
 
     /// <summary>
-    /// Получает закэшированные диапазоны для визуализации.
+    /// Закэшированные диапазоны для визуализации.
     /// </summary>
-    /// <returns>Список диапазонов (start, end) от 0 до 1.</returns>
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges() =>
         _currentStream?.GetBufferedRanges() ?? [];
 
     /// <summary>
-    /// Трек полностью загружен.
+    /// Полностью загружен.
     /// </summary>
     public bool IsFullyBuffered => _currentStream?.IsFullyDownloaded ?? false;
 
@@ -172,8 +173,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<bool, bool>? OnPlaybackStateChanged;
     public event Action? OnQueueChanged;
     public event Action<string, string>? OnCriticalError;
-
-    // Событие для явного уведомления об изменении состояния загрузки
     public event Action<bool>? OnLoadingStateChanged;
 
     #endregion
@@ -185,10 +184,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _youtube = youtube;
         _library = library;
         _cacheManager = cacheManager;
-
         _httpClient = CreateHttpClient();
 
-        // DropOldest вместо Wait - новые команды вытесняют старые
         _commandQueue = Channel.CreateBounded<Func<ValueTask>>(
             new BoundedChannelOptions(16)
             {
@@ -206,17 +203,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _ = ProcessCommandsAsync();
         _ = VolumeSaveLoopAsync();
 
-        Log.Info($"[AudioEngine] Ready. Volume={_volumePercent}%, Profile={library.Settings.InternetProfile}");
+        Log.Info($"[AudioEngine] Ready. Volume={_volumePercent}%");
     }
 
-    private HttpClient CreateHttpClient() => new(new SocketsHttpHandler
+    private static HttpClient CreateHttpClient() => new(new LoggingHandler(new SocketsHttpHandler
     {
         PooledConnectionLifetime = TimeSpan.FromMinutes(15),
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
         MaxConnectionsPerServer = 8,
         ConnectTimeout = TimeSpan.FromSeconds(4),
         EnableMultipleHttp2Connections = true
-    })
+    }))
     {
         Timeout = TimeSpan.FromMinutes(4),
         DefaultRequestHeaders =
@@ -275,22 +272,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public async Task ReinitializeWithProfileAsync(InternetProfile profile)
     {
         Log.Info($"[AudioEngine] Switching to profile: {profile}");
-
-        // Немедленно отменяем текущую загрузку
         CancelCurrentPlayback();
 
         await EnqueueCommandAsync(async () =>
         {
             await CleanupMediaAsync();
-
             _player?.Dispose();
             _player = null;
             _libVLC?.Dispose();
 
             _streamingConfig = GetStreamingConfig(profile);
             InitializeVLC();
-
             ClearState();
+
             RaiseOnUI(() =>
             {
                 OnTrackChanged?.Invoke(null);
@@ -307,12 +301,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (track == null || HasFlag(StateFlags.Disposed)) return Task.CompletedTask;
 
-        // Немедленно отменяем текущую загрузку ДО постановки в очередь
         var newSession = CancelCurrentPlayback();
 
         return EnqueueCommandAsync(async () =>
         {
-            // Если сессия изменилась пока ждали очередь - команда устарела
             if (_session != newSession) return;
 
             lock (_queueLock)
@@ -341,7 +333,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (HasFlag(StateFlags.Disposed)) return Task.CompletedTask;
 
-        // Немедленно отменяем текущую загрузку
         var newSession = CancelCurrentPlayback();
 
         return EnqueueCommandAsync(async () =>
@@ -374,23 +365,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             if (shouldPlay)
             {
-                // Уведомляем stream что пауза снята (важно для приоритетов)
                 _currentStream?.NotifyPaused(false);
 
                 if (state is VLCState.Paused or VLCState.Stopped)
-                {
-                    // VLC.Play() работает и из Paused, и из Stopped
                     _player?.Play();
-                }
                 else if (state is VLCState.Ended)
                 {
                     var session = CancelCurrentPlayback();
                     _ = EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
                 }
                 else
-                {
                     _player?.Play();
-                }
 
                 SetFlag(StateFlags.Playing, true);
                 SetFlag(StateFlags.Paused, false);
@@ -417,45 +402,88 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         var ms = (long)Math.Clamp(position.TotalMilliseconds, 0, TotalDuration.TotalMilliseconds);
 
-        Log.Info($"[AudioEngine] Seeking to {position.TotalSeconds:F1}s (ms={ms})");
+        Log.Debug($"[AudioEngine] Seek to {position.TotalSeconds:F1}s");
 
-        // ИЗМЕНЕНО: Устанавливаем SuppressAutoNext на время seek
         SetFlag(StateFlags.SuppressAutoNext, true);
 
-        // Сначала уведомляем stream о seek
-        if (_currentStream != null)
+        try
         {
-            try
-            {
-                _currentStream.NotifySeek(ms);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[AudioEngine] NotifySeek failed: {ex.Message}");
-            }
+            _currentStream?.NotifySeek(ms);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioEngine] NotifySeek error: {ex.Message}");
         }
 
-        // Затем устанавливаем позицию в VLC
         Volatile.Write(ref _cachedTimeMs, ms);
 
         _ = Task.Run(async () =>
         {
             try
             {
-                // Seek в VLC
+                if (_player == null || HasFlag(StateFlags.Disposed)) return;
+
+                // Запоминаем что нужно возобновить воспроизведение
+                bool shouldPlay = IsPlaying || _player.State == VLCState.Paused;
+
+                Log.Debug($"[AudioEngine] Setting VLC time to {ms}ms, state={_player.State}");
+
+                // Устанавливаем время
                 _player.Time = ms;
 
-                // ДОБАВЛЕНО: Ждём завершения seek и сбрасываем флаг
-                await Task.Delay(300);
+                await Task.Delay(50);
 
-                if (!HasFlag(StateFlags.Disposed))
+                if (HasFlag(StateFlags.Disposed)) return;
+
+                if (shouldPlay)
                 {
-                    SetFlag(StateFlags.SuppressAutoNext, false);
+                    // Пробуем несколько способов возобновить воспроизведение
+                    for (int retry = 0; retry < 10; retry++)
+                    {
+                        if (HasFlag(StateFlags.Disposed)) return;
+
+                        var state = _player.State;
+                        if (state == VLCState.Playing)
+                        {
+                            Log.Debug($"[AudioEngine] VLC playing after {retry} retries");
+                            break;
+                        }
+
+                        Log.Debug($"[AudioEngine] Play attempt {retry + 1}, state={state}");
+
+                        // Разные методы в зависимости от состояния
+                        if (state == VLCState.Paused)
+                        {
+                            _player.SetPause(false);
+                        }
+                        else if (state == VLCState.Stopped || state == VLCState.Ended)
+                        {
+                            _player.Play();
+                        }
+                        else
+                        {
+                            _player.Play();
+                        }
+
+                        await Task.Delay(50 + retry * 20);
+                    }
+
+                    // Последняя попытка
+                    if (_player.State != VLCState.Playing && !HasFlag(StateFlags.Disposed))
+                    {
+                        Log.Warn($"[AudioEngine] Force play, state={_player.State}");
+                        _player.Play();
+                    }
                 }
+
+                await Task.Delay(50);
+                SetFlag(StateFlags.SuppressAutoNext, false);
+
+                Log.Debug($"[AudioEngine] Seek complete, VLC state={_player.State}");
             }
             catch (Exception ex)
             {
-                Log.Warn($"[AudioEngine] VLC seek failed: {ex.Message}");
+                Log.Warn($"[AudioEngine] VLC seek error: {ex.Message}");
                 SetFlag(StateFlags.SuppressAutoNext, false);
             }
         });
@@ -484,35 +512,35 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public Task PlayNextAsync() => NavigateAsync(forward: true, userInitiated: true);
     public Task PlayPreviousAsync() => NavigateAsync(forward: false, userInitiated: true);
 
-    /// <summary>
-    /// Централизованная отмена текущего воспроизведения
-    /// Возвращает новый session ID для проверки актуальности команды
-    /// </summary>
     private int CancelCurrentPlayback()
     {
         SetFlag(StateFlags.SuppressAutoNext, true);
         var newSession = Interlocked.Increment(ref _session);
 
-        Log.Info($"[AudioEngine] Cancelling current playback. New session: {newSession}");
+        Log.Debug($"[AudioEngine] Cancel session → {newSession}");
 
-        // Отменяем текущую операцию загрузки
-        try { _playbackCts?.Cancel(); } catch { }
+        // Отменяем CTS
+        try
+        {
+            _playbackCts?.Cancel();
+            _playbackCts?.Dispose();
+        }
+        catch { }
+        _playbackCts = null;
 
-        // Отменяем чтение из стрима (быстрый выход из блокирующих операций)
-        try { _currentStream?.CancelPendingReads(); } catch { }
+        // Немедленно отменяем операции в стриме
+        try { _currentStream?.CancelPendingReads(); }
+        catch { }
 
         return newSession;
     }
+
 
     #endregion
 
     #region Volume
 
-    public void SaveVolumeNow()
-    {
-        _library.UpdateSettings(s => s.Volume = _volumePercent);
-    }
-
+    public void SaveVolumeNow() => _library.UpdateSettings(s => s.Volume = _volumePercent);
     public float GetVolume() => _volumePercent;
 
     public void SetVolumeInstant(float value)
@@ -561,9 +589,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             await Task.Delay(2000);
             if ((DateTime.UtcNow - _lastVolumeChange).TotalSeconds >= 1.5)
-            {
                 _library.UpdateSettings(s => s.Volume = _volumePercent);
-            }
         }
     }
 
@@ -757,10 +783,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Stream Info
 
-    /// <summary>
-    /// Получает информацию о текущем потоке.
-    /// </summary>
-    /// <returns>Формат, битрейт и флаг готовности.</returns>
     public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo()
     {
         if (!string.IsNullOrEmpty(_activeCodec))
@@ -785,15 +807,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Internal Playback
 
-    /// <summary>
-    /// ИСПРАВЛЕНО: Принимает session для проверки актуальности
-    /// </summary>
     private async ValueTask PlayCurrentIndexAsync(int? expectedSession = null)
     {
         if (HasFlag(StateFlags.Disposed)) return;
 
         TrackInfo? track;
-
         lock (_queueLock)
         {
             if (_currentIndex < 0 || _currentIndex >= _queue.Count) return;
@@ -802,17 +820,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (track == null) return;
 
-        // Если передан ожидаемый session - проверяем
-        int currentSession;
-        if (expectedSession.HasValue)
-        {
-            currentSession = expectedSession.Value;
-            if (_session != currentSession) return; // Команда устарела
-        }
-        else
-        {
-            currentSession = Interlocked.Increment(ref _session);
-        }
+        int currentSession = expectedSession ?? Interlocked.Increment(ref _session);
+        if (expectedSession.HasValue && _session != currentSession) return;
 
         SetFlag(StateFlags.SuppressAutoNext, true);
 
@@ -825,10 +834,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_session != currentSession || ct.IsCancellationRequested) return;
 
         ClearStreamInfo();
-
-        // Используем метод с уведомлением
         SetLoadingState(true);
-
         SetFlag(StateFlags.Ready, false);
         CurrentTrack = track;
 
@@ -844,7 +850,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
         catch (OperationCanceledException)
         {
-            Log.Debug($"[AudioEngine] Playback cancelled for session {currentSession}");
+            Log.Debug($"[AudioEngine] Cancelled session {currentSession}");
         }
         catch (Exception ex)
         {
@@ -854,131 +860,166 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
         finally
         {
-            // Только если это текущая сессия
             if (_session == currentSession)
-            {
                 SetLoadingState(false);
-            }
         }
     }
 
     private async ValueTask LoadAndPlayAsync(TrackInfo track, int session, CancellationToken ct)
     {
-        await Task.Run(async () =>
+        var sw = Stopwatch.StartNew();
+        MediaStreamBase? stream = null;
+
+        try
         {
-            var sw = Stopwatch.StartNew();
-            MemoryFirstCachingStream? cacheStream = null;
+            // Проверки с быстрым выходом
+            if (ct.IsCancellationRequested || _session != session) return;
 
-            try
+            var streamInfo = await GetStreamAsync(track, forceRefresh: false, ct);
+            if (streamInfo == null) throw new Exception("Failed to get stream URL");
+
+            if (ct.IsCancellationRequested || _session != session) return;
+
+            bool isHls = track.IsHlsOnly || streamInfo.Container == "m3u8";
+            string cacheId = track.Id;
+
+            if (!isHls)
             {
-                // Проверка отмены перед каждой долгой операцией
-                ct.ThrowIfCancellationRequested();
-                if (_session != session) return;
-
-                // 1. Получаем ссылку на поток
-                var stream = await GetStreamAsync(track, forceRefresh: false, ct);
-
-                // Проверка сразу после сетевого запроса
-                ct.ThrowIfCancellationRequested();
-                if (_session != session) return;
-
-                if (stream == null) throw new Exception("Failed to get stream URL");
-
-                // 2. Настраиваем кэш
                 var hasOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
-                var cacheId = hasOverride ? $"{track.Id}_{stream.Container}_{stream.Bitrate}" : track.Id;
-
-                StreamCacheManager.UpdateStreamInfo(cacheId, stream.Codec, stream.Bitrate, stream.Container);
-                SetStreamInfo(stream.Codec, stream.Bitrate);
-
-                Log.Info($"[AudioEngine] Stream: {stream.Codec}/{stream.Bitrate}kbps, cache={cacheId}");
-
-                // Проверка перед следующим сетевым запросом
-                ct.ThrowIfCancellationRequested();
-                if (_session != session) return;
-
-                // 3. Получаем размер
-                var size = stream.Size;
-                if (size <= 0 && !hasOverride)
-                    size = await GetContentLengthAsync(stream.Url, ct);
-
-                // Проверка после HEAD запроса
-                ct.ThrowIfCancellationRequested();
-                if (_session != session) return;
-
-                // 4. Инициализируем кэш-стрим
-                if (size > 0)
-                {
-                    var trackDuration = track.Duration.TotalMilliseconds;
-
-                    cacheStream = new MemoryFirstCachingStream(
-                        cacheId,
-                        stream.Url,
-                        size,
-                        _httpClient,
-                        _cacheManager,
-                        _streamingConfig,
-                        urlRefresher: async token =>
-                        {
-                            var s = await GetStreamAsync(track, forceRefresh: true, token);
-                            return s?.Url;
-                        },
-                        originalTrackId: track.Id,
-                        getPlaybackTimeMs: () => Volatile.Read(ref _cachedTimeMs),
-                        totalDurationMs: (long)trackDuration);
-
-                    // Пребуферизация с проверкой отмены
-                    if (!await cacheStream.PreBufferAsync(ct))
-                    {
-                        cacheStream.Dispose();
-                        cacheStream = null;
-                    }
-                }
-
-                // Финальная проверка перед запуском VLC
-                ct.ThrowIfCancellationRequested();
-                if (_session != session)
-                {
-                    cacheStream?.Dispose();
-                    return;
-                }
-
-                // 5. Запускаем VLC
-                Media media = cacheStream != null
-                    ? new Media(_libVLC!, new StreamMediaInput(cacheStream))
-                    : CreateUrlMedia(stream.Url);
-
-                StartPlayback(media, cacheStream, track);
-                cacheStream = null; // Ownership transferred
-
-                Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");
+                if (hasOverride)
+                    cacheId = $"{track.Id}_{streamInfo.Container}_{streamInfo.Bitrate}";
+                StreamCacheManager.UpdateStreamInfo(cacheId, streamInfo.Codec, streamInfo.Bitrate, streamInfo.Container);
             }
-            catch (OperationCanceledException)
+
+            SetStreamInfo(streamInfo.Codec, streamInfo.Bitrate);
+            Log.Info($"[AudioEngine] Stream: {streamInfo.Codec}/{streamInfo.Bitrate}kbps, HLS={isHls}");
+
+            if (ct.IsCancellationRequested || _session != session) return;
+
+            // Создаём стрим
+            if (isHls)
             {
-                cacheStream?.Dispose();
-                throw;
+                stream = CreateHlsStream(streamInfo, track, ct);
             }
-            catch (Exception ex)
+            else
             {
-                Log.Error($"[AudioEngine] Load error: {ex.Message}");
-                cacheStream?.Dispose();
-                throw;
+                stream = await CreateMemoryStreamAsync(streamInfo, track, cacheId, ct);
             }
-        }, ct);
+
+            if (stream == null)
+                throw new Exception("Failed to create stream");
+
+            // Проверка перед инициализацией
+            if (ct.IsCancellationRequested || _session != session)
+            {
+                stream.Dispose();
+                return;
+            }
+
+            if (!await stream.InitializeAsync(ct))
+            {
+                stream.Dispose();
+                throw new Exception("Stream initialization failed");
+            }
+
+            if (ct.IsCancellationRequested || _session != session)
+            {
+                stream.Dispose();
+                return;
+            }
+
+            if (!await stream.PreBufferAsync(ct))
+            {
+                stream.Dispose();
+                throw new Exception("PreBuffer failed");
+            }
+
+            // Финальная проверка
+            if (ct.IsCancellationRequested || _session != session)
+            {
+                stream.Dispose();
+                return;
+            }
+
+            // Запуск воспроизведения
+            var media = new Media(_libVLC!, new StreamMediaInput(stream));
+            StartPlayback(media, stream, track);
+
+            Log.Info($"[AudioEngine] Loaded in {sw.ElapsedMilliseconds}ms");
+        }
+        catch (OperationCanceledException)
+        {
+            stream?.Dispose();
+            Log.Debug($"[AudioEngine] Load cancelled, session {session}");
+        }
+        catch (Exception)
+        {
+            stream?.Dispose();
+            throw;
+        }
     }
 
-    private Media CreateUrlMedia(string url)
+    private HlsStream CreateHlsStream(StreamInfo info, TrackInfo track, CancellationToken ct)
     {
-        var media = new Media(_libVLC!, url, FromType.FromLocation);
-        media.AddOption($":http-user-agent={YoutubeClientUtils.UserAgent}");
-        media.AddOption(":http-referrer=https://www.youtube.com/");
-        return media;
+        var headers = new Dictionary<string, string>
+        {
+            ["User-Agent"] = YoutubeClientUtils.UserAgent,
+            ["Referer"] = "https://www.youtube.com/",
+            ["Origin"] = "https://www.youtube.com"
+        };
+
+        return new HlsStream(
+            info.Url,
+            _httpClient,
+            headers,
+            urlRefresher: async token =>
+            {
+                var s = await GetStreamAsync(track, forceRefresh: true, token);
+                return s?.Url;
+            });
     }
 
-    private void StartPlayback(Media media, MemoryFirstCachingStream? stream, TrackInfo track)
+
+    private async Task<MediaStreamBase?> CreateMemoryStreamAsync(
+     StreamInfo info, TrackInfo track, string cacheId, CancellationToken ct)
+    {
+        var size = info.Size;
+        if (size <= 0)
+            size = await GetContentLengthAsync(info.Url, ct);
+
+        if (size <= 0)
+        {
+            Log.Warn("[AudioEngine] Cannot determine content length");
+            return null;
+        }
+
+        // Инициализируем метаданные кэша
+        StreamCacheManager.LoadOrCreateMetadata(cacheId, info.Url, size);
+
+        var stream = new MemoryFirstCachingStream(
+            cacheId,
+            info.Url,
+            size,
+            _httpClient,
+            _cacheManager,
+            _streamingConfig,
+            urlRefresher: async token =>
+            {
+                var s = await GetStreamAsync(track, forceRefresh: true, token);
+                return s?.Url;
+            },
+            originalTrackId: track.Id,
+            getPlaybackTimeMs: () => Volatile.Read(ref _cachedTimeMs),
+            totalDurationMs: (long)track.Duration.TotalMilliseconds);
+
+        return stream;
+    }
+
+    private void StartPlayback(Media media, MediaStreamBase stream, TrackInfo track)
     {
         var (oldMedia, oldStream) = (_currentMedia, _currentStream);
-        (_currentMedia, _currentStream) = (media, stream);
+        _currentMedia = media;
+        _currentStream = stream;
 
         _ = Task.Run(() =>
         {
@@ -999,11 +1040,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (HasFlag(StateFlags.Disposed)) return;
 
-        // Убрана проверка Navigating - разрешаем прерывать навигацию
-        // Немедленно отменяем текущую загрузку
         var newSession = CancelCurrentPlayback();
-
         SetFlag(StateFlags.Navigating, true);
+
         try
         {
             if (!forward && CurrentPosition.TotalSeconds > 3 && HasFlag(StateFlags.Ready))
@@ -1015,9 +1054,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             bool canMove;
             lock (_queueLock)
             {
-                canMove = forward
-                    ? TryMoveNext(userInitiated)
-                    : TryMovePrevious();
+                canMove = forward ? TryMoveNext(userInitiated) : TryMovePrevious();
             }
 
             if (canMove)
@@ -1098,24 +1135,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         var hasOverride = track.TransientBitrate > 0 || !string.IsNullOrEmpty(track.TransientContainer);
 
-        // Check full cache
         if (!hasOverride && !forceRefresh && _cacheManager.IsFullyCached(track.Id))
         {
             var meta = StreamCacheManager.TryGetMetadata(track.Id);
             if (meta is { ContentLength: > 0, Codec: not "" })
             {
-                Log.Debug($"[AudioEngine] Using cached stream: {track.Id}");
+                Log.Debug($"[AudioEngine] Using cached: {track.Id}");
                 if (!track.IsDownloaded && !_cacheManager.IsPromoted(track.Id))
                     _cacheManager.TriggerCacheCompleted(track.Id, track.Id);
                 return new(meta.SourceUrl, meta.ContentLength, meta.Bitrate, meta.Codec, meta.Container);
             }
         }
 
-        // Check if we need fresh URL
         if (!forceRefresh && !hasOverride && !string.IsNullOrEmpty(track.StreamUrl) && !string.IsNullOrEmpty(track.CachedCodec))
             return new(track.StreamUrl, -1, track.CachedBitrate, track.CachedCodec, track.CachedContainer);
 
-        // API request with throttling
         return await WithApiLockAsync(async () =>
         {
             await ThrottleAsync(ct);
@@ -1162,15 +1196,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         _consecutiveErrors = 0;
 
-        // НЕ сбрасываем SuppressAutoNext сразу!
-        // Даём задержку чтобы избежать race condition с EndReached
         _ = Task.Run(async () =>
         {
             await Task.Delay(500);
             if (!HasFlag(StateFlags.Disposed))
-            {
                 SetFlag(StateFlags.SuppressAutoNext, false);
-            }
         });
 
         SetFlag(StateFlags.Ready, true);
@@ -1213,24 +1243,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private void OnVlcEndReached()
     {
-        // Игнорируем EndReached если недавно был seek
         long lastSeek = Volatile.Read(ref _cachedTimeMs);
         long totalDur = Volatile.Read(ref _cachedLengthMs);
 
-        // Если текущая позиция < 95% от длительности - это ложный EndReached
         if (totalDur > 0 && lastSeek < totalDur * 0.95)
         {
-            Log.Warn($"[AudioEngine] Ignoring false EndReached (pos={lastSeek}ms, dur={totalDur}ms)");
+            Log.Warn($"[AudioEngine] Ignoring false EndReached");
             return;
         }
 
-        // ДОБАВЛЕНО: Дополнительная проверка через VLC.Time
         if (_player != null)
         {
             long vlcTime = _player.Time;
             if (totalDur > 0 && vlcTime > 0 && vlcTime < totalDur * 0.95)
             {
-                Log.Warn($"[AudioEngine] Ignoring false EndReached (VLC.Time={vlcTime}ms, dur={totalDur}ms)");
+                Log.Warn($"[AudioEngine] Ignoring false EndReached (VLC check)");
                 return;
             }
         }
@@ -1245,12 +1272,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var session = Interlocked.Increment(ref _session);
         _ = Task.Run(async () =>
         {
-            // ДОБАВЛЕНО: Задержка для окончательной проверки
             await Task.Delay(100);
 
             if (_session != session || HasFlag(StateFlags.Disposed)) return;
 
-            // Финальная проверка перед автопереключением
             if (_player != null)
             {
                 long finalPos = _player.Time;
@@ -1258,7 +1283,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
                 if (finalDur > 0 && finalPos < finalDur * 0.95)
                 {
-                    Log.Warn($"[AudioEngine] Cancelled auto-next after final check (pos={finalPos}, dur={finalDur})");
+                    Log.Warn($"[AudioEngine] Cancelled auto-next");
                     return;
                 }
             }
@@ -1294,19 +1319,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (stream == null && media == null) return;
 
-        try { stream?.CancelPendingReads(); } catch { }
+        // Сначала отменяем операции стрима
+        try { stream?.CancelPendingReads(); }
+        catch { }
 
-        // Плавная остановка VLC
+        // Останавливаем VLC если играет
         if (_player?.State is VLCState.Playing or VLCState.Buffering)
         {
-            try
-            {
-                _player?.Pause();
-                await Task.Delay(50);
-            }
+            try { _player?.Pause(); }
             catch { }
         }
 
+        // Отсоединяем медиа от плеера
         if (_player?.Media == media)
         {
             try
@@ -1317,10 +1341,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             catch { }
         }
 
-        // Отложенная очистка
-        _ = Task.Run(() =>
+        // Dispose в фоне с небольшой задержкой
+        _ = Task.Run(async () =>
         {
-            Thread.Sleep(200);
+            await Task.Delay(100);
             try { stream?.Dispose(); } catch { }
             try { media?.Dispose(); } catch { }
         });
@@ -1361,9 +1385,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private void NotifyPlaybackState() =>
         RaiseOnUI(() => OnPlaybackStateChanged?.Invoke(IsPlaying, IsPaused));
 
-    /// <summary>
-    /// Метод для изменения состояния загрузки с уведомлением
-    /// </summary>
     private void SetLoadingState(bool value)
     {
         bool changed = HasFlag(StateFlags.Loading) != value;
@@ -1379,6 +1400,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
+    public void NotifyAppMinimized() => _currentStream?.ReleaseRamBuffers();
+
     #endregion
 
     #region Command Queue
@@ -1389,7 +1412,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             if (HasFlag(StateFlags.Disposed)) break;
             try { await cmd(); }
-            catch (OperationCanceledException) { /* Ожидаемая отмена */ }
+            catch (OperationCanceledException) { }
             catch (Exception ex) { Log.Error($"[AudioEngine] Command error: {ex.Message}"); }
         }
     }
@@ -1443,13 +1466,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Configuration
 
-    /// <summary>
-    /// Получает конфигурацию стриминга для указанного профиля.
-    /// </summary>
     private static StreamingConfig GetStreamingConfig(InternetProfile profile) =>
         StreamingProfiles.GetConfig(profile);
-
-    public void NotifyAppMinimized() => _currentStream?.ReleaseRamBuffers();
 
     #endregion
 

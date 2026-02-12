@@ -40,6 +40,26 @@ class Program
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
+#if HLS_FORMAT_TEST
+            // Запуск теста HLS форматов
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5000); // Подождать инициализации
+                // await Core.Dev.HlsFormatTester.RunAllTestsAsync();
+                // await Core.Dev.HlsFormatTester.TestAllStreamsAsync();
+                // await Core.Dev.HlsFormatTester.TestIosRangeLimitAsync();
+                // await Core.Dev.HlsFormatTester.TestIosOpusRangeLimitAsync();
+                // await Core.Dev.HlsFormatTester.TestHeadersBypassAsync();
+                await Core.Dev.HlsFormatTester.TestSignatureRefreshAsync();
+                Console.WriteLine("\n\n");
+
+                await Core.Dev.HlsFormatTester.TestCookieBypassAsync();
+                Console.WriteLine("\n\n");
+
+                await Core.Dev.HlsFormatTester.TestParallelConnectionsAsync();
+            });
+#endif
+
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)

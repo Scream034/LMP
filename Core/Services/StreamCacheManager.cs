@@ -44,6 +44,16 @@ public class StreamCacheMetadata
 /// </summary>
 public class StreamCacheManager : IDisposable
 {
+    public const string CacheExtension = ".cache";
+    public const string MetaExtension = ".meta";
+    public const int HashLength = 32;
+    public const int MaxFileNameLength = 200;
+
+    public static readonly string[] KnownContainers =
+        ["m4a", "opus", "webm", "mp3", "ogg", "aac", "flac", "mp4"];
+    
+    public static readonly string AllCaches = "*" + CacheExtension;
+
     private readonly LibraryService _library;
     private readonly SemaphoreSlim _promoteLock = new(1, 1);
     private readonly SemaphoreSlim _cleanupLock = new(1, 1);
@@ -472,7 +482,7 @@ public class StreamCacheManager : IDisposable
             var cacheDir = G.Folder.StreamCache;
             if (!Directory.Exists(cacheDir)) return (0, 0);
 
-            var files = Directory.GetFiles(cacheDir, "*.cache");
+            var files = Directory.GetFiles(cacheDir, AllCaches);
             long totalSize = files.Sum(f => new FileInfo(f).Length);
 
             return (files.Length, totalSize / 1024 / 1024);
@@ -566,7 +576,7 @@ public class StreamCacheManager : IDisposable
             var cacheDir = G.Folder.StreamCache;
             if (!Directory.Exists(cacheDir)) return;
 
-            var files = Directory.GetFiles(cacheDir, "*.cache")
+            var files = Directory.GetFiles(cacheDir, AllCaches)
                 .Select(f => new FileInfo(f)).ToList();
 
             long totalSize = files.Sum(f => f.Length);
@@ -592,7 +602,7 @@ public class StreamCacheManager : IDisposable
                 try
                 {
                     f.Delete();
-                    var metaPath = Path.ChangeExtension(f.FullName, ".meta");
+                    var metaPath = Path.ChangeExtension(f.FullName, MetaExtension);
                     if (File.Exists(metaPath)) File.Delete(metaPath);
                 }
                 catch { }
@@ -635,7 +645,7 @@ public class StreamCacheManager : IDisposable
     }
 
     private static bool IsKnownContainer(string s) =>
-        s is "m4a" or "opus" or "webm" or "mp3" or "ogg" or "aac" or "flac" or "mp4";
+        KnownContainers.Contains(s, StringComparer.OrdinalIgnoreCase);
 
     private static string SanitizeFileName(string name)
     {

@@ -24,15 +24,25 @@ public static class YoutubeClientUtils
     public static bool RequiresAuth => CurrentProfile == YoutubeClientProfile.Web;
 
     /// <summary>
-    /// Порядок клиентов для fallback при ошибках воспроизведения.
+    /// Порядок клиентов для fallback.
+    /// IOS НЕ включён — для него используем только HLS.
     /// </summary>
-    public static readonly string[] FallbackClients = 
+    public static readonly string[] StreamFallbackClients = 
     [
         "ANDROID_VR",
         "ANDROID_MUSIC", 
         "WEB",
-        "IOS",
         "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
+    ];
+
+    /// <summary>
+    /// Клиенты для получения HLS (IOS в приоритете).
+    /// </summary>
+    public static readonly string[] HlsFallbackClients = 
+    [
+        "IOS",
+        "ANDROID_VR",
+        "WEB"
     ];
 
     public static string GeneratePlayerContext(string videoId, string? visitorData)

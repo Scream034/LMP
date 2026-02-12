@@ -8,24 +8,28 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    
+
     <!-- Workstation GC - меньше памяти, быстрее отдаёт ОС -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
-    
+
     <!-- Concurrent GC - UI не фризит во время сборки -->
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
-    
+
     <!-- НЕ удерживать VM сегменты (отдавать память ОС) -->
     <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
-    
+
     <!-- Компактификация LOH (борьба с фрагментацией) -->
     <GCLargeObjectHeapCompactionMode>CompactOnce</GCLargeObjectHeapCompactionMode>
-    
+
     <!-- Tiered compilation для быстрого старта -->
     <TieredCompilation>true</TieredCompilation>
     <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
 
     <NoWarn>$(NoWarn);CS0436</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DefineConstants>$(DefineConstants);HLS_FORMAT_TEST;_HTTP_LOG</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

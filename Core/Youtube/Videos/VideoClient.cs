@@ -1,5 +1,5 @@
 using LMP.Core.Models;
-
+using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Videos.Streams;
 
@@ -16,13 +16,13 @@ public class VideoClient(HttpClient http)
     )
     {
         var watchPage = await _controller.GetVideoWatchPageAsync(videoId, cancellationToken);
-        var playerResponse = watchPage.PlayerResponse 
+        var playerResponse = watchPage.PlayerResponse
                              ?? await _controller.GetPlayerResponseAsync(videoId, cancellationToken);
 
         var title = playerResponse.Title ?? "";
-        var channelTitle = playerResponse.Author 
+        var channelTitle = playerResponse.Author
                            ?? throw new YoutubeExplodeException("Failed to extract video author.");
-        var channelId = playerResponse.ChannelId 
+        var channelId = playerResponse.ChannelId
                         ?? throw new YoutubeExplodeException("Failed to extract video channel ID.");
 
         // Получаем лучшее превью
@@ -44,5 +44,16 @@ public class VideoClient(HttpClient http)
             IsMusic = playerResponse.IsMusic,
             // Дополнительные метаданные можно расширить при необходимости
         };
+    }
+
+    /// <summary>
+    /// Публичный метод для получения PlayerResponse (используется для HLS fallback).
+    /// </summary>
+    internal async ValueTask<PlayerResponse> GetPlayerResponseAsync(
+        VideoId videoId,
+        CancellationToken cancellationToken = default)
+    {
+        var (response, _) = await _controller.GetPlayerResponseWithFallbackAsync(videoId, cancellationToken);
+        return response;
     }
 }

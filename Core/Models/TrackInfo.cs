@@ -12,16 +12,14 @@ namespace LMP.Core.Models;
 /// </summary>
 public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 {
-    // СТАТИЧЕСКИЙ КЭШ ПРЕФИКСОВ — избегаем тысяч аллокаций "yt_" + id
     private static readonly ConditionalWeakTable<string, string> _idCache = new();
-    
+
     private string _id = string.Empty;
 
     #region Identity
 
     /// <summary>
     /// Уникальный идентификатор с кэшированием для избежания дубликатов строк.
-    /// НЕ используем [Reactive] — ручная реализация для оптимизации.
     /// </summary>
     public string Id
     {
@@ -29,7 +27,7 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
         set
         {
             if (_id == value) return;
-            
+
             if (!string.IsNullOrEmpty(value))
             {
                 if (value.StartsWith("yt_") || value.StartsWith("yt_pl_"))
@@ -45,7 +43,7 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
             {
                 _id = value ?? string.Empty;
             }
-            
+
             this.RaisePropertyChanged();
         }
     }
@@ -63,7 +61,6 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     /// <summary>
     /// Извлекает чистый YouTube ID без префикса (zero-alloc через Span).
-    /// Используйте в sync контексте.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<char> GetRawIdSpan()
@@ -89,7 +86,7 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #endregion
 
-    #region Metadata — используем [Reactive] без конфликтов
+    #region Metadata
 
     /// <summary>
     /// Название трека.
@@ -155,10 +152,6 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #region Playlists
 
-    /// <summary>
-    /// ID плейлистов, в которых находится трек.
-    /// ОПТИМИЗАЦИЯ: ленивая инициализация + StringComparer.Ordinal.
-    /// </summary>
     private HashSet<string>? _inPlaylists;
 
     public HashSet<string> InPlaylists
@@ -178,16 +171,27 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #endregion
 
-    #region Runtime Cache (не сохраняется)
+    #region Runtime Cache
 
     [JsonIgnore] public string? TransientContainer { get; set; }
     [JsonIgnore] public int TransientBitrate { get; set; }
+    [JsonIgnore] public long TransientSize { get; set; }
 
     [JsonIgnore, Reactive] public string StreamUrl { get; set; } = string.Empty;
 
     [JsonIgnore] public string CachedCodec { get; set; } = string.Empty;
     [JsonIgnore] public int CachedBitrate { get; set; }
     [JsonIgnore] public string CachedContainer { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Трек доступен только через HLS (обычные стримы заблокированы).
+    /// </summary>
+    [JsonIgnore] public bool IsHlsOnly { get; set; }
+
+    /// <summary>
+    /// URL HLS манифеста (если IsHlsOnly = true).
+    /// </summary>
+    [JsonIgnore] public string? HlsManifestUrl { get; set; }
 
     #endregion
 
@@ -200,34 +204,33 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     #region Methods
 
     /// <summary>
-    /// Обновляет метаданные из свежего объекта ).
+    /// Обновляет метаданные из свежего объекта.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void UpdateMetadata(TrackInfo fresh)
     {
-        // Проверяем изменения до присваивания
-        if (!string.IsNullOrEmpty(fresh.Title) && fresh.Title != Title) 
+        if (!string.IsNullOrEmpty(fresh.Title) && fresh.Title != Title)
             Title = fresh.Title;
-        
-        if (!string.IsNullOrEmpty(fresh.Author) && fresh.Author != Author) 
+
+        if (!string.IsNullOrEmpty(fresh.Author) && fresh.Author != Author)
             Author = fresh.Author;
-        
-        if (!string.IsNullOrEmpty(fresh.Url) && fresh.Url != Url) 
+
+        if (!string.IsNullOrEmpty(fresh.Url) && fresh.Url != Url)
             Url = fresh.Url;
-        
-        if (!string.IsNullOrEmpty(fresh.ThumbnailUrl) && fresh.ThumbnailUrl != ThumbnailUrl) 
+
+        if (!string.IsNullOrEmpty(fresh.ThumbnailUrl) && fresh.ThumbnailUrl != ThumbnailUrl)
             ThumbnailUrl = fresh.ThumbnailUrl;
-        
-        if (fresh.Duration.TotalSeconds > 0 && fresh.Duration != Duration) 
+
+        if (fresh.Duration.TotalSeconds > 0 && fresh.Duration != Duration)
             Duration = fresh.Duration;
-        
-        if (fresh.IsOfficialArtist && !IsOfficialArtist) 
+
+        if (fresh.IsOfficialArtist && !IsOfficialArtist)
             IsOfficialArtist = true;
-        
-        if (fresh.IsMusic && !IsMusic) 
+
+        if (fresh.IsMusic && !IsMusic)
             IsMusic = true;
-        
-        if (!string.IsNullOrEmpty(fresh.ChannelId) && fresh.ChannelId != ChannelId) 
+
+        if (!string.IsNullOrEmpty(fresh.ChannelId) && fresh.ChannelId != ChannelId)
             ChannelId = fresh.ChannelId;
     }
 

@@ -85,12 +85,9 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
         bool isPlayerRequest = request.Options.TryGetValue(IsPlayerContext, out var p) && p;
 
-        // User-Agent
-        if (request.Headers.Contains("User-Agent")) request.Headers.Remove("User-Agent");
-
         if (isPlayerRequest)
         {
-            request.Headers.Add("User-Agent", YoutubeClientUtils.UserAgent);
+            if (!request.Headers.Contains("User-Agent")) request.Headers.Add("User-Agent", YoutubeClientUtils.UserAgent);
             if (!YoutubeClientUtils.RequiresAuth)
                 return request;
         }
