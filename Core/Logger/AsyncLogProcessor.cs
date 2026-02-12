@@ -1,7 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 
-namespace LMP.Logger;
+namespace LMP.Core.Logger;
 
 public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
 {
