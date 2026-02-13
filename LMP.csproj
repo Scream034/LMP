@@ -29,7 +29,8 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-    <DefineConstants>$(DefineConstants);HLS_FORMAT_TEST;_HTTP_LOG</DefineConstants>
+    <DefineConstants>$(DefineConstants);_HLS_FORMAT_TEST;_HTTP_LOG;AUDIO_TESTS;AUDIO_TESTS_OFFLINE
+    </DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -52,6 +53,7 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.3.0.6" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
     <PackageReference Include="Material.Icons.Avalonia" Version="2.4.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.2" />
@@ -65,6 +67,10 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
 
     <PackageReference Include="LibVLCSharp" Version="3.9.5" />
+
+    <PackageReference Include="SharpJaad" Version="0.1.1" />
+
+    <PackageReference Include="SharpJaad.AAC" Version="0.1.1" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23" />
   </ItemGroup>
 </Project>

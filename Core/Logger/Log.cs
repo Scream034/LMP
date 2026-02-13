@@ -38,7 +38,7 @@ public static class Log
 
     // Вспомогательный метод отправки
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Enqueue(LogLevel level, string? message, Exception? ex = null, [CallerMemberName] string memberName = "")
+    private static void Enqueue(LogLevel level, string? message, Exception? ex = null)
     {
         if (!_isInitialized || _processor == null) return;
 
