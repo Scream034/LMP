@@ -8,6 +8,16 @@ using ReactiveUI.Fody.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Features.Shared;
 
+#if DEBUG
+using LMP.Core.Audio;
+using LMP.Core.Audio.Cache;
+using LMP.Core.Audio.Interfaces;
+using LMP.Core.Audio.Sources;
+using LMP.Core.Audio.Decoders;
+using LMP.Core.Audio.Backends;
+using LMP.Core.Helpers;
+#endif
+
 namespace LMP.Features.Debug;
 
 public sealed class DebugViewModel : ViewModelBase, IDisposable
@@ -17,6 +27,14 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     [Reactive] public string LogOutput { get; set; } = "Debug Session Started...\n";
     [Reactive] public string SearchQuery { get; set; } = "Linkin Park";
     [Reactive] public bool IsBusy { get; set; }
+
+    [Reactive] public string AudioTestInput { get; set; } = "aG_i7fvGSXU";
+    [Reactive] public int AudioTestDuration { get; set; } = 10;
+    [Reactive] public bool IsAudioPlaying { get; set; }
+
+    private CancellationTokenSource? _audioTestCts;
+    private AudioPlayer? _testPlayer;
+    private AudioCacheManager? _testCacheManager;
 
     public ReactiveCommand<Unit, Unit> GetLikedVideosCommand { get; }
     public ReactiveCommand<Unit, Unit> GetLikedMusicCommand { get; }
@@ -28,6 +46,14 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ForceGcCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearCachesCommand { get; }
     public ReactiveCommand<Unit, Unit> CheckVmLeaksCommand { get; }
+
+    // Audio test commands
+    public ReactiveCommand<Unit, Unit> PlayYoutubeAudioCommand { get; }
+    public ReactiveCommand<Unit, Unit> PlayYoutubeWithCacheCommand { get; }
+    public ReactiveCommand<Unit, Unit> StopAudioTestCommand { get; }
+    public ReactiveCommand<Unit, Unit> ShowCacheStatsCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand { get; }
+    public ReactiveCommand<Unit, Unit> TestLocalFileCommand { get; }
 
     public DebugViewModel()
     {
@@ -43,15 +69,13 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         DumpMemoryCommand = CreateCommand(ReactiveCommand.Create(ExecuteDumpMemory));
         ForceGcCommand = CreateCommand(ReactiveCommand.Create(ExecuteForceGc));
         ClearCachesCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteClearCaches));
-        
+
         CheckVmLeaksCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
 
-            // Через reflection
             var cacheField = vmFactory.GetType().GetField("_cache",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
 
             if (cacheField?.GetValue(vmFactory) is System.Collections.Concurrent.ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> cache)
             {
@@ -80,14 +104,449 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 AppendLog($"--- END ---\n");
             }
         }));
+
+        // Audio test commands
+        PlayYoutubeAudioCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecutePlayYoutubeAudio));
+        PlayYoutubeWithCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecutePlayYoutubeWithCache));
+        StopAudioTestCommand = CreateCommand(ReactiveCommand.Create(ExecuteStopAudioTest));
+        ShowCacheStatsCommand = CreateCommand(ReactiveCommand.Create(ExecuteShowCacheStats));
+        ClearAudioCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteClearAudioCache));
+        TestLocalFileCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteTestLocalFile));
     }
+
+
+    private async Task ExecutePlayYoutubeAudio()
+    {
+        await PlayAudioTestAsync(useCache: false);
+    }
+
+    private async Task ExecutePlayYoutubeWithCache()
+    {
+        await PlayAudioTestAsync(useCache: true);
+    }
+
+    private async Task PlayAudioTestAsync(bool useCache)
+    {
+        if (IsAudioPlaying)
+        {
+            AppendLog("⚠️ Audio test already running. Stop it first.");
+            return;
+        }
+
+        IsBusy = true;
+        IsAudioPlaying = true;
+        _audioTestCts = new CancellationTokenSource();
+
+        var cacheMode = useCache ? "WITH CACHE" : "NO CACHE";
+        AppendLog($"\n╔════════════════════════════════════════╗");
+        AppendLog($"║  🎵 AUDIO TEST ({cacheMode})");
+        AppendLog($"╚════════════════════════════════════════╝");
+        AppendLog($"  Input: {AudioTestInput}");
+        AppendLog($"  Duration: {AudioTestDuration}s");
+
+        try
+        {
+            // Extract video ID
+            var videoId = ExtractVideoId(AudioTestInput);
+            if (string.IsNullOrEmpty(videoId))
+            {
+                AppendLog($"  ❌ Invalid YouTube URL/ID");
+                return;
+            }
+            AppendLog($"  Video ID: {videoId}");
+
+            // Get track info
+            AppendLog($"  → Getting stream URL...");
+            var track = new TrackInfo
+            {
+                Id = videoId,
+                Title = "Test Track",
+                Author = "Unknown",
+                Url = $"https://www.youtube.com/watch?v={videoId}"
+            };
+
+            try
+            {
+                var fullTrack = await _youtube.GetTrackByUrlAsync(track.Url);
+                if (fullTrack != null) track = fullTrack;
+                AppendLog($"  ✓ Title: {track.Title}");
+                AppendLog($"  ✓ Author: {track.Author}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"  ⚠️ Track info error: {ex.Message}");
+            }
+
+            // Get stream URL
+            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, forceRefresh: true, _audioTestCts.Token);
+            if (streamInfo == null)
+            {
+                AppendLog($"  ❌ Failed to get stream URL");
+                return;
+            }
+
+            var (url, size, bitrate, codec, container) = streamInfo.Value;
+            AppendLog($"  ✓ Codec: {codec}, Bitrate: {bitrate}kbps");
+            AppendLog($"  ✓ Container: {container}, Size: {size / 1024.0 / 1024.0:F1}MB");
+            AppendLog($"  ✓ HLS: {track.IsHlsOnly}");
+
+            // Create player
+            AppendLog($"  → Creating AudioPlayer...");
+
+            // *** ИСПРАВЛЕНИЕ: используем поле класса для cacheManager ***
+            if (useCache)
+            {
+                _testCacheManager = new AudioCacheManager();
+                AppendLog($"  ✓ Cache enabled");
+            }
+
+            var options = new AudioPlayerOptions
+            {
+                UrlRefreshCallback = async (trackId, ct) =>
+                {
+                    var newStream = await _youtube.RefreshStreamUrlAsync(track, forceRefresh: true, ct);
+                    return newStream?.Url;
+                }
+            };
+
+            _testPlayer = new AudioPlayer(options, _testCacheManager);
+
+            // Subscribe to events
+            _testPlayer.StateChanged += state =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    AppendLog($"  State: {state}"));
+
+            _testPlayer.ErrorOccurred += ex =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    AppendLog($"  ❌ Error: {ex.Message}"));
+
+            _testPlayer.TrackEnded += () =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    AppendLog($"  🏁 Track ended");
+                    IsAudioPlaying = false;
+                });
+
+            // Start playback
+            AppendLog($"  → Starting playback...");
+            await _testPlayer.PlayAsync(url, track.Id, _audioTestCts.Token);
+
+            AppendLog($"  ▶️ Playing for {AudioTestDuration}s...");
+
+            // Progress updates
+            var startTime = DateTime.Now;
+            while ((DateTime.Now - startTime).TotalSeconds < AudioTestDuration &&
+                   !_audioTestCts.Token.IsCancellationRequested &&
+                   _testPlayer.State == PlaybackState.Playing)
+            {
+                await Task.Delay(1000, _audioTestCts.Token);
+                var pos = _testPlayer.Position.TotalSeconds;
+                var dur = _testPlayer.Duration.TotalSeconds;
+                var buf = _testPlayer.BufferProgress;
+                AppendLog($"  ⏱️ {pos:F1}s / {dur:F1}s | Buffer: {buf:F0}%");
+            }
+
+            AppendLog($"  ✓ Test completed");
+
+            // *** ИСПРАВЛЕНИЕ: показываем статистику из ТОГО ЖЕ cacheManager ***
+            if (_testCacheManager != null)
+            {
+                var stats = _testCacheManager.GetStats();
+                AppendLog($"  📦 Cache: {stats.CompleteEntries} complete, {stats.TotalSizeFormatted}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            AppendLog($"  ⏹️ Cancelled");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"  ❌ Error: {ex.Message}");
+            AppendLog($"  Stack: {ex.StackTrace}");
+        }
+        finally
+        {
+            await CleanupAudioTest();
+            IsBusy = false;
+            IsAudioPlaying = false;
+            AppendLog($"═══════════════════════════════════════\n");
+        }
+    }
+
+    private void ExecuteStopAudioTest()
+    {
+        if (!IsAudioPlaying)
+        {
+            AppendLog("No audio test running.");
+            return;
+        }
+
+        AppendLog("⏹️ Stopping audio test...");
+        _audioTestCts?.Cancel();
+        _ = CleanupAudioTest();
+    }
+
+    private async Task CleanupAudioTest()
+    {
+        if (_testPlayer != null)
+        {
+            await _testPlayer.DisposeAsync();
+            _testPlayer = null;
+        }
+
+        // *** ВАЖНО: освобождаем cacheManager чтобы сохранить индекс ***
+        if (_testCacheManager != null)
+        {
+            await _testCacheManager.DisposeAsync();
+            _testCacheManager = null;
+        }
+
+        _audioTestCts?.Dispose();
+        _audioTestCts = null;
+        IsAudioPlaying = false;
+    }
+
+    private void ExecuteShowCacheStats()
+    {
+        AppendLog("\n--- AUDIO CACHE STATS ---");
+
+        try
+        {
+            // Если есть активный тест — показываем его кэш
+            if (_testCacheManager != null)
+            {
+                var stats = _testCacheManager.GetStats();
+                AppendLog($"  [Active Test Cache]");
+                AppendLog($"  Total entries: {stats.TotalEntries}");
+                AppendLog($"  Complete: {stats.CompleteEntries}");
+                AppendLog($"  Partial: {stats.PartialEntries}");
+                AppendLog($"  Size: {stats.TotalSizeFormatted} / {stats.MaxSizeFormatted}");
+                AppendLog($"  Usage: {stats.UsagePercent:F1}%");
+            }
+            else
+            {
+                // Иначе создаём временный для чтения с диска
+                using var cacheManager = new AudioCacheManager();
+                var stats = cacheManager.GetStats();
+
+                AppendLog($"  [Disk Cache]");
+                AppendLog($"  Total entries: {stats.TotalEntries}");
+                AppendLog($"  Complete: {stats.CompleteEntries}");
+                AppendLog($"  Partial: {stats.PartialEntries}");
+                AppendLog($"  Size: {stats.TotalSizeFormatted} / {stats.MaxSizeFormatted}");
+                AppendLog($"  Usage: {stats.UsagePercent:F1}%");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"  Error: {ex.Message}");
+        }
+
+        AppendLog("--- END ---\n");
+    }
+
+    private async Task ExecuteClearAudioCache()
+    {
+        AppendLog("\n--- CLEARING AUDIO CACHE ---");
+        IsBusy = true;
+
+        try
+        {
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LMP", "AudioCache");
+
+            if (Directory.Exists(cacheDir))
+            {
+                var files = Directory.GetFiles(cacheDir);
+                foreach (var file in files)
+                {
+                    try
+                    {
+                        File.Delete(file);
+                    }
+                    catch { }
+                }
+                AppendLog($"  ✓ Deleted {files.Length} files");
+            }
+            else
+            {
+                AppendLog($"  Cache directory doesn't exist");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"  Error: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+            AppendLog("--- CACHE CLEARED ---\n");
+        }
+    }
+
+    private async Task ExecuteTestLocalFile()
+    {
+        AppendLog("\n--- LOCAL FILE TEST ---");
+        AppendLog("  Select a .webm, .mp4, .m4a, or .ogg file to test.");
+
+        // Для простоты — тест с фиксированным путём
+        // В реальном приложении нужен file picker
+        var testPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
+            "test.webm");
+
+        if (!File.Exists(testPath))
+        {
+            AppendLog($"  ⚠️ Test file not found: {testPath}");
+            AppendLog($"  Place a test audio file at this path.");
+            return;
+        }
+
+        IsBusy = true;
+        _audioTestCts = new CancellationTokenSource();
+        IsAudioPlaying = true;
+
+        try
+        {
+            AppendLog($"  File: {testPath}");
+
+            var source = new LocalFileSource(testPath);
+            if (!await source.InitializeAsync(_audioTestCts.Token))
+            {
+                AppendLog($"  ❌ Failed to initialize source");
+                return;
+            }
+
+            AppendLog($"  ✓ Duration: {source.DurationMs}ms");
+            AppendLog($"  ✓ Codec: {source.Codec}");
+            AppendLog($"  ✓ Sample rate: {source.SampleRate}Hz");
+            AppendLog($"  ✓ Channels: {source.Channels}");
+
+            // Create decoder
+            IAudioDecoder decoder = source.Codec == AudioCodec.Opus
+                ? new OpusDecoder(source.SampleRate > 0 ? source.SampleRate : 48000, source.Channels > 0 ? source.Channels : 2)
+                : new AacDecoder(source.SampleRate > 0 ? source.SampleRate : 44100, source.Channels > 0 ? source.Channels : 2);
+
+            if (decoder is AacDecoder aac && source.DecoderConfig != null)
+            {
+                aac.Initialize(source.DecoderConfig);
+            }
+
+            // Create backend
+            IPlaybackBackend backend;
+            try
+            {
+                backend = new NAudioBackend();
+                AppendLog($"  ✓ NAudioBackend");
+            }
+            catch
+            {
+                backend = new NullAudioBackend();
+                AppendLog($"  ⚠️ NullBackend (no audio output)");
+            }
+
+            // PCM buffer
+            var pcmBuffer = new CircularBuffer<float>(decoder.SampleRate * decoder.Channels * 4);
+            var decodeOutput = new float[decoder.MaxFrameSize * decoder.Channels];
+
+            backend.Initialize(decoder.SampleRate, decoder.Channels, buffer =>
+            {
+                int read = pcmBuffer.Read(buffer);
+                if (read < buffer.Length) buffer[read..].Clear();
+                return read / decoder.Channels;
+            });
+
+            // Decode loop
+            var decodeTask = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!_audioTestCts.Token.IsCancellationRequested)
+                    {
+                        while (pcmBuffer.Available < decodeOutput.Length)
+                            await Task.Delay(5, _audioTestCts.Token);
+
+                        var frame = await source.ReadFrameAsync(_audioTestCts.Token);
+                        if (frame == null) break;
+
+                        int samples = decoder.Decode(frame.Value.Data.Span, decodeOutput);
+                        if (samples > 0)
+                            pcmBuffer.Write(decodeOutput.AsSpan(0, samples * decoder.Channels));
+                    }
+                }
+                catch (OperationCanceledException) { }
+            });
+
+            // Buffer
+            await Task.Delay(500, _audioTestCts.Token);
+
+            // Play
+            backend.Start();
+            AppendLog($"  ▶️ Playing for {AudioTestDuration}s...");
+
+            var start = DateTime.Now;
+            while ((DateTime.Now - start).TotalSeconds < AudioTestDuration &&
+                   !_audioTestCts.Token.IsCancellationRequested)
+            {
+                await Task.Delay(1000, _audioTestCts.Token);
+                AppendLog($"  ⏱️ {source.PositionMs / 1000.0:F1}s");
+            }
+
+            backend.Stop();
+            _audioTestCts.Cancel();
+
+            backend.Dispose();
+            decoder.Dispose();
+            await source.DisposeAsync();
+
+            AppendLog($"  ✓ Test completed");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"  ❌ Error: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+            IsAudioPlaying = false;
+            AppendLog("--- END ---\n");
+        }
+    }
+
+    private static string? ExtractVideoId(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return null;
+        input = input.Trim();
+
+        // Already a video ID?
+        if (System.Text.RegularExpressions.Regex.IsMatch(input, @"^[a-zA-Z0-9_-]{11}$"))
+            return input;
+
+        // youtube.com/watch?v=VIDEO_ID
+        var match = System.Text.RegularExpressions.Regex.Match(input, @"[?&]v=([a-zA-Z0-9_-]{11})");
+        if (match.Success) return match.Groups[1].Value;
+
+        // youtu.be/VIDEO_ID
+        match = System.Text.RegularExpressions.Regex.Match(input, @"youtu\.be/([a-zA-Z0-9_-]{11})");
+        if (match.Success) return match.Groups[1].Value;
+
+        // youtube.com/embed/VIDEO_ID
+        match = System.Text.RegularExpressions.Regex.Match(input, @"embed/([a-zA-Z0-9_-]{11})");
+        if (match.Success) return match.Groups[1].Value;
+
+        // youtube.com/shorts/VIDEO_ID
+        match = System.Text.RegularExpressions.Regex.Match(input, @"shorts/([a-zA-Z0-9_-]{11})");
+        if (match.Success) return match.Groups[1].Value;
+
+        return null;
+    }
+
 
     private void ExecuteDumpMemory()
     {
         var report = MemoryDiagnostics.Instance.GetFullReport();
         AppendLog(report);
-
-        // Также логируем в файл
         MemoryDiagnostics.LogReport();
     }
 
@@ -113,30 +572,24 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
         try
         {
-            // Image cache
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             imageCache.ClearMemoryCache();
             AppendLog("✓ Image memory cache cleared");
 
-            // Search cache
             var searchCache = Program.Services.GetRequiredService<SearchCacheService>();
             searchCache.ClearAll();
             AppendLog("✓ Search cache cleared");
 
-            // YouTube stream cache
             _youtube.ClearCache();
             AppendLog("✓ YouTube stream URL cache cleared");
 
-            // TrackViewModelFactory
             var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
             var cleaned = vmFactory.CleanupCache();
             AppendLog($"✓ TrackVM cache: cleaned {cleaned} dead refs");
 
-            // Force GC after clearing
             MemoryDiagnostics.ForceCleanup();
             AppendLog("✓ GC completed");
 
-            // Show new memory state
             var stats = MemoryDiagnostics.Instance.CurrentStats;
             AppendLog($"\nCurrent memory: {stats.WorkingSetMb} MB (GC: {stats.GcTotalMemoryMb} MB)");
         }
@@ -216,5 +669,13 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     private void AppendLog(string text)
     {
         LogOutput += text + "\n";
+    }
+
+    public void Dispose()
+    {
+        _audioTestCts?.Cancel();
+        _audioTestCts?.Dispose();
+        _testPlayer?.Dispose();
+        _testCacheManager?.Dispose();
     }
 }

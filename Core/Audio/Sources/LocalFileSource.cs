@@ -26,11 +26,14 @@ public sealed class LocalFileSource : IAudioSource
     }
     
     public long DurationMs => _durationMs;
-    public long PositionMs => Interlocked.Read(ref _positionMs);
+    public long PositionMs => Volatile.Read(ref _positionMs);
     public bool CanSeek => true;
     public AudioCodec Codec { get; private set; } = AudioCodec.Unknown;
     public double BufferProgress => 100;
     public bool IsFullyBuffered => true;
+    public byte[]? DecoderConfig => _parser?.DecoderConfig;
+    public int SampleRate => _parser?.SampleRate ?? 0;
+    public int Channels => _parser?.Channels ?? 0;
     
     public async ValueTask<bool> InitializeAsync(CancellationToken ct = default)
     {
@@ -48,7 +51,6 @@ public sealed class LocalFileSource : IAudioSource
                 bufferSize: 64 * 1024,
                 useAsync: true);
             
-            // Определяем формат
             var header = new byte[12];
             int totalRead = 0;
             while (totalRead < 12)
@@ -115,7 +117,7 @@ public sealed class LocalFileSource : IAudioSource
         if (frame == null)
             return null;
         
-        Interlocked.Exchange(ref _positionMs, frame.Value.TimestampMs);
+        Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
         return frame;
     }
     
@@ -138,7 +140,7 @@ public sealed class LocalFileSource : IAudioSource
         _fileStream.Position = seekInfo.Value.BytePosition;
         _parser.Reset();
         
-        Interlocked.Exchange(ref _positionMs, positionMs);
+        Volatile.Write(ref _positionMs, positionMs);
         return true;
     }
     
@@ -162,7 +164,9 @@ public sealed class LocalFileSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
         
-        _parser?.Dispose();
+        if (_parser != null)
+            await _parser.DisposeAsync();
+        
         if (_fileStream != null)
             await _fileStream.DisposeAsync();
     }

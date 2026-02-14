@@ -1,15 +1,15 @@
-// Core/Audio/Sources/UniversalStreamSource.cs
-
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net;
 using LMP.Core.Audio.Helpers;
+using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
 
 namespace LMP.Core.Audio.Sources;
 
 /// <summary>
-/// Универсальный источник для WebM и MP4 (без кэширования на диск).
+/// Универсальный источник для WebM и MP4 (RAM-only кэш).
 /// </summary>
 public sealed class UniversalStreamSource : IAudioSource
 {
@@ -17,6 +17,8 @@ public sealed class UniversalStreamSource : IAudioSource
     private const int MaxRamChunks = 32;
     private const int MaxConcurrentDownloads = 4;
     private const int DownloadTimeoutMs = 15000;
+    private const int InitialChunksToLoad = 4;
+    private const int PreloadAheadChunks = 8;
     
     private readonly string _cacheId;
     private readonly HttpClient _httpClient;
@@ -33,7 +35,7 @@ public sealed class UniversalStreamSource : IAudioSource
     private readonly SemaphoreSlim _downloadSlots;
     
     private IContainerParser? _parser;
-    private Stream? _readStream;
+    private AsyncChunkReadStream? _readStream;
     
     private long _durationMs = -1;
     private long _positionMs;
@@ -41,15 +43,18 @@ public sealed class UniversalStreamSource : IAudioSource
     private volatile bool _initialized;
     private volatile bool _disposed;
     
-    private CancellationTokenSource? _downloadCts;
+    private CancellationTokenSource? _operationCts;
     private Task? _preloadTask;
     
     public long DurationMs => _durationMs;
-    public long PositionMs => Interlocked.Read(ref _positionMs);
+    public long PositionMs => Volatile.Read(ref _positionMs);
     public bool CanSeek => true;
     public AudioCodec Codec { get; private set; }
+    public byte[]? DecoderConfig => _parser?.DecoderConfig;
+    public int SampleRate => _parser?.SampleRate ?? 0;
+    public int Channels => _parser?.Channels ?? 0;
     
-    public double BufferProgress => _totalChunks == 0 ? 0 : 
+    public double BufferProgress => _totalChunks == 0 ? 0 :
         Math.Min((double)_downloadedChunks.PopCount() / _totalChunks * 100, 100);
     
     public bool IsFullyBuffered => _downloadedChunks.PopCount() >= _totalChunks;
@@ -85,33 +90,38 @@ public sealed class UniversalStreamSource : IAudioSource
         
         try
         {
-            _downloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             
-            for (int i = 0; i < Math.Min(4, _totalChunks); i++)
+            // Загружаем начальные чанки
+            var initialTasks = new List<Task>();
+            for (int i = 0; i < Math.Min(InitialChunksToLoad, _totalChunks); i++)
             {
-                await DownloadChunkAsync(i, _downloadCts.Token);
+                initialTasks.Add(DownloadChunkAsync(i, _operationCts.Token));
             }
+            await Task.WhenAll(initialTasks);
             
-            _readStream = new ChunkReadStream(this);
+            _readStream = new AsyncChunkReadStream(this);
             
-            var header = new byte[12];
-            int bytesRead = 0;
-            while (bytesRead < 12)
+            // Определяем формат по magic bytes
+            var header = ArrayPool<byte>.Shared.Rent(12);
+            try
             {
-                int read = _readStream.Read(header, bytesRead, 12 - bytesRead);
-                if (read == 0) break;
-                bytesRead += read;
+                int bytesRead = await _readStream.ReadAsync(header.AsMemory(0, 12), ct);
+                _readStream.Position = 0;
+                
+                var format = AudioSourceFactory.DetectFormatByMagic(header.AsSpan(0, bytesRead));
+                
+                _parser = format switch
+                {
+                    AudioFormat.WebM or AudioFormat.Ogg => new WebMContainerParser(_readStream),
+                    AudioFormat.Mp4 => new Mp4ContainerParser(_readStream),
+                    _ => throw new NotSupportedException($"Unsupported format: {format}")
+                };
             }
-            _readStream.Position = 0;
-            
-            var format = AudioSourceFactory.DetectFormatByMagic(header);
-            
-            _parser = format switch
+            finally
             {
-                AudioFormat.WebM or AudioFormat.Ogg => new WebMContainerParser(_readStream),
-                AudioFormat.Mp4 => new Mp4ContainerParser(_readStream),
-                _ => throw new NotSupportedException($"Unsupported format: {format}")
-            };
+                ArrayPool<byte>.Shared.Return(header);
+            }
             
             if (!await _parser.ParseHeadersAsync(ct))
             {
@@ -122,7 +132,8 @@ public sealed class UniversalStreamSource : IAudioSource
             Codec = _parser.Codec;
             _initialized = true;
             
-            _preloadTask = Task.Run(() => PreloadLoopAsync(_downloadCts.Token));
+            // Запускаем фоновую предзагрузку
+            _preloadTask = Task.Run(() => PreloadLoopAsync(_operationCts.Token));
             
             Log.Info($"[UniversalSource] Initialized: duration={_durationMs}ms, codec={Codec}");
             return true;
@@ -148,13 +159,14 @@ public sealed class UniversalStreamSource : IAudioSource
             if (frame == null)
                 return null;
             
-            Interlocked.Exchange(ref _positionMs, frame.Value.TimestampMs);
+            Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
             _currentChunk = (int)(_readStream!.Position / ChunkSize);
             
             return frame;
         }
         catch (IOException) when (!_disposed)
         {
+            // Retry after ensuring chunk is loaded
             await EnsureChunkAsync(_currentChunk, ct);
             return await ReadFrameAsync(ct);
         }
@@ -168,6 +180,7 @@ public sealed class UniversalStreamSource : IAudioSource
         
         if (seekInfo == null)
         {
+            // Approximate seek by byte position
             long approxPosition = (long)(_contentLength * ((double)positionMs / _durationMs));
             seekInfo = (approxPosition, positionMs);
         }
@@ -175,16 +188,25 @@ public sealed class UniversalStreamSource : IAudioSource
         int targetChunk = (int)(seekInfo.Value.BytePosition / ChunkSize);
         targetChunk = Math.Clamp(targetChunk, 0, _totalChunks - 1);
         
+        // Preload chunks around target
+        var loadTasks = new List<Task>();
         for (int i = targetChunk; i < Math.Min(targetChunk + 3, _totalChunks); i++)
         {
-            await EnsureChunkAsync(i, ct);
+            if (!_downloadedChunks.Get(i))
+            {
+                loadTasks.Add(EnsureChunkAsync(i, ct));
+            }
+        }
+        if (loadTasks.Count > 0)
+        {
+            await Task.WhenAll(loadTasks);
         }
         
         _readStream!.Position = seekInfo.Value.BytePosition;
         _currentChunk = targetChunk;
         _parser.Reset();
         
-        Interlocked.Exchange(ref _positionMs, positionMs);
+        Volatile.Write(ref _positionMs, positionMs);
         
         return true;
     }
@@ -219,7 +241,7 @@ public sealed class UniversalStreamSource : IAudioSource
     
     public void ReleaseRamBuffers()
     {
-        int current = _currentChunk;
+        int current = Volatile.Read(ref _currentChunk);
         
         foreach (var idx in _ramChunks.Keys.Where(i => Math.Abs(i - current) > 5).ToList())
         {
@@ -227,7 +249,7 @@ public sealed class UniversalStreamSource : IAudioSource
         }
     }
     
-    public void CancelPendingOperations() => _downloadCts?.Cancel();
+    public void CancelPendingOperations() => _operationCts?.Cancel();
     
     #region Chunk Management
     
@@ -273,9 +295,7 @@ public sealed class UniversalStreamSource : IAudioSource
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(DownloadTimeoutMs);
             
-            using var request = new HttpRequestMessage(HttpMethod.Get, _currentUrl);
-            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, end);
-            
+            using var request = SharedHttpClient.CreateRangeRequest(_currentUrl, start, end);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             
             if (response.StatusCode == HttpStatusCode.Forbidden)
@@ -312,7 +332,7 @@ public sealed class UniversalStreamSource : IAudioSource
     
     private void EvictOldChunks()
     {
-        int current = _currentChunk;
+        int current = Volatile.Read(ref _currentChunk);
         
         var toEvict = _ramChunks.Keys
             .Where(i => Math.Abs(i - current) > 10)
@@ -326,7 +346,7 @@ public sealed class UniversalStreamSource : IAudioSource
         }
     }
     
-    internal int ReadAt(long position, byte[] buffer, int offset, int count)
+    internal async Task<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
     {
         if (position >= _contentLength) return 0;
         
@@ -335,16 +355,16 @@ public sealed class UniversalStreamSource : IAudioSource
         
         if (!_downloadedChunks.Get(chunkIndex))
         {
-            DownloadChunkAsync(chunkIndex, CancellationToken.None).GetAwaiter().GetResult();
+            await EnsureChunkAsync(chunkIndex, ct);
         }
         
         if (!_ramChunks.TryGetValue(chunkIndex, out var chunkData))
             return 0;
         
-        int available = Math.Min(count, chunkData.Length - offsetInChunk);
+        int available = Math.Min(buffer.Length, chunkData.Length - offsetInChunk);
         if (available <= 0) return 0;
         
-        Buffer.BlockCopy(chunkData, offsetInChunk, buffer, offset, available);
+        chunkData.AsSpan(offsetInChunk, available).CopyTo(buffer.Span);
         return available;
     }
     
@@ -360,9 +380,10 @@ public sealed class UniversalStreamSource : IAudioSource
             {
                 await Task.Delay(200, ct);
                 
-                int current = _currentChunk;
+                int current = Volatile.Read(ref _currentChunk);
                 
-                for (int i = 0; i < 8 && current + i < _totalChunks; i++)
+                // Preload ahead
+                for (int i = 0; i < PreloadAheadChunks && current + i < _totalChunks; i++)
                 {
                     int idx = current + i;
                     if (!_downloadedChunks.Get(idx) && !_activeDownloads.ContainsKey(idx))
@@ -386,9 +407,13 @@ public sealed class UniversalStreamSource : IAudioSource
             if (!string.IsNullOrEmpty(newUrl))
             {
                 _currentUrl = newUrl;
+                Log.Info("[UniversalSource] URL refreshed");
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Warn($"[UniversalSource] URL refresh failed: {ex.Message}");
+        }
     }
     
     #endregion
@@ -400,8 +425,8 @@ public sealed class UniversalStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
         
-        _downloadCts?.Cancel();
-        _downloadCts?.Dispose();
+        _operationCts?.Cancel();
+        _operationCts?.Dispose();
         _parser?.Dispose();
         _readStream?.Dispose();
         _ramChunks.Clear();
@@ -413,7 +438,7 @@ public sealed class UniversalStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
         
-        _downloadCts?.Cancel();
+        _operationCts?.Cancel();
         
         if (_preloadTask != null)
         {
@@ -421,8 +446,11 @@ public sealed class UniversalStreamSource : IAudioSource
             catch { }
         }
         
-        _downloadCts?.Dispose();
-        _parser?.Dispose();
+        _operationCts?.Dispose();
+        
+        if (_parser != null)
+            await _parser.DisposeAsync();
+        
         _readStream?.Dispose();
         _ramChunks.Clear();
         _downloadSlots.Dispose();
@@ -430,14 +458,17 @@ public sealed class UniversalStreamSource : IAudioSource
     
     #endregion
     
-    #region ChunkReadStream
+    #region AsyncChunkReadStream
     
-    private sealed class ChunkReadStream : Stream
+    /// <summary>
+    /// Async-compatible read stream over chunks.
+    /// </summary>
+    private sealed class AsyncChunkReadStream : Stream
     {
         private readonly UniversalStreamSource _source;
         private long _position;
         
-        public ChunkReadStream(UniversalStreamSource source) => _source = source;
+        public AsyncChunkReadStream(UniversalStreamSource source) => _source = source;
         
         public override bool CanRead => true;
         public override bool CanSeek => true;
@@ -446,27 +477,41 @@ public sealed class UniversalStreamSource : IAudioSource
         
         public override long Position
         {
-            get => _position;
-            set => _position = value;
+            get => Volatile.Read(ref _position);
+            set => Volatile.Write(ref _position, value);
         }
         
         public override int Read(byte[] buffer, int offset, int count)
         {
-            int read = _source.ReadAt(_position, buffer, offset, count);
-            _position += read;
+            // Sync read - вызываем async версию
+            return ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+        }
+        
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
+        {
+            return await ReadAsync(buffer.AsMemory(offset, count), ct);
+        }
+        
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            long pos = Volatile.Read(ref _position);
+            int read = await _source.ReadAtAsync(pos, buffer, ct);
+            Volatile.Write(ref _position, pos + read);
             return read;
         }
         
         public override long Seek(long offset, SeekOrigin origin)
         {
-            _position = origin switch
+            long newPos = origin switch
             {
                 SeekOrigin.Begin => offset,
-                SeekOrigin.Current => _position + offset,
+                SeekOrigin.Current => Volatile.Read(ref _position) + offset,
                 SeekOrigin.End => _source._contentLength + offset,
-                _ => _position
+                _ => Volatile.Read(ref _position)
             };
-            return _position;
+            Volatile.Write(ref _position, newPos);
+            return newPos;
         }
         
         public override void Flush() { }

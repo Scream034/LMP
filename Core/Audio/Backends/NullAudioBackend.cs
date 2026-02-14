@@ -3,51 +3,84 @@ using LMP.Core.Audio.Interfaces;
 namespace LMP.Core.Audio.Backends;
 
 /// <summary>
-/// Managed fallback бэкенд для платформ без miniaudio.
-/// Использует System.Media на Windows или выводит в null device.
+/// Заглушка для тестов без реального аудио вывода.
 /// </summary>
 public sealed class NullAudioBackend : IPlaybackBackend
 {
     private AudioDataCallback? _callback;
-    private Timer? _timer;
-    private float[] _dummyBuffer = [];
-    private volatile bool _isPlaying;
+    private int _sampleRate;
+    private int _channels;
+    private volatile float _volume = 1.0f;
+    private volatile bool _playing;
+    private volatile bool _disposed;
     
-    public float Volume { get; set; } = 1.0f;
-    public bool IsPlaying => _isPlaying;
+    private Task? _consumeTask;
+    private CancellationTokenSource? _cts;
+    
+    public string Name => "Null";
+    public float Volume { get => _volume; set => _volume = Math.Clamp(value, 0f, 1f); }
+    public bool IsPlaying => _playing;
     public int BufferedSamples => 0;
     
     public void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback)
     {
+        _sampleRate = sampleRate;
+        _channels = channels;
         _callback = dataCallback;
-        // 20ms буфер для симуляции
-        _dummyBuffer = new float[sampleRate * channels * 20 / 1000];
+        
+        Log.Debug($"[NullAudioBackend] Initialized: {sampleRate}Hz, {channels}ch");
     }
     
     public void Start()
     {
-        if (_isPlaying || _callback == null) return;
-        _isPlaying = true;
+        if (_playing || _callback == null) return;
         
-        // Симулируем вызовы callback каждые 20ms
-        _timer = new Timer(_ =>
-        {
-            if (_isPlaying && _callback != null)
-            {
-                _callback(_dummyBuffer);
-            }
-        }, null, 0, 20);
+        _playing = true;
+        _cts = new CancellationTokenSource();
+        _consumeTask = Task.Run(() => ConsumeLoopAsync(_cts.Token));
+        
+        Log.Debug("[NullAudioBackend] Started");
     }
     
     public void Stop()
     {
-        _isPlaying = false;
-        _timer?.Dispose();
-        _timer = null;
+        _playing = false;
+        _cts?.Cancel();
+        
+        Log.Debug("[NullAudioBackend] Stopped");
+    }
+    
+    private async Task ConsumeLoopAsync(CancellationToken ct)
+    {
+        // Симулируем потребление аудио данных
+        var buffer = new float[1024 * _channels];
+        int samplesPerSecond = _sampleRate * _channels;
+        int delayMs = 1000 * buffer.Length / samplesPerSecond;
+        
+        while (!ct.IsCancellationRequested && _playing)
+        {
+            _callback?.Invoke(buffer);
+            await Task.Delay(Math.Max(delayMs, 10), ct);
+        }
     }
     
     public void Dispose()
     {
-        Stop();
+        if (_disposed) return;
+        _disposed = true;
+        
+        _playing = false;
+        _cts?.Cancel();
+        
+        try
+        {
+            _consumeTask?.Wait(500);
+        }
+        catch
+        {
+            // Ignore
+        }
+        
+        _cts?.Dispose();
     }
 }

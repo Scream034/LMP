@@ -39,6 +39,18 @@ public interface IAudioSource : IAsyncDisposable, IDisposable
     /// <summary>Полностью загружен</summary>
     bool IsFullyBuffered { get; }
     
+    /// <summary>
+    /// Decoder-specific config (ASC для AAC, CodecPrivate для Opus).
+    /// Null если не требуется или недоступен.
+    /// </summary>
+    byte[]? DecoderConfig { get; }
+    
+    /// <summary>Sample rate из контейнера (0 если неизвестен)</summary>
+    int SampleRate { get; }
+    
+    /// <summary>Количество каналов из контейнера (0 если неизвестно)</summary>
+    int Channels { get; }
+    
     /// <summary>Буферизованные диапазоны для визуализации</summary>
     IReadOnlyList<(double Start, double End)> GetBufferedRanges();
     

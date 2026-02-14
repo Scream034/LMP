@@ -1,10 +1,7 @@
+using System.Buffers;
 using System.Net;
-using System.Text;
 using System.Text.RegularExpressions;
-using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Interfaces;
-using LMP.Core.Exceptions;
-using LMP.Core.Logger;
 
 namespace LMP.Core.Audio.Sources;
 
@@ -14,96 +11,111 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed partial class HlsStreamSource : IAudioSource
 {
+    private const int DefaultPrefetchSegments = 3;
+    private const int FrameDurationMs = 23; // ~1024 samples @ 44.1kHz
+    
     private readonly string _masterUrl;
     private readonly HttpClient _httpClient;
     private readonly Func<CancellationToken, Task<string?>>? _urlRefresher;
-
+    private readonly int _prefetchSegments;
+    
     private string _currentPlaylistUrl = string.Empty;
     private List<HlsSegment> _segments = [];
     private int _currentSegmentIndex;
-    private Queue<AacFrame> _frameBuffer = new();
-
+    private readonly Queue<AacFrame> _frameBuffer = new();
+    private readonly object _bufferLock = new();
+    
     private byte[]? _audioSpecificConfig;
     private long _durationMs = -1;
     private long _positionMs;
+    private int _sampleRate = 44100;
+    private int _channels = 2;
     private bool _initialized;
-    private bool _disposed;
-
-    private CancellationTokenSource? _downloadCts;
+    private volatile bool _disposed;
+    
+    private CancellationTokenSource? _operationCts;
     private Task? _prefetchTask;
-
-    // Буферизация
-    private readonly int _prefetchSegments;
     private readonly HashSet<int> _downloadedSegments = [];
-    private readonly object _segmentLock = new();
-
+    private readonly HashSet<int> _loadingSegments = [];
+    
     public HlsStreamSource(
         string masterUrl,
         HttpClient? httpClient = null,
         Func<CancellationToken, Task<string?>>? urlRefresher = null,
-        int prefetchSegments = 3)
+        int prefetchSegments = DefaultPrefetchSegments)
     {
         _masterUrl = masterUrl ?? throw new ArgumentNullException(nameof(masterUrl));
-        _httpClient = httpClient ?? CreateDefaultClient();
+        _httpClient = httpClient ?? Http.SharedHttpClient.Instance;
         _urlRefresher = urlRefresher;
         _prefetchSegments = prefetchSegments;
     }
-
+    
     public long DurationMs => _durationMs;
-    public long PositionMs => _positionMs;
+    public long PositionMs => Volatile.Read(ref _positionMs);
     public bool CanSeek => _segments.Count > 0;
     public AudioCodec Codec => AudioCodec.Aac;
-    public double BufferProgress => _segments.Count > 0
-        ? (double)_downloadedSegments.Count / _segments.Count * 100
-        : 0;
-    public bool IsFullyBuffered => _downloadedSegments.Count >= _segments.Count;
-
-    /// <summary>
-    /// Возвращает Audio Specific Config для инициализации AacDecoder.
-    /// </summary>
-    public byte[]? AudioSpecificConfig => _audioSpecificConfig;
-
+    public byte[]? DecoderConfig => _audioSpecificConfig;
+    public int SampleRate => _sampleRate;
+    public int Channels => _channels;
+    
+    public double BufferProgress
+    {
+        get
+        {
+            lock (_bufferLock)
+            {
+                return _segments.Count > 0
+                    ? (double)_downloadedSegments.Count / _segments.Count * 100
+                    : 0;
+            }
+        }
+    }
+    
+    public bool IsFullyBuffered
+    {
+        get
+        {
+            lock (_bufferLock)
+            {
+                return _downloadedSegments.Count >= _segments.Count;
+            }
+        }
+    }
+    
     public async ValueTask<bool> InitializeAsync(CancellationToken ct = default)
     {
         if (_initialized) return true;
-
+        
         try
         {
             Log.Debug($"[HLS] Initializing: {_masterUrl[..Math.Min(60, _masterUrl.Length)]}...");
-
-            // Загружаем master playlist
+            
             var masterContent = await _httpClient.GetStringAsync(_masterUrl, ct);
-
-            // Парсим и выбираем лучший audio-only вариант
             var audioPlaylistUrl = ParseMasterPlaylist(masterContent, _masterUrl);
-
+            
             if (string.IsNullOrEmpty(audioPlaylistUrl))
             {
-                // Возможно это уже media playlist
                 audioPlaylistUrl = _masterUrl;
             }
-
+            
             _currentPlaylistUrl = audioPlaylistUrl;
-
-            // Загружаем media playlist
+            
             var mediaContent = await _httpClient.GetStringAsync(audioPlaylistUrl, ct);
             _segments = ParseMediaPlaylist(mediaContent, audioPlaylistUrl);
-
+            
             if (_segments.Count == 0)
-                throw new AudioSourceException("No segments found in HLS playlist");
-
-            // Считаем общую длительность
+                throw new InvalidOperationException("No segments found in HLS playlist");
+            
             _durationMs = (long)_segments.Sum(s => s.DurationMs);
-
-            // Загружаем первый сегмент для получения ASC
+            
+            // Load first segment to get ASC
             await LoadSegmentAsync(0, ct);
-
+            
             _initialized = true;
-
-            // Запускаем prefetch
-            _downloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            _prefetchTask = Task.Run(() => PrefetchLoopAsync(_downloadCts.Token));
-
+            
+            _operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _prefetchTask = Task.Run(() => PrefetchLoopAsync(_operationCts.Token));
+            
             Log.Info($"[HLS] Initialized: {_segments.Count} segments, duration={_durationMs}ms");
             return true;
         }
@@ -113,50 +125,69 @@ public sealed partial class HlsStreamSource : IAudioSource
             return false;
         }
     }
-
+    
     public async ValueTask<AudioFrame?> ReadFrameAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-
+        
         if (!_initialized)
             throw new InvalidOperationException("Not initialized");
-
-        // Берём фрейм из буфера
-        while (_frameBuffer.Count == 0)
+        
+        while (true)
         {
+            // Try to get frame from buffer
+            lock (_bufferLock)
+            {
+                if (_frameBuffer.Count > 0)
+                {
+                    var frame = _frameBuffer.Dequeue();
+                    Volatile.Write(ref _positionMs, frame.TimestampMs);
+                    
+                    return new AudioFrame
+                    {
+                        Data = frame.Data,
+                        TimestampMs = frame.TimestampMs,
+                        DurationMs = frame.DurationMs,
+                        IsKeyFrame = true
+                    };
+                }
+            }
+            
+            // Check if we've reached end
             if (_currentSegmentIndex >= _segments.Count)
-                return null; // End of stream
-
-            // Загружаем следующий сегмент если нужно
-            if (!_downloadedSegments.Contains(_currentSegmentIndex))
+                return null;
+            
+            // Load next segment
+            bool isDownloaded;
+            lock (_bufferLock)
+            {
+                isDownloaded = _downloadedSegments.Contains(_currentSegmentIndex);
+            }
+            
+            if (!isDownloaded)
             {
                 await LoadSegmentAsync(_currentSegmentIndex, ct);
             }
-
-            if (_frameBuffer.Count == 0)
-                _currentSegmentIndex++;
+            
+            // If still no frames, move to next segment
+            lock (_bufferLock)
+            {
+                if (_frameBuffer.Count == 0)
+                {
+                    _currentSegmentIndex++;
+                }
+            }
         }
-
-        var frame = _frameBuffer.Dequeue();
-        _positionMs = frame.TimestampMs;
-
-        return new AudioFrame
-        {
-            Data = frame.Data,
-            TimestampMs = frame.TimestampMs,
-            DurationMs = frame.DurationMs,
-            IsKeyFrame = true
-        };
     }
-
+    
     public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct = default)
     {
         if (_segments.Count == 0) return false;
-
-        // Находим сегмент по времени
+        
+        // Find target segment by time
         long accumulated = 0;
         int targetSegment = 0;
-
+        
         for (int i = 0; i < _segments.Count; i++)
         {
             if (accumulated + _segments[i].DurationMs > positionMs)
@@ -167,80 +198,93 @@ public sealed partial class HlsStreamSource : IAudioSource
             accumulated += (long)_segments[i].DurationMs;
             targetSegment = i;
         }
-
+        
         Log.Debug($"[HLS] Seek to {positionMs}ms → segment {targetSegment}");
-
-        _frameBuffer.Clear();
-        _currentSegmentIndex = targetSegment;
-        _positionMs = accumulated;
-
-        // Загружаем сегмент
-        if (!_downloadedSegments.Contains(targetSegment))
+        
+        // Clear buffer and reset state
+        lock (_bufferLock)
         {
-            await LoadSegmentAsync(targetSegment, ct);
+            _frameBuffer.Clear();
+            // Mark segment as not downloaded to force reload
+            _downloadedSegments.Remove(targetSegment);
         }
-
+        
+        _currentSegmentIndex = targetSegment;
+        Volatile.Write(ref _positionMs, accumulated);
+        
+        // Load the target segment
+        await LoadSegmentAsync(targetSegment, ct);
+        
         return true;
     }
-
+    
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
     {
         if (_segments.Count == 0 || _durationMs <= 0) return [];
-
+        
         var ranges = new List<(double, double)>();
-        int? rangeStart = null;
-        long startMs = 0;
-        long currentMs = 0;
-
-        for (int i = 0; i < _segments.Count; i++)
+        
+        lock (_bufferLock)
         {
-            if (_downloadedSegments.Contains(i))
+            int? rangeStart = null;
+            long startMs = 0;
+            long currentMs = 0;
+            
+            for (int i = 0; i < _segments.Count; i++)
             {
-                rangeStart ??= i;
-                startMs = rangeStart == i ? currentMs : startMs;
+                if (_downloadedSegments.Contains(i))
+                {
+                    if (rangeStart == null)
+                    {
+                        rangeStart = i;
+                        startMs = currentMs;
+                    }
+                }
+                else if (rangeStart.HasValue)
+                {
+                    double start = (double)startMs / _durationMs;
+                    double end = (double)currentMs / _durationMs;
+                    ranges.Add((start, end));
+                    rangeStart = null;
+                }
+                
+                currentMs += (long)_segments[i].DurationMs;
             }
-            else if (rangeStart.HasValue)
+            
+            if (rangeStart.HasValue)
             {
-                double start = (double)startMs / _durationMs;
-                double end = (double)currentMs / _durationMs;
-                ranges.Add((start, end));
-                rangeStart = null;
+                ranges.Add(((double)startMs / _durationMs, 1.0));
             }
-
-            currentMs += (long)_segments[i].DurationMs;
         }
-
-        if (rangeStart.HasValue)
-        {
-            ranges.Add(((double)startMs / _durationMs, 1.0));
-        }
-
+        
         return ranges;
     }
-
+    
     public void ReleaseRamBuffers()
     {
-        _frameBuffer.Clear();
+        lock (_bufferLock)
+        {
+            _frameBuffer.Clear();
+        }
     }
-
+    
     public void CancelPendingOperations()
     {
-        _downloadCts?.Cancel();
+        _operationCts?.Cancel();
     }
-
+    
     #region Parsing
-
+    
     private static string? ParseMasterPlaylist(string content, string baseUrl)
     {
         var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         string? audioUrl = null;
         int maxBandwidth = 0;
-
+        
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i].Trim();
-
-            // Ищем аудио-only стримы
+            
             if (line.StartsWith("#EXT-X-MEDIA:") && line.Contains("TYPE=AUDIO"))
             {
                 var uriMatch = UriRegex().Match(line);
@@ -249,13 +293,12 @@ public sealed partial class HlsStreamSource : IAudioSource
                     audioUrl = ResolveUrl(baseUrl, uriMatch.Groups[1].Value);
                 }
             }
-
-            // Или берём первый stream с аудио
+            
             if (line.StartsWith("#EXT-X-STREAM-INF:"))
             {
                 var bwMatch = BandwidthRegex().Match(line);
                 int bw = bwMatch.Success ? int.Parse(bwMatch.Groups[1].Value) : 0;
-
+                
                 if (i + 1 < lines.Length && !lines[i + 1].StartsWith("#"))
                 {
                     var url = lines[i + 1].Trim();
@@ -267,22 +310,22 @@ public sealed partial class HlsStreamSource : IAudioSource
                 }
             }
         }
-
+        
         return audioUrl;
     }
-
+    
     private static List<HlsSegment> ParseMediaPlaylist(string content, string baseUrl)
     {
         var segments = new List<HlsSegment>();
         var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
+        
         double duration = 0;
         long accumulatedMs = 0;
-
+        
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i].Trim();
-
+            
             if (line.StartsWith("#EXTINF:"))
             {
                 var durationStr = line[8..].Split(',')[0];
@@ -292,81 +335,94 @@ public sealed partial class HlsStreamSource : IAudioSource
             {
                 var url = ResolveUrl(baseUrl, line);
                 var durationMs = duration * 1000;
-
+                
                 segments.Add(new HlsSegment
                 {
                     Url = url,
                     DurationMs = durationMs,
                     StartMs = accumulatedMs
                 });
-
+                
                 accumulatedMs += (long)durationMs;
                 duration = 0;
             }
         }
-
+        
         return segments;
     }
-
+    
     private static string ResolveUrl(string baseUrl, string relativeUrl)
     {
         if (relativeUrl.StartsWith("http://") || relativeUrl.StartsWith("https://"))
             return relativeUrl;
-
+        
         var baseUri = new Uri(baseUrl);
         return new Uri(baseUri, relativeUrl).ToString();
     }
-
+    
     [GeneratedRegex(@"URI=""([^""]+)""")]
     private static partial Regex UriRegex();
-
+    
     [GeneratedRegex(@"BANDWIDTH=(\d+)")]
     private static partial Regex BandwidthRegex();
-
+    
     #endregion
-
+    
     #region Segment Loading
-
+    
     private async Task LoadSegmentAsync(int index, CancellationToken ct)
     {
         if (index < 0 || index >= _segments.Count) return;
-        if (_downloadedSegments.Contains(index)) return;
-
+        
+        // Check if already downloaded or loading
+        lock (_bufferLock)
+        {
+            if (_downloadedSegments.Contains(index)) return;
+            if (_loadingSegments.Contains(index)) return;
+            _loadingSegments.Add(index);
+        }
+        
         var segment = _segments[index];
-
+        
         try
         {
             Log.Debug($"[HLS] Loading segment {index}: {segment.Url[..Math.Min(50, segment.Url.Length)]}...");
-
+            
             var data = await _httpClient.GetByteArrayAsync(segment.Url, ct);
-
-            // Извлекаем AAC фреймы из TS
+            
+            // Extract AAC frames from TS
             var frames = ExtractAacFramesFromTs(data, segment.StartMs);
-
-            lock (_segmentLock)
+            
+            lock (_bufferLock)
             {
                 foreach (var frame in frames)
+                {
                     _frameBuffer.Enqueue(frame);
-
+                }
+                
                 _downloadedSegments.Add(index);
+                _loadingSegments.Remove(index);
             }
-
+            
             Log.Debug($"[HLS] Segment {index}: {frames.Count} frames extracted");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            lock (_bufferLock)
+            {
+                _loadingSegments.Remove(index);
+            }
             Log.Warn($"[HLS] Segment {index} failed: {ex.Message}");
             throw;
         }
     }
-
+    
     private List<AacFrame> ExtractAacFramesFromTs(byte[] tsData, long baseTimestampMs)
     {
         var frames = new List<AacFrame>();
         int pos = 0;
         long currentMs = baseTimestampMs;
-        const int frameDurationMs = 23; // ~1024 samples @ 44.1kHz
-
+        
         while (pos + 188 <= tsData.Length)
         {
             // TS packet = 188 bytes, sync byte = 0x47
@@ -375,25 +431,22 @@ public sealed partial class HlsStreamSource : IAudioSource
                 pos++;
                 continue;
             }
-
-            // Parse TS header
-            int pid = ((tsData[pos + 1] & 0x1F) << 8) | tsData[pos + 2];
+            
             bool hasPayload = (tsData[pos + 3] & 0x10) != 0;
             bool hasAdaptation = (tsData[pos + 3] & 0x20) != 0;
-
+            
             int payloadStart = pos + 4;
             if (hasAdaptation)
             {
                 int adaptLength = tsData[payloadStart];
                 payloadStart += 1 + adaptLength;
             }
-
+            
             if (hasPayload && payloadStart < pos + 188)
             {
-                // Ищем ADTS header в payload
                 int payloadLen = pos + 188 - payloadStart;
                 var payload = tsData.AsSpan(payloadStart, payloadLen);
-
+                
                 int adtsPos = 0;
                 while (adtsPos + 7 <= payload.Length)
                 {
@@ -403,33 +456,34 @@ public sealed partial class HlsStreamSource : IAudioSource
                         int frameLength = ((payload[adtsPos + 3] & 0x03) << 11) |
                                           (payload[adtsPos + 4] << 3) |
                                           ((payload[adtsPos + 5] & 0xE0) >> 5);
-
+                        
                         if (frameLength > 0 && adtsPos + frameLength <= payload.Length)
                         {
-                            // Извлекаем ASC из ADTS если ещё нет
+                            // Extract ASC if not yet
                             if (_audioSpecificConfig == null)
                             {
-                                _audioSpecificConfig = ExtractDsiFromAdts(payload.Slice(adtsPos, 7));
+                                _audioSpecificConfig = ExtractAscFromAdts(payload.Slice(adtsPos, 7));
+                                ParseAscForSampleInfo();
                             }
-
-                            // AAC raw data (без ADTS header)
+                            
+                            // AAC raw data (without ADTS header)
                             int headerLen = (payload[adtsPos + 1] & 0x01) == 0 ? 9 : 7;
                             int dataLen = frameLength - headerLen;
-
+                            
                             if (dataLen > 0 && adtsPos + headerLen + dataLen <= payload.Length)
                             {
                                 var frameData = payload.Slice(adtsPos + headerLen, dataLen).ToArray();
-
+                                
                                 frames.Add(new AacFrame
                                 {
                                     Data = frameData,
                                     TimestampMs = currentMs,
-                                    DurationMs = frameDurationMs
+                                    DurationMs = FrameDurationMs
                                 });
-
-                                currentMs += frameDurationMs;
+                                
+                                currentMs += FrameDurationMs;
                             }
-
+                            
                             adtsPos += frameLength;
                         }
                         else
@@ -443,43 +497,51 @@ public sealed partial class HlsStreamSource : IAudioSource
                     }
                 }
             }
-
+            
             pos += 188;
         }
-
+        
         return frames;
     }
-
-    private static byte[] ExtractDsiFromAdts(ReadOnlySpan<byte> adtsHeader)
+    
+    private static byte[] ExtractAscFromAdts(ReadOnlySpan<byte> adtsHeader)
     {
-        // Extract profile, sample rate index, channels from ADTS header
-        // ADTS header format:
-        // Byte 2: [profile:2][sample_rate_index:4][private:1][channel_config_high:1]
-        // Byte 3: [channel_config_low:2][original:1][home:1][...]
-
-        int profile = ((adtsHeader[2] & 0xC0) >> 6) + 1; // Object type = profile + 1
+        int profile = ((adtsHeader[2] & 0xC0) >> 6) + 1;
         int sampleRateIndex = (adtsHeader[2] & 0x3C) >> 2;
         int channelConfig = ((adtsHeader[2] & 0x01) << 2) | ((adtsHeader[3] & 0xC0) >> 6);
-
-        // Build AudioSpecificConfig (ISO 14496-3)
-        // 5 bits: object type
-        // 4 bits: sample rate index  
-        // 4 bits: channel configuration
-        // = 13 bits, padded to 2 bytes
-
+        
         int asc = (profile << 11) | (sampleRateIndex << 7) | (channelConfig << 3);
-
-        return
-        [
-            (byte)(asc >> 8),
-            (byte)(asc & 0xFF)
-        ];
+        
+        return [(byte)(asc >> 8), (byte)(asc & 0xFF)];
     }
-
+    
+    private void ParseAscForSampleInfo()
+    {
+        if (_audioSpecificConfig == null || _audioSpecificConfig.Length < 2) return;
+        
+        int asc = (_audioSpecificConfig[0] << 8) | _audioSpecificConfig[1];
+        int sampleRateIndex = (asc >> 7) & 0x0F;
+        int channelConfig = (asc >> 3) & 0x0F;
+        
+        _sampleRate = sampleRateIndex switch
+        {
+            0 => 96000, 1 => 88200, 2 => 64000, 3 => 48000,
+            4 => 44100, 5 => 32000, 6 => 24000, 7 => 22050,
+            8 => 16000, 9 => 12000, 10 => 11025, 11 => 8000,
+            _ => 44100
+        };
+        
+        _channels = channelConfig switch
+        {
+            1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 8,
+            _ => 2
+        };
+    }
+    
     #endregion
-
+    
     #region Prefetch
-
+    
     private async Task PrefetchLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -487,16 +549,26 @@ public sealed partial class HlsStreamSource : IAudioSource
             try
             {
                 await Task.Delay(500, ct);
-
-                // Prefetch segments ahead
+                
+                int current = _currentSegmentIndex;
+                
                 for (int i = 0; i < _prefetchSegments; i++)
                 {
-                    int targetIndex = _currentSegmentIndex + i;
-
+                    int targetIndex = current + i;
+                    
                     if (targetIndex >= _segments.Count) break;
-                    if (_downloadedSegments.Contains(targetIndex)) continue;
-
-                    await LoadSegmentAsync(targetIndex, ct);
+                    
+                    bool shouldLoad;
+                    lock (_bufferLock)
+                    {
+                        shouldLoad = !_downloadedSegments.Contains(targetIndex) &&
+                                     !_loadingSegments.Contains(targetIndex);
+                    }
+                    
+                    if (shouldLoad)
+                    {
+                        await LoadSegmentAsync(targetIndex, ct);
+                    }
                 }
             }
             catch (OperationCanceledException) { break; }
@@ -506,63 +578,59 @@ public sealed partial class HlsStreamSource : IAudioSource
             }
         }
     }
-
+    
     #endregion
-
-    private static HttpClient CreateDefaultClient()
-    {
-        return new HttpClient(new SocketsHttpHandler
-        {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-            MaxConnectionsPerServer = 4
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        };
-    }
-
+    
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-
-        _downloadCts?.Cancel();
-        _downloadCts?.Dispose();
-        _frameBuffer.Clear();
+        
+        _operationCts?.Cancel();
+        _operationCts?.Dispose();
+        
+        lock (_bufferLock)
+        {
+            _frameBuffer.Clear();
+        }
     }
-
+    
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
-
-        _downloadCts?.Cancel();
-
+        
+        _operationCts?.Cancel();
+        
         if (_prefetchTask != null)
         {
             try { await _prefetchTask.WaitAsync(TimeSpan.FromSeconds(1)); }
-            catch { /* ignore */ }
+            catch { }
         }
-
-        _downloadCts?.Dispose();
-        _frameBuffer.Clear();
+        
+        _operationCts?.Dispose();
+        
+        lock (_bufferLock)
+        {
+            _frameBuffer.Clear();
+        }
     }
-
+    
     #region Types
-
+    
     private sealed class HlsSegment
     {
         public required string Url { get; init; }
         public double DurationMs { get; init; }
         public long StartMs { get; init; }
     }
-
+    
     private readonly struct AacFrame
     {
         public required byte[] Data { get; init; }
         public long TimestampMs { get; init; }
         public int DurationMs { get; init; }
     }
-
+    
     #endregion
 }

@@ -1,6 +1,5 @@
-// Core/Audio/AudioSourceFactory.cs
-
 using LMP.Core.Audio.Cache;
+using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
 
@@ -24,6 +23,8 @@ public enum AudioFormat
 /// </summary>
 public static class AudioSourceFactory
 {
+    private const long DefaultContentLength = 50 * 1024 * 1024; // 50MB fallback
+    
     /// <summary>
     /// Определяет формат по URL.
     /// </summary>
@@ -113,15 +114,17 @@ public static class AudioSourceFactory
     }
     
     /// <summary>
-    /// Создаёт источник для URL (без кэширования).
+    /// Создаёт источник для URL (без кэширования на диск).
     /// </summary>
     public static async Task<IAudioSource> CreateAsync(
         string url,
-        HttpClient httpClient,
+        HttpClient? httpClient = null,
         Func<CancellationToken, Task<string?>>? urlRefresher = null,
         string? trackId = null,
         CancellationToken ct = default)
     {
+        httpClient ??= SharedHttpClient.Instance;
+        
         var format = DetectFormat(url);
         
         if (format == AudioFormat.Unknown)
@@ -136,12 +139,11 @@ public static class AudioSourceFactory
             return new HlsStreamSource(url, httpClient, urlRefresher);
         }
         
-        // Для не-HLS нужен размер контента
-        long contentLength = await GetContentLengthAsync(url, httpClient, ct);
+        long contentLength = await SharedHttpClient.GetContentLengthAsync(url, ct);
         
         if (contentLength <= 0)
         {
-            contentLength = 50 * 1024 * 1024; // Assume max 50MB
+            contentLength = DefaultContentLength;
             Log.Warn("[AudioSourceFactory] Unknown content length, assuming 50MB");
         }
         
@@ -160,15 +162,18 @@ public static class AudioSourceFactory
     public static async Task<IAudioSource> CreateWithCacheAsync(
         string url,
         string trackId,
-        HttpClient httpClient,
+        HttpClient? httpClient,
         AudioCacheManager cacheManager,
         Func<CancellationToken, Task<string?>>? urlRefresher = null,
         CancellationToken ct = default)
     {
+        httpClient ??= SharedHttpClient.Instance;
+        
         // Проверяем полный кэш
         if (cacheManager.IsFullyCached(trackId))
         {
-            Log.Info($"[AudioSourceFactory] Using cached: {trackId}");
+            Log.Info($"[AudioSourceFactory] Using fully cached: {trackId}");
+            cacheManager.Touch(trackId);
             var cachedPath = cacheManager.GetCachePath(trackId);
             return new LocalFileSource(cachedPath);
         }
@@ -180,17 +185,19 @@ public static class AudioSourceFactory
             format = await DetectFormatByHeadAsync(url, httpClient, ct);
         }
         
+        // HLS пока без кэширования на диск
         if (format == AudioFormat.Hls)
         {
-            // HLS пока без кэширования
+            Log.Debug("[AudioSourceFactory] HLS stream, caching not supported");
             return new HlsStreamSource(url, httpClient, urlRefresher);
         }
         
-        long contentLength = await GetContentLengthAsync(url, httpClient, ct);
+        long contentLength = await SharedHttpClient.GetContentLengthAsync(url, ct);
         
         if (contentLength <= 0)
         {
-            contentLength = 50 * 1024 * 1024;
+            contentLength = DefaultContentLength;
+            Log.Warn("[AudioSourceFactory] Unknown content length, assuming 50MB");
         }
         
         return new CachingStreamSource(
@@ -218,20 +225,6 @@ public static class AudioSourceFactory
         catch
         {
             return AudioFormat.Unknown;
-        }
-    }
-    
-    private static async Task<long> GetContentLengthAsync(string url, HttpClient httpClient, CancellationToken ct)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            return response.Content.Headers.ContentLength ?? -1;
-        }
-        catch
-        {
-            return -1;
         }
     }
     

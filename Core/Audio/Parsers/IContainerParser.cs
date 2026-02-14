@@ -5,7 +5,7 @@ namespace LMP.Core.Audio.Parsers;
 /// <summary>
 /// Парсер контейнерного формата (WebM, MP4 и т.д.).
 /// </summary>
-public interface IContainerParser : IDisposable
+public interface IContainerParser : IAsyncDisposable, IDisposable
 {
     /// <summary>Длительность в миллисекундах.</summary>
     long DurationMs { get; }
@@ -15,6 +15,12 @@ public interface IContainerParser : IDisposable
     
     /// <summary>Decoder-specific config (ASC для AAC, CodecPrivate для Opus).</summary>
     byte[]? DecoderConfig { get; }
+    
+    /// <summary>Sample rate (0 если неизвестен).</summary>
+    int SampleRate { get; }
+    
+    /// <summary>Channels (0 если неизвестно).</summary>
+    int Channels { get; }
     
     /// <summary>
     /// Парсит заголовки контейнера.

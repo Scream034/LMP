@@ -41,62 +41,6 @@ class Program
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
-#if HLS_FORMAT_TEST
-            // Запуск теста HLS форматов
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000); // Подождать инициализации
-                // await Core.Dev.HlsFormatTester.RunAllTestsAsync();
-                // await Core.Dev.HlsFormatTester.TestAllStreamsAsync();
-                // await Core.Dev.HlsFormatTester.TestIosRangeLimitAsync();
-                // await Core.Dev.HlsFormatTester.TestIosOpusRangeLimitAsync();
-                // await Core.Dev.HlsFormatTester.TestHeadersBypassAsync();
-                await Core.Dev.HlsFormatTester.TestSignatureRefreshAsync();
-                Console.WriteLine("\n\n");
-
-                await Core.Dev.HlsFormatTester.TestCookieBypassAsync();
-                Console.WriteLine("\n\n");
-
-                await Core.Dev.HlsFormatTester.TestParallelConnectionsAsync();
-            });
-#endif
-
-#if AUDIO_TESTS
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000); // Ждём инициализации
-
-                var youtubeProvider = Services.GetRequiredService<YoutubeProvider>();
-
-                // ════════════════════════════════════════════════════════════════
-                // ВСТАВЬ СЮДА ЛЮБУЮ YOUTUBE ССЫЛКУ ИЛИ VIDEO ID
-                // ════════════════════════════════════════════════════════════════
-
-                await Core.Audio.Tests.QuickAudioTester.PlayAsync(
-                    "dQw4w9WgXcQ",  // Rick Astley - Never Gonna Give You Up
-                    youtubeProvider,
-                    seconds: 30     // Играть 30 секунд
-                ); 
-
-                // Или полная ссылка:
-                // await QuickAudioTester.PlayAsync(
-                //     "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                //     youtubeProvider,
-                //     seconds: 30
-                // );
-
-                // Или YouTube Music:
-                // await QuickAudioTester.PlayAsync(
-                //     "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
-                //     youtubeProvider,
-                //     seconds: 30
-                // );
-
-                // Или локальный файл:
-                // await QuickAudioTester.PlayFileAsync(@"D:\Music\song.webm", seconds: 30);
-            });
-#endif
-
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)

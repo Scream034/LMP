@@ -1,5 +1,3 @@
-// Core/Audio/Helpers/ConcurrentBitArray.cs
-
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -8,17 +6,11 @@ namespace LMP.Core.Audio.Helpers;
 /// <summary>
 /// Lock-free потокобезопасный битовый массив.
 /// </summary>
-public sealed class ConcurrentBitArray
+public sealed class ConcurrentBitArray(int length)
 {
-    private readonly int[] _data;
-    private readonly int _length;
-    
-    public ConcurrentBitArray(int length)
-    {
-        _length = length;
-        _data = new int[(length + 31) / 32];
-    }
-    
+    private readonly int[] _data = new int[(length + 31) / 32];
+    private readonly int _length = length;
+
     public int Length => _length;
     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -35,14 +27,15 @@ public sealed class ConcurrentBitArray
         
         int word = index >> 5;
         int bit = 1 << (index & 31);
-        int current, desired;
         
-        do
+        if (value)
         {
-            current = Volatile.Read(ref _data[word]);
-            desired = value ? (current | bit) : (current & ~bit);
-            if (desired == current) return;
-        } while (Interlocked.CompareExchange(ref _data[word], desired, current) != current);
+            Interlocked.Or(ref _data[word], bit);
+        }
+        else
+        {
+            Interlocked.And(ref _data[word], ~bit);
+        }
     }
     
     public int PopCount()
@@ -82,6 +75,9 @@ public sealed class ConcurrentBitArray
             var bytes = Convert.FromBase64String(base64);
             Buffer.BlockCopy(bytes, 0, _data, 0, Math.Min(bytes.Length, _data.Length * 4));
         }
-        catch { }
+        catch
+        {
+            // Ignore invalid data
+        }
     }
 }

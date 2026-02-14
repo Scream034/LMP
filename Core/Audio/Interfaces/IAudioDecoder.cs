@@ -24,9 +24,12 @@ public interface IAudioDecoder : IDisposable
     /// <summary>Количество каналов</summary>
     int Channels { get; }
     
-    /// <summary>Максимальный размер выходного буфера в семплах</summary>
+    /// <summary>Максимальный размер выходного буфера в семплах на канал</summary>
     int MaxFrameSize { get; }
     
     /// <summary>Тип кодека</summary>
     AudioCodec Codec { get; }
+    
+    /// <summary>Инициализирован ли декодер</summary>
+    bool IsInitialized { get; }
 }

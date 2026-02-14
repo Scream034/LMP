@@ -1,7 +1,6 @@
 using SharpJaad.AAC;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Exceptions;
-using LMP.Core.Logger;
 
 namespace LMP.Core.Audio.Decoders;
 
@@ -10,29 +9,32 @@ namespace LMP.Core.Audio.Decoders;
 /// </summary>
 public sealed class AacDecoder : IAudioDecoder
 {
+    private const int DefaultSampleRate = 44100;
+    private const int DefaultChannels = 2;
+    private const int DefaultMaxFrameSize = 2048;
+    
     private Decoder? _decoder;
     private DecoderConfig? _config;
     private SampleBuffer? _sampleBuffer;
     
-    private readonly int _sampleRate;
-    private readonly int _channels;
-    private readonly int _maxFrameSize;
+    private readonly int _requestedSampleRate;
+    private readonly int _requestedChannels;
     private bool _initialized;
     private bool _disposed;
     
-    public AacDecoder(int sampleRate = 44100, int channels = 2)
+    public AacDecoder(int sampleRate = DefaultSampleRate, int channels = DefaultChannels)
     {
-        _sampleRate = sampleRate;
-        _channels = channels;
-        _maxFrameSize = 2048; // Типичный AAC frame
+        _requestedSampleRate = sampleRate;
+        _requestedChannels = channels;
         
-        Log.Debug($"[AacDecoder] Created: {sampleRate}Hz, {channels}ch");
+        Log.Debug($"[AacDecoder] Created: requested {sampleRate}Hz, {channels}ch");
     }
     
-    public int SampleRate => _config?.GetSampleFrequency().GetFrequency() ?? _sampleRate;
-    public int Channels => (int?)_config?.GetChannelConfiguration() ?? _channels;
-    public int MaxFrameSize => _config?.GetFrameLength() ?? _maxFrameSize;
+    public int SampleRate => _config?.GetSampleFrequency().GetFrequency() ?? _requestedSampleRate;
+    public int Channels => (int?)_config?.GetChannelConfiguration() ?? _requestedChannels;
+    public int MaxFrameSize => _config?.GetFrameLength() ?? DefaultMaxFrameSize;
     public AudioCodec Codec => AudioCodec.Aac;
+    public bool IsInitialized => _initialized;
     
     /// <summary>
     /// Инициализирует декодер с MP4 Decoder Specific Info (Audio Specific Config).
@@ -40,6 +42,11 @@ public sealed class AacDecoder : IAudioDecoder
     public void Initialize(byte[] decoderSpecificInfo)
     {
         if (_initialized) return;
+        
+        if (decoderSpecificInfo == null || decoderSpecificInfo.Length < 2)
+        {
+            throw new ArgumentException("Invalid decoder specific info", nameof(decoderSpecificInfo));
+        }
         
         try
         {
@@ -90,29 +97,36 @@ public sealed class AacDecoder : IAudioDecoder
     }
     
     /// <summary>
-    /// Инициализирует декодер с явными параметрами (с int sample rate).
+    /// Инициализирует декодер с int sample rate.
     /// </summary>
     public void Initialize(Profile profile, int sampleRate, int channels)
     {
         Initialize(profile, GetSampleFrequency(sampleRate), channels);
     }
     
+    /// <summary>
+    /// Авто-инициализация с defaults если ещё не инициализирован.
+    /// </summary>
+    private void EnsureInitialized()
+    {
+        if (_initialized) return;
+        
+        Initialize(Profile.AAC_LC, GetSampleFrequency(_requestedSampleRate), _requestedChannels);
+    }
+    
     public int Decode(ReadOnlySpan<byte> encodedData, Span<float> outputBuffer)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         
-        if (!_initialized)
-        {
-            // Auto-init с defaults (AAC-LC, 44100, stereo)
-            Initialize(Profile.AAC_LC, SampleFrequency.SAMPLE_FREQUENCY_44100, _channels);
-        }
+        EnsureInitialized();
         
         if (encodedData.IsEmpty)
         {
-            // Silence для PLC
-            int silenceSamples = 1024 * _channels;
-            outputBuffer[..Math.Min(silenceSamples, outputBuffer.Length)].Clear();
-            return 1024;
+            // PLC: возвращаем тишину
+            int silenceSamples = MaxFrameSize;
+            int totalSamples = silenceSamples * Channels;
+            outputBuffer[..Math.Min(totalSamples, outputBuffer.Length)].Clear();
+            return silenceSamples;
         }
         
         try
@@ -123,7 +137,6 @@ public sealed class AacDecoder : IAudioDecoder
             byte[] pcmData = _sampleBuffer!.Data;
             int sampleCount = pcmData.Length / (sizeof(short) * Channels);
             
-            // Convert byte[] → float[]
             ConvertBytesToFloat(pcmData, outputBuffer, sampleCount * Channels);
             
             return sampleCount;
@@ -195,6 +208,7 @@ public sealed class AacDecoder : IAudioDecoder
     {
         if (_disposed) return;
         _disposed = true;
+        
         _decoder = null;
         _config = null;
         _sampleBuffer = null;

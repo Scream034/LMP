@@ -1,37 +1,37 @@
+using System.Buffers;
 using LMP.Core.Audio.Interfaces;
 
 namespace LMP.Core.Audio.Parsers;
 
 /// <summary>
 /// Парсер MP4/M4A контейнера для извлечения AAC фреймов.
+/// Поддерживает обычный MP4 и базовую поддержку fragmented MP4 (fMP4).
 /// </summary>
 public sealed class Mp4ContainerParser : IContainerParser
 {
     private readonly Stream _stream;
-    private readonly BinaryReader _reader;
     
     private long _durationMs;
     private byte[]? _decoderConfig;
     private int _sampleRate;
     private int _channels;
     
-    // Sample table
     private List<SampleInfo> _samples = [];
     private int _currentSampleIndex;
-    private long _mdatOffset;
-    private long _mdatSize;
     
-    // Track info
     private uint _timeScale = 1;
+    private bool _isFragmented;
+    private bool _disposed;
     
     public long DurationMs => _durationMs;
     public AudioCodec Codec => AudioCodec.Aac;
     public byte[]? DecoderConfig => _decoderConfig;
+    public int SampleRate => _sampleRate > 0 ? _sampleRate : 44100;
+    public int Channels => _channels > 0 ? _channels : 2;
     
     public Mp4ContainerParser(Stream stream)
     {
-        _stream = stream;
-        _reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        _stream = stream ?? throw new ArgumentNullException(nameof(stream));
     }
     
     public async ValueTask<bool> ParseHeadersAsync(CancellationToken ct = default)
@@ -40,6 +40,9 @@ public sealed class Mp4ContainerParser : IContainerParser
         {
             _stream.Position = 0;
             
+            bool foundMoov = false;
+            bool foundMdat = false;
+            
             while (_stream.Position < _stream.Length)
             {
                 ct.ThrowIfCancellationRequested();
@@ -47,9 +50,9 @@ public sealed class Mp4ContainerParser : IContainerParser
                 if (_stream.Length - _stream.Position < 8)
                     break;
                 
-                var (size, type) = ReadBoxHeader();
+                var (size, type) = await ReadBoxHeaderAsync(ct);
                 
-                if (size == 0) // Box extends to end of file
+                if (size == 0)
                     size = _stream.Length - _stream.Position + 8;
                 
                 long boxEnd = _stream.Position - 8 + size;
@@ -58,32 +61,53 @@ public sealed class Mp4ContainerParser : IContainerParser
                 {
                     case "moov":
                         await ParseMoovAsync(boxEnd, ct);
+                        foundMoov = true;
+                        break;
+                    
+                    case "moof":
+                        _isFragmented = true;
+                        // Для fMP4 без moov — логируем и продолжаем
+                        if (!foundMoov)
+                        {
+                            Log.Debug("[Mp4Parser] Found moof before moov, fragmented MP4");
+                        }
+                        await SkipToAsync(boxEnd, ct);
                         break;
                     
                     case "mdat":
-                        _mdatOffset = _stream.Position;
-                        _mdatSize = size - 8;
-                        _stream.Position = boxEnd;
+                        foundMdat = true;
+                        await SkipToAsync(boxEnd, ct);
+                        break;
+                    
+                    case "sidx":
+                        // Segment index для fMP4 — пропускаем
+                        await SkipToAsync(boxEnd, ct);
                         break;
                     
                     default:
-                        _stream.Position = boxEnd;
+                        await SkipToAsync(boxEnd, ct);
                         break;
                 }
                 
-                // Если нашли и moov и mdat - готово
-                if (_samples.Count > 0 && _mdatOffset > 0)
+                // Для обычного MP4: нашли moov и mdat
+                if (foundMoov && foundMdat && _samples.Count > 0)
                     break;
             }
             
             if (_samples.Count == 0)
             {
+                if (_isFragmented)
+                {
+                    Log.Warn("[Mp4Parser] Fragmented MP4 detected, sequential reading only");
+                    return _decoderConfig != null;
+                }
+                
                 Log.Error("[Mp4Parser] No samples found");
                 return false;
             }
             
             Log.Debug($"[Mp4Parser] Parsed: {_samples.Count} samples, duration={_durationMs}ms, " +
-                      $"rate={_sampleRate}, channels={_channels}");
+                      $"rate={_sampleRate}, channels={_channels}, fragmented={_isFragmented}");
             
             return true;
         }
@@ -94,30 +118,42 @@ public sealed class Mp4ContainerParser : IContainerParser
         }
     }
     
-    public ValueTask<AudioFrame?> ReadNextFrameAsync(CancellationToken ct = default)
+    public async ValueTask<AudioFrame?> ReadNextFrameAsync(CancellationToken ct = default)
     {
         if (_currentSampleIndex >= _samples.Count)
-            return ValueTask.FromResult<AudioFrame?>(null);
+            return null;
         
         var sample = _samples[_currentSampleIndex++];
         
         _stream.Position = sample.Offset;
-        var data = _reader.ReadBytes(sample.Size);
         
-        return ValueTask.FromResult<AudioFrame?>(new AudioFrame
+        var data = ArrayPool<byte>.Shared.Rent(sample.Size);
+        try
         {
-            Data = data,
-            TimestampMs = sample.TimestampMs,
-            DurationMs = sample.DurationMs,
-            IsKeyFrame = true // AAC frames are always keyframes
-        });
+            await ReadExactlyAsync(data.AsMemory(0, sample.Size), ct);
+            
+            // Копируем в новый массив нужного размера
+            var frameData = new byte[sample.Size];
+            Buffer.BlockCopy(data, 0, frameData, 0, sample.Size);
+            
+            return new AudioFrame
+            {
+                Data = frameData,
+                TimestampMs = sample.TimestampMs,
+                DurationMs = sample.DurationMs,
+                IsKeyFrame = true
+            };
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(data);
+        }
     }
     
     public (long BytePosition, long TimestampMs)? FindSeekPosition(long targetMs)
     {
         if (_samples.Count == 0) return null;
         
-        // Binary search for nearest sample
         int left = 0, right = _samples.Count - 1;
         
         while (left < right)
@@ -140,20 +176,61 @@ public sealed class Mp4ContainerParser : IContainerParser
         _currentSampleIndex = 0;
     }
     
+    #region Exact Reading
+    
+    /// <summary>
+    /// Читает ровно указанное количество байт или выбрасывает исключение.
+    /// </summary>
+    private async ValueTask ReadExactlyAsync(Memory<byte> buffer, CancellationToken ct)
+    {
+        int totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            int read = await _stream.ReadAsync(buffer[totalRead..], ct);
+            if (read == 0)
+                throw new EndOfStreamException($"Expected {buffer.Length} bytes, got {totalRead}");
+            totalRead += read;
+        }
+    }
+    
+    #endregion
+    
     #region Box Parsing
     
-    private (long size, string type) ReadBoxHeader()
+    private async ValueTask<(long size, string type)> ReadBoxHeaderAsync(CancellationToken ct)
     {
-        uint size = ReadUInt32BE();
-        string type = new string(_reader.ReadChars(4));
-        
-        if (size == 1)
+        var header = ArrayPool<byte>.Shared.Rent(8);
+        try
         {
-            // Extended size
-            size = (uint)ReadUInt64BE();
+            await ReadExactlyAsync(header.AsMemory(0, 8), ct);
+            
+            uint size = ReadUInt32BE(header);
+            string type = System.Text.Encoding.ASCII.GetString(header, 4, 4);
+            
+            if (size == 1)
+            {
+                var extSize = ArrayPool<byte>.Shared.Rent(8);
+                try
+                {
+                    await ReadExactlyAsync(extSize.AsMemory(0, 8), ct);
+                    return ((long)ReadUInt64BE(extSize), type);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(extSize);
+                }
+            }
+            
+            return (size, type);
         }
-        
-        return (size, type);
+        catch (EndOfStreamException)
+        {
+            return (0, "");
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(header);
+        }
     }
     
     private async Task ParseMoovAsync(long boxEnd, CancellationToken ct)
@@ -162,7 +239,9 @@ public sealed class Mp4ContainerParser : IContainerParser
         {
             ct.ThrowIfCancellationRequested();
             
-            var (size, type) = ReadBoxHeader();
+            var (size, type) = await ReadBoxHeaderAsync(ct);
+            if (size == 0) break;
+            
             long childEnd = _stream.Position - 8 + size;
             
             if (type == "trak")
@@ -171,37 +250,36 @@ public sealed class Mp4ContainerParser : IContainerParser
             }
             else if (type == "mvhd")
             {
-                ParseMvhd((int)(childEnd - _stream.Position));
+                await ParseMvhdAsync(childEnd, ct);
             }
             else
             {
-                _stream.Position = childEnd;
+                await SkipToAsync(childEnd, ct);
             }
         }
     }
     
-    private void ParseMvhd(int remaining)
+    private async Task ParseMvhdAsync(long boxEnd, CancellationToken ct)
     {
-        int version = _reader.ReadByte();
-        _stream.Position += 3; // flags
+        int version = _stream.ReadByte();
+        await SkipBytesAsync(3, ct); // flags
         
         if (version == 1)
         {
-            _stream.Position += 16; // creation_time, modification_time
-            _timeScale = ReadUInt32BE();
-            long duration = (long)ReadUInt64BE();
+            await SkipBytesAsync(16, ct);
+            _timeScale = await ReadUInt32BEAsync(ct);
+            long duration = (long)await ReadUInt64BEAsync(ct);
             _durationMs = duration * 1000 / _timeScale;
         }
         else
         {
-            _stream.Position += 8;
-            _timeScale = ReadUInt32BE();
-            uint duration = ReadUInt32BE();
+            await SkipBytesAsync(8, ct);
+            _timeScale = await ReadUInt32BEAsync(ct);
+            uint duration = await ReadUInt32BEAsync(ct);
             _durationMs = duration * 1000 / _timeScale;
         }
         
-        // Skip rest
-        _stream.Position += remaining - (version == 1 ? 28 : 16);
+        await SkipToAsync(boxEnd, ct);
     }
     
     private async Task ParseTrakAsync(long boxEnd, CancellationToken ct)
@@ -213,56 +291,66 @@ public sealed class Mp4ContainerParser : IContainerParser
         {
             ct.ThrowIfCancellationRequested();
             
-            var (size, type) = ReadBoxHeader();
+            var (size, type) = await ReadBoxHeaderAsync(ct);
+            if (size == 0) break;
+            
             long childEnd = _stream.Position - 8 + size;
             
-            switch (type)
+            if (type == "mdia")
             {
-                case "mdia":
-                    // Parse mdia to find audio track
-                    while (_stream.Position < childEnd)
+                while (_stream.Position < childEnd)
+                {
+                    var (mSize, mType) = await ReadBoxHeaderAsync(ct);
+                    if (mSize == 0) break;
+                    
+                    long mChildEnd = _stream.Position - 8 + mSize;
+                    
+                    if (mType == "hdlr")
                     {
-                        var (mSize, mType) = ReadBoxHeader();
-                        long mChildEnd = _stream.Position - 8 + mSize;
-                        
-                        if (mType == "hdlr")
+                        await SkipBytesAsync(8, ct);
+                        var handlerBytes = ArrayPool<byte>.Shared.Rent(4);
+                        try
                         {
-                            _stream.Position += 8; // version, flags, pre_defined
-                            string handlerType = new string(_reader.ReadChars(4));
+                            await ReadExactlyAsync(handlerBytes.AsMemory(0, 4), ct);
+                            string handlerType = System.Text.Encoding.ASCII.GetString(handlerBytes, 0, 4);
                             isAudioTrack = handlerType == "soun";
-                            _stream.Position = mChildEnd;
                         }
-                        else if (mType == "mdhd")
+                        finally
                         {
-                            int version = _reader.ReadByte();
-                            _stream.Position += 3;
-                            
-                            if (version == 1)
-                            {
-                                _stream.Position += 16;
-                                trackTimeScale = ReadUInt32BE();
-                            }
-                            else
-                            {
-                                _stream.Position += 8;
-                                trackTimeScale = ReadUInt32BE();
-                            }
-                            _stream.Position = mChildEnd;
+                            ArrayPool<byte>.Shared.Return(handlerBytes);
                         }
-                        else if (mType == "minf" && isAudioTrack)
+                        await SkipToAsync(mChildEnd, ct);
+                    }
+                    else if (mType == "mdhd")
+                    {
+                        int version = _stream.ReadByte();
+                        await SkipBytesAsync(3, ct);
+                        
+                        if (version == 1)
                         {
-                            await ParseMinfAsync(mChildEnd, trackTimeScale, ct);
+                            await SkipBytesAsync(16, ct);
+                            trackTimeScale = await ReadUInt32BEAsync(ct);
                         }
                         else
                         {
-                            _stream.Position = mChildEnd;
+                            await SkipBytesAsync(8, ct);
+                            trackTimeScale = await ReadUInt32BEAsync(ct);
                         }
+                        await SkipToAsync(mChildEnd, ct);
                     }
-                    break;
-                
-                default:
-                    _stream.Position = childEnd;
-                    break;
+                    else if (mType == "minf" && isAudioTrack)
+                    {
+                        await ParseMinfAsync(mChildEnd, trackTimeScale, ct);
+                    }
+                    else
+                    {
+                        await SkipToAsync(mChildEnd, ct);
+                    }
+                }
+            }
+            else
+            {
+                await SkipToAsync(childEnd, ct);
             }
         }
     }
@@ -271,7 +359,9 @@ public sealed class Mp4ContainerParser : IContainerParser
     {
         while (_stream.Position < boxEnd)
         {
-            var (size, type) = ReadBoxHeader();
+            var (size, type) = await ReadBoxHeaderAsync(ct);
+            if (size == 0) break;
+            
             long childEnd = _stream.Position - 8 + size;
             
             if (type == "stbl")
@@ -280,7 +370,7 @@ public sealed class Mp4ContainerParser : IContainerParser
             }
             else
             {
-                _stream.Position = childEnd;
+                await SkipToAsync(childEnd, ct);
             }
         }
     }
@@ -296,156 +386,159 @@ public sealed class Mp4ContainerParser : IContainerParser
         {
             ct.ThrowIfCancellationRequested();
             
-            var (size, type) = ReadBoxHeader();
+            var (size, type) = await ReadBoxHeaderAsync(ct);
+            if (size == 0) break;
+            
             long childEnd = _stream.Position - 8 + size;
             
             switch (type)
             {
                 case "stsd":
-                    ParseStsd((int)(childEnd - _stream.Position));
+                    await ParseStsdAsync(childEnd, ct);
                     break;
                 
                 case "stsz":
-                    _stream.Position += 4; // version, flags
-                    uint defaultSize = ReadUInt32BE();
-                    uint count = ReadUInt32BE();
+                    await SkipBytesAsync(4, ct);
+                    uint defaultSize = await ReadUInt32BEAsync(ct);
+                    uint count = await ReadUInt32BEAsync(ct);
                     
                     for (uint i = 0; i < count; i++)
                     {
-                        sampleSizes.Add(defaultSize == 0 ? ReadUInt32BE() : defaultSize);
+                        sampleSizes.Add(defaultSize == 0 ? await ReadUInt32BEAsync(ct) : defaultSize);
                     }
                     break;
                 
                 case "stsc":
-                    _stream.Position += 4;
-                    uint entryCount = ReadUInt32BE();
+                    await SkipBytesAsync(4, ct);
+                    uint entryCount = await ReadUInt32BEAsync(ct);
                     
                     for (uint i = 0; i < entryCount; i++)
                     {
-                        uint firstChunk = ReadUInt32BE();
-                        uint samplesPerChunk = ReadUInt32BE();
-                        uint descIndex = ReadUInt32BE();
+                        uint firstChunk = await ReadUInt32BEAsync(ct);
+                        uint samplesPerChunk = await ReadUInt32BEAsync(ct);
+                        uint descIndex = await ReadUInt32BEAsync(ct);
                         stsc.Add((firstChunk, samplesPerChunk, descIndex));
                     }
                     break;
                 
                 case "stco":
-                    _stream.Position += 4;
-                    uint offsetCount = ReadUInt32BE();
+                    await SkipBytesAsync(4, ct);
+                    uint offsetCount = await ReadUInt32BEAsync(ct);
                     
                     for (uint i = 0; i < offsetCount; i++)
                     {
-                        chunkOffsets.Add(ReadUInt32BE());
+                        chunkOffsets.Add(await ReadUInt32BEAsync(ct));
                     }
                     break;
                 
                 case "co64":
-                    _stream.Position += 4;
-                    uint offset64Count = ReadUInt32BE();
+                    await SkipBytesAsync(4, ct);
+                    uint offset64Count = await ReadUInt32BEAsync(ct);
                     
                     for (uint i = 0; i < offset64Count; i++)
                     {
-                        chunkOffsets.Add((long)ReadUInt64BE());
+                        chunkOffsets.Add((long)await ReadUInt64BEAsync(ct));
                     }
                     break;
                 
                 case "stts":
-                    _stream.Position += 4;
-                    uint sttsCount = ReadUInt32BE();
+                    await SkipBytesAsync(4, ct);
+                    uint sttsCount = await ReadUInt32BEAsync(ct);
                     
                     for (uint i = 0; i < sttsCount; i++)
                     {
-                        uint sampleCount = ReadUInt32BE();
-                        uint sampleDelta = ReadUInt32BE();
+                        uint sampleCount = await ReadUInt32BEAsync(ct);
+                        uint sampleDelta = await ReadUInt32BEAsync(ct);
                         stts.Add((sampleCount, sampleDelta));
                     }
                     break;
                 
                 default:
-                    _stream.Position = childEnd;
+                    await SkipToAsync(childEnd, ct);
                     break;
             }
             
-            _stream.Position = childEnd;
+            await SkipToAsync(childEnd, ct);
         }
         
-        // Build sample table
         BuildSampleTable(sampleSizes, stsc, chunkOffsets, stts, timeScale);
     }
     
-    private void ParseStsd(int remaining)
+    private async Task ParseStsdAsync(long boxEnd, CancellationToken ct)
     {
-        _stream.Position += 4; // version, flags
-        uint entryCount = ReadUInt32BE();
+        await SkipBytesAsync(4, ct);
+        uint entryCount = await ReadUInt32BEAsync(ct);
         
         if (entryCount == 0) return;
         
-        var (size, type) = ReadBoxHeader();
+        var (size, type) = await ReadBoxHeaderAsync(ct);
+        if (size == 0) return;
+        
         long entryEnd = _stream.Position - 8 + size;
         
-        // Skip to sample description
-        _stream.Position += 6; // reserved
-        _stream.Position += 2; // data_reference_index
-        _stream.Position += 8; // reserved
+        await SkipBytesAsync(6, ct); // reserved
+        await SkipBytesAsync(2, ct); // data_reference_index
+        await SkipBytesAsync(8, ct); // reserved
         
-        _channels = ReadUInt16BE();
-        _stream.Position += 2; // sample_size
-        _stream.Position += 4; // pre_defined, reserved
-        _sampleRate = (int)(ReadUInt32BE() >> 16);
+        _channels = await ReadUInt16BEAsync(ct);
+        await SkipBytesAsync(2, ct); // sample_size
+        await SkipBytesAsync(4, ct); // pre_defined, reserved
+        _sampleRate = (int)(await ReadUInt32BEAsync(ct) >> 16);
         
-        // Find esds box for decoder config
+        // Find esds box
         while (_stream.Position < entryEnd)
         {
-            var (boxSize, boxType) = ReadBoxHeader();
-            long boxEnd = _stream.Position - 8 + boxSize;
+            var (boxSize, boxType) = await ReadBoxHeaderAsync(ct);
+            if (boxSize == 0) break;
+            
+            long nestedEnd = _stream.Position - 8 + boxSize;
             
             if (boxType == "esds")
             {
-                ParseEsds((int)(boxEnd - _stream.Position));
+                await ParseEsdsAsync(ct);
                 break;
             }
             
-            _stream.Position = boxEnd;
+            await SkipToAsync(nestedEnd, ct);
         }
         
-        _stream.Position = entryEnd;
+        await SkipToAsync(entryEnd, ct);
     }
     
-    private void ParseEsds(int remaining)
+    private async Task ParseEsdsAsync(CancellationToken ct)
     {
-        _stream.Position += 4; // version, flags
+        await SkipBytesAsync(4, ct); // version, flags
         
-        // ES Descriptor
-        if (_reader.ReadByte() != 0x03) return;
-        ReadDescriptorLength();
-        _stream.Position += 2; // ES_ID
-        _stream.Position += 1; // flags
+        if (_stream.ReadByte() != 0x03) return;
+        await ReadDescriptorLengthAsync(ct);
+        await SkipBytesAsync(2, ct); // ES_ID
+        await SkipBytesAsync(1, ct); // flags
         
-        // Decoder Config Descriptor
-        if (_reader.ReadByte() != 0x04) return;
-        ReadDescriptorLength();
-        _stream.Position += 1; // objectTypeIndication
-        _stream.Position += 4; // streamType, bufferSizeDB
-        _stream.Position += 4; // maxBitrate
-        _stream.Position += 4; // avgBitrate
+        if (_stream.ReadByte() != 0x04) return;
+        await ReadDescriptorLengthAsync(ct);
+        await SkipBytesAsync(1, ct); // objectTypeIndication
+        await SkipBytesAsync(4, ct); // streamType, bufferSizeDB
+        await SkipBytesAsync(4, ct); // maxBitrate
+        await SkipBytesAsync(4, ct); // avgBitrate
         
-        // Decoder Specific Info
-        if (_reader.ReadByte() != 0x05) return;
-        int dsiLength = ReadDescriptorLength();
+        if (_stream.ReadByte() != 0x05) return;
+        int dsiLength = await ReadDescriptorLengthAsync(ct);
         
-        _decoderConfig = _reader.ReadBytes(dsiLength);
+        _decoderConfig = new byte[dsiLength];
+        await ReadExactlyAsync(_decoderConfig, ct);
         
         Log.Debug($"[Mp4Parser] Decoder config: {BitConverter.ToString(_decoderConfig)}");
     }
     
-    private int ReadDescriptorLength()
+    private async ValueTask<int> ReadDescriptorLengthAsync(CancellationToken ct)
     {
         int length = 0;
         int b;
         
         do
         {
-            b = _reader.ReadByte();
+            b = _stream.ReadByte();
+            if (b < 0) break;
             length = (length << 7) | (b & 0x7F);
         } while ((b & 0x80) != 0);
         
@@ -463,7 +556,6 @@ public sealed class Mp4ContainerParser : IContainerParser
         
         _samples = new List<SampleInfo>(sampleSizes.Count);
         
-        // Calculate timestamps
         var timestamps = new List<long>(sampleSizes.Count);
         long time = 0;
         
@@ -476,13 +568,11 @@ public sealed class Mp4ContainerParser : IContainerParser
             }
         }
         
-        // Build sample info
         int sampleIndex = 0;
         int stscIndex = 0;
         
         for (int chunkIndex = 0; chunkIndex < chunkOffsets.Count && sampleIndex < sampleSizes.Count; chunkIndex++)
         {
-            // Find samples per chunk
             while (stscIndex + 1 < stsc.Count && stsc[stscIndex + 1].firstChunk - 1 <= chunkIndex)
             {
                 stscIndex++;
@@ -495,7 +585,7 @@ public sealed class Mp4ContainerParser : IContainerParser
             {
                 long timestampMs = timestamps.Count > sampleIndex
                     ? timestamps[sampleIndex] * 1000 / timeScale
-                    : sampleIndex * 20; // Fallback to ~20ms per frame
+                    : sampleIndex * 20;
                 
                 int durationMs = sampleIndex + 1 < timestamps.Count
                     ? (int)((timestamps[sampleIndex + 1] - timestamps[sampleIndex]) * 1000 / timeScale)
@@ -524,25 +614,93 @@ public sealed class Mp4ContainerParser : IContainerParser
     
     #region Helpers
     
-    private uint ReadUInt32BE()
+    private static uint ReadUInt32BE(ReadOnlySpan<byte> bytes)
     {
-        var bytes = _reader.ReadBytes(4);
         return (uint)((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
     }
     
-    private ulong ReadUInt64BE()
+    private static ulong ReadUInt64BE(ReadOnlySpan<byte> bytes)
     {
-        var bytes = _reader.ReadBytes(8);
         return ((ulong)bytes[0] << 56) | ((ulong)bytes[1] << 48) |
                ((ulong)bytes[2] << 40) | ((ulong)bytes[3] << 32) |
                ((ulong)bytes[4] << 24) | ((ulong)bytes[5] << 16) |
                ((ulong)bytes[6] << 8) | bytes[7];
     }
     
-    private ushort ReadUInt16BE()
+    private async ValueTask<uint> ReadUInt32BEAsync(CancellationToken ct)
     {
-        var bytes = _reader.ReadBytes(2);
-        return (ushort)((bytes[0] << 8) | bytes[1]);
+        var buffer = ArrayPool<byte>.Shared.Rent(4);
+        try
+        {
+            await ReadExactlyAsync(buffer.AsMemory(0, 4), ct);
+            return ReadUInt32BE(buffer);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+    
+    private async ValueTask<ulong> ReadUInt64BEAsync(CancellationToken ct)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(8);
+        try
+        {
+            await ReadExactlyAsync(buffer.AsMemory(0, 8), ct);
+            return ReadUInt64BE(buffer);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+    
+    private async ValueTask<ushort> ReadUInt16BEAsync(CancellationToken ct)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(2);
+        try
+        {
+            await ReadExactlyAsync(buffer.AsMemory(0, 2), ct);
+            return (ushort)((buffer[0] << 8) | buffer[1]);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+    
+    private async ValueTask SkipBytesAsync(long count, CancellationToken ct)
+    {
+        if (_stream.CanSeek)
+        {
+            _stream.Position += count;
+        }
+        else
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(Math.Min((int)count, 8192));
+            try
+            {
+                while (count > 0)
+                {
+                    int toRead = (int)Math.Min(count, buffer.Length);
+                    int read = await _stream.ReadAsync(buffer.AsMemory(0, toRead), ct);
+                    if (read == 0) break;
+                    count -= read;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+    }
+    
+    private async ValueTask SkipToAsync(long position, CancellationToken ct)
+    {
+        if (_stream.Position < position)
+        {
+            await SkipBytesAsync(position - _stream.Position, ct);
+        }
     }
     
     #endregion
@@ -557,6 +715,14 @@ public sealed class Mp4ContainerParser : IContainerParser
     
     public void Dispose()
     {
-        _reader.Dispose();
+        if (_disposed) return;
+        _disposed = true;
+        // Stream управляется извне
+    }
+    
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 }

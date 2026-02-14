@@ -1,7 +1,6 @@
 using Concentus;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Exceptions;
-using LMP.Core.Logger;
 
 namespace LMP.Core.Audio.Decoders;
 
@@ -10,6 +9,8 @@ namespace LMP.Core.Audio.Decoders;
 /// </summary>
 public sealed class OpusDecoder : IAudioDecoder
 {
+    private const int MaxFrameDurationMs = 120;
+    
     private readonly IOpusDecoder _decoder;
     private readonly short[] _shortBuffer;
     private readonly int _sampleRate;
@@ -21,7 +22,7 @@ public sealed class OpusDecoder : IAudioDecoder
     {
         _sampleRate = sampleRate;
         _channels = channels;
-        _maxFrameSize = sampleRate * 120 / 1000; // 120ms max
+        _maxFrameSize = sampleRate * MaxFrameDurationMs / 1000;
         _shortBuffer = new short[_maxFrameSize * channels];
         
         _decoder = OpusCodecFactory.CreateDecoder(sampleRate, channels);
@@ -33,6 +34,7 @@ public sealed class OpusDecoder : IAudioDecoder
     public int Channels => _channels;
     public int MaxFrameSize => _maxFrameSize;
     public AudioCodec Codec => AudioCodec.Opus;
+    public bool IsInitialized => true; // Opus не требует отдельной инициализации
     
     public int Decode(ReadOnlySpan<byte> encodedData, Span<float> outputBuffer)
     {
@@ -73,8 +75,11 @@ public sealed class OpusDecoder : IAudioDecoder
         }
         catch
         {
-            outputBuffer[..(_channels * 960)].Clear();
-            return 960;
+            // Fallback: возвращаем тишину (960 samples = 20ms @ 48kHz)
+            const int fallbackSamples = 960;
+            int totalSamples = fallbackSamples * _channels;
+            outputBuffer[..Math.Min(totalSamples, outputBuffer.Length)].Clear();
+            return fallbackSamples;
         }
     }
     
@@ -82,15 +87,23 @@ public sealed class OpusDecoder : IAudioDecoder
     {
         const float scale = 1f / 32768f;
         int len = Math.Min(src.Length, dst.Length);
+        
         for (int i = 0; i < len; i++)
+        {
             dst[i] = src[i] * scale;
+        }
     }
     
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        
         _decoder.ResetState();
-        if (_decoder is IDisposable d) d.Dispose();
+        
+        if (_decoder is IDisposable d)
+        {
+            d.Dispose();
+        }
     }
 }

@@ -1,10 +1,10 @@
+using System.Buffers;
 using System.Buffers.Binary;
 
 namespace LMP.Core.Helpers;
 
 /// <summary>
 /// Парсер WebM/Matroska контейнера для извлечения OPUS пакетов.
-/// Поддерживает инкрементальный парсинг для стриминга.
 /// </summary>
 public sealed class WebMParser : IDisposable
 {
@@ -14,78 +14,83 @@ public sealed class WebMParser : IDisposable
     private const uint CLUSTER_ID = 0x1F43B675;
     private const uint SIMPLE_BLOCK_ID = 0xA3;
     private const uint BLOCK_GROUP_ID = 0xA0;
-    private const uint BLOCK_ID = 0xA1;
     private const uint TIMECODE_ID = 0xE7;
     private const uint INFO_ID = 0x1549A966;
     private const uint DURATION_ID = 0x4489;
     private const uint TIMECODE_SCALE_ID = 0x2AD7B1;
     private const uint TRACKS_ID = 0x1654AE6B;
     private const uint TRACK_ENTRY_ID = 0xAE;
+    private const uint TRACK_NUMBER_ID = 0xD7;
+    private const uint TRACK_TYPE_ID = 0x83;
+    private const uint CODEC_PRIVATE_ID = 0x63A2;
+    private const uint AUDIO_ID = 0xE1;
+    private const uint SAMPLING_FREQUENCY_ID = 0xB5;
+    private const uint CHANNELS_ID = 0x9F;
     private const uint CUES_ID = 0x1C53BB6B;
     private const uint CUE_POINT_ID = 0xBB;
     private const uint CUE_TIME_ID = 0xB3;
     private const uint CUE_TRACK_POSITIONS_ID = 0xB7;
     private const uint CUE_CLUSTER_POSITION_ID = 0xF1;
-    private const uint CODEC_ID = 0x86;
+    
+    // Lacing types
+    private const int LACING_NONE = 0;
+    private const int LACING_XIPH = 1;
+    private const int LACING_FIXED = 2;
+    private const int LACING_EBML = 3;
+    
+    private const long DEFAULT_TIMECODE_SCALE = 1_000_000; // 1ms в наносекундах
+    private const int ReadBufferSize = 64 * 1024;
     
     private readonly Stream _stream;
     private readonly byte[] _readBuffer;
-    private readonly List<CuePoint> _cuePoints = new();
+    private readonly List<CuePoint> _cuePoints = [];
     
     private long _segmentOffset;
     private long _currentClusterTimecode;
-    private long _timecodeScale = 1_000_000; // По умолчанию наносекунды
-    private long _duration; // В единицах timecodeScale
+    private long _timecodeScale = DEFAULT_TIMECODE_SCALE;
+    private long _duration;
+    private int _audioTrackNumber = 1;
+    private int _sampleRate;
+    private int _channels = 2;
+    private byte[]? _codecPrivate;
     private bool _headersParsed;
     
-    /// <summary>
-    /// Информация о точке поиска (cue point)
-    /// </summary>
     public readonly record struct CuePoint(long TimeMs, long ClusterOffset);
     
-    /// <summary>
-    /// Извлечённый аудио-блок
-    /// </summary>
     public readonly record struct AudioBlock(
         ReadOnlyMemory<byte> Data,
         long TimestampMs,
         bool IsKeyFrame
     );
     
-    public WebMParser(Stream stream, int bufferSize = 64 * 1024)
+    public WebMParser(Stream stream, int bufferSize = ReadBufferSize)
     {
         _stream = stream;
         _readBuffer = new byte[bufferSize];
     }
     
-    /// <summary>Длительность в миллисекундах</summary>
-    public long DurationMs => (long)(_duration * _timecodeScale / 1_000_000);
-    
-    /// <summary>Точки поиска для seeking</summary>
+    public long DurationMs => _duration * _timecodeScale / 1_000_000;
     public IReadOnlyList<CuePoint> CuePoints => _cuePoints;
+    public byte[]? CodecPrivate => _codecPrivate;
+    public int SampleRate => _sampleRate;
+    public int Channels => _channels;
     
-    /// <summary>
-    /// Парсит заголовки WebM файла.
-    /// </summary>
     public async ValueTask<bool> ParseHeadersAsync(CancellationToken ct = default)
     {
         if (_headersParsed) return true;
         
         try
         {
-            // Читаем EBML header
             var (id, size) = await ReadElementHeaderAsync(ct);
             if (id != EBML_ID) return false;
             
             await SkipBytesAsync(size, ct);
             
-            // Читаем Segment
             (id, size) = await ReadElementHeaderAsync(ct);
             if (id != SEGMENT_ID) return false;
             
             _segmentOffset = _stream.Position;
             
-            // Парсим элементы Segment до первого Cluster
             while (!ct.IsCancellationRequested)
             {
                 long elementStart = _stream.Position;
@@ -106,7 +111,6 @@ public sealed class WebMParser : IDisposable
                         break;
                     
                     case CLUSTER_ID:
-                        // Вернуться к началу Cluster для последующего чтения
                         if (_stream.CanSeek)
                         {
                             _stream.Position = elementStart;
@@ -131,35 +135,37 @@ public sealed class WebMParser : IDisposable
         }
     }
     
-    /// <summary>
-    /// Читает следующий аудио-блок из потока.
-    /// </summary>
     public async ValueTask<AudioBlock?> ReadNextBlockAsync(CancellationToken ct = default)
     {
         while (!ct.IsCancellationRequested)
         {
             var (id, size) = await ReadElementHeaderAsync(ct);
             
-            if (id == 0) return null; // EOF
+            if (id == 0) return null;
             
             switch (id)
             {
                 case CLUSTER_ID:
-                    // Cluster не имеет фиксированного размера в streaming режиме
                     continue;
                 
                 case TIMECODE_ID:
-                    var timecodeData = new byte[size];
-                    await ReadExactAsync(timecodeData, ct);
-                    _currentClusterTimecode = ReadVInt(timecodeData);
+                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt вместо ReadVInt! ***
+                    var timecodeData = ArrayPool<byte>.Shared.Rent((int)size);
+                    try
+                    {
+                        await ReadExactAsync(timecodeData.AsMemory(0, (int)size), ct);
+                        _currentClusterTimecode = ReadUnsignedInt(timecodeData.AsSpan(0, (int)size));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(timecodeData);
+                    }
                     continue;
                 
                 case SIMPLE_BLOCK_ID:
                     return await ParseSimpleBlockAsync((int)size, ct);
                 
                 case BLOCK_GROUP_ID:
-                    // Block Group содержит Block и дополнительные элементы
-                    // Пропускаем для простоты, читаем как SimpleBlock
                     await SkipBytesAsync(size, ct);
                     continue;
                 
@@ -175,14 +181,10 @@ public sealed class WebMParser : IDisposable
         return null;
     }
     
-    /// <summary>
-    /// Ищет позицию ближайшего кластера для указанного времени.
-    /// </summary>
     public long? FindSeekPosition(long targetMs)
     {
         if (_cuePoints.Count == 0) return null;
         
-        // Бинарный поиск
         int low = 0, high = _cuePoints.Count - 1;
         
         while (low < high)
@@ -197,27 +199,186 @@ public sealed class WebMParser : IDisposable
         return _segmentOffset + _cuePoints[low].ClusterOffset;
     }
     
-    private async ValueTask<AudioBlock> ParseSimpleBlockAsync(int size, CancellationToken ct)
+    private async ValueTask<AudioBlock?> ParseSimpleBlockAsync(int size, CancellationToken ct)
     {
-        // Track Number (1-4 bytes variable)
-        int trackNumberSize = 1;
-        int trackNumber = await ReadByteAsync(ct);
+        if (size < 4) return null;
         
-        // Timecode offset (2 bytes, signed)
-        var timecodeOffsetData = new byte[2];
-        await ReadExactAsync(timecodeOffsetData, ct);
-        short timecodeOffset = BinaryPrimitives.ReadInt16BigEndian(timecodeOffsetData);
+        // Track Number — это VINT (используем ReadVInt!)
+        int trackNumberByte = await ReadByteAsync(ct);
+        if (trackNumberByte < 0) return null;
+        
+        int trackNumberLength = GetVIntLength((byte)trackNumberByte);
+        
+        long trackNumber;
+        if (trackNumberLength == 1)
+        {
+            trackNumber = trackNumberByte & 0x7F; // VINT mask для 1 байта
+        }
+        else
+        {
+            var trackBytes = ArrayPool<byte>.Shared.Rent(trackNumberLength);
+            try
+            {
+                trackBytes[0] = (byte)trackNumberByte;
+                await ReadExactAsync(trackBytes.AsMemory(1, trackNumberLength - 1), ct);
+                trackNumber = ReadVInt(trackBytes.AsSpan(0, trackNumberLength));
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(trackBytes);
+            }
+        }
+        
+        // Timecode offset (2 bytes, signed big-endian)
+        var timecodeBytes = ArrayPool<byte>.Shared.Rent(2);
+        short timecodeOffset;
+        try
+        {
+            await ReadExactAsync(timecodeBytes.AsMemory(0, 2), ct);
+            timecodeOffset = BinaryPrimitives.ReadInt16BigEndian(timecodeBytes);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(timecodeBytes);
+        }
         
         // Flags (1 byte)
         int flags = await ReadByteAsync(ct);
-        bool isKeyFrame = (flags & 0x80) != 0;
+        if (flags < 0) return null;
         
-        // Остальное - аудио данные
-        int dataSize = size - trackNumberSize - 2 - 1;
+        bool isKeyFrame = (flags & 0x80) != 0;
+        int lacingType = (flags >> 1) & 0x03;
+        
+        int headerSize = trackNumberLength + 2 + 1;
+        int dataSize = size - headerSize;
+        
+        if (dataSize <= 0) return null;
+        
+        // Skip non-audio tracks
+        if (trackNumber != _audioTrackNumber)
+        {
+            await SkipBytesAsync(dataSize, ct);
+            return null;
+        }
+        
+        // Handle lacing
+        if (lacingType != LACING_NONE)
+        {
+            return await ParseLacedBlockAsync(dataSize, lacingType, timecodeOffset, isKeyFrame, ct);
+        }
+        
+        // No lacing
         var audioData = new byte[dataSize];
         await ReadExactAsync(audioData, ct);
         
-        long timestampMs = _currentClusterTimecode + timecodeOffset;
+        // Конвертируем в миллисекунды
+        long timestampMs = (_currentClusterTimecode + timecodeOffset) * _timecodeScale / 1_000_000;
+        
+        return new AudioBlock(audioData, timestampMs, isKeyFrame);
+    }
+    
+    private async ValueTask<AudioBlock?> ParseLacedBlockAsync(
+        int dataSize, int lacingType, short timecodeOffset, bool isKeyFrame, CancellationToken ct)
+    {
+        int frameCount = await ReadByteAsync(ct);
+        if (frameCount < 0) return null;
+        frameCount++;
+        
+        dataSize--;
+        
+        int firstFrameSize;
+        int bytesToSkip;
+        
+        switch (lacingType)
+        {
+            case LACING_XIPH:
+                firstFrameSize = 0;
+                int totalSizeBytes = 0;
+                
+                while (true)
+                {
+                    int b = await ReadByteAsync(ct);
+                    if (b < 0) return null;
+                    totalSizeBytes++;
+                    firstFrameSize += b;
+                    if (b < 255) break;
+                }
+                
+                for (int i = 1; i < frameCount - 1; i++)
+                {
+                    while (true)
+                    {
+                        int b = await ReadByteAsync(ct);
+                        if (b < 0) return null;
+                        totalSizeBytes++;
+                        if (b < 255) break;
+                    }
+                }
+                
+                bytesToSkip = dataSize - totalSizeBytes - firstFrameSize;
+                break;
+            
+            case LACING_FIXED:
+                firstFrameSize = dataSize / frameCount;
+                bytesToSkip = dataSize - firstFrameSize;
+                break;
+            
+            case LACING_EBML:
+                int vintByte = await ReadByteAsync(ct);
+                if (vintByte < 0) return null;
+                
+                int vintLength = GetVIntLength((byte)vintByte);
+                
+                if (vintLength == 1)
+                {
+                    firstFrameSize = vintByte & 0x7F;
+                }
+                else
+                {
+                    var vintBytes = ArrayPool<byte>.Shared.Rent(vintLength);
+                    try
+                    {
+                        vintBytes[0] = (byte)vintByte;
+                        await ReadExactAsync(vintBytes.AsMemory(1, vintLength - 1), ct);
+                        firstFrameSize = (int)ReadVInt(vintBytes.AsSpan(0, vintLength));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(vintBytes);
+                    }
+                }
+                
+                int skipVintBytes = 0;
+                for (int i = 1; i < frameCount - 1; i++)
+                {
+                    int b = await ReadByteAsync(ct);
+                    if (b < 0) return null;
+                    int len = GetVIntLength((byte)b);
+                    skipVintBytes++;
+                    if (len > 1)
+                    {
+                        await SkipBytesAsync(len - 1, ct);
+                        skipVintBytes += len - 1;
+                    }
+                }
+                
+                bytesToSkip = dataSize - vintLength - skipVintBytes - firstFrameSize;
+                break;
+            
+            default:
+                await SkipBytesAsync(dataSize, ct);
+                return null;
+        }
+        
+        var audioData = new byte[firstFrameSize];
+        await ReadExactAsync(audioData, ct);
+        
+        if (bytesToSkip > 0)
+        {
+            await SkipBytesAsync(bytesToSkip, ct);
+        }
+        
+        long timestampMs = (_currentClusterTimecode + timecodeOffset) * _timecodeScale / 1_000_000;
         
         return new AudioBlock(audioData, timestampMs, isKeyFrame);
     }
@@ -233,15 +394,30 @@ public sealed class WebMParser : IDisposable
             switch (id)
             {
                 case TIMECODE_SCALE_ID:
-                    var scaleData = new byte[elementSize];
-                    await ReadExactAsync(scaleData, ct);
-                    _timecodeScale = ReadVInt(scaleData);
+                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    var scaleData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(scaleData.AsMemory(0, (int)elementSize), ct);
+                        _timecodeScale = ReadUnsignedInt(scaleData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(scaleData);
+                    }
                     break;
                 
                 case DURATION_ID:
-                    var durationData = new byte[elementSize];
-                    await ReadExactAsync(durationData, ct);
-                    _duration = (long)ReadFloat(durationData);
+                    var durationData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(durationData.AsMemory(0, (int)elementSize), ct);
+                        _duration = (long)ReadFloat(durationData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(durationData);
+                    }
                     break;
                 
                 default:
@@ -253,9 +429,126 @@ public sealed class WebMParser : IDisposable
     
     private async ValueTask ParseTracksAsync(long size, CancellationToken ct)
     {
-        // Для простоты пропускаем детальный парсинг треков
-        // В production версии нужно извлечь codec info
-        await SkipBytesAsync(size, ct);
+        long endPosition = _stream.Position + size;
+        
+        while (_stream.Position < endPosition)
+        {
+            var (id, elementSize) = await ReadElementHeaderAsync(ct);
+            
+            if (id == TRACK_ENTRY_ID)
+            {
+                await ParseTrackEntryAsync(elementSize, ct);
+            }
+            else
+            {
+                await SkipBytesAsync(elementSize, ct);
+            }
+        }
+    }
+    
+    private async ValueTask ParseTrackEntryAsync(long size, CancellationToken ct)
+    {
+        long endPosition = _stream.Position + size;
+        int trackNumber = 0;
+        int trackType = 0;
+        
+        while (_stream.Position < endPosition)
+        {
+            var (id, elementSize) = await ReadElementHeaderAsync(ct);
+            
+            switch (id)
+            {
+                case TRACK_NUMBER_ID:
+                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    var numData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(numData.AsMemory(0, (int)elementSize), ct);
+                        trackNumber = (int)ReadUnsignedInt(numData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(numData);
+                    }
+                    break;
+                
+                case TRACK_TYPE_ID:
+                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    var typeData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(typeData.AsMemory(0, (int)elementSize), ct);
+                        trackType = (int)ReadUnsignedInt(typeData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(typeData);
+                    }
+                    break;
+                
+                case CODEC_PRIVATE_ID:
+                    _codecPrivate = new byte[elementSize];
+                    await ReadExactAsync(_codecPrivate, ct);
+                    break;
+                
+                case AUDIO_ID:
+                    await ParseAudioSettingsAsync(elementSize, ct);
+                    break;
+                
+                default:
+                    await SkipBytesAsync(elementSize, ct);
+                    break;
+            }
+        }
+        
+        if (trackType == 2 && trackNumber > 0)
+        {
+            _audioTrackNumber = trackNumber;
+        }
+    }
+    
+    private async ValueTask ParseAudioSettingsAsync(long size, CancellationToken ct)
+    {
+        long endPosition = _stream.Position + size;
+        
+        while (_stream.Position < endPosition)
+        {
+            var (id, elementSize) = await ReadElementHeaderAsync(ct);
+            
+            switch (id)
+            {
+                case SAMPLING_FREQUENCY_ID:
+                    var freqData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(freqData.AsMemory(0, (int)elementSize), ct);
+                        _sampleRate = (int)ReadFloat(freqData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(freqData);
+                    }
+                    break;
+                
+                case CHANNELS_ID:
+                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    var chData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(chData.AsMemory(0, (int)elementSize), ct);
+                        _channels = (int)ReadUnsignedInt(chData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(chData);
+                    }
+                    break;
+                
+                default:
+                    await SkipBytesAsync(elementSize, ct);
+                    break;
+            }
+        }
     }
     
     private async ValueTask ParseCuesAsync(long size, CancellationToken ct)
@@ -294,9 +587,17 @@ public sealed class WebMParser : IDisposable
             switch (id)
             {
                 case CUE_TIME_ID:
-                    var timeData = new byte[elementSize];
-                    await ReadExactAsync(timeData, ct);
-                    time = ReadVInt(timeData);
+                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    var timeData = ArrayPool<byte>.Shared.Rent((int)elementSize);
+                    try
+                    {
+                        await ReadExactAsync(timeData.AsMemory(0, (int)elementSize), ct);
+                        time = ReadUnsignedInt(timeData.AsSpan(0, (int)elementSize));
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(timeData);
+                    }
                     break;
                 
                 case CUE_TRACK_POSITIONS_ID:
@@ -306,9 +607,17 @@ public sealed class WebMParser : IDisposable
                         var (posId, posSize) = await ReadElementHeaderAsync(ct);
                         if (posId == CUE_CLUSTER_POSITION_ID)
                         {
-                            var posData = new byte[posSize];
-                            await ReadExactAsync(posData, ct);
-                            clusterPosition = ReadVInt(posData);
+                            // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                            var posData = ArrayPool<byte>.Shared.Rent((int)posSize);
+                            try
+                            {
+                                await ReadExactAsync(posData.AsMemory(0, (int)posSize), ct);
+                                clusterPosition = ReadUnsignedInt(posData.AsSpan(0, (int)posSize));
+                            }
+                            finally
+                            {
+                                ArrayPool<byte>.Shared.Return(posData);
+                            }
                         }
                         else
                         {
@@ -332,31 +641,50 @@ public sealed class WebMParser : IDisposable
         int firstByte = await ReadByteAsync(ct);
         if (firstByte < 0) return (0, 0);
         
-        // Parse VINT ID
+        // ID — это VINT (с маркерным битом)
         int idLength = GetVIntLength((byte)firstByte);
-        var idBytes = new byte[idLength];
-        idBytes[0] = (byte)firstByte;
-        if (idLength > 1)
+        var idBytes = ArrayPool<byte>.Shared.Rent(idLength);
+        uint id;
+        try
         {
-            await ReadExactAsync(idBytes.AsMemory(1, idLength - 1), ct);
+            idBytes[0] = (byte)firstByte;
+            if (idLength > 1)
+            {
+                await ReadExactAsync(idBytes.AsMemory(1, idLength - 1), ct);
+            }
+            // ID читаем КАК ЕСТЬ (включая маркер), это Element ID
+            id = (uint)ReadUnsignedInt(idBytes.AsSpan(0, idLength));
         }
-        uint id = (uint)ReadVIntRaw(idBytes);
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(idBytes);
+        }
         
-        // Parse VINT Size
         firstByte = await ReadByteAsync(ct);
         if (firstByte < 0) return (0, 0);
         
+        // Size — это VINT (маркер показывает длину, сам маркер убираем)
         int sizeLength = GetVIntLength((byte)firstByte);
-        var sizeBytes = new byte[sizeLength];
-        sizeBytes[0] = (byte)firstByte;
-        if (sizeLength > 1)
+        var sizeBytes = ArrayPool<byte>.Shared.Rent(sizeLength);
+        long size;
+        try
         {
-            await ReadExactAsync(sizeBytes.AsMemory(1, sizeLength - 1), ct);
+            sizeBytes[0] = (byte)firstByte;
+            if (sizeLength > 1)
+            {
+                await ReadExactAsync(sizeBytes.AsMemory(1, sizeLength - 1), ct);
+            }
+            size = ReadVInt(sizeBytes.AsSpan(0, sizeLength));
         }
-        long size = ReadVInt(sizeBytes);
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(sizeBytes);
+        }
         
         return (id, size);
     }
+    
+    #region Read Helpers
     
     private static int GetVIntLength(byte firstByte)
     {
@@ -370,7 +698,11 @@ public sealed class WebMParser : IDisposable
         return 8;
     }
     
-    private static long ReadVIntRaw(ReadOnlySpan<byte> data)
+    /// <summary>
+    /// Читает unsigned integer (big-endian), без снятия маркерного бита.
+    /// Используется для data elements (Timecode, TrackNumber и т.д.)
+    /// </summary>
+    private static long ReadUnsignedInt(ReadOnlySpan<byte> data)
     {
         long value = 0;
         foreach (byte b in data)
@@ -380,11 +712,14 @@ public sealed class WebMParser : IDisposable
         return value;
     }
     
+    /// <summary>
+    /// Читает VINT Size, снимая маркерный бит.
+    /// Используется ТОЛЬКО для element size в headers.
+    /// </summary>
     private static long ReadVInt(ReadOnlySpan<byte> data)
     {
         if (data.Length == 0) return 0;
         
-        // Убираем маркерный бит
         int length = GetVIntLength(data[0]);
         byte mask = (byte)(0xFF >> length);
         
@@ -442,9 +777,10 @@ public sealed class WebMParser : IDisposable
         }
     }
     
+    #endregion
+    
     public void Dispose()
     {
-        // Stream управляется внешним кодом
         GC.SuppressFinalize(this);
     }
 }

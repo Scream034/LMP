@@ -9,10 +9,13 @@ namespace LMP.Core.Audio.Parsers;
 public sealed class WebMContainerParser : IContainerParser
 {
     private readonly WebMParser _parser;
+    private bool _disposed;
     
     public long DurationMs => _parser.DurationMs;
     public AudioCodec Codec => AudioCodec.Opus;
-    public byte[]? DecoderConfig => null; // Opus не требует explicit config
+    public byte[]? DecoderConfig => _parser.CodecPrivate;
+    public int SampleRate => _parser.SampleRate > 0 ? _parser.SampleRate : 48000;
+    public int Channels => _parser.Channels > 0 ? _parser.Channels : 2;
     
     public WebMContainerParser(Stream stream)
     {
@@ -48,11 +51,19 @@ public sealed class WebMContainerParser : IContainerParser
     
     public void Reset()
     {
-        // WebMParser doesn't have explicit reset
+        // WebMParser stateless between clusters
     }
     
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _parser.Dispose();
+    }
+    
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 }

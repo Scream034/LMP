@@ -1,21 +1,24 @@
-// Core/Audio/Sources/CachingStreamSource.cs
-
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net;
 using LMP.Core.Audio.Cache;
+using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
 
 namespace LMP.Core.Audio.Sources;
 
 /// <summary>
-/// Источник с полной поддержкой кэширования.
+/// Источник с полной поддержкой disk-кэширования.
 /// </summary>
 public sealed class CachingStreamSource : IAudioSource
 {
     private const int ChunkSize = 256 * 1024;
     private const int MaxConcurrentDownloads = 4;
     private const int DownloadTimeoutMs = 15000;
+    private const int InitialChunksToLoad = 4;
+    private const int PreloadAheadChunks = 8;
+    private const int MaxRamChunks = 32;
     
     private readonly string _trackId;
     private readonly string _url;
@@ -27,7 +30,7 @@ public sealed class CachingStreamSource : IAudioSource
     
     private CacheEntry? _cacheEntry;
     private IContainerParser? _parser;
-    private Stream? _readStream;
+    private AsyncCachingReadStream? _readStream;
     
     private readonly ConcurrentDictionary<int, byte[]> _ramChunks = new();
     private readonly ConcurrentDictionary<int, Task> _activeDownloads = new();
@@ -40,13 +43,16 @@ public sealed class CachingStreamSource : IAudioSource
     private volatile bool _disposed;
     private volatile bool _isOfflineMode;
     
-    private CancellationTokenSource? _downloadCts;
+    private CancellationTokenSource? _operationCts;
     private Task? _preloadTask;
     
     public long DurationMs => _parser?.DurationMs ?? _cacheEntry?.DurationMs ?? -1;
-    public long PositionMs => Interlocked.Read(ref _positionMs);
+    public long PositionMs => Volatile.Read(ref _positionMs);
     public bool CanSeek => true;
     public AudioCodec Codec { get; private set; }
+    public byte[]? DecoderConfig => _parser?.DecoderConfig;
+    public int SampleRate => _parser?.SampleRate ?? 0;
+    public int Channels => _parser?.Channels ?? 0;
     
     public double BufferProgress => _cacheEntry?.DownloadProgress ?? 0;
     public bool IsFullyBuffered => _cacheEntry?.IsComplete ?? false;
@@ -89,7 +95,7 @@ public sealed class CachingStreamSource : IAudioSource
                 return await InitializeFromCacheAsync(ct);
             }
             
-            // Создаём запись кэша
+            // Создаём или получаем запись кэша
             _cacheEntry = _cacheManager.CreateOrUpdate(
                 _trackId, _url, _contentLength, _format,
                 AudioSourceFactory.GetCodecForFormat(_format));
@@ -99,15 +105,17 @@ public sealed class CachingStreamSource : IAudioSource
                 Log.Info($"[CachingSource] Resuming: {_cacheEntry.DownloadedChunks}/{_cacheEntry.TotalChunks} chunks");
             }
             
-            _downloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             
             // Загружаем начальные чанки
-            for (int i = 0; i < Math.Min(4, _cacheEntry.TotalChunks); i++)
+            var initialTasks = new List<Task>();
+            for (int i = 0; i < Math.Min(InitialChunksToLoad, _cacheEntry.TotalChunks); i++)
             {
-                await EnsureChunkAsync(i, _downloadCts.Token);
+                initialTasks.Add(EnsureChunkAsync(i, _operationCts.Token));
             }
+            await Task.WhenAll(initialTasks);
             
-            _readStream = new CachingReadStream(this);
+            _readStream = new AsyncCachingReadStream(this);
             
             _parser = _format switch
             {
@@ -127,7 +135,8 @@ public sealed class CachingStreamSource : IAudioSource
             
             _initialized = true;
             
-            _preloadTask = Task.Run(() => PreloadLoopAsync(_downloadCts.Token));
+            // Запускаем фоновую предзагрузку
+            _preloadTask = Task.Run(() => PreloadLoopAsync(_operationCts.Token));
             
             Log.Info($"[CachingSource] Initialized: duration={DurationMs}ms, cached={_cacheEntry.DownloadProgress:F0}%");
             return true;
@@ -148,7 +157,8 @@ public sealed class CachingStreamSource : IAudioSource
             return await InitializeAsync(ct);
         }
         
-        _readStream = stream;
+        // Wrap в async stream
+        _readStream = new AsyncCachingReadStream(this, stream);
         
         _parser = _format switch
         {
@@ -182,11 +192,11 @@ public sealed class CachingStreamSource : IAudioSource
             if (frame == null)
                 return null;
             
-            Interlocked.Exchange(ref _positionMs, frame.Value.TimestampMs);
+            Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
             
-            if (!_isOfflineMode && _readStream is CachingReadStream crs)
+            if (!_isOfflineMode && _readStream != null)
             {
-                _currentChunk = (int)(crs.Position / ChunkSize);
+                _currentChunk = (int)(_readStream.Position / ChunkSize);
             }
             
             return frame;
@@ -216,9 +226,17 @@ public sealed class CachingStreamSource : IAudioSource
         
         if (!_isOfflineMode && _cacheEntry != null)
         {
+            var loadTasks = new List<Task>();
             for (int i = targetChunk; i < Math.Min(targetChunk + 3, _cacheEntry.TotalChunks); i++)
             {
-                await EnsureChunkAsync(i, ct);
+                if (!_cacheEntry.IsChunkDownloaded(i))
+                {
+                    loadTasks.Add(EnsureChunkAsync(i, ct));
+                }
+            }
+            if (loadTasks.Count > 0)
+            {
+                await Task.WhenAll(loadTasks);
             }
         }
         
@@ -226,7 +244,7 @@ public sealed class CachingStreamSource : IAudioSource
         _currentChunk = targetChunk;
         _parser.Reset();
         
-        Interlocked.Exchange(ref _positionMs, positionMs);
+        Volatile.Write(ref _positionMs, positionMs);
         
         return true;
     }
@@ -263,7 +281,7 @@ public sealed class CachingStreamSource : IAudioSource
     
     public void ReleaseRamBuffers()
     {
-        int current = _currentChunk;
+        int current = Volatile.Read(ref _currentChunk);
         
         foreach (var idx in _ramChunks.Keys.Where(i => Math.Abs(i - current) > 5).ToList())
         {
@@ -271,7 +289,7 @@ public sealed class CachingStreamSource : IAudioSource
         }
     }
     
-    public void CancelPendingOperations() => _downloadCts?.Cancel();
+    public void CancelPendingOperations() => _operationCts?.Cancel();
     
     #region Chunk Management
     
@@ -311,15 +329,16 @@ public sealed class CachingStreamSource : IAudioSource
             gotSlot = await _downloadSlots.WaitAsync(500, ct);
             if (!gotSlot) return;
             
+            // Double check after getting slot
+            if (_cacheEntry.IsChunkDownloaded(index)) return;
+            
             long start = (long)index * ChunkSize;
             long end = Math.Min(start + ChunkSize - 1, _contentLength - 1);
             
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(DownloadTimeoutMs);
             
-            using var request = new HttpRequestMessage(HttpMethod.Get, _currentUrl);
-            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, end);
-            
+            using var request = SharedHttpClient.CreateRangeRequest(_currentUrl, start, end);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             
             if (response.StatusCode == HttpStatusCode.Forbidden)
@@ -332,8 +351,25 @@ public sealed class CachingStreamSource : IAudioSource
             
             var data = await response.Content.ReadAsByteArrayAsync(cts.Token);
             
+            // Add to RAM cache
             _ramChunks.TryAdd(index, data);
-            await _cacheManager.WriteChunkAsync(_trackId, index, data, ct);
+            
+            // Write to disk cache
+            try
+            {
+                await _cacheManager.WriteChunkAsync(_trackId, index, data, ct);
+            }
+            catch (IOException ex)
+            {
+                Log.Warn($"[CachingSource] Disk write failed: {ex.Message}");
+                // Continue with RAM-only
+            }
+            
+            // Evict old RAM chunks
+            if (_ramChunks.Count > MaxRamChunks)
+            {
+                EvictOldRamChunks();
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -349,34 +385,50 @@ public sealed class CachingStreamSource : IAudioSource
         }
     }
     
-    internal async Task<int> ReadAtAsync(long position, byte[] buffer, int offset, int count, CancellationToken ct)
+    private void EvictOldRamChunks()
+    {
+        int current = Volatile.Read(ref _currentChunk);
+        
+        var toEvict = _ramChunks.Keys
+            .Where(i => Math.Abs(i - current) > 10)
+            .OrderByDescending(i => Math.Abs(i - current))
+            .Take(MaxRamChunks / 4)
+            .ToList();
+        
+        foreach (var idx in toEvict)
+        {
+            _ramChunks.TryRemove(idx, out _);
+        }
+    }
+    
+    internal async Task<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
     {
         if (position >= _contentLength) return 0;
         
         int chunkIndex = (int)(position / ChunkSize);
         int offsetInChunk = (int)(position % ChunkSize);
         
-        // RAM cache
+        // Try RAM cache first
         if (_ramChunks.TryGetValue(chunkIndex, out var ramData))
         {
-            int available = Math.Min(count, ramData.Length - offsetInChunk);
+            int available = Math.Min(buffer.Length, ramData.Length - offsetInChunk);
             if (available > 0)
             {
-                Buffer.BlockCopy(ramData, offsetInChunk, buffer, offset, available);
+                ramData.AsSpan(offsetInChunk, available).CopyTo(buffer.Span);
                 return available;
             }
         }
         
-        // Disk cache
+        // Try disk cache
         var diskData = await _cacheManager.ReadChunkAsync(_trackId, chunkIndex, ct);
         if (diskData != null)
         {
             _ramChunks.TryAdd(chunkIndex, diskData);
             
-            int available = Math.Min(count, diskData.Length - offsetInChunk);
+            int available = Math.Min(buffer.Length, diskData.Length - offsetInChunk);
             if (available > 0)
             {
-                Buffer.BlockCopy(diskData, offsetInChunk, buffer, offset, available);
+                diskData.AsSpan(offsetInChunk, available).CopyTo(buffer.Span);
                 return available;
             }
         }
@@ -386,10 +438,10 @@ public sealed class CachingStreamSource : IAudioSource
         
         if (_ramChunks.TryGetValue(chunkIndex, out ramData))
         {
-            int available = Math.Min(count, ramData.Length - offsetInChunk);
+            int available = Math.Min(buffer.Length, ramData.Length - offsetInChunk);
             if (available > 0)
             {
-                Buffer.BlockCopy(ramData, offsetInChunk, buffer, offset, available);
+                ramData.AsSpan(offsetInChunk, available).CopyTo(buffer.Span);
                 return available;
             }
         }
@@ -409,9 +461,10 @@ public sealed class CachingStreamSource : IAudioSource
             {
                 await Task.Delay(200, ct);
                 
-                int current = _currentChunk;
+                int current = Volatile.Read(ref _currentChunk);
                 
-                for (int i = 0; i < 8 && current + i < _cacheEntry.TotalChunks; i++)
+                // Preload ahead
+                for (int i = 0; i < PreloadAheadChunks && current + i < _cacheEntry.TotalChunks; i++)
                 {
                     int idx = current + i;
                     if (!_cacheEntry.IsChunkDownloaded(idx) && !_activeDownloads.ContainsKey(idx))
@@ -420,8 +473,8 @@ public sealed class CachingStreamSource : IAudioSource
                     }
                 }
                 
-                // Evict old RAM chunks
-                if (_ramChunks.Count > 32)
+                // Evict old RAM chunks periodically
+                if (_ramChunks.Count > MaxRamChunks)
                 {
                     ReleaseRamBuffers();
                 }
@@ -441,9 +494,13 @@ public sealed class CachingStreamSource : IAudioSource
             if (!string.IsNullOrEmpty(newUrl))
             {
                 _currentUrl = newUrl;
+                Log.Info("[CachingSource] URL refreshed");
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.Warn($"[CachingSource] URL refresh failed: {ex.Message}");
+        }
     }
     
     #endregion
@@ -455,8 +512,8 @@ public sealed class CachingStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
         
-        _downloadCts?.Cancel();
-        _downloadCts?.Dispose();
+        _operationCts?.Cancel();
+        _operationCts?.Dispose();
         _parser?.Dispose();
         _readStream?.Dispose();
         _ramChunks.Clear();
@@ -468,7 +525,7 @@ public sealed class CachingStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
         
-        _downloadCts?.Cancel();
+        _operationCts?.Cancel();
         
         if (_preloadTask != null)
         {
@@ -476,8 +533,11 @@ public sealed class CachingStreamSource : IAudioSource
             catch { }
         }
         
-        _downloadCts?.Dispose();
-        _parser?.Dispose();
+        _operationCts?.Dispose();
+        
+        if (_parser != null)
+            await _parser.DisposeAsync();
+        
         _readStream?.Dispose();
         _ramChunks.Clear();
         _downloadSlots.Dispose();
@@ -485,56 +545,101 @@ public sealed class CachingStreamSource : IAudioSource
     
     #endregion
     
-    #region CachingReadStream
+    #region AsyncCachingReadStream
     
-    private sealed class CachingReadStream : Stream
+    /// <summary>
+    /// Async read stream with caching support.
+    /// </summary>
+    private sealed class AsyncCachingReadStream : Stream
     {
-        private readonly CachingStreamSource _source;
+        private readonly CachingStreamSource? _source;
+        private readonly Stream? _fileStream;
         private long _position;
         
-        public CachingReadStream(CachingStreamSource source) => _source = source;
+        public AsyncCachingReadStream(CachingStreamSource source)
+        {
+            _source = source;
+        }
+        
+        public AsyncCachingReadStream(CachingStreamSource source, Stream fileStream)
+        {
+            _source = source;
+            _fileStream = fileStream;
+        }
         
         public override bool CanRead => true;
         public override bool CanSeek => true;
         public override bool CanWrite => false;
-        public override long Length => _source._contentLength;
+        public override long Length => _fileStream?.Length ?? _source?._contentLength ?? 0;
         
         public override long Position
         {
-            get => _position;
-            set => _position = value;
+            get => _fileStream?.Position ?? Volatile.Read(ref _position);
+            set
+            {
+                if (_fileStream != null)
+                    _fileStream.Position = value;
+                else
+                    Volatile.Write(ref _position, value);
+            }
         }
         
         public override int Read(byte[] buffer, int offset, int count)
         {
-            int read = _source.ReadAtAsync(_position, buffer, offset, count, CancellationToken.None)
-                .GetAwaiter().GetResult();
-            _position += read;
-            return read;
+            return ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
         }
         
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
         {
-            int read = await _source.ReadAtAsync(_position, buffer, offset, count, ct);
-            _position += read;
+            return await ReadAsync(buffer.AsMemory(offset, count), ct);
+        }
+        
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (_fileStream != null)
+            {
+                return await _fileStream.ReadAsync(buffer, ct);
+            }
+            
+            if (_source == null) return 0;
+            
+            long pos = Volatile.Read(ref _position);
+            int read = await _source.ReadAtAsync(pos, buffer, ct);
+            Volatile.Write(ref _position, pos + read);
             return read;
         }
         
         public override long Seek(long offset, SeekOrigin origin)
         {
-            _position = origin switch
+            if (_fileStream != null)
+            {
+                return _fileStream.Seek(offset, origin);
+            }
+            
+            long length = _source?._contentLength ?? 0;
+            long newPos = origin switch
             {
                 SeekOrigin.Begin => offset,
-                SeekOrigin.Current => _position + offset,
-                SeekOrigin.End => _source._contentLength + offset,
-                _ => _position
+                SeekOrigin.Current => Volatile.Read(ref _position) + offset,
+                SeekOrigin.End => length + offset,
+                _ => Volatile.Read(ref _position)
             };
-            return _position;
+            Volatile.Write(ref _position, newPos);
+            return newPos;
         }
         
         public override void Flush() { }
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _fileStream?.Dispose();
+            }
+            base.Dispose(disposing);
+        }
     }
     
     #endregion

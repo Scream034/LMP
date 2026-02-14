@@ -1,5 +1,3 @@
-// Core/Audio/Cache/AudioCacheManager.cs
-
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,16 +10,21 @@ namespace LMP.Core.Audio.Cache;
 /// <summary>
 /// Менеджер кэша аудио файлов.
 /// </summary>
-public sealed class AudioCacheManager : IDisposable
+public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 {
+    private const string MetadataFileName = "cache_index.json";
+    private const string AudioExtension = ".audio";
+    private const int AutoSaveIntervalMs = 30000;
+    private const int SaveLockTimeoutMs = 100;
+    
     private readonly string _cacheDirectory;
     private readonly long _maxCacheSize;
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
     private readonly SemaphoreSlim _saveLock = new(1, 1);
-    private readonly Timer _autoSaveTimer;
+    private readonly CancellationTokenSource _timerCts = new();
+    private readonly Task _autoSaveTask;
     
-    private const string MetadataFileName = "cache_index.json";
-    private const string AudioExtension = ".audio";
+    private volatile bool _disposed;
     
     public AudioCacheManager(string? cacheDirectory = null, long maxCacheSizeMb = 2048)
     {
@@ -34,17 +37,13 @@ public sealed class AudioCacheManager : IDisposable
         Directory.CreateDirectory(_cacheDirectory);
         LoadIndex();
         
-        // Автосохранение каждые 30 секунд
-        _autoSaveTimer = new Timer(_ => _ = SaveIndexAsync(), null, 30000, 30000);
+        _autoSaveTask = AutoSaveLoopAsync(_timerCts.Token);
         
         Log.Info($"[AudioCache] Initialized: {_cacheDirectory}, max={maxCacheSizeMb}MB, entries={_entries.Count}");
     }
     
     #region Public API
     
-    /// <summary>
-    /// Проверяет, полностью ли закэширован трек.
-    /// </summary>
     public bool IsFullyCached(string trackId)
     {
         if (!_entries.TryGetValue(trackId, out var entry))
@@ -61,39 +60,24 @@ public sealed class AudioCacheManager : IDisposable
         return fileInfo.Length >= entry.TotalSize;
     }
     
-    /// <summary>
-    /// Алиас для IsFullyCached.
-    /// </summary>
     public bool HasFullCache(string trackId) => IsFullyCached(trackId);
     
-    /// <summary>
-    /// Проверяет наличие частичного кэша.
-    /// </summary>
     public bool HasPartialCache(string trackId)
     {
         return _entries.TryGetValue(trackId, out var entry) && entry.DownloadedChunks > 0;
     }
     
-    /// <summary>
-    /// Получает информацию о кэше.
-    /// </summary>
     public CacheEntry? GetCacheInfo(string trackId)
     {
         return _entries.TryGetValue(trackId, out var entry) ? entry : null;
     }
     
-    /// <summary>
-    /// Получает путь к файлу кэша.
-    /// </summary>
     public string GetCachePath(string trackId)
     {
         var safeId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trackId)))[..16];
         return Path.Combine(_cacheDirectory, safeId + AudioExtension);
     }
     
-    /// <summary>
-    /// Обновляет время последнего доступа.
-    /// </summary>
     public void Touch(string trackId)
     {
         if (_entries.TryGetValue(trackId, out var entry))
@@ -102,9 +86,6 @@ public sealed class AudioCacheManager : IDisposable
         }
     }
     
-    /// <summary>
-    /// Создаёт или обновляет запись кэша.
-    /// </summary>
     public CacheEntry CreateOrUpdate(
         string trackId,
         string url,
@@ -128,7 +109,6 @@ public sealed class AudioCacheManager : IDisposable
             LastAccessedAt = DateTime.UtcNow
         });
         
-        // Обновляем если уже существует
         entry.OriginalUrl = url;
         entry.LastAccessedAt = DateTime.UtcNow;
         
@@ -138,9 +118,6 @@ public sealed class AudioCacheManager : IDisposable
         return entry;
     }
     
-    /// <summary>
-    /// Алиас для CreateOrUpdate.
-    /// </summary>
     public CacheEntry GetOrCreateEntry(
         string trackId,
         string url,
@@ -148,13 +125,10 @@ public sealed class AudioCacheManager : IDisposable
         AudioFormat format,
         int chunkSize = 256 * 1024)
     {
-        return CreateOrUpdate(trackId, url, totalSize, format, 
+        return CreateOrUpdate(trackId, url, totalSize, format,
             AudioSourceFactory.GetCodecForFormat(format), -1, chunkSize);
     }
     
-    /// <summary>
-    /// Помечает кэш как полностью загруженный.
-    /// </summary>
     public void MarkComplete(string trackId, long? durationMs = null)
     {
         if (_entries.TryGetValue(trackId, out var entry))
@@ -171,9 +145,6 @@ public sealed class AudioCacheManager : IDisposable
         }
     }
     
-    /// <summary>
-    /// Записывает чанк на диск.
-    /// </summary>
     public async Task WriteChunkAsync(string trackId, int chunkIndex, byte[] data, CancellationToken ct = default)
     {
         if (!_entries.TryGetValue(trackId, out var entry))
@@ -198,7 +169,6 @@ public sealed class AudioCacheManager : IDisposable
             entry.MarkChunkDownloaded(chunkIndex);
             entry.LastAccessedAt = DateTime.UtcNow;
             
-            // Проверяем завершённость
             if (entry.DownloadedChunks >= entry.TotalChunks)
             {
                 entry.IsComplete = true;
@@ -212,9 +182,6 @@ public sealed class AudioCacheManager : IDisposable
         }
     }
     
-    /// <summary>
-    /// Читает чанк с диска.
-    /// </summary>
     public async Task<byte[]?> ReadChunkAsync(string trackId, int chunkIndex, CancellationToken ct = default)
     {
         if (!_entries.TryGetValue(trackId, out var entry))
@@ -265,9 +232,6 @@ public sealed class AudioCacheManager : IDisposable
         }
     }
     
-    /// <summary>
-    /// Открывает стрим для полностью закэшированного файла.
-    /// </summary>
     public Stream? OpenCachedStream(string trackId)
     {
         if (!IsFullyCached(trackId))
@@ -285,9 +249,6 @@ public sealed class AudioCacheManager : IDisposable
             bufferSize: 65536);
     }
     
-    /// <summary>
-    /// Удаляет кэш трека.
-    /// </summary>
     public void RemoveCache(string trackId)
     {
         if (_entries.TryRemove(trackId, out _))
@@ -304,9 +265,6 @@ public sealed class AudioCacheManager : IDisposable
         }
     }
     
-    /// <summary>
-    /// Очищает старый кэш.
-    /// </summary>
     public async Task CleanupAsync(CancellationToken ct = default)
     {
         long totalSize = 0;
@@ -349,9 +307,6 @@ public sealed class AudioCacheManager : IDisposable
         Log.Info($"[AudioCache] Removed {toRemove.Count} old entries");
     }
     
-    /// <summary>
-    /// Статистика кэша.
-    /// </summary>
     public CacheStats GetStats()
     {
         long totalSize = 0;
@@ -421,7 +376,9 @@ public sealed class AudioCacheManager : IDisposable
     
     private async Task SaveIndexAsync()
     {
-        if (!await _saveLock.WaitAsync(100))
+        if (_disposed) return;
+        
+        if (!await _saveLock.WaitAsync(SaveLockTimeoutMs))
             return;
         
         try
@@ -451,14 +408,82 @@ public sealed class AudioCacheManager : IDisposable
         }
     }
     
+    private async Task AutoSaveLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(AutoSaveIntervalMs, ct);
+                await SaveIndexAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[AudioCache] Auto-save error: {ex.Message}");
+            }
+        }
+    }
+    
     #endregion
+    
+    #region Dispose
     
     public void Dispose()
     {
-        _autoSaveTimer.Dispose();
-        SaveIndexAsync().GetAwaiter().GetResult();
+        if (_disposed) return;
+        _disposed = true;
+        
+        _timerCts.Cancel();
+        
+        try
+        {
+            _autoSaveTask.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Ignore
+        }
+        
+        try
+        {
+            SaveIndexAsync().Wait(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Ignore
+        }
+        
+        _timerCts.Dispose();
         _saveLock.Dispose();
     }
+    
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        
+        _timerCts.Cancel();
+        
+        try
+        {
+            await _autoSaveTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Ignore
+        }
+        
+        await SaveIndexAsync();
+        
+        _timerCts.Dispose();
+        _saveLock.Dispose();
+    }
+    
+    #endregion
 }
 
 /// <summary>
@@ -475,15 +500,20 @@ public sealed class CacheEntry
     public int ChunkSize { get; init; }
     public int TotalChunks { get; init; }
     
-    public int DownloadedChunks { get; set; }
+    // Используем backing field для Interlocked
+    private int _downloadedChunks;
+    
+    public int DownloadedChunks
+    {
+        get => Volatile.Read(ref _downloadedChunks);
+        set => Volatile.Write(ref _downloadedChunks, value);
+    }
+    
     public DateTime CreatedAt { get; init; }
     public DateTime LastAccessedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public bool IsComplete { get; set; }
     
-    /// <summary>
-    /// Сериализованная битовая маска (Base64).
-    /// </summary>
     public string? ChunkMaskData { get; set; }
     
     [JsonIgnore]
@@ -496,7 +526,7 @@ public sealed class CacheEntry
     {
         EnsureChunkBits();
         if (index < 0 || index >= TotalChunks) return false;
-        return (_chunkBits![index >> 5] & (1 << (index & 31))) != 0;
+        return (Volatile.Read(ref _chunkBits![index >> 5]) & (1 << (index & 31))) != 0;
     }
     
     public void MarkChunkDownloaded(int index)
@@ -507,10 +537,22 @@ public sealed class CacheEntry
         int word = index >> 5;
         int bit = 1 << (index & 31);
         
-        if ((_chunkBits![word] & bit) == 0)
+        int current = Volatile.Read(ref _chunkBits![word]);
+        if ((current & bit) == 0)
         {
-            _chunkBits[word] |= bit;
-            DownloadedChunks++;
+            // Атомарно устанавливаем бит
+            int original;
+            do
+            {
+                original = current;
+                current = Interlocked.CompareExchange(ref _chunkBits![word], original | bit, original);
+            } while (current != original);
+            
+            // Инкрементируем счётчик только если бит был установлен впервые
+            if ((original & bit) == 0)
+            {
+                Interlocked.Increment(ref _downloadedChunks);
+            }
         }
     }
     
@@ -535,12 +577,13 @@ public sealed class CacheEntry
             Buffer.BlockCopy(bytes, 0, _chunkBits!, 0, Math.Min(bytes.Length, _chunkBits!.Length * 4));
             
             // Пересчитываем количество загруженных чанков
-            DownloadedChunks = 0;
+            int count = 0;
             for (int i = 0; i < TotalChunks; i++)
             {
                 if (IsChunkDownloaded(i))
-                    DownloadedChunks++;
+                    count++;
             }
+            Volatile.Write(ref _downloadedChunks, count);
         }
         catch { }
     }

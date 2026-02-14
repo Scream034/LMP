@@ -4,11 +4,11 @@
     xmlns:mi="using:Material.Icons.Avalonia"
     x:Class="LMP.Features.Debug.DebugWindow"
     x:DataType="vm:DebugViewModel"
-    Title="Query Debugger" Width="800" Height="650"
+    Title="Query Debugger" Width="900" Height="750"
     Background="{DynamicResource BgPrimaryBrush}"
     WindowStartupLocation="CenterScreen">
 
-    <Grid RowDefinitions="Auto, Auto, Auto, *">
+    <Grid RowDefinitions="Auto, Auto, Auto, Auto, *">
         <!-- 1. Toolbar -->
         <Border Grid.Row="0" Background="{DynamicResource BgSecondaryBrush}" Padding="10">
             <StackPanel Orientation="Horizontal" Spacing="10">
@@ -75,18 +75,97 @@
                 </Button>
 
                 <Button Command="{Binding CheckVmLeaksCommand}"
-                    Background="#F44336" Foreground="White" Padding="12,8"
-                    ToolTip.Tip="Clear all memory caches">
+                    Background="#E91E63" Foreground="White" Padding="12,8"
+                    ToolTip.Tip="Check TrackVM cache for leaks">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <mi:MaterialIcon Kind="Memory" Width="16" Height="16" />
+                        <mi:MaterialIcon Kind="BugCheck" Width="16" Height="16" />
                         <TextBlock Text="Check VM Leaks" />
                     </StackPanel>
                 </Button>
             </StackPanel>
         </Border>
 
-        <!-- 4. Output Log -->
-        <Border Grid.Row="3" Margin="10"
+        <!-- 4. Audio Test Buttons (DEBUG only) -->
+        <Border Grid.Row="3" Background="{DynamicResource BgHighlightBrush}" Padding="10,8" Margin="10,5,10,0"
+                CornerRadius="6">
+            <StackPanel Spacing="8">
+                <!-- Row 1: Input -->
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <TextBlock Text="🎵 Audio Test:" VerticalAlignment="Center" FontWeight="Bold" 
+                        Foreground="{DynamicResource AccentBrush}" />
+                    <TextBox Text="{Binding AudioTestInput}" Width="280" 
+                        Watermark="YouTube URL or Video ID" VerticalAlignment="Center" />
+                    <TextBlock Text="Duration (sec):" VerticalAlignment="Center" />
+                    <NumericUpDown Value="{Binding AudioTestDuration}" Minimum="5" Maximum="60" 
+                        Width="80" VerticalAlignment="Center" />
+                </StackPanel>
+                
+                <!-- Row 2: Buttons -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Command="{Binding PlayYoutubeAudioCommand}"
+                        Background="#4CAF50" Foreground="White" Padding="12,8"
+                        IsEnabled="{Binding !IsAudioPlaying}"
+                        ToolTip.Tip="Play YouTube audio (no caching)">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <mi:MaterialIcon Kind="Play" Width="16" Height="16" />
+                            <TextBlock Text="Play (No Cache)" />
+                        </StackPanel>
+                    </Button>
+                    
+                    <Button Command="{Binding PlayYoutubeWithCacheCommand}"
+                        Background="#2196F3" Foreground="White" Padding="12,8"
+                        IsEnabled="{Binding !IsAudioPlaying}"
+                        ToolTip.Tip="Play YouTube audio with disk caching">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <mi:MaterialIcon Kind="PlayCircle" Width="16" Height="16" />
+                            <TextBlock Text="Play (With Cache)" />
+                        </StackPanel>
+                    </Button>
+                    
+                    <Button Command="{Binding StopAudioTestCommand}"
+                        Background="#f44336" Foreground="White" Padding="12,8"
+                        IsEnabled="{Binding IsAudioPlaying}"
+                        ToolTip.Tip="Stop current audio test">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <mi:MaterialIcon Kind="Stop" Width="16" Height="16" />
+                            <TextBlock Text="Stop" />
+                        </StackPanel>
+                    </Button>
+                    
+                    <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="4,0" />
+                    
+                    <Button Command="{Binding ShowCacheStatsCommand}"
+                        Background="#607D8B" Foreground="White" Padding="12,8"
+                        ToolTip.Tip="Show audio cache statistics">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <mi:MaterialIcon Kind="ChartBar" Width="16" Height="16" />
+                            <TextBlock Text="Cache Stats" />
+                        </StackPanel>
+                    </Button>
+                    
+                    <Button Command="{Binding ClearAudioCacheCommand}"
+                        Background="#795548" Foreground="White" Padding="12,8"
+                        ToolTip.Tip="Clear audio cache directory">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <mi:MaterialIcon Kind="FolderRemove" Width="16" Height="16" />
+                            <TextBlock Text="Clear Audio Cache" />
+                        </StackPanel>
+                    </Button>
+                    
+                    <Button Command="{Binding TestLocalFileCommand}"
+                        Background="#9E9E9E" Foreground="White" Padding="12,8"
+                        ToolTip.Tip="Test local audio file playback">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <mi:MaterialIcon Kind="FileMusic" Width="16" Height="16" />
+                            <TextBlock Text="Test Local File" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 5. Output Log -->
+        <Border Grid.Row="4" Margin="10"
             BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="1" CornerRadius="4">
             <ScrollViewer x:Name="LogScroller">
                 <SelectableTextBlock Text="{Binding LogOutput}"

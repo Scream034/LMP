@@ -1,5 +1,10 @@
+using System.Buffers;
+using System.Numerics;
+using System.Runtime.InteropServices;
 using LMP.Core.Audio.Backends;
+using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Decoders;
+using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
 using LMP.Core.Exceptions;
@@ -8,66 +13,81 @@ using LMP.Core.Helpers;
 namespace LMP.Core.Audio;
 
 /// <summary>
-/// Опции AudioPlayer.
+/// Опции конфигурации аудиоплеера.
 /// </summary>
 public sealed class AudioPlayerOptions
 {
+    /// <summary>Callback для обновления протухших ссылок (YouTube/CDN).</summary>
     public Func<string, CancellationToken, ValueTask<string?>>? UrlRefreshCallback { get; init; }
-    public TimeSpan PositionUpdateInterval { get; init; } = TimeSpan.FromMilliseconds(250);
+    
+    /// <summary>Интервал обновления события PositionChanged.</summary>
+    public TimeSpan PositionUpdateInterval { get; init; } = TimeSpan.FromMilliseconds(200);
+    
+    /// <summary>Максимальное количество попыток переподключения при разрыве сети.</summary>
     public int MaxRetryAttempts { get; init; } = 3;
+    
+    /// <summary>Задержка между попытками переподключения.</summary>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(1);
+    
+    /// <summary>Использовать NullBackend (без звука) для тестов или headless режима.</summary>
     public bool UseNullBackend { get; init; }
 }
 
 /// <summary>
-/// Координатор воспроизведения: source → decoder → backend.
+/// Высокопроизводительный аудио-плеер.
+/// Координирует работу Source -> Decoder -> Buffer -> Backend.
 /// </summary>
 public sealed class AudioPlayer : IAudioPlayer
 {
     #region Constants
 
-    private const int BufferSizeFrames = 48000 * 4; // ~4 seconds @ 48kHz
-    private const int MinBufferMs = 200;
+    private const int DefaultSampleRate = 48000;
+    private const int DefaultChannels = 2;
+    private const int BufferSizeSeconds = 2;     // 2 секунды PCM буфера (достаточно для стабильности)
+    private const int MinBufferMs = 500;         // Минимальный буфер для старта (0.5с)
+    private const int StopTimeoutMs = 2000;      // Таймаут ожидания остановки потоков
+    private const int DecoderBufferFrames = 8192;// Размер буфера декодирования (фреймов)
 
     #endregion
 
     #region Fields
 
     private readonly AudioPlayerOptions _options;
-    private readonly HttpClient _httpClient;
+    private readonly AudioCacheManager? _cacheManager;
+    private readonly SemaphoreSlim _stateLock = new(1, 1);
 
-    // Components
+    // Pipeline Components
     private IAudioSource? _source;
     private IAudioDecoder? _decoder;
     private IPlaybackBackend? _backend;
 
-    // PCM buffer
-    private readonly CircularBuffer<float> _pcmBuffer;
-    private readonly float[] _decodeBuffer;
+    // Data Buffers
+    private CircularBuffer<float>? _pcmBuffer;
+    private float[]? _decodeBuffer;
 
-    // State (volatile для 32-bit, Interlocked для 64-bit)
+    // State
     private volatile PlaybackState _state = PlaybackState.Stopped;
     private volatile float _volume = 1.0f;
     private volatile bool _disposed;
-
-    private long _positionMs;
+    
+    // Timekeeping
     private long _durationMs;
+    private long _playedSamples; // Количество семплов, переданных в backend (basis for Position)
 
+    // Context
     private string? _currentTrackId;
     private string? _currentUrl;
 
-    // Tasks
+    // Tasks & Timers
     private CancellationTokenSource? _playbackCts;
     private Task? _decoderTask;
     private Timer? _positionTimer;
-
-    // Sync
-    private readonly SemaphoreSlim _stateLock = new(1, 1);
 
     #endregion
 
     #region Properties
 
+    /// <inheritdoc />
     public float Volume
     {
         get => _volume;
@@ -75,12 +95,40 @@ public sealed class AudioPlayer : IAudioPlayer
         {
             _volume = Math.Clamp(value, 0f, 2f);
             if (_backend != null)
-                _backend.Volume = _volume;
+            {
+                // Передаем в backend громкость <= 1.0 (аппаратное/драйверное управление).
+                // Если volume > 1.0, усиление применяется программно в AudioCallback.
+                _backend.Volume = Math.Min(_volume, 1f);
+            }
         }
     }
 
-    public TimeSpan Position => TimeSpan.FromMilliseconds(Interlocked.Read(ref _positionMs));
-    public TimeSpan Duration => TimeSpan.FromMilliseconds(Interlocked.Read(ref _durationMs));
+    /// <inheritdoc />
+    public TimeSpan Position
+    {
+        get
+        {
+            if (_decoder == null || _decoder.SampleRate <= 0 || _backend == null)
+                return TimeSpan.Zero;
+
+            // Алгоритм точного времени:
+            // 1. Берем сколько всего семплов мы "скормили" бэкенду (_playedSamples).
+            // 2. Вычитаем то, что бэкенд еще держит в своем внутреннем буфере (BufferedSamples).
+            // 3. Получаем реальное количество семплов, ушедших на динамики.
+            
+            long totalWritten = Volatile.Read(ref _playedSamples);
+            int backendBuffered = _backend.BufferedSamples;
+            long heardSamples = Math.Max(0, totalWritten - backendBuffered);
+
+            double seconds = (double)heardSamples / (_decoder.SampleRate * _decoder.Channels);
+            return TimeSpan.FromSeconds(seconds);
+        }
+    }
+
+    /// <inheritdoc />
+    public TimeSpan Duration => TimeSpan.FromMilliseconds(Volatile.Read(ref _durationMs));
+
+    /// <inheritdoc />
     public PlaybackState State => _state;
 
     public double BufferProgress => _source?.BufferProgress ?? 0;
@@ -97,18 +145,15 @@ public sealed class AudioPlayer : IAudioPlayer
 
     #endregion
 
-    public AudioPlayer(AudioPlayerOptions? options = null)
+    public AudioPlayer(AudioPlayerOptions? options = null, AudioCacheManager? cacheManager = null)
     {
         _options = options ?? new AudioPlayerOptions();
-        _httpClient = CreateHttpClient();
-
-        // Buffer for ~4 seconds at 48kHz stereo
-        _pcmBuffer = new CircularBuffer<float>(BufferSizeFrames * 2);
-        _decodeBuffer = new float[48000 * 2]; // 1 second max
+        _cacheManager = cacheManager;
     }
 
-    #region Playback Control
+    #region Public Methods
 
+    /// <inheritdoc />
     public async Task PlayAsync(string url, string? trackId = null, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -116,6 +161,7 @@ public sealed class AudioPlayer : IAudioPlayer
         await _stateLock.WaitAsync(ct);
         try
         {
+            // Сброс предыдущего состояния
             await StopInternalAsync();
 
             _currentUrl = url;
@@ -123,33 +169,38 @@ public sealed class AudioPlayer : IAudioPlayer
 
             SetState(PlaybackState.Loading);
 
+            // Инициализация пайплайна
             await InitializePlaybackAsync(url, ct);
 
+            // Запуск декодера
             _playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            _decoderTask = Task.Run(() => DecoderLoopAsync(_playbackCts.Token));
+            _decoderTask = Task.Run(() => DecoderLoopAsync(_playbackCts.Token), _playbackCts.Token);
 
-            // Wait for buffer to fill
+            // Ожидание предварительной буферизации
+            SetState(PlaybackState.Buffering);
             await WaitForBufferAsync(_playbackCts.Token);
 
+            // Старт воспроизведения
             _backend!.Start();
 
-            // Правильный конструктор Timer
-            int intervalMs = (int)_options.PositionUpdateInterval.TotalMilliseconds;
+            // Таймер UI обновлений
             _positionTimer = new Timer(
-                callback: _ => UpdatePosition(),
-                state: null,
-                dueTime: 0,
-                period: intervalMs);
+                _ => PositionChanged?.Invoke(Position),
+                null,
+                0,
+                (int)_options.PositionUpdateInterval.TotalMilliseconds);
 
             SetState(PlaybackState.Playing);
-
-            Log.Info($"[AudioPlayer] Started: {trackId ?? "unknown"}");
+            Log.Info($"[AudioPlayer] Started track: {trackId ?? "unknown"}");
         }
         catch (Exception ex)
         {
             Log.Error($"[AudioPlayer] Play failed: {ex.Message}", ex);
             SetState(PlaybackState.Error);
             ErrorOccurred?.Invoke(ex);
+            
+            // Чистим ресурсы при ошибке старта
+            await StopInternalAsync();
             throw;
         }
         finally
@@ -158,69 +209,82 @@ public sealed class AudioPlayer : IAudioPlayer
         }
     }
 
+    /// <inheritdoc />
     public void Pause()
     {
         if (_state != PlaybackState.Playing) return;
-
         _backend?.Stop();
         SetState(PlaybackState.Paused);
-        Log.Debug("[AudioPlayer] Paused");
     }
 
+    /// <inheritdoc />
     public void Resume()
     {
         if (_state != PlaybackState.Paused) return;
-
         _backend?.Start();
         SetState(PlaybackState.Playing);
-        Log.Debug("[AudioPlayer] Resumed");
     }
 
+    /// <inheritdoc />
     public void Stop()
     {
         if (_state == PlaybackState.Stopped) return;
+        // Fire-and-forget, но безопасно
+        _ = StopAsync();
+    }
 
-        _stateLock.Wait();
+    /// <summary>
+    /// Асинхронная остановка с ожиданием завершения потоков.
+    /// </summary>
+    public async Task StopAsync()
+    {
+        if (_state == PlaybackState.Stopped) return;
+        
+        await _stateLock.WaitAsync();
         try
         {
-            StopInternalAsync().GetAwaiter().GetResult();
+            await StopInternalAsync();
         }
         finally
         {
             _stateLock.Release();
         }
-
         Log.Info("[AudioPlayer] Stopped");
     }
 
+    /// <inheritdoc />
     public async ValueTask SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_source == null || !_source.CanSeek)
-        {
-            Log.Warn("[AudioPlayer] Seek not supported");
-            return;
-        }
+        if (_source == null || !_source.CanSeek || _decoder == null) return;
 
         await _stateLock.WaitAsync(ct);
         try
         {
             var wasPlaying = _state == PlaybackState.Playing;
-
             SetState(PlaybackState.Buffering);
-            _backend?.Stop();
-            _pcmBuffer.Clear();
 
-            long positionMs = (long)position.TotalMilliseconds;
-            bool success = await _source.SeekAsync(positionMs, ct);
+            // 1. Останавливаем вывод звука и чистим буферы
+            _backend?.Stop();
+            _pcmBuffer?.Clear();
+
+            // 2. Выполняем seek на источнике
+            long posMs = (long)position.TotalMilliseconds;
+            bool success = await _source.SeekAsync(posMs, ct);
 
             if (success)
             {
-                Interlocked.Exchange(ref _positionMs, positionMs);
-                Log.Debug($"[AudioPlayer] Seeked to {positionMs}ms");
+                // 3. Атомарно обновляем счетчик семплов для корректного отображения времени
+                // Position = (PlayedSamples - Buffered) / Rate
+                // Устанавливаем PlayedSamples так, чтобы формула вернула запрошенное время
+                long newSampleCount = (long)(position.TotalSeconds * _decoder.SampleRate * _decoder.Channels);
+                Volatile.Write(ref _playedSamples, newSampleCount);
+
+                Log.Debug($"[AudioPlayer] Seeked to {posMs}ms");
             }
 
+            // 4. Возобновляем воспроизведение
             if (wasPlaying)
             {
                 await WaitForBufferAsync(ct);
@@ -231,6 +295,9 @@ public sealed class AudioPlayer : IAudioPlayer
             {
                 SetState(PlaybackState.Paused);
             }
+
+            // Мгновенное обновление UI
+            PositionChanged?.Invoke(position);
         }
         finally
         {
@@ -240,166 +307,237 @@ public sealed class AudioPlayer : IAudioPlayer
 
     #endregion
 
-    #region Internal
+    #region Internal Logic
 
     private async Task InitializePlaybackAsync(string url, CancellationToken ct)
     {
-        // Используем фабрику для создания источника
-        _source = await AudioSourceFactory.CreateAsync(
-            url,
-            _httpClient,
-            CreateUrlRefresher(),
-            _currentTrackId,
-            ct);
+        // 1. Создание источника (с кэшем или без)
+        if (_cacheManager != null && !string.IsNullOrEmpty(_currentTrackId))
+        {
+            _source = await AudioSourceFactory.CreateWithCacheAsync(
+                url, _currentTrackId, SharedHttpClient.Instance, _cacheManager, CreateUrlRefresher(), ct);
+        }
+        else
+        {
+            _source = await AudioSourceFactory.CreateAsync(
+                url, SharedHttpClient.Instance, CreateUrlRefresher(), _currentTrackId, ct);
+        }
 
         if (!await _source.InitializeAsync(ct))
             throw new AudioSourceException("Failed to initialize audio source");
 
-        // Создаём декодер на основе кодека источника
-        _decoder = _source.Codec switch
-        {
-            AudioCodec.Opus => new OpusDecoder(48000, 2),
-            AudioCodec.Aac => CreateAacDecoder(_source),
-            _ => throw new NotSupportedException($"Codec {_source.Codec} not supported")
-        };
+        // 2. Создание декодера
+        _decoder = CreateDecoder(_source);
+        Volatile.Write(ref _durationMs, _source.DurationMs);
 
-        Interlocked.Exchange(ref _durationMs, _source.DurationMs);
+        // 3. Создание буферов
+        // 2 секунды буфера достаточно для компенсации джиттера сети, не создавая большой задержки
+        int bufferSize = _decoder.SampleRate * _decoder.Channels * BufferSizeSeconds;
+        _pcmBuffer = new CircularBuffer<float>(bufferSize);
+        _decodeBuffer = ArrayPool<float>.Shared.Rent(DecoderBufferFrames * _decoder.Channels);
 
-        // Initialize backend
-        _backend = _options.UseNullBackend
-            ? new NullAudioBackend()
-            : new MiniaudioBackend();
-
+        // 4. Создание бэкенда
+        _backend = CreateBackend();
+        _backend.Volume = Math.Min(_volume, 1f);
+        
+        // Инициализация бэкенда с передачей callback-функции
         _backend.Initialize(_decoder.SampleRate, _decoder.Channels, AudioCallback);
-        _backend.Volume = _volume;
+
+        Log.Debug($"[AudioPlayer] Initialized: {_source.Codec} -> PCM {_decoder.SampleRate}Hz -> {_backend.Name}");
     }
 
-    private static AacDecoder CreateAacDecoder(IAudioSource source)
+    private IAudioDecoder CreateDecoder(IAudioSource source)
     {
-        var decoder = new AacDecoder();
+        int rate = source.SampleRate > 0 ? source.SampleRate : DefaultSampleRate;
+        int ch = source.Channels > 0 ? source.Channels : DefaultChannels;
 
-        // Получаем decoder config если есть
-        if (source is UniversalStreamSource universal)
+        return source.Codec switch
         {
-            // Parser может иметь decoder config
-            // TODO: Добавить свойство DecoderConfig в IAudioSource
-        }
-        else if (source is HlsStreamSource hls && hls.AudioSpecificConfig != null)
-        {
-            decoder.Initialize(hls.AudioSpecificConfig);
-        }
+            AudioCodec.Opus => new OpusDecoder(rate, ch),
+            AudioCodec.Aac => CreateAacDecoder(source, rate, ch),
+            _ => throw new NotSupportedException($"Codec {source.Codec} not supported")
+        };
+    }
 
-        return decoder;
+    private static AacDecoder CreateAacDecoder(IAudioSource source, int rate, int ch)
+    {
+        var dec = new AacDecoder(rate, ch);
+        if (source.DecoderConfig != null) dec.Initialize(source.DecoderConfig);
+        return dec;
+    }
+
+    private IPlaybackBackend CreateBackend()
+    {
+        if (_options.UseNullBackend) return new NullAudioBackend();
+        
+        try 
+        { 
+            return new NAudioBackend(); 
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioPlayer] NAudio init failed: {ex.Message}, falling back to NullBackend");
+            return new NullAudioBackend();
+        }
     }
 
     private async Task DecoderLoopAsync(CancellationToken ct)
     {
+        if (_source == null || _decoder == null || _pcmBuffer == null || _decodeBuffer == null) return;
+
         int retryCount = 0;
 
         try
         {
-            while (!ct.IsCancellationRequested && _source != null && _decoder != null)
+            while (!ct.IsCancellationRequested)
             {
-                // Wait for space in buffer
-                while (_pcmBuffer.Available < _decoder.MaxFrameSize * _decoder.Channels * 2)
+                // 1. Проверка места в буфере
+                // Если буфер полон, ждем. Используем Task.Delay для разгрузки CPU.
+                if (_pcmBuffer.Available < _decoder.MaxFrameSize * _decoder.Channels)
                 {
-                    await Task.Delay(5, ct);
+                    await Task.Delay(10, ct);
+                    continue;
                 }
 
+                // 2. Чтение фрейма
                 AudioFrame? frame;
                 try
                 {
                     frame = await _source.ReadFrameAsync(ct);
-                    retryCount = 0;
+                    retryCount = 0; // Сброс счетчика ошибок при успехе
                 }
                 catch (UrlExpiredException)
                 {
-                    if (await TryRefreshUrlAsync(ct))
-                        continue;
+                    if (await TryRefreshUrlAsync(ct)) continue;
                     throw;
                 }
-                catch (AudioSourceException) when (retryCount < _options.MaxRetryAttempts)
+                catch (Exception) when (retryCount++ < _options.MaxRetryAttempts)
                 {
-                    retryCount++;
-                    Log.Warn($"[AudioPlayer] Read error, retry {retryCount}");
+                    Log.Warn($"[AudioPlayer] Read retry {retryCount}/{_options.MaxRetryAttempts}");
                     await Task.Delay(_options.RetryDelay, ct);
                     continue;
                 }
 
+                // 3. Конец потока
                 if (frame == null)
                 {
-                    Log.Debug("[AudioPlayer] End of stream");
-
-                    // Wait for buffer to drain
+                    // Ждем пока буфер опустеет (доиграет)
                     while (!_pcmBuffer.IsEmpty && !ct.IsCancellationRequested)
                     {
                         await Task.Delay(50, ct);
                     }
-
                     OnTrackEnded();
-                    return;
+                    break;
                 }
 
-                // Decode
-                int samplesDecoded = _decoder.Decode(
-                    frame.Value.Data.Span,
-                    _decodeBuffer);
-
-                if (samplesDecoded > 0)
+                // 4. Декодирование
+                try
                 {
-                    int totalSamples = samplesDecoded * _decoder.Channels;
-                    _pcmBuffer.Write(_decodeBuffer.AsSpan(0, totalSamples));
-                    Interlocked.Exchange(ref _positionMs, frame.Value.TimestampMs);
+                    int samplesDecoded = _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
+                    
+                    if (samplesDecoded > 0)
+                    {
+                        _pcmBuffer.Write(_decodeBuffer.AsSpan(0, samplesDecoded * _decoder.Channels));
+                        // Примечание: Position не обновляется здесь, он зависит от AudioCallback
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[AudioPlayer] Decode frame failed: {ex.Message}");
+                    // Пропускаем битый фрейм
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // Normal cancellation
+            // Нормальная остановка
         }
         catch (Exception ex)
         {
-            Log.Error($"[AudioPlayer] Decoder error: {ex.Message}", ex);
-            ErrorOccurred?.Invoke(ex);
+            Log.Error($"[AudioPlayer] Decoder loop fatal error: {ex.Message}", ex);
             SetState(PlaybackState.Error);
+            ErrorOccurred?.Invoke(ex);
         }
     }
 
+    /// <summary>
+    /// Callback, вызываемый бэкендом (аудио-потоком) для получения PCM данных.
+    /// Критический путь: никаких аллокаций, блокировок или тяжелых операций.
+    /// </summary>
     private int AudioCallback(Span<float> buffer)
     {
-        if (_state != PlaybackState.Playing)
+        if (_state != PlaybackState.Playing || _pcmBuffer == null)
         {
             buffer.Clear();
             return 0;
         }
 
-        int samplesRead = _pcmBuffer.Read(buffer);
+        // Читаем данные из циклического буфера
+        int read = _pcmBuffer.Read(buffer);
 
-        // Apply volume
-        if (Math.Abs(_volume - 1.0f) > 0.001f)
+        if (read > 0)
         {
-            for (int i = 0; i < samplesRead; i++)
+            // Увеличиваем глобальный счетчик воспроизведенных семплов.
+            // Это основа для свойства Position.
+            Interlocked.Add(ref _playedSamples, read);
+
+            // Применяем программную громкость (SIMD оптимизация)
+            // Backend применяет Hardware Volume (<= 1.0), мы применяем Software Boost (> 1.0)
+            if (_volume > 1.0f)
             {
-                buffer[i] *= _volume;
+                ApplyVolumeSimd(buffer[..read], _volume);
             }
         }
 
-        // Clear remainder
-        if (samplesRead < buffer.Length)
+        // Заполняем остаток тишиной (для стабильности драйверов)
+        if (read < buffer.Length)
         {
-            buffer[samplesRead..].Clear();
+            buffer[read..].Clear();
         }
 
-        return samplesRead / 2; // Return frame count
+        // Возвращаем количество фреймов (семплы / каналы)
+        return read / (_decoder?.Channels ?? 2);
+    }
+
+    /// <summary>
+    /// Применяет громкость к буферу с использованием векторных инструкций (AVX/SSE).
+    /// </summary>
+    private static void ApplyVolumeSimd(Span<float> data, float volume)
+    {
+        int i = 0;
+        if (Vector.IsHardwareAccelerated)
+        {
+            var vecVol = new Vector<float>(volume);
+            var min = new Vector<float>(-1.0f);
+            var max = new Vector<float>(1.0f);
+            int vecSize = Vector<float>.Count;
+            
+            var span = MemoryMarshal.Cast<float, Vector<float>>(data);
+            for (int j = 0; j < span.Length; j++)
+            {
+                var v = span[j] * vecVol;
+                // Clamp значения между -1.0 и 1.0
+                v = Vector.Min(Vector.Max(v, min), max);
+                span[j] = v;
+            }
+            i = span.Length * vecSize;
+        }
+
+        // Обработка хвоста (или если SIMD недоступен)
+        for (; i < data.Length; i++)
+        {
+            data[i] = Math.Clamp(data[i] * volume, -1f, 1f);
+        }
     }
 
     private async Task WaitForBufferAsync(CancellationToken ct)
     {
-        if (_decoder == null) return;
+        if (_decoder == null || _pcmBuffer == null) return;
+        
+        // Ждем заполнения минимум 500мс или полной загрузки трека
+        int threshold = _decoder.SampleRate * _decoder.Channels * MinBufferMs / 1000;
 
-        int minSamples = _decoder.SampleRate * _decoder.Channels * MinBufferMs / 1000;
-
-        while (_pcmBuffer.Count < minSamples && !ct.IsCancellationRequested)
+        while (_pcmBuffer.Count < threshold && !ct.IsCancellationRequested && _source?.IsFullyBuffered == false)
         {
             await Task.Delay(10, ct);
         }
@@ -410,15 +548,13 @@ public sealed class AudioPlayer : IAudioPlayer
         if (_options.UrlRefreshCallback == null || string.IsNullOrEmpty(_currentTrackId))
             return false;
 
-        Log.Info($"[AudioPlayer] Refreshing URL for {_currentTrackId}");
-
         try
         {
             var newUrl = await _options.UrlRefreshCallback(_currentTrackId, ct);
             if (!string.IsNullOrEmpty(newUrl))
             {
                 _currentUrl = newUrl;
-                Log.Info("[AudioPlayer] URL refreshed");
+                Log.Info("[AudioPlayer] URL refreshed successfully");
                 return true;
             }
         }
@@ -426,7 +562,6 @@ public sealed class AudioPlayer : IAudioPlayer
         {
             Log.Warn($"[AudioPlayer] URL refresh failed: {ex.Message}");
         }
-
         return false;
     }
 
@@ -437,20 +572,7 @@ public sealed class AudioPlayer : IAudioPlayer
 
         var trackId = _currentTrackId;
         var callback = _options.UrlRefreshCallback;
-
-        return async ct =>
-        {
-            var result = await callback(trackId, ct);
-            return result;
-        };
-    }
-
-    private void UpdatePosition()
-    {
-        if (_state == PlaybackState.Playing || _state == PlaybackState.Paused)
-        {
-            PositionChanged?.Invoke(Position);
-        }
+        return ct => callback(trackId, ct).AsTask();
     }
 
     private async Task StopInternalAsync()
@@ -459,14 +581,13 @@ public sealed class AudioPlayer : IAudioPlayer
 
         if (_decoderTask != null)
         {
-            try { await _decoderTask.WaitAsync(TimeSpan.FromSeconds(2)); }
-            catch { /* ignore */ }
+            try { await _decoderTask.WaitAsync(TimeSpan.FromMilliseconds(StopTimeoutMs)); }
+            catch { /* Игнорируем ошибки ожидания */ }
         }
 
         _positionTimer?.Dispose();
         _positionTimer = null;
 
-        _backend?.Stop();
         _backend?.Dispose();
         _backend = null;
 
@@ -479,12 +600,21 @@ public sealed class AudioPlayer : IAudioPlayer
             _source = null;
         }
 
-        _pcmBuffer.Clear();
-        Interlocked.Exchange(ref _positionMs, 0);
-        Interlocked.Exchange(ref _durationMs, 0);
+        if (_decodeBuffer != null)
+        {
+            ArrayPool<float>.Shared.Return(_decodeBuffer);
+            _decodeBuffer = null;
+        }
+
+        _pcmBuffer = null; // GC соберет
+        
+        // Сброс счетчиков
+        Volatile.Write(ref _playedSamples, 0);
+        Volatile.Write(ref _durationMs, 0);
+        
         _currentTrackId = null;
         _currentUrl = null;
-
+        
         _playbackCts?.Dispose();
         _playbackCts = null;
         _decoderTask = null;
@@ -494,8 +624,11 @@ public sealed class AudioPlayer : IAudioPlayer
 
     private void OnTrackEnded()
     {
+        if (_state != PlaybackState.Stopped)
+        {
+            TrackEnded?.Invoke();
+        }
         SetState(PlaybackState.Stopped);
-        TrackEnded?.Invoke();
     }
 
     private void SetState(PlaybackState newState)
@@ -505,32 +638,6 @@ public sealed class AudioPlayer : IAudioPlayer
         StateChanged?.Invoke(newState);
     }
 
-    private async Task<long> GetContentLengthAsync(string url, CancellationToken ct)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            using var response = await _httpClient.SendAsync(request, ct);
-            return response.Content.Headers.ContentLength ?? -1;
-        }
-        catch
-        {
-            return -1;
-        }
-    }
-
-    private static HttpClient CreateHttpClient()
-    {
-        return new HttpClient(new SocketsHttpHandler
-        {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-            MaxConnectionsPerServer = 8
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        };
-    }
-
     #endregion
 
     #region Dispose
@@ -538,29 +645,22 @@ public sealed class AudioPlayer : IAudioPlayer
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
+        _disposed = true; // Fix CS0649
 
+        // Синхронный стоп
         Stop();
-        _httpClient.Dispose();
         _stateLock.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
-        _disposed = true;
+        _disposed = true; // Fix CS0649
 
-        await _stateLock.WaitAsync();
-        try
-        {
-            await StopInternalAsync();
-        }
-        finally
-        {
-            _stateLock.Release();
-            _httpClient.Dispose();
-            _stateLock.Dispose();
-        }
+        await StopAsync();
+        _stateLock.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     #endregion

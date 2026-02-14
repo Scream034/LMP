@@ -9,4 +9,10 @@ public partial class DebugWindow : Window
         InitializeComponent();
         DataContext = new DebugViewModel();
     }
+    
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        (DataContext as DebugViewModel)?.Dispose();
+    }
 }
