@@ -64,8 +64,36 @@ class Program
 #if AUDIO_TESTS
             _ = Task.Run(async () =>
             {
-                await Task.Delay(5000); // Подождать инициализации
-                await Core.Audio.Tests.AudioTests.RunAllAsync();
+                await Task.Delay(5000); // Ждём инициализации
+
+                var youtubeProvider = Services.GetRequiredService<YoutubeProvider>();
+
+                // ════════════════════════════════════════════════════════════════
+                // ВСТАВЬ СЮДА ЛЮБУЮ YOUTUBE ССЫЛКУ ИЛИ VIDEO ID
+                // ════════════════════════════════════════════════════════════════
+
+                await Core.Audio.Tests.QuickAudioTester.PlayAsync(
+                    "dQw4w9WgXcQ",  // Rick Astley - Never Gonna Give You Up
+                    youtubeProvider,
+                    seconds: 30     // Играть 30 секунд
+                ); 
+
+                // Или полная ссылка:
+                // await QuickAudioTester.PlayAsync(
+                //     "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                //     youtubeProvider,
+                //     seconds: 30
+                // );
+
+                // Или YouTube Music:
+                // await QuickAudioTester.PlayAsync(
+                //     "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+                //     youtubeProvider,
+                //     seconds: 30
+                // );
+
+                // Или локальный файл:
+                // await QuickAudioTester.PlayFileAsync(@"D:\Music\song.webm", seconds: 30);
             });
 #endif
 

@@ -1,0 +1,38 @@
+using LMP.Core.Audio.Interfaces;
+
+namespace LMP.Core.Audio.Parsers;
+
+/// <summary>
+/// Парсер контейнерного формата (WebM, MP4 и т.д.).
+/// </summary>
+public interface IContainerParser : IDisposable
+{
+    /// <summary>Длительность в миллисекундах.</summary>
+    long DurationMs { get; }
+    
+    /// <summary>Кодек аудио данных.</summary>
+    AudioCodec Codec { get; }
+    
+    /// <summary>Decoder-specific config (ASC для AAC, CodecPrivate для Opus).</summary>
+    byte[]? DecoderConfig { get; }
+    
+    /// <summary>
+    /// Парсит заголовки контейнера.
+    /// </summary>
+    ValueTask<bool> ParseHeadersAsync(CancellationToken ct = default);
+    
+    /// <summary>
+    /// Читает следующий аудио-фрейм.
+    /// </summary>
+    ValueTask<AudioFrame?> ReadNextFrameAsync(CancellationToken ct = default);
+    
+    /// <summary>
+    /// Находит позицию для seek.
+    /// </summary>
+    (long BytePosition, long TimestampMs)? FindSeekPosition(long targetMs);
+    
+    /// <summary>
+    /// Сбрасывает состояние парсера после seek.
+    /// </summary>
+    void Reset();
+}
