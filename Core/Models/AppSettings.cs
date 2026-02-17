@@ -16,6 +16,30 @@ public enum InternetProfile
     Ultra     // Максимальное кэширование / Локальная сеть
 }
 
+/// <summary>
+/// Тип кривой интерполяции громкости.
+/// </summary>
+public enum VolumeCurveType
+{
+    /// <summary>Линейная: volume = t</summary>
+    Linear,
+
+    /// <summary>Квадратичная: volume = t² (по умолчанию, перцептивно линейная)</summary>
+    Quadratic,
+
+    /// <summary>Логарифмическая: volume = log2(1 + t) / log2(2)</summary>
+    Logarithmic,
+
+    /// <summary>Кубическая: volume = t³</summary>
+    Cubic,
+
+    /// <summary>
+    /// "Скорость света": экспоненциальный рост в конце.
+    /// Формула: volume = (e^(t*2) - 1) / (e² - 1)
+    /// </summary>
+    SpeedOfLight
+}
+
 public sealed class ProxySettings
 {
     public bool Enabled { get; set; } = false;
@@ -56,6 +80,43 @@ public sealed class StorageSettings
     public bool AutoSaveToDownloads { get; set; } = false;
 }
 
+/// <summary>
+/// Настройки аудио системы.
+/// </summary>
+public sealed class AudioSettings
+{
+    /// <summary>
+    /// Включить boost громкости выше 100%.
+    /// Если false — MaxVolume просто увеличивает точность (больше шагов).
+    /// </summary>
+    public bool VolumeBoostEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Кривая интерполяции громкости.
+    /// </summary>
+    public VolumeCurveType VolumeCurve { get; set; } = VolumeCurveType.Quadratic;
+
+    /// <summary>
+    /// Плавное изменение громкости (fade при изменении).
+    /// </summary>
+    public bool SmoothVolumeEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Скорость плавного изменения громкости (мс на полный переход).
+    /// </summary>
+    public int SmoothVolumeDurationMs { get; set; } = 150;
+
+    /// <summary>
+    /// Нормализация громкости (выравнивание уровней между треками).
+    /// </summary>
+    public bool NormalizationEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Целевой уровень нормализации в LUFS.
+    /// </summary>
+    public float NormalizationTargetLufs { get; set; } = -14f;
+}
+
 public enum RepeatMode
 {
     None,
@@ -83,6 +144,11 @@ public sealed class AppSettings
     public float TargetGainDb { get; set; } = 0f;
     public AudioQualityPreference QualityPreference { get; set; } = AudioQualityPreference.BestAvailable;
     public bool RememberTrackFormat { get; set; } = true;
+
+    /// <summary>
+    /// Расширенные настройки аудио.
+    /// </summary>
+    public AudioSettings Audio { get; set; } = new();
 
     // === Network ===
     public InternetProfile InternetProfile { get; set; } = InternetProfile.Medium;

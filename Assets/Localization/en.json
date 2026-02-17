@@ -68,6 +68,45 @@
   "Search_NoLocalFiles": "No local files in library. Download some tracks or add local files.",
   "Search_OfflineMode": "Searching local library only",
 
+  "VolumeCurve_Linear": "Linear",
+  "VolumeCurve_Quadratic": "Quadratic (Recommended)",
+  "VolumeCurve_Logarithmic": "Logarithmic",
+  "VolumeCurve_Cubic": "Cubic",
+  "VolumeCurve_SpeedOfLight": "Speed of Light ⚡",
+  
+  "Settings_VolumeCurve": "Volume Curve",
+  "Settings_VolumeCurve_Desc": "How volume slider maps to actual loudness",
+  
+  "Settings_VolumeBoost": "Volume Boost",
+  "Settings_VolumeBoost_Tooltip": "Allow volume above 100%. When disabled, higher max volume only increases precision for fine-tuning.",
+  
+  "Settings_SmoothVolume": "Smooth Volume Changes",
+  "Settings_SmoothVolume_Tooltip": "Fade volume instead of instant changes. Prevents audio pops and clicks.",
+  
+  "Settings_AudioNormalization": "Audio Normalization",
+  "Settings_AudioNormalization_Tooltip": "Automatically balance volume levels between different tracks. May affect dynamics.",
+  
+  "Audio_VolumeSection": "🔊 Volume",
+  "Audio_ProcessingSection": "⚙️ Processing",
+  "Audio_QualitySection": "🎵 Quality",
+  
+  "Settings_RememberFormat": "Remember Track Format",
+  "Settings_RememberFormatDesc": "Save preferred audio format per track",
+  
+  "Settings_AudioQualityDesc": "Preferred streaming quality when available",
+  
+  "Settings_SmoothLoading": "Smooth Loading Animations",
+  "Settings_SmoothLoadingDesc": "Show smooth skeleton loaders instead of instant content",
+  
+  "General_AutoPasteDesc": "Automatically play when YouTube URL is pasted",
+  "General_DiscordDesc": "Show currently playing track in Discord status",
+  
+  "Settings_SearchCache": "Cache Search Results",
+  "Settings_SearchCacheDesc": "Store search results for faster repeated searches",
+  "Settings_SearchCacheTtl": "Cache Duration",
+  
+  "Settings_Playback": "Playback",
+
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",
   "Settings_Network": "Network & Streaming",
@@ -99,8 +138,6 @@
 
   "Settings_Audio": "Audio",
   "Settings_AudioQuality": "Quality",
-  "Settings_AudioQualityDesc": "Preferred audio format/bitrate.",
-  "Settings_RememberFormat": "Remember format per track",
   "Settings_SearchBatchSize": "Search batch size",
   "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
   "Settings_UserAgentDesc": "Insert the User-Agent from your browser to prevent cookie expiration.",

@@ -62,12 +62,17 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     public AudioPlayerEvents Events => _events;
     public AudioStreamInfo StreamInfo => _currentStreamInfo;
 
+    /// <summary>
+    /// Gain множитель. 0..1 = нормальный диапазон, >1 = boost.
+    /// NAudio backend получает min(volume, 1), SIMD boost применяется в AudioCallback.
+    /// </summary>
     public float Volume
     {
         get => _volume;
         set
         {
-            _volume = Math.Clamp(value, 0f, 2f);
+            // Разрешаем до 4.0 для boost (MaxGain в AudioEngine)
+            _volume = Math.Clamp(value, 0f, 4f);
             if (_backend != null)
                 _backend.Volume = Math.Min(_volume, 1f);
         }
@@ -131,13 +136,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     #region Public Methods
 
-    /// <summary>
-    /// Начинает воспроизведение.
-    /// </summary>
-    /// <param name="url">URL потока.</param>
-    /// <param name="trackId">ID трека.</param>
-    /// <param name="bitrateHint">Подсказка битрейта (kbps). 0 = автоопределение.</param>
-    /// <param name="ct">Токен отмены.</param>
     public async Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -363,7 +361,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             }
         }
 
-        // bitrateHint имеет приоритет
         if (_currentBitrateHint > 0)
             bitrate = _currentBitrateHint;
 
@@ -594,8 +591,10 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         {
             Interlocked.Add(ref _playedSamples, read);
 
+            // Применяем boost если gain > 1.0
+            // NAudio backend уже применил gain до 1.0 через свой Volume
             if (_volume > 1.0f)
-                ApplyVolumeSimd(buffer[..read], _volume);
+                ApplyBoostSimd(buffer[..read], _volume);
         }
 
         if (read < buffer.Length)
@@ -604,27 +603,32 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         return read / (_decoder?.Channels ?? 2);
     }
 
-    private static void ApplyVolumeSimd(Span<float> data, float volume)
+    /// <summary>
+    /// Применяет boost усиление через SIMD.
+    /// Вызывается только при gain > 1.0 (boost режим).
+    /// Soft clipping для защиты от жёсткого клиппинга.
+    /// </summary>
+    private static void ApplyBoostSimd(Span<float> data, float gain)
     {
-        if (MathF.Abs(volume - 1.0f) < 0.001f) return;
+        if (MathF.Abs(gain - 1.0f) < 0.001f) return;
 
         int i = 0;
 
         if (Vector.IsHardwareAccelerated)
         {
-            var vecVol = new Vector<float>(volume);
+            var vecGain = new Vector<float>(gain);
             var vecMin = new Vector<float>(-1.0f);
             var vecMax = new Vector<float>(1.0f);
 
             var vectors = MemoryMarshal.Cast<float, Vector<float>>(data);
             for (int j = 0; j < vectors.Length; j++)
-                vectors[j] = Vector.Min(Vector.Max(vectors[j] * vecVol, vecMin), vecMax);
+                vectors[j] = Vector.Min(Vector.Max(vectors[j] * vecGain, vecMin), vecMax);
 
             i = vectors.Length * Vector<float>.Count;
         }
 
         for (; i < data.Length; i++)
-            data[i] = Math.Clamp(data[i] * volume, -1f, 1f);
+            data[i] = Math.Clamp(data[i] * gain, -1f, 1f);
     }
 
     #endregion

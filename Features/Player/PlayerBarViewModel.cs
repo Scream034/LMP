@@ -28,6 +28,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int CopyHighlightDurationMs = 800;
     private const int PositionUpdateThrottleMs = 50;
     private const int BufferUpdateIntervalMs = 300;
+    private const int TrackResetVisualDelayMs = 150;
 
     #endregion
 
@@ -57,6 +58,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private int _lastVolumeBeforeMute = 50;
 
+    private WeakReference<PlayerBarView>? _viewRef;
+
     #endregion
 
     #region Properties - Playback State
@@ -68,14 +71,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool HasTrack { get; private set; }
     [Reactive] public bool IsLiked { get; private set; }
     [Reactive] public bool IsNavigating { get; private set; }
+    [Reactive] public bool IsTrackResetting { get; private set; }
 
-    /// <summary>Заголовок трека или placeholder.</summary>
     public string SafeTitle => CurrentTrack?.Title ?? L["Player_NotPlaying"];
-
-    /// <summary>Автор трека.</summary>
     public string SafeAuthor => CurrentTrack?.Author ?? "";
-
-    /// <summary>URL миниатюры.</summary>
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
 
     #endregion
@@ -86,7 +85,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public int TotalTracksInQueue { get; private set; }
     [Reactive] public bool HasQueueToShuffle { get; private set; }
 
-    /// <summary>Отображаемый номер трека (1-based).</summary>
     public string CurrentTrackIndexDisplay => (CurrentTrackIndex + 1).ToString();
 
     #endregion
@@ -104,25 +102,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Buffer Progress
 
-    /// <summary>
-    /// Прогресс буферизации в процентах (0-100).
-    /// </summary>
     [Reactive] public double BufferProgressPercent { get; private set; }
-
-    /// <summary>
-    /// Закэшированные диапазоны для отрисовки сегментов.
-    /// Формат: список (startPercent, endPercent) от 0 до 1.
-    /// </summary>
     [Reactive] public IReadOnlyList<(double Start, double End)> BufferedRanges { get; private set; } = [];
-
-    /// <summary>
-    /// Использовать сегментную визуализацию (для прерывистого кэша).
-    /// </summary>
     public bool UseSegmentedBuffer => BufferedRanges.Count > 1;
-
-    /// <summary>
-    /// Трек полностью закэширован.
-    /// </summary>
     [Reactive] public bool IsFullyBuffered { get; private set; }
 
     #endregion
@@ -134,22 +116,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool IsVolumePopupOpen { get; set; }
     [Reactive] public bool IsVolumePreviewVisible { get; set; }
 
-    /// <summary>Громкость выключена.</summary>
     public bool IsMuted => Volume < 1;
-
-    /// <summary>Низкая громкость (1-33%).</summary>
     public bool IsVolumeLow => Volume >= 1 && Volume <= 33;
-
-    /// <summary>Средняя громкость (34-66%).</summary>
     public bool IsVolumeMedium => Volume > 33 && Volume <= 66;
-
-    /// <summary>Высокая громкость (67-100%).</summary>
     public bool IsVolumeHigh => Volume > 66 && Volume <= 100;
-
-    /// <summary>Усиленная громкость (&gt;100%).</summary>
     public bool IsVolumeBoosted => Volume > 100;
 
-    /// <summary>Кисть для отображения процента громкости.</summary>
     public IBrush VolumePercentBrush
     {
         get
@@ -161,17 +133,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
             {
                 if (app.Resources.TryGetResource("SystemWarnOrangeBrush", app.ActualThemeVariant, out var warnBrush)
                     && warnBrush is IBrush warn)
-                {
                     return warn;
-                }
                 return new SolidColorBrush(Color.Parse("#FFB86C"));
             }
 
             if (app.Resources.TryGetResource("TextPrimaryBrush", app.ActualThemeVariant, out var textBrush)
                 && textBrush is IBrush text)
-            {
                 return text;
-            }
             return Brushes.White;
         }
     }
@@ -182,7 +150,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     [Reactive] public bool ShuffleEnabled { get; private set; }
     [Reactive] public RepeatMode RepeatMode { get; set; }
-
     [Reactive] public bool IsRepeatHintVisible { get; private set; }
     [Reactive] public string RepeatHintText { get; private set; } = "";
 
@@ -192,7 +159,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     [Reactive] public bool IsLikeHintVisible { get; private set; }
     [Reactive] public string LikeHintText { get; private set; } = "";
-
     [Reactive] public bool IsCopyHintVisible { get; private set; }
     [Reactive] public bool IsCopyHighlighted { get; private set; }
 
@@ -204,28 +170,20 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
 
-    /// <summary>Доступные форматы потока.</summary>
     public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 
     #endregion
 
     #region Properties - Tooltips
 
-    /// <summary>Тултип кнопки Shuffle.</summary>
     public string ShuffleTooltip => L.Get("Player_Shuffle", "Shuffle");
-
-    /// <summary>Тултип кнопки Previous.</summary>
     public string PreviousTooltip => L.Get("Player_Previous", "Previous");
-
-    /// <summary>Тултип кнопки Next.</summary>
     public string NextTooltip => L.Get("Player_Next", "Next");
 
-    /// <summary>Тултип кнопки Play/Pause.</summary>
     public string PlayPauseTooltip => IsPlaying
         ? L.Get("Player_Pause", "Pause")
         : L.Get("Player_Play", "Play");
 
-    /// <summary>Тултип кнопки Repeat.</summary>
     public string RepeatTooltip => RepeatMode switch
     {
         RepeatMode.None => L.Get("Player_Repeat_Off", "Repeat Off"),
@@ -234,34 +192,27 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _ => ""
     };
 
-    /// <summary>Тултип кнопки Like.</summary>
     public string LikeTooltip => IsLiked
         ? L.Get("Track_Unlike", "Remove from Liked")
         : L.Get("Track_Like", "Add to Liked");
 
-    /// <summary>Тултип кнопки Copy.</summary>
     public string CopyTooltip => L.Get("Track_CopyLink", "Copy Link");
 
-    /// <summary>Тултип кнопки Mute.</summary>
     public string MuteTooltip => IsMuted
         ? L.Get("Player_Unmute", "Unmute")
         : L.Get("Player_Mute", "Mute");
 
-    /// <summary>Тултип номера трека: "Трек X из Y".</summary>
     public string TrackNumberTooltip => string.Format(
         L.Get("Player_TrackNumber", "Track {0} of {1}"),
         CurrentTrackIndex + 1,
         TotalTracksInQueue);
 
-    /// <summary>Тултип длительности.</summary>
     public string DurationTooltip
     {
         get
         {
             if (IsLoading || DurationSeconds <= 0)
-            {
                 return L.Get("Player_Loading_Duration", "Loading duration...");
-            }
 
             string posStr = FormatTime(Position);
             string durStr = FormatTime(Duration);
@@ -315,7 +266,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
 
         // ИНИЦИАЛИЗАЦИЯ ИЗ НАСТРОЕК
-
         Observable.FromEvent(
             h => _library.OnInitialized += h,
             h => _library.OnInitialized -= h)
@@ -325,7 +275,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         // AUDIO ENGINE EVENTS
-
         Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
             h => (p, u) => h((p, u)),
             h => _audio.OnPlaybackStateChanged += h,
@@ -345,10 +294,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => UpdateQueueState())
             .DisposeWith(Disposables);
 
-        // Throttle position updates для экономии CPU
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
             h => _audio.OnPositionChanged += h,
             h => _audio.OnPositionChanged -= h)
+            .Where(_ => !_isSuspended)
             .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(pos =>
@@ -360,9 +309,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                     this.RaisePropertyChanged(nameof(DurationTooltip));
                 }
                 if (IsSeekBusy && !IsLoading)
-                {
                     IsSeekBusy = false;
-                }
             })
             .DisposeWith(Disposables);
 
@@ -387,7 +334,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(UpdateStreamInfo)
             .DisposeWith(Disposables);
 
-        // BUFFER PROGRESS — через событие, не через интервал
         Observable.FromEvent<Action<BufferState>, BufferState>(
                 h => _audio.OnBufferStateChanged += h,
                 h => _audio.OnBufferStateChanged -= h)
@@ -398,7 +344,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         // CACHE & LIBRARY EVENTS
-
         Observable.FromEvent<Action<string, string, int, bool>, (string, string, int, bool)>(
             h => (t, c, b, d) => h((t, c, b, d)),
             h => _cacheManager.OnFormatCached += h,
@@ -420,7 +365,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         // VOLUME BINDING
-
         this.WhenAnyValue(x => x.Volume)
             .Subscribe(v =>
             {
@@ -428,9 +372,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 RaiseVolumePropertiesChanged();
 
                 if (_isInitialized && v > 0)
-                {
                     _library.UpdateSettings(s => s.LastVolume = v);
-                }
             })
             .DisposeWith(Disposables);
 
@@ -442,7 +384,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => this.RaisePropertyChanged(nameof(LikeTooltip)))
             .DisposeWith(Disposables);
 
-        // Обновляем тултипы при изменении индекса/количества
         this.WhenAnyValue(x => x.CurrentTrackIndex, x => x.TotalTracksInQueue)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(TrackNumberTooltip)))
             .DisposeWith(Disposables);
@@ -460,7 +401,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         // TIMERS
-
         _fallbackPositionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _fallbackPositionTimer.Tick += (_, _) => FallbackPositionUpdate();
         _fallbackPositionTimer.Start();
@@ -470,7 +410,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _speedUpdateTimer.Start();
 
         // NAVIGATION SUBJECTS
-
         _nextSubject
             .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -492,7 +431,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         // COMMANDS
-
         var canNavigate = this.WhenAnyValue(x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
             (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
 
@@ -547,6 +485,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
             if (IsMuted)
             {
                 int restoreVolume = _lastVolumeBeforeMute > 0 ? _lastVolumeBeforeMute : 50;
+                // Ограничиваем восстанавливаемую громкость текущим MaxVolume
+                restoreVolume = Math.Min(restoreVolume, MaxVolume);
                 Volume = restoreVolume;
                 Log.Debug($"[PlayerBar] Unmuted, restored volume: {restoreVolume}");
             }
@@ -585,23 +525,24 @@ public sealed class PlayerBarViewModel : ViewModelBase
             if (option == null) return;
             foreach (var f in AvailableFormats) f.IsActive = false;
             option.IsActive = true;
+
+            BeginTrackReset();
+
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
         }));
+    }
+
+    internal void RegisterView(PlayerBarView view)
+    {
+        _viewRef = new WeakReference<PlayerBarView>(view);
     }
 
     #endregion
 
     #region Buffer Progress
 
-    /// <summary>
-    /// Обрабатывает обновление состояния буфера от AudioEngine.
-    /// </summary>
     private void HandleBufferStateChanged(BufferState state)
     {
-        Log.Debug($"[PlayerBarVM] HandleBufferStateChanged: progress={state.Progress:F1}%, " +
-                  $"ranges={state.Ranges.Count}, suspended={_isSuspended}");
-
-        // Если трек загружен локально — всегда 100%
         if (CurrentTrack?.IsDownloaded == true)
         {
             if (!IsFullyBuffered)
@@ -617,25 +558,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
         BufferProgressPercent = state.Progress;
         IsFullyBuffered = state.IsFullyBuffered;
 
-        // Обновляем ranges только если они реально изменились
         var newRanges = state.Ranges;
 
         if (!RangesEqual(BufferedRanges, newRanges))
         {
-            Log.Debug($"[PlayerBarVM] Updating BufferedRanges: {newRanges.Count} ranges");
             BufferedRanges = newRanges;
             this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
-            this.RaisePropertyChanged(nameof(BufferedRanges)); // Явно!
+            this.RaisePropertyChanged(nameof(BufferedRanges));
         }
-        else
-        {
-            Log.Debug("[PlayerBarVM] Ranges unchanged, skipping update");
-        }
+
+        if (IsTrackResetting && newRanges.Count > 0 && state.Progress > 0)
+            EndTrackReset();
     }
 
-    /// <summary>
-    /// Сравнивает два списка диапазонов для предотвращения лишних перерисовок.
-    /// </summary>
     private static bool RangesEqual(
         IReadOnlyList<(double Start, double End)> a,
         IReadOnlyList<(double Start, double End)> b)
@@ -645,20 +580,14 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         for (int i = 0; i < a.Count; i++)
         {
-            // Используем epsilon для сравнения double
             if (Math.Abs(a[i].Start - b[i].Start) > 0.001 ||
                 Math.Abs(a[i].End - b[i].End) > 0.001)
-            {
                 return false;
-            }
         }
 
         return true;
     }
 
-    /// <summary>
-    /// Принудительное обновление буфера (для resume и т.д.).
-    /// </summary>
     private void ForceUpdateBufferProgress()
     {
         if (!HasTrack || CurrentTrack == null) return;
@@ -677,6 +606,29 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
 
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
+    }
+
+    #endregion
+
+    #region Track Reset Visual
+
+    private void BeginTrackReset()
+    {
+        IsTrackResetting = true;
+
+        BufferProgressPercent = 0;
+        BufferedRanges = [];
+        IsFullyBuffered = false;
+        Position = TimeSpan.Zero;
+        PositionSeconds = 0;
+
+        this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
+    }
+
+    private async void EndTrackReset()
+    {
+        await Task.Delay(TrackResetVisualDelayMs);
+        IsTrackResetting = false;
     }
 
     #endregion
@@ -728,7 +680,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         RaiseVolumePropertiesChanged();
         UpdateQueueState();
 
-        Log.Info($"[PlayerBar] Initialized from settings: MaxVol={MaxVolume}, Vol={Volume}, Repeat={RepeatMode}, Shuffle={ShuffleEnabled}");
+        Log.Info($"[PlayerBar] Initialized from settings: MaxVol={MaxVolume}, Vol={Volume}");
     }
 
     #endregion
@@ -790,9 +742,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                     (int)f.Bitrate == cached.Bitrate);
 
                 if (!f.IsDownloaded)
-                {
                     f.IsDownloaded = _cacheManager.IsFormatCached(CurrentTrack.Id, f.Container, (int)f.Bitrate);
-                }
 
                 f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
                              (int)f.Bitrate == currentBitrate;
@@ -825,9 +775,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
 
         if (!found && AvailableFormats.Count > 0)
-        {
             _ = LoadFormatsAsync();
-        }
     }
 
     #endregion
@@ -881,15 +829,16 @@ public sealed class PlayerBarViewModel : ViewModelBase
         int oldMax = MaxVolume;
         MaxVolume = newMax;
 
+        // Пересчитываем текущую громкость
         if (Volume > MaxVolume)
         {
             Volume = MaxVolume;
+            Log.Info($"[PlayerBar] Volume clamped from {Volume} to {MaxVolume}");
         }
 
+        // Пересчитываем сохранённую громкость для mute/unmute
         if (_lastVolumeBeforeMute > MaxVolume)
-        {
             _lastVolumeBeforeMute = MaxVolume;
-        }
 
         RaiseVolumePropertiesChanged();
         Log.Info($"[PlayerBar] MaxVolume changed: {oldMax} -> {newMax}");
@@ -897,6 +846,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void HandleTrackChanged(TrackInfo? track)
     {
+        BeginTrackReset();
+
         CurrentTrack = track;
         HasTrack = track != null;
 
@@ -911,9 +862,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         AvailableFormats.Clear();
 
-        Position = TimeSpan.Zero;
-        PositionSeconds = 0;
-
         if (track != null)
         {
             Duration = track.Duration;
@@ -922,18 +870,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             var storedTrack = _library.GetTrack(track.Id);
             IsLiked = storedTrack?.IsLiked ?? track.IsLiked;
 
-            // Сбрасываем буфер для нового трека
             if (track.IsDownloaded)
             {
                 BufferProgressPercent = 100;
                 BufferedRanges = [(0.0, 1.0)];
                 IsFullyBuffered = true;
-            }
-            else
-            {
-                BufferProgressPercent = 0;
-                BufferedRanges = [];
-                IsFullyBuffered = false;
+                EndTrackReset();
             }
 
             ShowStreamInfo = true;
@@ -943,16 +885,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
         {
             Duration = TimeSpan.Zero;
             DurationSeconds = 1;
-            PositionSeconds = 0;
-
-            // Полный сброс буфера
-            BufferProgressPercent = 0;
-            BufferedRanges = [];
-            IsFullyBuffered = false;
 
             ShowStreamInfo = false;
             StreamInfo = "";
             IsLiked = false;
+            IsTrackResetting = false;
         }
 
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
@@ -1005,6 +942,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 f.IsActive = string.Equals(f.Codec, info.Codec, StringComparison.OrdinalIgnoreCase) &&
                              (int)f.Bitrate == info.Bitrate;
             }
+
+            if (IsTrackResetting)
+                EndTrackReset();
         }
         else
         {
@@ -1017,6 +957,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void UpdateDownloadSpeed()
     {
+        if (_isSuspended) return;
+
         if (!HasTrack || CurrentTrack?.IsDownloaded == true || IsFullyBuffered)
         {
             DownloadSpeedText = "";
@@ -1043,7 +985,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void FallbackPositionUpdate()
     {
-        if (!HasTrack || _isSeeking || _justFinishedSeeking) return;
+        if (!HasTrack || _isSeeking || _justFinishedSeeking || _isSuspended) return;
 
         var realDur = _audio.TotalDuration;
 
@@ -1065,9 +1007,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Public Interaction
 
-    /// <summary>
-    /// Начинает операцию seek (перетаскивание ползунка).
-    /// </summary>
     public void StartSeek()
     {
         _isSeeking = true;
@@ -1075,15 +1014,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         _wasPlayingBeforeSeek = IsPlaying;
         if (_wasPlayingBeforeSeek)
-        {
             _ = _audio.SetPlaybackStateAsync(false);
-        }
     }
 
-    /// <summary>
-    /// Обновляет позицию во время seek.
-    /// </summary>
-    /// <param name="seconds">Новая позиция в секундах.</param>
     public void UpdateSeekPosition(double seconds)
     {
         if (!_isSeeking) return;
@@ -1093,9 +1026,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(DurationTooltip));
     }
 
-    /// <summary>
-    /// Завершает операцию seek.
-    /// </summary>
     public async void EndSeek()
     {
         if (!HasTrack)
@@ -1115,37 +1045,40 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         IsSeekBusy = true;
         await _audio.SeekAsync(TimeSpan.FromSeconds(target));
+
+        ForceUpdateBufferProgress();
+
         await Task.Delay(300);
 
         if (_wasPlayingBeforeSeek)
-        {
             await _audio.SetPlaybackStateAsync(true);
-        }
 
         IsSeekBusy = false;
         _justFinishedSeeking = false;
     }
 
-    /// <summary>
-    /// Отменяет операцию seek.
-    /// </summary>
     public void CancelSeek()
     {
         _isSeeking = false;
         _justFinishedSeeking = false;
 
         if (_wasPlayingBeforeSeek)
-        {
             _ = _audio.SetPlaybackStateAsync(true);
-        }
     }
 
-    /// <summary>
-    /// Сохраняет громкость немедленно.
-    /// </summary>
     public void OnVolumeChangeComplete()
     {
         _audio.SaveVolumeNow();
+    }
+
+    /// <summary>
+    /// Вычисляет шаг изменения громкости для скролла.
+    /// </summary>
+    public int GetVolumeScrollStep()
+    {
+        // Чем больше MaxVolume, тем больше шаг чтобы реальный шаг был ~0.5%
+        if (MaxVolume <= 100) return 1;
+        return Math.Max(1, MaxVolume / 200);
     }
 
     #endregion
@@ -1157,6 +1090,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _isSuspended = true;
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
+
+        if (_viewRef?.TryGetTarget(out var view) == true)
+            view.OnSuspend();
+
         Log.Debug("[PlayerBar] Suspended");
     }
 
@@ -1166,9 +1103,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _fallbackPositionTimer.Start();
         _speedUpdateTimer.Start();
 
-        // Обновляем данные которые могли измениться
         FallbackPositionUpdate();
         ForceUpdateBufferProgress();
+
+        if (_viewRef?.TryGetTarget(out var view) == true)
+            view.OnResume();
 
         Log.Debug("[PlayerBar] Resumed");
     }
@@ -1180,9 +1119,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
 
             if (_isInitialized && Volume > 0)
-            {
                 _library.UpdateSettings(s => s.LastVolume = Volume);
-            }
 
             _audio.SaveVolumeNow();
             _fallbackPositionTimer.Stop();

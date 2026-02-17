@@ -1,4 +1,3 @@
-// Core/Audio/AudioStreamInfo.cs
 namespace LMP.Core.Audio;
 
 /// <summary>
@@ -21,6 +20,6 @@ public sealed record AudioStreamInfo
     public bool IsValid => !string.IsNullOrEmpty(Codec) && Bitrate > 0;
     
     public string FormatDisplay => IsValid 
-        ? $"{Container}/{Codec}/{Bitrate}kbps" 
+        ? $"{Container}/{Codec}/{Bitrate:F0}kbps" 
         : "Loading...";
 }

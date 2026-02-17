@@ -188,7 +188,7 @@
             <Setter Property="RenderTransform" Value="scaleY(1.5)" />
         </Style>
 
-        <!--  Seek thumb  -->
+        <!--  Seek thumb: hidden when suspended or resetting  -->
         <Style Selector="Ellipse.slider-thumb">
             <Setter Property="Opacity" Value="0" />
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
@@ -204,6 +204,13 @@
         <Style Selector="Grid.seek-container.dragging Ellipse.slider-thumb">
             <Setter Property="Opacity" Value="1" />
         </Style>
+        <!--  Force hide thumb during track reset  -->
+        <Style Selector="Ellipse.slider-thumb.hidden">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions />
+            </Setter>
+        </Style>
 
         <!--  Seek cursor  -->
         <Style Selector="Border.seek-cursor">
@@ -217,6 +224,13 @@
         <Style Selector="Grid.seek-container:pointerover Border.seek-cursor">
             <Setter Property="Opacity" Value="0.6" />
         </Style>
+        <!--  Force hide cursor during track reset  -->
+        <Style Selector="Border.seek-cursor.hidden">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions />
+            </Setter>
+        </Style>
 
         <!--  Preview fill  -->
         <Style Selector="Border.slider-preview">
@@ -225,6 +239,19 @@
         </Style>
         <Style Selector="Border.slider-preview.active">
             <Setter Property="Opacity" Value="0.5" />
+        </Style>
+
+        <!--  Progress bar: hide during reset with no transition  -->
+        <Style Selector="Border.progress-bar">
+            <Setter Property="Transitions">
+                <Transitions />
+            </Setter>
+        </Style>
+        <Style Selector="Border.progress-bar.hidden">
+            <Setter Property="Width" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions />
+            </Setter>
         </Style>
 
         <!--  Playing glow  -->
@@ -246,6 +273,10 @@
                     </KeyFrame>
                 </Animation>
             </Style.Animations>
+        </Style>
+        <!--  Suppress glow when suspended  -->
+        <Style Selector="Border.playing-glow.suspended">
+            <Setter Property="Opacity" Value="0" />
         </Style>
 
         <!--  VOLUME SLIDER (Minimalist)                                       -->
@@ -370,6 +401,7 @@
                         Name="ProgressBar"
                         HorizontalAlignment="Left"
                         Background="{DynamicResource AccentBrush}"
+                        Classes="progress-bar"
                         CornerRadius="2" />
 
                     <!--  Layer 5: Playing glow  -->
@@ -621,10 +653,9 @@
                             </Grid>
                         </Button>
 
-                        <!--  Volume Popup  -->
+                        <!--  Volume Popup — centered on button  -->
                         <Popup
                             x:Name="VolumePopup"
-                            HorizontalOffset="5"
                             IsLightDismissEnabled="False"
                             Placement="Top"
                             PlacementTarget="{Binding #VolumeButton}"
@@ -651,7 +682,7 @@
                                         VerticalAlignment="Stretch"
                                         Classes="vol-track" />
 
-                                    <!--  Fill - добавляем начальную Height  -->
+                                    <!--  Fill  -->
                                     <Border
                                         Name="VolumeBar"
                                         Width="4"

@@ -62,6 +62,23 @@
             <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
             <Setter Property="Margin" Value="0,2,0,0" />
         </Style>
+        
+        <!-- FEATURE BADGE -->
+        <Style Selector="Border.feature-badge">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="6,2" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.feature-badge TextBlock">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
+        </Style>
+        <Style Selector="Border.feature-badge.experimental">
+            <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
+        </Style>
     </UserControl.Styles>
 
     <ScrollViewer>
@@ -414,17 +431,69 @@
             <TextBlock Classes="h2" Text="{Binding L[Settings_Audio]}" />
             <Border Classes="card">
                 <StackPanel Spacing="20">
+                    
+                    <!-- Volume Section Header -->
+                    <TextBlock Text="{Binding L[Audio_VolumeSection]}" 
+                        FontWeight="SemiBold" FontSize="14"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                    
+                    <!-- Max Volume -->
                     <Grid ColumnDefinitions="*, 250, 70">
                         <StackPanel>
                             <TextBlock Classes="label" Text="{Binding L[Audio_MaxVolume]}" />
                             <TextBlock Classes="desc" Text="{Binding L[Audio_MaxVolumeDesc]}" />
                         </StackPanel>
-                        <Slider Grid.Column="1" Minimum="100" Maximum="400"
-                            Value="{Binding MaxVolumeLimit}" Margin="0,0,10,0" />
+                        <Slider Grid.Column="1" Minimum="100" Maximum="800"
+                            Value="{Binding MaxVolumeLimit}" Margin="0,0,10,0"
+                            TickFrequency="100" IsSnapToTickEnabled="True" />
                         <TextBlock Grid.Column="2" Classes="value-label"
                             Text="{Binding MaxVolumeLimit, StringFormat='{}{0}%'}" />
                     </Grid>
 
+                    <!-- Volume Boost Toggle -->
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Classes="label" Text="{Binding L[Settings_VolumeBoost]}" />
+                                <Border Classes="feature-badge">
+                                    <TextBlock Text="BOOST" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_VolumeBoost_Tooltip]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding VolumeBoostEnabled}" />
+                    </Grid>
+
+                    <!-- Volume Curve -->
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_VolumeCurve]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_VolumeCurve_Desc]}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding VolumeCurveOptions}"
+                            SelectedItem="{Binding SelectedVolumeCurve}"
+                            MinWidth="220">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="{Binding Name}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+
+                    <!-- Smooth Volume -->
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_SmoothVolume]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_SmoothVolume_Tooltip]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding SmoothVolumeEnabled}" />
+                    </Grid>
+
+                    <!-- Target Gain -->
                     <Grid ColumnDefinitions="*, 250, 70">
                         <StackPanel>
                             <TextBlock Classes="label" Text="{Binding L[Audio_Gain]}" />
@@ -438,8 +507,37 @@
 
                     <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
+                    <!-- Audio Processing Section -->
+                    <TextBlock Text="{Binding L[Audio_ProcessingSection]}" 
+                        FontWeight="SemiBold" FontSize="14"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                    <!-- Audio Normalization -->
                     <Grid ColumnDefinitions="*, Auto">
-                        <TextBlock Classes="label" Text="{Binding L[Settings_AudioQuality]}" />
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Classes="label" Text="{Binding L[Settings_AudioNormalization]}" />
+                                <Border Classes="feature-badge experimental">
+                                    <TextBlock Text="BETA" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_AudioNormalization_Tooltip]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding AudioNormalizationEnabled}" />
+                    </Grid>
+
+                    <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                    <!-- Quality Section -->
+                    <TextBlock Text="{Binding L[Audio_QualitySection]}" 
+                        FontWeight="SemiBold" FontSize="14"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_AudioQuality]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_AudioQualityDesc]}" />
+                        </StackPanel>
                         <ComboBox Grid.Column="1" ItemsSource="{Binding QualityOptions}"
                             SelectedItem="{Binding QualityPreference}" MinWidth="200">
                             <ComboBox.ItemTemplate>
@@ -452,8 +550,33 @@
                     </Grid>
 
                     <Grid ColumnDefinitions="*, Auto">
-                        <TextBlock Classes="label" Text="{Binding L[General_AutoPaste]}" />
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_RememberFormat]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_RememberFormatDesc]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding RememberTrackFormat}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- PLAYBACK -->
+            <TextBlock Classes="h2" Text="{Binding L[Settings_Playback]}" />
+            <Border Classes="card">
+                <StackPanel Spacing="16">
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[General_AutoPaste]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[General_AutoPasteDesc]}" />
+                        </StackPanel>
                         <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoPlayOnPaste}" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_SmoothLoading]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_SmoothLoadingDesc]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSmoothLoading}" />
                     </Grid>
                 </StackPanel>
             </Border>
@@ -463,8 +586,30 @@
             <Border Classes="card">
                 <StackPanel Spacing="16">
                     <Grid ColumnDefinitions="*, Auto">
-                        <TextBlock Classes="label" Text="{Binding L[General_Discord]}" />
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[General_Discord]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[General_DiscordDesc]}" />
+                        </StackPanel>
                         <ToggleSwitch Grid.Column="1" IsChecked="{Binding DiscordRpcEnabled}" />
+                    </Grid>
+
+                    <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                    <!-- Search Settings -->
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_SearchCache]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_SearchCacheDesc]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSearchCache}" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*, 200, 70" IsEnabled="{Binding EnableSearchCache}">
+                        <TextBlock Classes="label" Text="{Binding L[Settings_SearchCacheTtl]}" />
+                        <Slider Grid.Column="1" Minimum="15" Maximum="480"
+                            Value="{Binding SearchCacheTtlMinutes}" Margin="12,0" />
+                        <TextBlock Grid.Column="2" Classes="value-label"
+                            Text="{Binding SearchCacheTtlMinutes, StringFormat='{}{0} min'}" />
                     </Grid>
 
                     <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />

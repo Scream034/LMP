@@ -68,6 +68,42 @@
   "Search_NoLocalFiles": "В библиотеке нет локальных файлов. Скачайте треки или добавьте локальные файлы.",
   "Search_OfflineMode": "Поиск только по локальной библиотеке",
   
+  "VolumeCurve_Linear": "Линейная",
+  "VolumeCurve_Quadratic": "Квадратичная (Рекомендуется)",
+  "VolumeCurve_Logarithmic": "Логарифмическая",
+  "VolumeCurve_Cubic": "Кубическая",
+  "VolumeCurve_SpeedOfLight": "Скорость света ⚡",
+  
+  "Settings_VolumeCurve": "Кривая громкости",
+  "Settings_VolumeCurve_Desc": "Как слайдер громкости соотносится с реальной громкостью",
+  
+  "Settings_VolumeBoost": "Усиление громкости",
+  "Settings_VolumeBoost_Tooltip": "Разрешить громкость выше 100%. Если выключено, больший максимум только увеличивает точность настройки.",
+  
+  "Settings_SmoothVolume": "Плавное изменение громкости",
+  "Settings_SmoothVolume_Tooltip": "Плавный переход вместо мгновенного изменения. Предотвращает щелчки и артефакты.",
+  
+  "Settings_AudioNormalization": "Нормализация звука",
+  "Settings_AudioNormalization_Tooltip": "Автоматически выравнивать громкость между треками. Может влиять на динамику.",
+  
+  "Audio_VolumeSection": "🔊 Громкость",
+  "Audio_ProcessingSection": "⚙️ Обработка",
+  "Audio_QualitySection": "🎵 Качество",
+  
+  "Settings_RememberFormatDesc": "Сохранять предпочитаемый формат для каждого трека",
+  
+  "Settings_SmoothLoading": "Плавные анимации загрузки",
+  "Settings_SmoothLoadingDesc": "Показывать плавные скелетоны вместо мгновенного появления",
+  
+  "General_AutoPasteDesc": "Автоматически воспроизводить при вставке YouTube ссылки",
+  "General_DiscordDesc": "Показывать текущий трек в статусе Discord",
+  
+  "Settings_SearchCache": "Кэшировать результаты поиска",
+  "Settings_SearchCacheDesc": "Хранить результаты для быстрого повторного поиска",
+  "Settings_SearchCacheTtl": "Время хранения",
+  
+  "Settings_Playback": "Воспроизведение",
+
   "Settings_Title": "Настройки",
   "Settings_Account_Language": "Аккаунт и язык",
   "Settings_Network": "Сеть и стриминг",
