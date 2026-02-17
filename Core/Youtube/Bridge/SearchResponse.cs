@@ -318,17 +318,11 @@ internal partial class SearchResponse
     // VideoData с кэшированием свойств при первом доступе
     internal sealed class VideoData(JsonElement content, bool isYtm)
     {
-        private string? _id;
         private bool _idComputed;
-        private string? _title;
         private bool _titleComputed;
-        private string? _author;
         private bool _authorComputed;
-        private string? _channelId;
         private bool _channelIdComputed;
-        private TimeSpan? _duration;
         private bool _durationComputed;
-        private IReadOnlyList<ThumbnailData>? _thumbnails;
         private bool? _isPlaylistContext;
         private bool? _isArtistContext;
 
@@ -338,10 +332,10 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_idComputed) return _id;
-                _id = ComputeId();
+                if (_idComputed) return field;
+                field = ComputeId();
                 _idComputed = true;
-                return _id;
+                return field;
             }
         }
 
@@ -373,10 +367,10 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_titleComputed) return _title;
-                _title = ComputeTitle();
+                if (_titleComputed) return field;
+                field = ComputeTitle();
                 _titleComputed = true;
-                return _title;
+                return field;
             }
         }
 
@@ -405,10 +399,10 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_authorComputed) return _author;
-                _author = ComputeAuthor();
+                if (_authorComputed) return field;
+                field = ComputeAuthor();
                 _authorComputed = true;
-                return _author;
+                return field;
             }
         }
 
@@ -454,10 +448,10 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_channelIdComputed) return _channelId;
-                _channelId = ComputeChannelId();
+                if (_channelIdComputed) return field;
+                field = ComputeChannelId();
                 _channelIdComputed = true;
-                return _channelId;
+                return field;
             }
         }
 
@@ -528,10 +522,10 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_durationComputed) return _duration;
-                _duration = ComputeDuration();
+                if (_durationComputed) return field;
+                field = ComputeDuration();
                 _durationComputed = true;
-                return _duration;
+                return field;
             }
         }
 
@@ -563,9 +557,9 @@ internal partial class SearchResponse
         {
             get
             {
-                if (_thumbnails != null) return _thumbnails;
-                _thumbnails = ComputeThumbnails();
-                return _thumbnails;
+                if (field != null) return field;
+                field = ComputeThumbnails();
+                return field;
             }
         }
 

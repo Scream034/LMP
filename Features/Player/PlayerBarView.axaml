@@ -298,9 +298,7 @@
         </Style>
     </UserControl.Styles>
 
-    <!--  ═══════════════════════════════════════════════════════════════════  -->
     <!--  MAIN CONTENT                                                         -->
-    <!--  ═══════════════════════════════════════════════════════════════════  -->
     <Border Background="{DynamicResource BgSecondaryBrush}">
         <Grid RowDefinitions="Auto,*">
 
@@ -324,10 +322,13 @@
                     Classes="track-container"
                     RenderTransformOrigin="0.5,0.5">
 
-                    <!--  Background track  -->
-                    <Border Classes="slider-track seek-track" CornerRadius="2" />
+                    <!--  Layer 0: Background track  -->
+                    <Border
+                        Background="{DynamicResource BgHighlightBrush}"
+                        CornerRadius="2"
+                        Opacity="0.4" />
 
-                    <!--  SPARK (движется через code-behind)  -->
+                    <!--  Layer 1: SPARK  -->
                     <Border
                         Name="SparkContainer"
                         ClipToBounds="True"
@@ -349,29 +350,29 @@
                         </Border>
                     </Border>
 
-                    <!--  Buffer bar  -->
+                    <!--  Layer 2: Buffer segments — CANVAS для абсолютного позиционирования  -->
                     <Canvas
                         Name="BufferSegmentsCanvas"
                         HorizontalAlignment="Stretch"
-                        VerticalAlignment="Center"
-                        Height="4"
-                        ClipToBounds="True" />
+                        VerticalAlignment="Stretch"
+                        ClipToBounds="True"
+                        IsHitTestVisible="False" />
 
-                    <!--  Preview fill  -->
+                    <!--  Layer 3: Preview fill  -->
                     <Border
                         Name="PreviewFill"
                         HorizontalAlignment="Left"
-                        Classes="slider-preview seek-track"
+                        Classes="slider-preview"
                         CornerRadius="2" />
 
-                    <!--  Progress bar  -->
+                    <!--  Layer 4: Progress bar  -->
                     <Border
                         Name="ProgressBar"
                         HorizontalAlignment="Left"
-                        Classes="slider-fill seek-track"
+                        Background="{DynamicResource AccentBrush}"
                         CornerRadius="2" />
 
-                    <!--  Playing glow  -->
+                    <!--  Layer 5: Playing glow  -->
                     <Border
                         Name="PlayingGlow"
                         Height="4"

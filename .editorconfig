@@ -1,0 +1,13 @@
+# Пометить все файлы в папке как "сгенерированный код"
+# Компилятор обычно игнорирует варнинги в таких файлах
+[SharpJaad.AAC/**.cs]
+generated_code = true
+
+# Или точечно отключить конкретные правила для этой папки
+[SharpJaad.AAC/**.cs]
+dotnet_diagnostic.CS8618.severity = none
+dotnet_diagnostic.CS8600.severity = none
+dotnet_diagnostic.CS8602.severity = none
+dotnet_diagnostic.CS8604.severity = none
+dotnet_diagnostic.CS8625.severity = none
+dotnet_diagnostic.CS0420.severity = none

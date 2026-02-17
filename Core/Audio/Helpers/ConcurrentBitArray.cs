@@ -9,21 +9,20 @@ namespace LMP.Core.Audio.Helpers;
 public sealed class ConcurrentBitArray(int length)
 {
     private readonly int[] _data = new int[(length + 31) / 32];
-    private readonly int _length = length;
 
-    public int Length => _length;
-    
+    public int Length { get; } = length;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Get(int index)
     {
-        if ((uint)index >= (uint)_length) return false;
+        if ((uint)index >= (uint)Length) return false;
         return (Volatile.Read(ref _data[index >> 5]) & (1 << (index & 31))) != 0;
     }
     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set(int index, bool value)
     {
-        if ((uint)index >= (uint)_length) return;
+        if ((uint)index >= (uint)Length) return;
         
         int word = index >> 5;
         int bit = 1 << (index & 31);
@@ -45,7 +44,7 @@ public sealed class ConcurrentBitArray(int length)
         {
             count += BitOperations.PopCount((uint)Volatile.Read(ref _data[i]));
         }
-        return Math.Min(count, _length);
+        return Math.Min(count, Length);
     }
     
     public void Clear()

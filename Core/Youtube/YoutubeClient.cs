@@ -4,7 +4,6 @@ using LMP.Core.Youtube.Channels;
 using LMP.Core.Youtube.Music;
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Search;
-using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Videos;
 
 namespace LMP.Core.Youtube;

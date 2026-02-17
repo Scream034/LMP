@@ -1,249 +1,297 @@
+using System.Net;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
+using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
 
-/// <summary>
-/// Форматы аудио контейнеров.
-/// </summary>
-public enum AudioFormat
-{
-    Unknown,
-    WebM,
-    Mp4,
-    Hls,
-    Ogg,
-    Raw
-}
-
-/// <summary>
-/// Фабрика источников аудио.
-/// </summary>
 public static class AudioSourceFactory
 {
-    private const long DefaultContentLength = 50 * 1024 * 1024; // 50MB fallback
-    
-    /// <summary>
-    /// Определяет формат по URL.
-    /// </summary>
-    public static AudioFormat DetectFormat(string url)
+    private static AudioCacheManager? _globalCacheManager;
+
+    public static void InitializeGlobalCache(AudioCacheManager cacheManager)
     {
-        var lower = url.ToLowerInvariant();
-        
-        if (lower.Contains(".m3u8"))
-            return AudioFormat.Hls;
-        
-        if (lower.Contains(".webm"))
-            return AudioFormat.WebM;
-        if (lower.Contains(".m4a") || lower.Contains(".mp4") || lower.Contains(".aac"))
-            return AudioFormat.Mp4;
-        if (lower.Contains(".ogg") || lower.Contains(".opus"))
-            return AudioFormat.Ogg;
-        
-        if (lower.Contains("mime=audio%2fwebm") || lower.Contains("mime=audio/webm"))
-            return AudioFormat.WebM;
-        if (lower.Contains("mime=audio%2fmp4") || lower.Contains("mime=audio/mp4"))
-            return AudioFormat.Mp4;
-        
-        if (TryParseItag(url, out int itag))
-            return GetFormatByItag(itag);
-        
-        return AudioFormat.Unknown;
+        _globalCacheManager = cacheManager ?? throw new ArgumentNullException(nameof(cacheManager));
+        Log.Info("[AudioSourceFactory] Global cache initialized");
     }
-    
+
+    public static AudioCacheManager? GlobalCache => _globalCacheManager;
+
     /// <summary>
-    /// Определяет формат по Content-Type.
+    /// Строит уникальный ключ кэша: trackId + формат + нормализованный битрейт.
     /// </summary>
-    public static AudioFormat DetectFormatByContentType(string? contentType)
+    public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
     {
-        if (string.IsNullOrEmpty(contentType))
-            return AudioFormat.Unknown;
-        
-        var lower = contentType.ToLowerInvariant();
-        
-        if (lower.Contains("webm")) return AudioFormat.WebM;
-        if (lower.Contains("mp4") || lower.Contains("m4a") || lower.Contains("aac")) return AudioFormat.Mp4;
-        if (lower.Contains("ogg") || lower.Contains("opus")) return AudioFormat.Ogg;
-        if (lower.Contains("mpegurl") || lower.Contains("m3u")) return AudioFormat.Hls;
-        
-        return AudioFormat.Unknown;
+        int normalizedBitrate = NormalizeBitrate(bitrate);
+        return $"{trackId}_{format}_{normalizedBitrate}";
     }
-    
+
     /// <summary>
-    /// Определяет формат по magic bytes.
+    /// Ищет полностью закэшированный трек любого формата/битрейта.
     /// </summary>
-    public static AudioFormat DetectFormatByMagic(ReadOnlySpan<byte> header)
+    public static (string Path, CacheEntry Entry)? FindAnyCachedTrack(string trackId)
     {
-        if (header.Length < 12)
-            return AudioFormat.Unknown;
-        
-        // WebM/Matroska: 1A 45 DF A3
-        if (header[0] == 0x1A && header[1] == 0x45 && header[2] == 0xDF && header[3] == 0xA3)
-            return AudioFormat.WebM;
-        
-        // MP4/M4A: ....ftyp
-        if (header[4] == 'f' && header[5] == 't' && header[6] == 'y' && header[7] == 'p')
-            return AudioFormat.Mp4;
-        
-        // Ogg: OggS
-        if (header[0] == 'O' && header[1] == 'g' && header[2] == 'g' && header[3] == 'S')
-            return AudioFormat.Ogg;
-        
-        // ADTS AAC: FF Fx
-        if (header[0] == 0xFF && (header[1] & 0xF0) == 0xF0)
-            return AudioFormat.Raw;
-        
-        return AudioFormat.Unknown;
+        if (_globalCacheManager == null) return null;
+
+        var entry = _globalCacheManager.FindBestCache(trackId);
+        if (entry == null) return null;
+
+        var path = _globalCacheManager.GetCachePath(entry.CacheKey);
+        if (!File.Exists(path)) return null;
+
+        return (path, entry);
     }
-    
+
     /// <summary>
-    /// Определяет кодек по формату.
+    /// Создаёт аудио источник.
     /// </summary>
-    public static AudioCodec GetCodecForFormat(AudioFormat format)
-    {
-        return format switch
-        {
-            AudioFormat.WebM => AudioCodec.Opus,
-            AudioFormat.Mp4 => AudioCodec.Aac,
-            AudioFormat.Hls => AudioCodec.Aac,
-            AudioFormat.Ogg => AudioCodec.Opus,
-            _ => AudioCodec.Unknown
-        };
-    }
-    
-    /// <summary>
-    /// Создаёт источник для URL (без кэширования на диск).
-    /// </summary>
+    /// <param name="url">URL потока.</param>
+    /// <param name="httpClient">HTTP клиент.</param>
+    /// <param name="urlRefresher">Функция обновления URL.</param>
+    /// <param name="trackId">ID трека.</param>
+    /// <param name="bitrateHint">
+    /// Подсказка битрейта (kbps) от вызывающего кода.
+    /// Используется для точного кэш-ключа вместо угадывания из URL.
+    /// 0 = определять автоматически.
+    /// </param>
+    /// <param name="ct">Токен отмены.</param>
     public static async Task<IAudioSource> CreateAsync(
         string url,
-        HttpClient? httpClient = null,
+        HttpClient httpClient,
         Func<CancellationToken, Task<string?>>? urlRefresher = null,
         string? trackId = null,
+        int bitrateHint = 0,
         CancellationToken ct = default)
     {
-        httpClient ??= SharedHttpClient.Instance;
-        
-        var format = DetectFormat(url);
-        
-        if (format == AudioFormat.Unknown)
+        if (_globalCacheManager == null)
         {
-            format = await DetectFormatByHeadAsync(url, httpClient, ct);
+            throw new InvalidOperationException(
+                "AudioSourceFactory.InitializeGlobalCache() must be called before creating sources");
         }
-        
-        Log.Debug($"[AudioSourceFactory] Format: {format}");
-        
+
+        trackId ??= GenerateTrackIdFromUrl(url);
+
+        // Пустой URL — ищем любой кэш для трека
+        if (string.IsNullOrEmpty(url))
+        {
+            var cached = FindAnyCachedTrack(trackId);
+            if (cached != null)
+            {
+                Log.Info($"[AudioSourceFactory] Using cached: {trackId} " +
+                        $"({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
+                return new LocalFileSource(cached.Value.Path);
+            }
+            throw new ArgumentException("No URL provided and no cache available", nameof(url));
+        }
+
+        // Определяем формат
+        var format = await DetectFormatAsync(url, httpClient, ct);
+        if (format == AudioFormat.Unknown)
+            throw new NotSupportedException($"Could not detect audio format for: {url}");
+
+        // HLS — не кэшируем
         if (format == AudioFormat.Hls)
         {
-            return new HlsStreamSource(url, httpClient, urlRefresher);
+            Log.Info($"[AudioSourceFactory] HLS stream (RAM-only): {trackId}");
+            return new HlsStreamSource(url, httpClient);
         }
-        
-        long contentLength = await SharedHttpClient.GetContentLengthAsync(url, ct);
-        
-        if (contentLength <= 0)
+
+        // Получаем метаданные потока
+        var (contentLength, codec, detectedBitrate) = await GetStreamInfoAsync(url, format, httpClient, ct);
+
+        // bitrateHint имеет приоритет над автодетектом
+        int finalBitrate = bitrateHint > 0 ? bitrateHint : detectedBitrate;
+
+        // Строим ключ кэша
+        string cacheKey = BuildCacheKey(trackId, format, finalBitrate);
+
+        Log.Debug($"[AudioSourceFactory] Bitrate resolution: hint={bitrateHint}, detected={detectedBitrate}, " +
+                  $"final={finalBitrate}, normalized={NormalizeBitrate(finalBitrate)}, key={cacheKey}");
+
+        // Проверяем точный кэш (формат + битрейт)
+        if (_globalCacheManager.IsFullyCached(cacheKey))
         {
-            contentLength = DefaultContentLength;
-            Log.Warn("[AudioSourceFactory] Unknown content length, assuming 50MB");
+            var cachePath = _globalCacheManager.GetCachePath(cacheKey);
+            if (File.Exists(cachePath))
+            {
+                Log.Info($"[AudioSourceFactory] Exact cache hit: {cacheKey}");
+                return new LocalFileSource(cachePath);
+            }
         }
-        
-        return new UniversalStreamSource(
-            trackId ?? Guid.NewGuid().ToString(),
-            url,
-            contentLength,
-            GetCodecForFormat(format),
-            httpClient,
-            urlRefresher);
-    }
-    
-    /// <summary>
-    /// Создаёт источник с кэшированием.
-    /// </summary>
-    public static async Task<IAudioSource> CreateWithCacheAsync(
-        string url,
-        string trackId,
-        HttpClient? httpClient,
-        AudioCacheManager cacheManager,
-        Func<CancellationToken, Task<string?>>? urlRefresher = null,
-        CancellationToken ct = default)
-    {
-        httpClient ??= SharedHttpClient.Instance;
-        
-        // Проверяем полный кэш
-        if (cacheManager.IsFullyCached(trackId))
-        {
-            Log.Info($"[AudioSourceFactory] Using fully cached: {trackId}");
-            cacheManager.Touch(trackId);
-            var cachedPath = cacheManager.GetCachePath(trackId);
-            return new LocalFileSource(cachedPath);
-        }
-        
-        var format = DetectFormat(url);
-        
-        if (format == AudioFormat.Unknown)
-        {
-            format = await DetectFormatByHeadAsync(url, httpClient, ct);
-        }
-        
-        // HLS пока без кэширования на диск
-        if (format == AudioFormat.Hls)
-        {
-            Log.Debug("[AudioSourceFactory] HLS stream, caching not supported");
-            return new HlsStreamSource(url, httpClient, urlRefresher);
-        }
-        
-        long contentLength = await SharedHttpClient.GetContentLengthAsync(url, ct);
-        
-        if (contentLength <= 0)
-        {
-            contentLength = DefaultContentLength;
-            Log.Warn("[AudioSourceFactory] Unknown content length, assuming 50MB");
-        }
-        
+
+        Log.Info($"[AudioSourceFactory] Caching {format}/{codec}/{finalBitrate}kbps: {cacheKey}");
+
         return new CachingStreamSource(
+            cacheKey,
             trackId,
             url,
             contentLength,
             format,
+            codec,
+            finalBitrate,
             httpClient,
-            cacheManager,
+            _globalCacheManager,
             urlRefresher);
     }
-    
-    #region Private
-    
-    private static async Task<AudioFormat> DetectFormatByHeadAsync(
-        string url, HttpClient httpClient, CancellationToken ct)
+
+    private static string GenerateTrackIdFromUrl(string url)
     {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(url));
+        return "cache_" + Convert.ToHexString(hash)[..16];
+    }
+
+    public static CacheEntry? GetCacheInfo(string trackId)
+    {
+        return _globalCacheManager?.FindBestCache(trackId);
+    }
+
+    #region Format Detection
+
+    public static AudioFormat DetectFormat(string url)
+    {
+        if (string.IsNullOrEmpty(url))
+            return AudioFormat.Unknown;
+
+        if (url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("/hls/", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.Hls;
+
+        if (url.Contains(".webm", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.WebM;
+
+        if (url.Contains(".mp4", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains(".m4a", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.Mp4;
+
+        if (url.Contains(".ogg", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains(".opus", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.Ogg;
+
+        return AudioFormat.Unknown;
+    }
+
+    public static async Task<AudioFormat> DetectFormatAsync(
+        string url, HttpClient httpClient, CancellationToken ct = default)
+    {
+        var urlFormat = DetectFormat(url);
+        if (urlFormat != AudioFormat.Unknown)
+            return urlFormat;
+
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            var contentType = response.Content.Headers.ContentType?.MediaType;
-            return DetectFormatByContentType(contentType);
+            using var request = SharedHttpClient.CreateRangeRequest(url, 0, FormatDetectionHeaderSize - 1);
+            using var response = await httpClient.SendAsync(request,
+                HttpCompletionOption.ResponseHeadersRead, ct);
+
+            if (response.StatusCode == HttpStatusCode.Forbidden)
+                return AudioFormat.Unknown;
+
+            response.EnsureSuccessStatusCode();
+
+            var header = await response.Content.ReadAsByteArrayAsync(ct);
+            return DetectFormatByMagic(header);
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warn($"[AudioSourceFactory] Format detection failed: {ex.Message}");
             return AudioFormat.Unknown;
         }
     }
-    
-    private static bool TryParseItag(string url, out int itag)
+
+    public static AudioFormat DetectFormatByMagic(ReadOnlySpan<byte> header)
     {
-        itag = 0;
-        var match = System.Text.RegularExpressions.Regex.Match(url, @"[?&]itag=(\d+)");
-        return match.Success && int.TryParse(match.Groups[1].Value, out itag);
+        if (header.Length < 4) return AudioFormat.Unknown;
+
+        if (header[..4].SequenceEqual(WebMMagic))
+            return AudioFormat.WebM;
+
+        if (header.Length >= 8 && header.Slice(4, 4).SequenceEqual(Mp4FtypMagic))
+            return AudioFormat.Mp4;
+
+        if (header[..4].SequenceEqual(OggMagic))
+            return AudioFormat.Ogg;
+
+        return AudioFormat.Unknown;
     }
-    
-    private static AudioFormat GetFormatByItag(int itag)
+
+    private static async Task<(long ContentLength, AudioCodec Codec, int Bitrate)> GetStreamInfoAsync(
+        string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
     {
-        return itag switch
+        long contentLength = 0;
+
+        try
         {
-            249 or 250 or 251 => AudioFormat.WebM, // Opus
-            139 or 140 or 141 or 256 or 258 or 325 or 328 => AudioFormat.Mp4, // AAC
-            _ => AudioFormat.Unknown
-        };
+            using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
+            using var headResponse = await httpClient.SendAsync(headRequest, ct);
+
+            if (headResponse.IsSuccessStatusCode)
+                contentLength = headResponse.Content.Headers.ContentLength ?? 0;
+        }
+        catch { }
+
+        if (contentLength == 0)
+        {
+            try
+            {
+                using var rangeRequest = SharedHttpClient.CreateRangeRequest(url, 0, 0);
+                using var rangeResponse = await httpClient.SendAsync(rangeRequest, ct);
+
+                if (rangeResponse.Content.Headers.ContentRange?.Length != null)
+                    contentLength = rangeResponse.Content.Headers.ContentRange.Length.Value;
+            }
+            catch
+            {
+                contentLength = 100 * 1024 * 1024;
+            }
+        }
+
+        if (contentLength <= 0)
+            contentLength = 100 * 1024 * 1024;
+
+        var codec = GetCodecForFormat(format);
+        int bitrate = ExtractBitrateFromUrl(url);
+        if (bitrate == 0)
+            bitrate = codec == AudioCodec.Opus ? 128 : 96;
+
+        return (contentLength, codec, bitrate);
     }
-    
+
+    private static int ExtractBitrateFromUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+            var bitrateStr = query["bitrate"];
+            if (!string.IsNullOrEmpty(bitrateStr) && int.TryParse(bitrateStr, out var br))
+                return br / 1000;
+        }
+        catch { }
+
+        return 0;
+    }
+
+    public static AudioCodec GetCodecForFormat(AudioFormat format) => format switch
+    {
+        AudioFormat.WebM => AudioCodec.Opus,
+        AudioFormat.Ogg => AudioCodec.Opus,
+        AudioFormat.Mp4 => AudioCodec.Aac,
+        AudioFormat.Hls => AudioCodec.Aac,
+        _ => AudioCodec.Unknown
+    };
+
     #endregion
+}
+
+public enum AudioFormat
+{
+    Unknown = 0,
+    WebM = 1,
+    Mp4 = 2,
+    Ogg = 3,
+    Hls = 4
 }

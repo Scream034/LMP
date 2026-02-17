@@ -28,12 +28,9 @@ public sealed class LibraryService : IAsyncDisposable
     private readonly Subject<Unit> _saveSettingsSignal = new();
     private readonly IDisposable _saveSubscription;
 
-    private AppSettings _appSettings = new();
-    public AppSettings Settings => _appSettings;
+    public AppSettings Settings { get; private set; } = new();
 
     // Fake Account cache
-    private string? _fakeAccountName;
-    private string? _fakeAccountAvatarUrl;
 
     public event Action? OnInitialized;
     public event Action? OnDataChanged;
@@ -61,7 +58,7 @@ public sealed class LibraryService : IAsyncDisposable
             .ObserveOn(RxApp.TaskpoolScheduler)
             .Subscribe(async _ =>
             {
-                try { await _settings.SetAsync("AppSettings", _appSettings); }
+                try { await _settings.SetAsync("AppSettings", Settings); }
                 catch (Exception ex) { Log.Error($"[LibraryService] Settings save failed: {ex.Message}"); }
             });
     }
@@ -86,9 +83,9 @@ public sealed class LibraryService : IAsyncDisposable
         }
 
         // Load settings
-        _appSettings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
+        Settings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
         // ИНИЦИАЛИЗИРУЕМ СТАТИКУ
-        YoutubeClientUtils.CurrentProfile = _appSettings.YoutubeClient;
+        YoutubeClientUtils.CurrentProfile = Settings.YoutubeClient;
 
         // Hydrate cache
         await _registry.HydrateAsync(ct);
@@ -207,8 +204,8 @@ public sealed class LibraryService : IAsyncDisposable
             }
 
             // Step 4: Migrate settings
-            _appSettings = MapLegacySettings(legacy);
-            await _settings.SetAsync("AppSettings", _appSettings, ct);
+            Settings = MapLegacySettings(legacy);
+            await _settings.SetAsync("AppSettings", Settings, ct);
 
             // Backup old file
             var backup = path + $".migrated.{DateTime.Now:yyyyMMddHHmmss}";
@@ -675,13 +672,13 @@ public sealed class LibraryService : IAsyncDisposable
 
     public string DownloadPath
     {
-        get => string.IsNullOrEmpty(_appSettings.DownloadPath) ? G.Folder.Downloads : _appSettings.DownloadPath;
-        set { _appSettings.DownloadPath = value; SaveSettings(); }
+        get => string.IsNullOrEmpty(Settings.DownloadPath) ? G.Folder.Downloads : Settings.DownloadPath;
+        set { Settings.DownloadPath = value; SaveSettings(); }
     }
 
     public void UpdateSettings(Action<AppSettings> update)
     {
-        update(_appSettings);
+        update(Settings);
         SaveSettings();
     }
 
@@ -691,16 +688,16 @@ public sealed class LibraryService : IAsyncDisposable
 
     #region Fake Account
 
-    public bool HasFakeAccount => !string.IsNullOrEmpty(_appSettings.FakeAccountChannelUrl);
-    public string? FakeAccountUrl => _appSettings.FakeAccountChannelUrl;
-    public string? FakeAccountName => _fakeAccountName;
-    public string? FakeAccountAvatarUrl => _fakeAccountAvatarUrl;
+    public bool HasFakeAccount => !string.IsNullOrEmpty(Settings.FakeAccountChannelUrl);
+    public string? FakeAccountUrl => Settings.FakeAccountChannelUrl;
+    public string? FakeAccountName { get; private set; }
+    public string? FakeAccountAvatarUrl { get; private set; }
 
     public void SetFakeAccount(string url, string name, string avatar)
     {
-        _appSettings.FakeAccountChannelUrl = url;
-        _fakeAccountName = name;
-        _fakeAccountAvatarUrl = avatar;
+        Settings.FakeAccountChannelUrl = url;
+        FakeAccountName = name;
+        FakeAccountAvatarUrl = avatar;
         SaveSettings();
         OnFakeAccountChanged?.Invoke();
         OnDataChanged?.Invoke();
@@ -708,16 +705,16 @@ public sealed class LibraryService : IAsyncDisposable
 
     public void UpdateFakeAccountCache(string name, string avatar)
     {
-        _fakeAccountName = name;
-        _fakeAccountAvatarUrl = avatar;
+        FakeAccountName = name;
+        FakeAccountAvatarUrl = avatar;
         OnFakeAccountChanged?.Invoke();
     }
 
     public void ClearFakeAccount()
     {
-        _appSettings.FakeAccountChannelUrl = null;
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
+        Settings.FakeAccountChannelUrl = null;
+        FakeAccountName = null;
+        FakeAccountAvatarUrl = null;
         SaveSettings();
         OnFakeAccountChanged?.Invoke();
         OnDataChanged?.Invoke();
@@ -739,8 +736,8 @@ public sealed class LibraryService : IAsyncDisposable
     public async Task ResetAsync(CancellationToken ct = default)
     {
         _registry.Clear();
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
+        FakeAccountName = null;
+        FakeAccountAvatarUrl = null;
 
         await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
         await ctx.Database.EnsureDeletedAsync(ct);
@@ -748,7 +745,7 @@ public sealed class LibraryService : IAsyncDisposable
         await ctx.OptimizeAsync(ct);
         await ctx.EnsureFtsTablesAsync(ct);
 
-        _appSettings = new AppSettings();
+        Settings = new AppSettings();
         await EnsureLikedPlaylistAsync(ct);
         OnDataChanged?.Invoke();
     }
@@ -761,7 +758,7 @@ public sealed class LibraryService : IAsyncDisposable
 
         // Final flush
         await _registry.FlushAsync();
-        await _settings.SetAsync("AppSettings", _appSettings);
+        await _settings.SetAsync("AppSettings", Settings);
 
         GC.SuppressFinalize(this);
     }

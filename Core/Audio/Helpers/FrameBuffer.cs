@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using LMP.Core.Audio.Interfaces;
 
-namespace LMP.Core.Helpers;
+namespace LMP.Core.Audio.Helpers;
 
 /// <summary>
 /// Буфер фреймов для producer-consumer паттерна.

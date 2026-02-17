@@ -196,7 +196,7 @@ internal sealed class MusicBrowseResponse
         if (items != null) ParseMixedContent(items.Value, title);
     }
 
-    private MusicItem? ParseMusicItem(JsonElement json)
+    private static MusicItem? ParseMusicItem(JsonElement json)
     {
         var id = json.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
         if (id == null)
@@ -280,7 +280,7 @@ internal sealed class MusicBrowseResponse
         };
     }
 
-    private MusicItem? ParseTwoRowItem(JsonElement json)
+    private static MusicItem? ParseTwoRowItem(JsonElement json)
     {
         var title = json.GetPropertyOrNull("title")
             ?.GetPropertyOrNull("runs")

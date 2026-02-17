@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace LMP.Core.Helpers;
+namespace LMP.Core.Audio.Helpers;
 
 /// <summary>
 /// Lock-free циклический буфер для single-producer-single-consumer сценария.
@@ -10,7 +10,6 @@ namespace LMP.Core.Helpers;
 public sealed class CircularBuffer<T> where T : unmanaged
 {
     private readonly T[] _buffer;
-    private readonly int _capacity;
     private readonly int _mask;
     
     private int _head; // Позиция записи (producer)
@@ -22,9 +21,9 @@ public sealed class CircularBuffer<T> where T : unmanaged
     /// <param name="capacity">Минимальная ёмкость (округляется до степени 2)</param>
     public CircularBuffer(int capacity)
     {
-        _capacity = RoundUpToPowerOf2(Math.Max(capacity, 16));
-        _mask = _capacity - 1;
-        _buffer = new T[_capacity];
+        Capacity = RoundUpToPowerOf2(Math.Max(capacity, 16));
+        _mask = Capacity - 1;
+        _buffer = new T[Capacity];
     }
     
     /// <summary>Текущее количество элементов в буфере</summary>
@@ -37,18 +36,18 @@ public sealed class CircularBuffer<T> where T : unmanaged
             int head = Volatile.Read(ref _head);
             // Затем tail (consumer пишет сюда)
             int tail = Volatile.Read(ref _tail);
-            return (head - tail + _capacity) & _mask;
+            return (head - tail + Capacity) & _mask;
         }
     }
-    
+
     /// <summary>Ёмкость буфера</summary>
-    public int Capacity => _capacity;
-    
+    public int Capacity { get; }
+
     /// <summary>Свободное место в буфере (оставляем 1 слот для различения full/empty)</summary>
     public int Available
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => _capacity - Count - 1;
+        get => Capacity - Count - 1;
     }
     
     /// <summary>Буфер пуст</summary>
@@ -70,12 +69,12 @@ public sealed class CircularBuffer<T> where T : unmanaged
         int head = Volatile.Read(ref _head);
         int tail = Volatile.Read(ref _tail);
         
-        int available = (_capacity - 1) - ((head - tail + _capacity) & _mask);
+        int available = (Capacity - 1) - ((head - tail + Capacity) & _mask);
         int toWrite = Math.Min(data.Length, available);
         
         if (toWrite == 0) return 0;
         
-        int firstPart = Math.Min(toWrite, _capacity - head);
+        int firstPart = Math.Min(toWrite, Capacity - head);
         
         // Копируем первую часть (до конца массива)
         data[..firstPart].CopyTo(_buffer.AsSpan(head, firstPart));
@@ -105,12 +104,12 @@ public sealed class CircularBuffer<T> where T : unmanaged
         int tail = Volatile.Read(ref _tail);
         int head = Volatile.Read(ref _head);
         
-        int count = (head - tail + _capacity) & _mask;
+        int count = (head - tail + Capacity) & _mask;
         int toRead = Math.Min(output.Length, count);
         
         if (toRead == 0) return 0;
         
-        int firstPart = Math.Min(toRead, _capacity - tail);
+        int firstPart = Math.Min(toRead, Capacity - tail);
         
         // Копируем первую часть
         _buffer.AsSpan(tail, firstPart).CopyTo(output[..firstPart]);
@@ -136,12 +135,12 @@ public sealed class CircularBuffer<T> where T : unmanaged
         int tail = Volatile.Read(ref _tail);
         int head = Volatile.Read(ref _head);
         
-        int count = (head - tail + _capacity) & _mask;
+        int count = (head - tail + Capacity) & _mask;
         int toRead = Math.Min(output.Length, count);
         
         if (toRead == 0) return 0;
         
-        int firstPart = Math.Min(toRead, _capacity - tail);
+        int firstPart = Math.Min(toRead, Capacity - tail);
         _buffer.AsSpan(tail, firstPart).CopyTo(output[..firstPart]);
         
         if (toRead > firstPart)
@@ -161,7 +160,7 @@ public sealed class CircularBuffer<T> where T : unmanaged
         int tail = Volatile.Read(ref _tail);
         int head = Volatile.Read(ref _head);
         
-        int available = (head - tail + _capacity) & _mask;
+        int available = (head - tail + Capacity) & _mask;
         int toSkip = Math.Min(count, available);
         
         if (toSkip > 0)

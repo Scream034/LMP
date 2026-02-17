@@ -23,14 +23,13 @@ public sealed class TrackItemViewModel : ViewModelBase
     private readonly ObservableAsPropertyHelper<bool> _isCached;
 
     private Action<TrackInfo>? _onPlay;
-    private bool _isDisposed;
 
     #endregion
 
     #region Properties - Core
 
     public TrackInfo Track { get; }
-    public bool IsDisposed => _isDisposed;
+    public bool IsDisposed { get; private set; }
 
     public string Id => Track.Id;
     public string Title => Track.Title;
@@ -265,7 +264,7 @@ public sealed class TrackItemViewModel : ViewModelBase
 
     protected override void Dispose(bool disposing)
     {
-        if (_isDisposed) return;
+        if (IsDisposed) return;
         
         if (disposing)
         {
@@ -280,7 +279,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         }
         
         base.Dispose(disposing);  // Это вызовет Disposables.Dispose()
-        _isDisposed = true;
+        IsDisposed = true;
     }
 
     #endregion

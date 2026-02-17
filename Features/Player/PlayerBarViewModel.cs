@@ -6,7 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Threading;
-using DynamicData.Binding;
+using LMP.Core.Audio;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -35,7 +35,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
-    private readonly DownloadService _downloads;
     private readonly IClipboardService _clipboard;
     private readonly YoutubeProvider _youtube;
     private readonly MusicLibraryManager _musicManager;
@@ -292,7 +291,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public PlayerBarViewModel(
         AudioEngine audio,
         LibraryService library,
-        DownloadService downloads,
         IClipboardService clipboard,
         YoutubeProvider youtube,
         MusicLibraryManager musicManager,
@@ -300,7 +298,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         _audio = audio;
         _library = library;
-        _downloads = downloads;
         _clipboard = clipboard;
         _youtube = youtube;
         _musicManager = musicManager;
@@ -383,20 +380,21 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(HandleTrackChanged)
             .DisposeWith(Disposables);
 
-        Observable.FromEvent(
-            h => _audio.OnStreamInfoReady += h,
-            h => _audio.OnStreamInfoReady -= h)
+        Observable.FromEvent<Action<AudioStreamInfo>, AudioStreamInfo>(
+            h => _audio.OnStreamInfoChanged += h,
+            h => _audio.OnStreamInfoChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => UpdateStreamInfo())
+            .Subscribe(UpdateStreamInfo)
             .DisposeWith(Disposables);
 
-        // BUFFER PROGRESS
-        Observable.Interval(TimeSpan.FromMilliseconds(BufferUpdateIntervalMs))
+        // BUFFER PROGRESS — через событие, не через интервал
+        Observable.FromEvent<Action<BufferState>, BufferState>(
+                h => _audio.OnBufferStateChanged += h,
+                h => _audio.OnBufferStateChanged -= h)
+            .Where(_ => !_isSuspended)
+            .Throttle(TimeSpan.FromMilliseconds(BufferUpdateIntervalMs))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                if (!_isSuspended) UpdateBufferProgress();
-            })
+            .Subscribe(HandleBufferStateChanged)
             .DisposeWith(Disposables);
 
         // CACHE & LIBRARY EVENTS
@@ -416,7 +414,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(t =>
             {
                 IsLiked = t.IsLiked;
-                if (CurrentTrack != null) CurrentTrack.IsLiked = t.IsLiked;
+                CurrentTrack?.IsLiked = t.IsLiked;
                 this.RaisePropertyChanged(nameof(LikeTooltip));
             })
             .DisposeWith(Disposables);
@@ -596,26 +594,87 @@ public sealed class PlayerBarViewModel : ViewModelBase
     #region Buffer Progress
 
     /// <summary>
-    /// Обновляет прогресс буферизации из AudioEngine.
+    /// Обрабатывает обновление состояния буфера от AudioEngine.
     /// </summary>
-    private void UpdateBufferProgress()
+    private void HandleBufferStateChanged(BufferState state)
     {
-        if (!HasTrack || CurrentTrack == null) return;
+        Log.Debug($"[PlayerBarVM] HandleBufferStateChanged: progress={state.Progress:F1}%, " +
+                  $"ranges={state.Ranges.Count}, suspended={_isSuspended}");
 
-        // Если трек загружен локально - 100%
-        if (CurrentTrack.IsDownloaded)
+        // Если трек загружен локально — всегда 100%
+        if (CurrentTrack?.IsDownloaded == true)
         {
-            BufferProgressPercent = 100;
-            BufferedRanges = [(0, 1)];
-            IsFullyBuffered = true;
-            this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
+            if (!IsFullyBuffered)
+            {
+                BufferProgressPercent = 100;
+                BufferedRanges = [(0.0, 1.0)];
+                IsFullyBuffered = true;
+                this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
+            }
             return;
         }
 
-        // Получаем реальные данные из AudioEngine
-        BufferProgressPercent = _audio.BufferProgress;
-        BufferedRanges = _audio.GetBufferedRanges();
-        IsFullyBuffered = _audio.IsFullyBuffered;
+        BufferProgressPercent = state.Progress;
+        IsFullyBuffered = state.IsFullyBuffered;
+
+        // Обновляем ranges только если они реально изменились
+        var newRanges = state.Ranges;
+
+        if (!RangesEqual(BufferedRanges, newRanges))
+        {
+            Log.Debug($"[PlayerBarVM] Updating BufferedRanges: {newRanges.Count} ranges");
+            BufferedRanges = newRanges;
+            this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
+            this.RaisePropertyChanged(nameof(BufferedRanges)); // Явно!
+        }
+        else
+        {
+            Log.Debug("[PlayerBarVM] Ranges unchanged, skipping update");
+        }
+    }
+
+    /// <summary>
+    /// Сравнивает два списка диапазонов для предотвращения лишних перерисовок.
+    /// </summary>
+    private static bool RangesEqual(
+        IReadOnlyList<(double Start, double End)> a,
+        IReadOnlyList<(double Start, double End)> b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a.Count != b.Count) return false;
+
+        for (int i = 0; i < a.Count; i++)
+        {
+            // Используем epsilon для сравнения double
+            if (Math.Abs(a[i].Start - b[i].Start) > 0.001 ||
+                Math.Abs(a[i].End - b[i].End) > 0.001)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Принудительное обновление буфера (для resume и т.д.).
+    /// </summary>
+    private void ForceUpdateBufferProgress()
+    {
+        if (!HasTrack || CurrentTrack == null) return;
+
+        if (CurrentTrack.IsDownloaded)
+        {
+            BufferProgressPercent = 100;
+            BufferedRanges = [(0.0, 1.0)];
+            IsFullyBuffered = true;
+        }
+        else
+        {
+            BufferProgressPercent = _audio.BufferProgress;
+            BufferedRanges = _audio.GetBufferedRanges();
+            IsFullyBuffered = _audio.IsFullyBuffered;
+        }
 
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
     }
@@ -720,7 +779,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             var formats = await _youtube.GetStreamOptionsAsync(videoId);
 
             var (currentFormat, currentBitrate, _) = _audio.GetCurrentStreamInfo();
-            var cachedFormats = _cacheManager.GetCachedFormats(CurrentTrack.Id);
+            var cachedFormats = StreamCacheManager.GetCachedFormats(CurrentTrack.Id);
 
             AvailableFormats.Clear();
 
@@ -768,12 +827,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (!found && AvailableFormats.Count > 0)
         {
             _ = LoadFormatsAsync();
-        }
-
-        if (isDownloaded)
-        {
-            UpdateStreamInfo();
-            UpdateBufferProgress();
         }
     }
 
@@ -846,7 +899,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         CurrentTrack = track;
         HasTrack = track != null;
-        IsNavigating = false;
 
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(SafeAuthor));
@@ -859,6 +911,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         AvailableFormats.Clear();
 
+        Position = TimeSpan.Zero;
+        PositionSeconds = 0;
+
         if (track != null)
         {
             Duration = track.Duration;
@@ -867,14 +922,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
             var storedTrack = _library.GetTrack(track.Id);
             IsLiked = storedTrack?.IsLiked ?? track.IsLiked;
 
-            Position = TimeSpan.Zero;
-            PositionSeconds = 0;
-
-            // Инициализируем буфер
+            // Сбрасываем буфер для нового трека
             if (track.IsDownloaded)
             {
                 BufferProgressPercent = 100;
-                BufferedRanges = [(0, 1)];
+                BufferedRanges = [(0.0, 1.0)];
                 IsFullyBuffered = true;
             }
             else
@@ -889,11 +941,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
         else
         {
+            Duration = TimeSpan.Zero;
             DurationSeconds = 1;
             PositionSeconds = 0;
+
+            // Полный сброс буфера
             BufferProgressPercent = 0;
             BufferedRanges = [];
             IsFullyBuffered = false;
+
             ShowStreamInfo = false;
             StreamInfo = "";
             IsLiked = false;
@@ -929,7 +985,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         IsPaused = isPaused;
     }
 
-    private void UpdateStreamInfo()
+    private void UpdateStreamInfo(AudioStreamInfo info)
     {
         if (CurrentTrack == null)
         {
@@ -938,33 +994,21 @@ public sealed class PlayerBarViewModel : ViewModelBase
             return;
         }
 
-        var (format, bitrate, isReady) = _audio.GetCurrentStreamInfo();
-
-        if (!isReady || string.IsNullOrEmpty(format))
+        if (info.IsValid)
         {
-            StreamInfo = L.Get("Player_StreamInfo_Loading", "Loading...");
-            ShowStreamInfo = true;
-            return;
-        }
+            StreamInfo = info.FormatDisplay;
+            Duration = TimeSpan.FromMilliseconds(info.DurationMs);
+            DurationSeconds = Duration.TotalSeconds > 0 ? Duration.TotalSeconds : 1;
 
-        foreach (var f in AvailableFormats)
-        {
-            f.IsActive = string.Equals(f.Codec, format, StringComparison.OrdinalIgnoreCase) &&
-                         (int)f.Bitrate == bitrate;
-        }
-
-        if (bitrate > 0)
-        {
-            StreamInfo = string.Format(L.Get("Stream_Format_Bitrate", "{0} • {1} kbps"), format, bitrate);
+            foreach (var f in AvailableFormats)
+            {
+                f.IsActive = string.Equals(f.Codec, info.Codec, StringComparison.OrdinalIgnoreCase) &&
+                             (int)f.Bitrate == info.Bitrate;
+            }
         }
         else
         {
-            StreamInfo = format;
-        }
-
-        if (CurrentTrack.IsDownloaded && !string.IsNullOrEmpty(CurrentTrack.LocalPath))
-        {
-            StreamInfo += " " + L.Get("Stream_Downloaded_Mark", "✓");
+            StreamInfo = L.Get("Player_StreamInfo_Loading", "Loading...");
         }
 
         ShowStreamInfo = true;
@@ -1124,7 +1168,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         // Обновляем данные которые могли измениться
         FallbackPositionUpdate();
-        UpdateBufferProgress();
+        ForceUpdateBufferProgress();
 
         Log.Debug("[PlayerBar] Resumed");
     }

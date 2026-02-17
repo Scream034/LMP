@@ -1,9 +1,10 @@
 using LMP.Core.Audio.Backends;
+using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
-using LMP.Core.Helpers;
+using LMP.Core.Audio.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 
@@ -11,7 +12,6 @@ namespace LMP.Core.Audio.Tests;
 
 /// <summary>
 /// Быстрый тестер аудио системы.
-/// Использует NAudio как primary backend, NullAudioBackend как fallback.
 /// </summary>
 public static class QuickAudioTester
 {
@@ -37,10 +37,10 @@ public static class QuickAudioTester
         IAudioSource? source = null;
         IAudioDecoder? decoder = null;
         IPlaybackBackend? backend = null;
+        AudioCacheManager? testCache = null;
         
         try
         {
-            // STEP 1: Извлекаем Video ID
             var videoId = ExtractVideoId(youtubeUrlOrId);
             if (string.IsNullOrEmpty(videoId))
             {
@@ -49,12 +49,11 @@ public static class QuickAudioTester
             }
             Console.WriteLine($"[1/5] Video ID: {videoId}");
             
-            // STEP 2: Создаём TrackInfo
             Console.WriteLine("[2/5] Getting track info...");
             
             var track = new TrackInfo
             {
-                Id = videoId,
+                Id = $"yt_{videoId}",
                 Title = "Test Track",
                 Author = "Unknown",
                 Url = $"https://www.youtube.com/watch?v={videoId}"
@@ -76,7 +75,6 @@ public static class QuickAudioTester
                 Console.WriteLine($"  ⚠ Could not get track info: {ex.Message}");
             }
             
-            // STEP 3: Получаем URL стрима
             Console.WriteLine("[3/5] Getting stream URL...");
             
             var streamInfo = await youtubeProvider.RefreshStreamUrlAsync(track, forceRefresh: true, ct);
@@ -96,11 +94,13 @@ public static class QuickAudioTester
             Console.WriteLine($"  ✓ HLS: {track.IsHlsOnly}");
             Console.WriteLine($"  ✓ URL: {url[..Math.Min(80, url.Length)]}...");
             
-            // STEP 4: Создаём пайплайн
             Console.WriteLine("[4/5] Creating audio pipeline...");
             
+            // Создаём временный кэш для теста
+            testCache = new AudioCacheManager();
+            
             (source, decoder) = await CreateSourceAndDecoderAsync(
-                track, url, size, codec, container, ct);
+                track, url, size, codec, bitrate, container, testCache, ct);
             
             if (source == null || decoder == null)
             {
@@ -110,7 +110,6 @@ public static class QuickAudioTester
             
             Console.WriteLine($"  ✓ Source initialized: duration={source.DurationMs}ms, codec={source.Codec}");
             
-            // STEP 5: Создаём backend
             Console.WriteLine("[5/5] Creating backend...");
             backend = CreateBackend();
             Console.WriteLine($"  ✓ {backend.Name} backend");
@@ -132,6 +131,8 @@ public static class QuickAudioTester
             decoder?.Dispose();
             if (source != null)
                 await source.DisposeAsync();
+            if (testCache != null)
+                await testCache.DisposeAsync();
         }
     }
     
@@ -169,7 +170,6 @@ public static class QuickAudioTester
             
             decoder = CreateDecoderForCodec(source.Codec, source.SampleRate, source.Channels);
             
-            // Инициализируем AAC декодер если есть config
             if (decoder is AacDecoder aacDecoder && source.DecoderConfig != null)
             {
                 aacDecoder.Initialize(source.DecoderConfig);
@@ -205,6 +205,7 @@ public static class QuickAudioTester
         IAudioSource? source = null;
         IAudioDecoder? decoder = null;
         IPlaybackBackend? backend = null;
+        AudioCacheManager? testCache = null;
         
         try
         {
@@ -214,14 +215,30 @@ public static class QuickAudioTester
             long contentLength = await SharedHttpClient.GetContentLengthAsync(url);
             Console.WriteLine($"  Size: {(contentLength > 0 ? $"{contentLength / 1024.0 / 1024.0:F1} MB" : "Unknown")}");
             
+            // Создаём временный кэш
+            testCache = new AudioCacheManager();
             var expectedCodec = AudioSourceFactory.GetCodecForFormat(format);
+            var trackId = "test_" + Guid.NewGuid().ToString()[..8];
             
-            source = new UniversalStreamSource(
-                cacheId: Guid.NewGuid().ToString(),
-                url: url,
-                contentLength: contentLength > 0 ? contentLength : 50 * 1024 * 1024,
-                expectedCodec: expectedCodec,
-                httpClient: SharedHttpClient.Instance);
+            if (format == AudioFormat.Hls)
+            {
+                source = new HlsStreamSource(url, SharedHttpClient.Instance);
+            }
+            else
+            {
+                string cacheKey = AudioSourceFactory.BuildCacheKey(trackId, format, 0);
+                
+                source = new CachingStreamSource(
+                    cacheKey,
+                    trackId,
+                    url,
+                    contentLength > 0 ? contentLength : 50 * 1024 * 1024,
+                    format,
+                    expectedCodec,
+                    0, // TODO: Bitrate get
+                    SharedHttpClient.Instance,
+                    testCache);
+            }
             
             if (!await source.InitializeAsync())
             {
@@ -255,6 +272,8 @@ public static class QuickAudioTester
             decoder?.Dispose();
             if (source != null)
                 await source.DisposeAsync();
+            if (testCache != null)
+                await testCache.DisposeAsync();
         }
     }
     
@@ -276,7 +295,6 @@ public static class QuickAudioTester
         bool endOfStream = false;
         string? error = null;
         
-        // Настраиваем бэкенд (volume управляется только здесь!)
         backend.Initialize(decoder.SampleRate, decoder.Channels, buffer =>
         {
             int read = pcmBuffer.Read(buffer);
@@ -287,7 +305,6 @@ public static class QuickAudioTester
         
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         
-        // Декодирование в отдельном потоке
         var decodeTask = Task.Run(async () =>
         {
             try
@@ -333,7 +350,6 @@ public static class QuickAudioTester
             }
         }, cts.Token);
         
-        // Буферизация
         Console.WriteLine();
         Console.WriteLine("Buffering...");
         int minBuffer = decoder.SampleRate * decoder.Channels * MinBufferMs / 1000;
@@ -365,7 +381,6 @@ public static class QuickAudioTester
             return;
         }
         
-        // Воспроизведение
         Console.WriteLine();
         Console.WriteLine($"▶ Playing for {seconds} seconds...");
         Console.WriteLine();
@@ -385,7 +400,7 @@ public static class QuickAudioTester
             progress = Math.Clamp(progress, 0, 40);
             string bar = new string('█', progress) + new string('░', 40 - progress);
             
-            Console.Write($"\r  ▶ [{bar}] {positionSec:F1}s / {durationSec:F1}s | Buf: {bufferMs:F0}ms | Fr: {framesRead}  ");
+            Console.Write($"\r  ▶ [{bar}] {positionSec:F1}s / {durationSec:F1}s | Buf: {bufferMs:F0}ms | Cache: {source.BufferProgress:F0}%  ");
             
             if (endOfStream)
             {
@@ -409,7 +424,6 @@ public static class QuickAudioTester
         }
         catch { }
         
-        // Итоги
         PrintSummary(framesRead, bytesRead, lastTimestampMs, source.BufferProgress, endOfStream, error);
     }
     
@@ -422,7 +436,9 @@ public static class QuickAudioTester
         string url,
         long size,
         string codec,
+        int bitrate,
         string container,
+        AudioCacheManager cacheManager,
         CancellationToken ct)
     {
         IAudioSource source;
@@ -430,30 +446,40 @@ public static class QuickAudioTester
         
         if (track.IsHlsOnly || container == "m3u8")
         {
-            Console.WriteLine("  → Using HLS source");
+            Console.WriteLine("  → Using HLS source (RAM-only)");
             source = new HlsStreamSource(url, SharedHttpClient.Instance);
             decoder = new AacDecoder(44100, 2);
         }
         else if (container == "webm" || codec == "Opus")
         {
-            Console.WriteLine("  → Using WebM/Opus source");
-            source = new UniversalStreamSource(
-                cacheId: track.Id,
-                url: url,
-                contentLength: size > 0 ? size : 50 * 1024 * 1024,
-                expectedCodec: AudioCodec.Opus,
-                httpClient: SharedHttpClient.Instance);
+            Console.WriteLine("  → Using CachingSource (WebM/Opus)");
+            string cacheKey = AudioSourceFactory.BuildCacheKey(track.Id, AudioFormat.WebM, bitrate);
+            source = new CachingStreamSource(
+                cacheKey,
+                track.Id,
+                url,
+                size > 0 ? size : 50 * 1024 * 1024,
+                AudioFormat.WebM,
+                AudioCodec.Opus,
+                bitrate,
+                SharedHttpClient.Instance,
+                cacheManager);
             decoder = new OpusDecoder(48000, 2);
         }
         else
         {
-            Console.WriteLine("  → Using MP4/AAC source");
-            source = new UniversalStreamSource(
-                cacheId: track.Id,
-                url: url,
-                contentLength: size > 0 ? size : 50 * 1024 * 1024,
-                expectedCodec: AudioCodec.Aac,
-                httpClient: SharedHttpClient.Instance);
+            Console.WriteLine("  → Using CachingSource (MP4/AAC)");
+            string cacheKey = AudioSourceFactory.BuildCacheKey(track.Id, AudioFormat.Mp4, bitrate);
+            source = new CachingStreamSource(
+                cacheKey,
+                track.Id,
+                url,
+                size > 0 ? size : 50 * 1024 * 1024,
+                AudioFormat.Mp4,
+                AudioCodec.Aac,
+                bitrate,
+                SharedHttpClient.Instance,
+                cacheManager);
             decoder = new AacDecoder(44100, 2);
         }
         
@@ -463,7 +489,6 @@ public static class QuickAudioTester
             return (null, null);
         }
         
-        // Обновляем декодер если нужно
         if (source.Codec != decoder.Codec)
         {
             Console.WriteLine($"  → Switching decoder to {source.Codec}");
@@ -471,7 +496,6 @@ public static class QuickAudioTester
             decoder = CreateDecoderForCodec(source.Codec, source.SampleRate, source.Channels);
         }
         
-        // Инициализируем AAC декодер если есть config
         if (decoder is AacDecoder aacDecoder && source.DecoderConfig != null)
         {
             aacDecoder.Initialize(source.DecoderConfig);
@@ -495,9 +519,6 @@ public static class QuickAudioTester
         };
     }
     
-    /// <summary>
-    /// Создаёт backend: NAudio primary, Null fallback.
-    /// </summary>
     private static IPlaybackBackend CreateBackend()
     {
         try
@@ -530,7 +551,7 @@ public static class QuickAudioTester
         Console.WriteLine($"  Frames decoded:  {framesRead}");
         Console.WriteLine($"  Data processed:  {bytesRead / 1024.0:F1} KB");
         Console.WriteLine($"  Last position:   {lastTimestampMs / 1000.0:F1}s");
-        Console.WriteLine($"  Buffer progress: {bufferProgress:F0}%");
+        Console.WriteLine($"  Cache progress:  {bufferProgress:F0}%");
         Console.WriteLine($"  Status: {(endOfStream ? "✓ Completed" : error != null ? $"❌ {error}" : "⏹ Stopped")}");
         Console.WriteLine("════════════════════════════════════════════════════════════");
     }

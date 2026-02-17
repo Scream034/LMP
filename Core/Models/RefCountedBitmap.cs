@@ -10,19 +10,18 @@ namespace LMP.Core.Models;
 /// </summary>
 public sealed class RefCountedBitmap : IDisposable
 {
-    private readonly Bitmap _bitmap;
     private int _refCount;
     private bool _isDisposed;
     private readonly object _lock = new();
 
-    public Bitmap Bitmap => _bitmap;
+    public Bitmap Bitmap { get; }
     public int RefCount => Volatile.Read(ref _refCount);
     public long EstimatedBytes { get; }
     public DateTime CachedAt { get; }
 
     public RefCountedBitmap(Bitmap bitmap)
     {
-        _bitmap = bitmap ?? throw new ArgumentNullException(nameof(bitmap));
+        Bitmap = bitmap ?? throw new ArgumentNullException(nameof(bitmap));
         _refCount = 1; // Начинаем с 1 (cache держит ссылку)
         
         long pixelCount = (long)bitmap.PixelSize.Width * bitmap.PixelSize.Height;
@@ -73,8 +72,8 @@ public sealed class RefCountedBitmap : IDisposable
 
         try
         {
-            _bitmap.Dispose();
-            Log.Trace($"[RefCountedBitmap] Disposed bitmap {_bitmap.PixelSize}");
+            Bitmap.Dispose();
+            Log.Trace($"[RefCountedBitmap] Disposed bitmap {Bitmap.PixelSize}");
         }
         catch (Exception ex)
         {

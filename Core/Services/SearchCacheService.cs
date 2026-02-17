@@ -24,8 +24,7 @@ public class SearchCacheService
     private readonly LinkedList<string> _lruOrder = new();
     private const int MaxMemoryCacheItems = 15;
 
-    private LibraryService? _libService;
-    private LibraryService LibService => _libService ??= Program.Services.GetRequiredService<LibraryService>();
+    private LibraryService LibService => field ??= Program.Services.GetRequiredService<LibraryService>();
 
     private TimeSpan CacheTtl => TimeSpan.FromMinutes(
         LibService.Settings.SearchCacheTtlMinutes > 0

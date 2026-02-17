@@ -304,7 +304,7 @@ public class StreamCacheManager : IDisposable
     /// <summary>
     /// Возвращает список закэшированных форматов для трека.
     /// </summary>
-    public List<(string Container, int Bitrate)> GetCachedFormats(string trackId)
+    public static List<(string Container, int Bitrate)> GetCachedFormats(string trackId)
     {
         var result = new List<(string, int)>();
 
@@ -544,7 +544,7 @@ public class StreamCacheManager : IDisposable
     /// <summary>
     /// Очищает папку Downloads.
     /// </summary>
-    public async Task ClearDownloadsAsync()
+    public static async Task ClearDownloadsAsync()
     {
         try
         {

@@ -146,7 +146,7 @@ public partial class MainWindow : Window
 
                 // 3. Буферы аудио
                 var audioEngine = Program.Services.GetRequiredService<AudioEngine>();
-                audioEngine.NotifyAppMinimized();
+                AudioEngine.NotifyAppMinimized();
 
                 // 4. Мёртвые ссылки в TrackRegistry
                 var registry = Program.Services.GetRequiredService<TrackRegistry>();

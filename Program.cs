@@ -14,7 +14,7 @@ using Microsoft.EntityFrameworkCore;
 using Avalonia;
 using AsyncImageLoader;
 using LMP.UI.Dialogs;
-using LMP.Core.Audio;
+using LMP.Core.Audio.Cache;
 
 namespace LMP;
 
@@ -105,21 +105,10 @@ class Program
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
 
-        // === Audio & Downloads ===
-        // services.AddSingleton(sp =>
-        // {
-        //     var youtubeProvider = sp.GetRequiredService<YoutubeProvider>();
-        //     var trackRegistry = sp.GetRequiredService<TrackRegistry>();
-
-        //     return new MusicPlayerService(youtubeProvider, trackRegistry, new AudioPlayerOptions
-        //     {
-        //         PositionUpdateInterval = TimeSpan.FromMilliseconds(200),
-        //         MaxRetryAttempts = 3,
-        //         UseNullBackend = false // true для тестов
-        //     });
-        // });
-        services.AddSingleton<AudioEngine>();
-        services.AddSingleton<DownloadService>();
+        // === Audio & Downloads ====
+        services.AddSingleton<AudioCacheManager>(); // Новый менеджер кэша (диск)
+        services.AddSingleton<AudioEngine>();       // Наш новый движок
+        services.AddSingleton<DownloadService>();   // Сервис загрузок
 
         // === ViewModels ===
         services.AddTransient<HomeViewModel>();

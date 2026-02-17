@@ -83,4 +83,9 @@ public sealed class NullAudioBackend : IPlaybackBackend
         
         _cts?.Dispose();
     }
+
+    public void Flush()
+    {
+        // Ignore
+    }
 }

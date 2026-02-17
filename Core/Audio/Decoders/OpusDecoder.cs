@@ -13,26 +13,23 @@ public sealed class OpusDecoder : IAudioDecoder
     
     private readonly IOpusDecoder _decoder;
     private readonly short[] _shortBuffer;
-    private readonly int _sampleRate;
-    private readonly int _channels;
-    private readonly int _maxFrameSize;
     private bool _disposed;
     
     public OpusDecoder(int sampleRate = 48000, int channels = 2)
     {
-        _sampleRate = sampleRate;
-        _channels = channels;
-        _maxFrameSize = sampleRate * MaxFrameDurationMs / 1000;
-        _shortBuffer = new short[_maxFrameSize * channels];
+        SampleRate = sampleRate;
+        Channels = channels;
+        MaxFrameSize = sampleRate * MaxFrameDurationMs / 1000;
+        _shortBuffer = new short[MaxFrameSize * channels];
         
         _decoder = OpusCodecFactory.CreateDecoder(sampleRate, channels);
         
         Log.Debug($"[OpusDecoder] Created: {sampleRate}Hz, {channels}ch");
     }
-    
-    public int SampleRate => _sampleRate;
-    public int Channels => _channels;
-    public int MaxFrameSize => _maxFrameSize;
+
+    public int SampleRate { get; }
+    public int Channels { get; }
+    public int MaxFrameSize { get; }
     public AudioCodec Codec => AudioCodec.Opus;
     public bool IsInitialized => true; // Opus не требует отдельной инициализации
     
@@ -45,10 +42,10 @@ public sealed class OpusDecoder : IAudioDecoder
         
         try
         {
-            Span<short> shortSpan = _shortBuffer.AsSpan(0, _maxFrameSize * _channels);
-            int samples = _decoder.Decode(encodedData, shortSpan, _maxFrameSize);
+            Span<short> shortSpan = _shortBuffer.AsSpan(0, MaxFrameSize * Channels);
+            int samples = _decoder.Decode(encodedData, shortSpan, MaxFrameSize);
             
-            ConvertToFloat(shortSpan[..(samples * _channels)], outputBuffer);
+            ConvertToFloat(shortSpan[..(samples * Channels)], outputBuffer);
             return samples;
         }
         catch (Exception ex)
@@ -69,15 +66,15 @@ public sealed class OpusDecoder : IAudioDecoder
         try
         {
             Span<short> shortSpan = _shortBuffer.AsSpan();
-            int samples = _decoder.Decode(ReadOnlySpan<byte>.Empty, shortSpan, _maxFrameSize);
-            ConvertToFloat(shortSpan[..(samples * _channels)], outputBuffer);
+            int samples = _decoder.Decode(ReadOnlySpan<byte>.Empty, shortSpan, MaxFrameSize);
+            ConvertToFloat(shortSpan[..(samples * Channels)], outputBuffer);
             return samples;
         }
         catch
         {
             // Fallback: возвращаем тишину (960 samples = 20ms @ 48kHz)
             const int fallbackSamples = 960;
-            int totalSamples = fallbackSamples * _channels;
+            int totalSamples = fallbackSamples * Channels;
             outputBuffer[..Math.Min(totalSamples, outputBuffer.Length)].Clear();
             return fallbackSamples;
         }

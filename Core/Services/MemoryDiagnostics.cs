@@ -13,8 +13,7 @@ public sealed class MemoryDiagnostics : IDisposable
 {
     #region Singleton
 
-    private static MemoryDiagnostics? _instance;
-    public static MemoryDiagnostics Instance => _instance ??= new MemoryDiagnostics();
+    public static MemoryDiagnostics Instance => field ??= new MemoryDiagnostics();
 
     #endregion
 
@@ -23,8 +22,6 @@ public sealed class MemoryDiagnostics : IDisposable
     private readonly ConcurrentDictionary<string, long> _counters = new();
     private readonly ConcurrentDictionary<string, int> _instanceCounts = new();
     private readonly Timer _monitorTimer;
-
-    private MemoryStats _lastStats = new();
     private bool _disposed;
 
     #endregion
@@ -38,7 +35,7 @@ public sealed class MemoryDiagnostics : IDisposable
 
     #region Properties
 
-    public MemoryStats CurrentStats => _lastStats;
+    public MemoryStats CurrentStats { get; private set; } = new();
 
     /// <summary>Порог предупреждения (MB)</summary>
     public long WarningThresholdMb { get; set; } = 330;
@@ -146,7 +143,7 @@ public sealed class MemoryDiagnostics : IDisposable
             var process = Process.GetCurrentProcess();
             var gcInfo = GC.GetGCMemoryInfo();
 
-            _lastStats = new MemoryStats
+            CurrentStats = new MemoryStats
             {
                 WorkingSetMb = process.WorkingSet64 / (1024 * 1024),
                 PrivateMemoryMb = process.PrivateMemorySize64 / (1024 * 1024),
@@ -161,12 +158,12 @@ public sealed class MemoryDiagnostics : IDisposable
                 TrackedCategories = GetTrackedSummary()
             };
 
-            OnStatsUpdated?.Invoke(_lastStats);
+            OnStatsUpdated?.Invoke(CurrentStats);
 
             // Проверяем пороги
-            if (_lastStats.WorkingSetMb > CriticalThresholdMb)
+            if (CurrentStats.WorkingSetMb > CriticalThresholdMb)
             {
-                var msg = $"CRITICAL: Memory {_lastStats.WorkingSetMb}MB > {CriticalThresholdMb}MB!";
+                var msg = $"CRITICAL: Memory {CurrentStats.WorkingSetMb}MB > {CriticalThresholdMb}MB!";
                 OnMemoryWarning?.Invoke(msg);
                 Log.Warn(msg);
 
@@ -175,9 +172,9 @@ public sealed class MemoryDiagnostics : IDisposable
                     ForceCleanup();
                 }
             }
-            else if (_lastStats.WorkingSetMb > WarningThresholdMb)
+            else if (CurrentStats.WorkingSetMb > WarningThresholdMb)
             {
-                var msg = $"WARNING: Memory {_lastStats.WorkingSetMb}MB > {WarningThresholdMb}MB";
+                var msg = $"WARNING: Memory {CurrentStats.WorkingSetMb}MB > {WarningThresholdMb}MB";
                 OnMemoryWarning?.Invoke(msg);
             }
         }
@@ -264,7 +261,7 @@ public sealed class MemoryDiagnostics : IDisposable
     /// </summary>
     public string GetShortStatus()
     {
-        return $"RAM: {_lastStats.WorkingSetMb}MB | GC: {_lastStats.GcTotalMemoryMb}MB | Gen0/1/2: {_lastStats.Gen0Collections}/{_lastStats.Gen1Collections}/{_lastStats.Gen2Collections}";
+        return $"RAM: {CurrentStats.WorkingSetMb}MB | GC: {CurrentStats.GcTotalMemoryMb}MB | Gen0/1/2: {CurrentStats.Gen0Collections}/{CurrentStats.Gen1Collections}/{CurrentStats.Gen2Collections}";
     }
 
     /// <summary>

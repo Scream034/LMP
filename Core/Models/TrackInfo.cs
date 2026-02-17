@@ -14,8 +14,6 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 {
     private static readonly ConditionalWeakTable<string, string> _idCache = new();
 
-    private string _id = string.Empty;
-
     #region Identity
 
     /// <summary>
@@ -23,30 +21,30 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     /// </summary>
     public string Id
     {
-        get => _id;
+        get;
         set
         {
-            if (_id == value) return;
+            if (field == value) return;
 
             if (!string.IsNullOrEmpty(value))
             {
                 if (value.StartsWith("yt_") || value.StartsWith("yt_pl_"))
                 {
-                    _id = value;
+                    field = value;
                 }
                 else
                 {
-                    _id = GetCachedPrefixedId("yt_", value);
+                    field = GetCachedPrefixedId("yt_", value);
                 }
             }
             else
             {
-                _id = value ?? string.Empty;
+                field = value ?? string.Empty;
             }
 
             this.RaisePropertyChanged();
         }
-    }
+    } = string.Empty;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string GetCachedPrefixedId(string prefix, string rawId)
@@ -65,7 +63,7 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<char> GetRawIdSpan()
     {
-        var span = _id.AsSpan();
+        var span = Id.AsSpan();
         if (span.StartsWith("yt_pl_".AsSpan()))
             return span[6..];
         if (span.StartsWith("yt_".AsSpan()))
@@ -79,9 +77,9 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string GetRawId()
     {
-        if (_id.StartsWith("yt_pl_")) return _id.Substring(6);
-        if (_id.StartsWith("yt_")) return _id.Substring(3);
-        return _id;
+        if (Id.StartsWith("yt_pl_")) return Id.Substring(6);
+        if (Id.StartsWith("yt_")) return Id.Substring(3);
+        return Id;
     }
 
     #endregion
@@ -152,12 +150,11 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #region Playlists
 
-    private HashSet<string>? _inPlaylists;
 
     public HashSet<string> InPlaylists
     {
-        get => _inPlaylists ??= new HashSet<string>(StringComparer.Ordinal);
-        set => _inPlaylists = value;
+        get => field ??= new HashSet<string>(StringComparer.Ordinal);
+        set;
     }
 
     #endregion

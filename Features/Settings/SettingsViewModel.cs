@@ -180,7 +180,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 YoutubeClientUtils.CurrentProfile = c.Value;
 
                 // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
-                await _audio.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
+                await AudioEngine.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
 
                 // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
                 _youtube.ClearCache();
@@ -691,7 +691,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (!await _dialog.ConfirmAsync(SL["Dialog_Confirm_Title"], SL["Settings_ClearDownloadsConfirm"]))
             return;
 
-        await _streamCache.ClearDownloadsAsync();
+        await StreamCacheManager.ClearDownloadsAsync();
         UpdateCacheStats();
     }
 

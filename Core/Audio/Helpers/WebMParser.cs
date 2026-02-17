@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 
-namespace LMP.Core.Helpers;
+namespace LMP.Core.Audio.Helpers;
 
 /// <summary>
 /// Парсер WebM/Matroska контейнера для извлечения OPUS пакетов.
@@ -50,9 +50,6 @@ public sealed class WebMParser : IDisposable
     private long _timecodeScale = DEFAULT_TIMECODE_SCALE;
     private long _duration;
     private int _audioTrackNumber = 1;
-    private int _sampleRate;
-    private int _channels = 2;
-    private byte[]? _codecPrivate;
     private bool _headersParsed;
     
     public readonly record struct CuePoint(long TimeMs, long ClusterOffset);
@@ -71,10 +68,10 @@ public sealed class WebMParser : IDisposable
     
     public long DurationMs => _duration * _timecodeScale / 1_000_000;
     public IReadOnlyList<CuePoint> CuePoints => _cuePoints;
-    public byte[]? CodecPrivate => _codecPrivate;
-    public int SampleRate => _sampleRate;
-    public int Channels => _channels;
-    
+    public byte[]? CodecPrivate { get; private set; }
+    public int SampleRate { get; private set; }
+    public int Channels { get; private set; } = 2;
+
     public async ValueTask<bool> ParseHeadersAsync(CancellationToken ct = default)
     {
         if (_headersParsed) return true;
@@ -149,7 +146,7 @@ public sealed class WebMParser : IDisposable
                     continue;
                 
                 case TIMECODE_ID:
-                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt вместо ReadVInt! ***
+                    // ReadUnsignedInt вместо ReadVInt!
                     var timecodeData = ArrayPool<byte>.Shared.Rent((int)size);
                     try
                     {
@@ -394,7 +391,7 @@ public sealed class WebMParser : IDisposable
             switch (id)
             {
                 case TIMECODE_SCALE_ID:
-                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    // ReadUnsignedInt!
                     var scaleData = ArrayPool<byte>.Shared.Rent((int)elementSize);
                     try
                     {
@@ -459,7 +456,7 @@ public sealed class WebMParser : IDisposable
             switch (id)
             {
                 case TRACK_NUMBER_ID:
-                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    // ReadUnsignedInt!
                     var numData = ArrayPool<byte>.Shared.Rent((int)elementSize);
                     try
                     {
@@ -473,7 +470,7 @@ public sealed class WebMParser : IDisposable
                     break;
                 
                 case TRACK_TYPE_ID:
-                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    // ReadUnsignedInt!
                     var typeData = ArrayPool<byte>.Shared.Rent((int)elementSize);
                     try
                     {
@@ -487,8 +484,8 @@ public sealed class WebMParser : IDisposable
                     break;
                 
                 case CODEC_PRIVATE_ID:
-                    _codecPrivate = new byte[elementSize];
-                    await ReadExactAsync(_codecPrivate, ct);
+                    CodecPrivate = new byte[elementSize];
+                    await ReadExactAsync(CodecPrivate, ct);
                     break;
                 
                 case AUDIO_ID:
@@ -522,7 +519,7 @@ public sealed class WebMParser : IDisposable
                     try
                     {
                         await ReadExactAsync(freqData.AsMemory(0, (int)elementSize), ct);
-                        _sampleRate = (int)ReadFloat(freqData.AsSpan(0, (int)elementSize));
+                        SampleRate = (int)ReadFloat(freqData.AsSpan(0, (int)elementSize));
                     }
                     finally
                     {
@@ -531,12 +528,12 @@ public sealed class WebMParser : IDisposable
                     break;
                 
                 case CHANNELS_ID:
-                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    // ReadUnsignedInt!
                     var chData = ArrayPool<byte>.Shared.Rent((int)elementSize);
                     try
                     {
                         await ReadExactAsync(chData.AsMemory(0, (int)elementSize), ct);
-                        _channels = (int)ReadUnsignedInt(chData.AsSpan(0, (int)elementSize));
+                        Channels = (int)ReadUnsignedInt(chData.AsSpan(0, (int)elementSize));
                     }
                     finally
                     {
@@ -587,7 +584,7 @@ public sealed class WebMParser : IDisposable
             switch (id)
             {
                 case CUE_TIME_ID:
-                    // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                    // ReadUnsignedInt!
                     var timeData = ArrayPool<byte>.Shared.Rent((int)elementSize);
                     try
                     {
@@ -607,7 +604,7 @@ public sealed class WebMParser : IDisposable
                         var (posId, posSize) = await ReadElementHeaderAsync(ct);
                         if (posId == CUE_CLUSTER_POSITION_ID)
                         {
-                            // *** ИСПРАВЛЕНИЕ: ReadUnsignedInt! ***
+                            // ReadUnsignedInt!
                             var posData = ArrayPool<byte>.Shared.Rent((int)posSize);
                             try
                             {

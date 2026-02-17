@@ -1,5 +1,4 @@
-﻿using System.Buffers;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -932,7 +931,6 @@ public partial class YoutubeProvider : IDisposable
         private readonly TrackRegistry _registry;
         private readonly string _query;
         private readonly int _maxResults;
-        private readonly SearchFilter _filter;
         private readonly HashSet<string> _seenIds;
         private IAsyncEnumerator<Batch<ISearchResult>>? _enumerator;
         private bool _hasMore = true;
@@ -943,7 +941,7 @@ public partial class YoutubeProvider : IDisposable
 
         public bool HasMore => (_hasMore || _buffer.Count > 0) && !_disposed && _seenIds.Count < _maxResults;
         public int LoadedCount => _seenIds.Count;
-        public SearchFilter Filter => _filter;
+        public SearchFilter Filter { get; }
 
         internal SearchSession(
             YoutubeClient youtube,
@@ -957,7 +955,7 @@ public partial class YoutubeProvider : IDisposable
             _registry = registry;
             _query = query;
             _maxResults = maxResults;
-            _filter = filter;
+            Filter = filter;
             _seenIds = new HashSet<string>(64, StringComparer.Ordinal);
 
             if (skipTrackIds != null)
@@ -988,7 +986,7 @@ public partial class YoutubeProvider : IDisposable
                 try
                 {
                     _enumerator ??= _youtube.Search
-                        .GetResultBatchesAsync(_query, _filter, ct)
+                        .GetResultBatchesAsync(_query, Filter, ct)
                         .GetAsyncEnumerator(ct);
 
                     if (!await _enumerator.MoveNextAsync())
@@ -1426,8 +1424,7 @@ public partial class YoutubeProvider : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (AuthService != null)
-            AuthService.OnAuthStateChanged -= ReloadClient;
+        AuthService?.OnAuthStateChanged -= ReloadClient;
 
         DisposeCurrentClient();
 

@@ -1,6 +1,4 @@
-using System.Diagnostics;
-
-namespace LMP.Core.Services.Streaming;
+namespace LMP.Core.Helpers;
 
 /// <summary>
 /// HTTP handler для логирования всех запросов в DEBUG.
@@ -20,17 +18,26 @@ public sealed class LoggingHandler(HttpMessageHandler innerHandler) : Delegating
 #endif
 
         HttpResponseMessage response;
+#if DEBUG && HTTP_LOG
         try
         {
             response = await base.SendAsync(request, cancellationToken);
         }
         catch (Exception ex)
         {
-#if DEBUG && HTTP_LOG
             Log.Warn($"[HTTP] ✗ {request.Method} {request.RequestUri} - {ex.Message}");
-#endif
             throw;
         }
+#else
+        try
+        {
+            response = await base.SendAsync(request, cancellationToken);
+        }
+        catch (Exception)
+        {
+            throw;
+        }
+#endif
 
 #if DEBUG && HTTP_LOG
         sw.Stop();

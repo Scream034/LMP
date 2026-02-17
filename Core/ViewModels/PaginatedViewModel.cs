@@ -28,9 +28,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     private CancellationTokenSource? _loadCts;
     private bool _canFetchMore;
     private bool _isDisposed;
-    private int _totalSourceCount;
-
-    private string _filterQuery = string.Empty;
 
     #endregion
 
@@ -50,12 +47,12 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     public string FilterQuery
     {
-        get => _filterQuery;
-        set => this.RaiseAndSetIfChanged(ref _filterQuery, value);
-    }
+        get;
+        set => this.RaiseAndSetIfChanged(ref field, value);
+    } = string.Empty;
 
     public ReadOnlyObservableCollection<TViewModel> Items => _items;
-    protected int TotalCount => _totalSourceCount;
+    protected int TotalCount { get; private set; }
 
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
 
@@ -72,7 +69,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.TaskpoolScheduler)
             .Select(query => BuildFilterPredicate(query))
-            .StartWith(BuildFilterPredicate(_filterQuery));
+            .StartWith(BuildFilterPredicate(FilterQuery));
 
         _sourceList.Connect()
             .Filter(filterPredicate)
@@ -170,10 +167,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             innerList.AddRange(itemsList);
         });
 
-        _totalSourceCount = _sourceList.Count;
+        TotalCount = _sourceList.Count;
         UpdateState();
 
-        if (_totalSourceCount == 0 && canFetchMore)
+        if (TotalCount == 0 && canFetchMore)
         {
             await LoadNextBatchAsync();
         }
@@ -182,7 +179,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     protected void ClearItems()
     {
         _sourceList.Clear();
-        _totalSourceCount = 0;
+        TotalCount = 0;
         _canFetchMore = false;
         UpdateState();
     }
@@ -207,7 +204,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     private void UpdateState()
     {
         HasMoreItems = _canFetchMore;
-        ReachedEnd = !_canFetchMore && _totalSourceCount > 0;
+        ReachedEnd = !_canFetchMore && TotalCount > 0;
     }
 
     protected void SetCanFetchMore(bool value)
@@ -242,7 +239,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
                         if (!existingIds.Contains(GetItemId(item)))
                         {
                             list.Add(item);
-                            _totalSourceCount++;
+                            TotalCount++;
                         }
                     }
                 });

@@ -5,6 +5,8 @@ using Microsoft.Extensions.DependencyInjection;
 using LMP.Features.Shell;
 using LMP.Core.Services;
 using AsyncImageLoader;
+using LMP.Core.Audio;
+using LMP.Core.Audio.Cache;
 
 namespace LMP;
 
@@ -25,24 +27,26 @@ public partial class App : Application
             var themeManager = Program.Services.GetRequiredService<ThemeManagerService>();
             themeManager.LoadAndApplyThemeOnStartup();
 
-            // 1. Get library service (don't await initialization here!)
+            // 1. Get library service
             var library = Program.Services.GetRequiredService<LibraryService>();
 
             var registry = Program.Services.GetRequiredService<TrackRegistry>();
             var cacheManager = Program.Services.GetRequiredService<StreamCacheManager>();
-
-            // Передаем CacheManager в Registry ДО начала загрузки данных (HydrateAsync)
             registry.CacheManager = cacheManager;
 
-            // 2. Initialize localization with default, will update after DB init
+            // 2. Initialize localization with default
             LocalizationService.Instance.Initialize("en");
 
-            // 3. Start Memory Monitor
+            // 3. Initialize GLOBAL audio cache
+            var audioCacheManager = Program.Services.GetRequiredService<AudioCacheManager>();
+            AudioSourceFactory.InitializeGlobalCache(audioCacheManager);
+
+            // 4. Start Memory Monitor
             MemoryDiagnostics.Instance.OnMemoryWarning += Log.Warn;
             MemoryDiagnostics.Instance.WarningThresholdMb = 400;
             MemoryDiagnostics.Instance.CriticalThresholdMb = 450;
 
-            // 4. Create UI FIRST
+            // 5. Create UI
             var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow
             {
@@ -54,18 +58,20 @@ public partial class App : Application
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
-            // 5. Initialize library and other services IN BACKGROUND
+            // 6. Initialize services IN BACKGROUND
             _ = InitializeServicesAsync(library);
 
-            // 6. Cleanup on shutdown
+            // 7. Cleanup on shutdown
             desktop.ShutdownRequested += async (_, e) =>
             {
                 try
                 {
-                    // Логируем финальный отчёт
                     MemoryDiagnostics.LogReport();
-
                     MemoryDiagnostics.Instance.Dispose();
+
+                    // Dispose audio cache
+                    await audioCacheManager.DisposeAsync();
+
                     await library.DisposeAsync();
                 }
                 catch (Exception ex)
@@ -77,7 +83,6 @@ public partial class App : Application
 #if DEBUG
             desktop.MainWindow.AttachDevTools();
 
-            // Debug window
             desktop.MainWindow.KeyDown += (s, e) =>
             {
                 if (e.Key == Avalonia.Input.Key.F9)

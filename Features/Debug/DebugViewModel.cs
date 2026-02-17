@@ -7,6 +7,8 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Features.Shared;
+using LMP.Core.Audio.Helpers;
+
 
 #if DEBUG
 using LMP.Core.Audio;
@@ -146,7 +148,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
         try
         {
-            // Extract video ID
             var videoId = ExtractVideoId(AudioTestInput);
             if (string.IsNullOrEmpty(videoId))
             {
@@ -155,7 +156,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             }
             AppendLog($"  Video ID: {videoId}");
 
-            // Get track info
             AppendLog($"  → Getting stream URL...");
             var track = new TrackInfo
             {
@@ -177,7 +177,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 AppendLog($"  ⚠️ Track info error: {ex.Message}");
             }
 
-            // Get stream URL
             var streamInfo = await _youtube.RefreshStreamUrlAsync(track, forceRefresh: true, _audioTestCts.Token);
             if (streamInfo == null)
             {
@@ -190,13 +189,13 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             AppendLog($"  ✓ Container: {container}, Size: {size / 1024.0 / 1024.0:F1}MB");
             AppendLog($"  ✓ HLS: {track.IsHlsOnly}");
 
-            // Create player
             AppendLog($"  → Creating AudioPlayer...");
 
-            // *** ИСПРАВЛЕНИЕ: используем поле класса для cacheManager ***
+            // Инициализируем глобальный кэш если включен
             if (useCache)
             {
                 _testCacheManager = new AudioCacheManager();
+                AudioSourceFactory.InitializeGlobalCache(_testCacheManager);
                 AppendLog($"  ✓ Cache enabled");
             }
 
@@ -209,9 +208,9 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 }
             };
 
-            _testPlayer = new AudioPlayer(options, _testCacheManager);
+            // AudioPlayer теперь принимает только options
+            _testPlayer = new AudioPlayer(options);
 
-            // Subscribe to events
             _testPlayer.StateChanged += state =>
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                     AppendLog($"  State: {state}"));
@@ -227,13 +226,11 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                     IsAudioPlaying = false;
                 });
 
-            // Start playback
             AppendLog($"  → Starting playback...");
-            await _testPlayer.PlayAsync(url, track.Id, _audioTestCts.Token);
+            await _testPlayer.PlayAsync(url, track.Id, ct: _audioTestCts.Token);
 
             AppendLog($"  ▶️ Playing for {AudioTestDuration}s...");
 
-            // Progress updates
             var startTime = DateTime.Now;
             while ((DateTime.Now - startTime).TotalSeconds < AudioTestDuration &&
                    !_audioTestCts.Token.IsCancellationRequested &&
@@ -243,12 +240,12 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 var pos = _testPlayer.Position.TotalSeconds;
                 var dur = _testPlayer.Duration.TotalSeconds;
                 var buf = _testPlayer.BufferProgress;
-                AppendLog($"  ⏱️ {pos:F1}s / {dur:F1}s | Buffer: {buf:F0}%");
+                var downloaded = _testPlayer.GetDownloadedBytes() / 1024.0;
+                AppendLog($"  ⏱️ {pos:F1}s / {dur:F1}s | Buffer: {buf:F0}% | Downloaded: {downloaded:F0}KB");
             }
 
             AppendLog($"  ✓ Test completed");
 
-            // *** ИСПРАВЛЕНИЕ: показываем статистику из ТОГО ЖЕ cacheManager ***
             if (_testCacheManager != null)
             {
                 var stats = _testCacheManager.GetStats();
@@ -671,11 +668,16 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         LogOutput += text + "\n";
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        _audioTestCts?.Cancel();
-        _audioTestCts?.Dispose();
-        _testPlayer?.Dispose();
-        _testCacheManager?.Dispose();
+        if (disposing)
+        {
+            _audioTestCts?.Cancel();
+            _audioTestCts?.Dispose();
+            _testPlayer?.Dispose();
+            _testCacheManager?.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 }

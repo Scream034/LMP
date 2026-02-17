@@ -92,7 +92,9 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
     public static LocalizationService SL => LocalizationService.Instance;
 
     /// <summary>Нестатическое для XAML биндинга (через DataContext).</summary>
+#pragma warning disable CA1822 // Пометьте члены как статические
     public LocalizationService L => LocalizationService.Instance;
+#pragma warning restore CA1822 // Пометьте члены как статические
 
     #endregion
 

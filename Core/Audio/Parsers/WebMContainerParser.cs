@@ -1,5 +1,5 @@
 using LMP.Core.Audio.Interfaces;
-using LMP.Core.Helpers;
+using LMP.Core.Audio.Helpers;
 
 namespace LMP.Core.Audio.Parsers;
 

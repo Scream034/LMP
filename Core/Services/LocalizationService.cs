@@ -8,8 +8,6 @@ namespace LMP.Core.Services;
 public sealed class LocalizationService : INotifyPropertyChanged
 {
     public readonly static LocalizationService Instance = new();
-
-    private string _currentLanguage = "en"; // Дефолт - английский
     private Dictionary<string, string> _resources = [];
     private bool _isInitialized;
 
@@ -25,17 +23,17 @@ public sealed class LocalizationService : INotifyPropertyChanged
     /// <summary>
     /// Публичное свойство для доступа к коду языка (hl)
     /// </summary>
-    public string CurrentLanguageCode => _currentLanguage;
+    public string CurrentLanguageCode { get; private set; } = "en";
 
     public string CurrentLanguage
     {
-        get => _currentLanguage;
+        get => CurrentLanguageCode;
         set
         {
-            if (_currentLanguage != value && AvailableLanguages.Any(l => l.Code == value))
+            if (CurrentLanguageCode != value && AvailableLanguages.Any(l => l.Code == value))
             {
-                Log.Info($"Changing language: {_currentLanguage} → {value}");
-                _currentLanguage = value;
+                Log.Info($"Changing language: {CurrentLanguageCode} → {value}");
+                CurrentLanguageCode = value;
                 LoadLanguage(value);
 
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
@@ -83,7 +81,7 @@ public sealed class LocalizationService : INotifyPropertyChanged
             }
         }
 
-        _currentLanguage = langToUse;
+        CurrentLanguageCode = langToUse;
         LoadLanguage(langToUse);
         _isInitialized = true;
     }
