@@ -1,6 +1,4 @@
-using LMP.Core.Audio.Interfaces;
-
-namespace LMP.Core.Audio.Parsers;
+namespace LMP.Core.Audio.Interfaces;
 
 /// <summary>
 /// Парсер контейнерного формата (WebM, MP4 и т.д.).

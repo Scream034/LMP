@@ -296,6 +296,10 @@
   "Input_Watermark": "Enter text...",
   "Input_PasteHere": "Paste here...",
 
+  "Dialog_BotDetection_Title": "Temporary Slowdown",
+  "Dialog_BotDetection_Message": "YouTube detected unusual activity and temporarily limited playback.\n\nThis is normal after playing many tracks quickly.",
+  "Dialog_BotDetection_Hint": "Playback resumes automatically. Don't close the player.",
+
   "Sync_Action": "Import",
   "Sync_DuplicateName": "Imported",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",
@@ -347,5 +351,21 @@
   "Delete_LocalOnly": "Remove from Library",
   "Delete_LocalOnlyHint": "Keeps the playlist on YouTube",
   "Delete_Everywhere": "Delete Everywhere",
-  "Delete_EverywhereHint": "Removes from YouTube account too"
+  "Delete_EverywhereHint": "Removes from YouTube account too",
+
+  "Error_CopyDetails": "Copy Details",
+  
+  "Error_BotDetection_Message": "YouTube rate limit active. Please wait {0}.",
+  
+  "Error_Stream_HlsForbidden": "HLS stream blocked (403). Please contact the developer.",
+  "Error_Stream_Forbidden": "Track access forbidden (403). Try another track or contact the developer.",
+  "Error_Stream_AllClientsFailed": "Could not access track through any method. Please contact the developer.",
+  "Error_Stream_RegionBlocked": "Track is not available in your region.",
+  "Error_Stream_AgeRestricted": "Track is age-restricted. Please sign in to YouTube.",
+  "Error_Stream_LiveStream": "Live streams are not supported yet.",
+  "Error_Stream_Private": "This is a private video.",
+  "Error_Stream_Removed": "Video has been removed.",
+  "Error_Stream_PaymentRequired": "This content requires a subscription.",
+  "Error_Stream_Unknown": "Track unavailable. Please contact the developer.",
+  "Error_Stream_Generic": "Could not play track. Please contact the developer."
 }

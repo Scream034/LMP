@@ -12,7 +12,7 @@ public sealed class RefCountedBitmap : IDisposable
 {
     private int _refCount;
     private bool _isDisposed;
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
 
     public Bitmap Bitmap { get; }
     public int RefCount => Volatile.Read(ref _refCount);

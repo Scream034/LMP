@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LMP.Core.Audio.Cache;
 using LMP.Core.Services;
 
 namespace LMP.Core.Models;
@@ -12,8 +13,7 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(List<TrackInfo>))]
 [JsonSerializable(typeof(Playlist))]
 [JsonSerializable(typeof(List<Playlist>))]
-[JsonSerializable(typeof(StreamCacheMetadata))]
-[JsonSerializable(typeof(List<RangeItem>))]
+[JsonSerializable(typeof(CacheEntry))]
 [JsonSerializable(typeof(ThemeSettings))]
 [JsonSourceGenerationOptions(
     WriteIndented = false, 

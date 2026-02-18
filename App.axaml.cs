@@ -30,10 +30,6 @@ public partial class App : Application
             // 1. Get library service
             var library = Program.Services.GetRequiredService<LibraryService>();
 
-            var registry = Program.Services.GetRequiredService<TrackRegistry>();
-            var cacheManager = Program.Services.GetRequiredService<StreamCacheManager>();
-            registry.CacheManager = cacheManager;
-
             // 2. Initialize localization with default
             LocalizationService.Instance.Initialize("en");
 

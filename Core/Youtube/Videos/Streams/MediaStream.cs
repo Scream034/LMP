@@ -66,7 +66,7 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
             try
             {
                 var stream = await ResolveSegmentAsync(cancellationToken);
-                return await stream.ReadAsync(buffer, offset, count, cancellationToken);
+                return await stream.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
             }
             // Retry on connectivity issues
             catch (Exception ex)

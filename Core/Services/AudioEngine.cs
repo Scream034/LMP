@@ -1,35 +1,45 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using LMP.Core.Audio;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.Services;
 
+/// <summary>
+/// Центральный движок аудио воспроизведения.
+/// Координирует AudioPlayer, очередь треков, громкость и UI события.
+/// </summary>
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {
     #region Constants
 
     private const int MaxConsecutiveErrors = 3;
     private const int MaxHistorySize = 100;
-
-    /// <summary>
-    /// Базовый диапазон громкости в единицах VM.
-    /// Используется только при VolumeBoostEnabled = true.
-    /// </summary>
-    private const int VolumeNormalRange = 200;
-
-    /// <summary>
-    /// Максимальный gain (аппаратное ограничение).
-    /// </summary>
-    private const float MaxGain = 4.0f;
-
-    /// <summary>
-    /// Интервал обновления smooth volume (мс).
-    /// </summary>
+    private const int CommandQueueCapacity = 32;
+    private const int SeekDebounceMs = 100;
+    private const int VolumeSaveIntervalMs = 2000;
     private const int SmoothVolumeUpdateIntervalMs = 16;
+
+    /// <summary>
+    /// Базовый диапазон громкости (0-200 = 0-100% без boost).
+    /// </summary>
+    public const int VolumeNormalRange = 200;
+
+    /// <summary>
+    /// Максимальный gain (аппаратное ограничение для защиты).
+    /// </summary>
+    public const float MaxGain = 4.0f;
+
+    /// <summary>
+    /// Целевой уровень для простой нормализации (peak).
+    /// Значения выше будут снижены.
+    /// </summary>
+    private const float NormalizationTargetPeak = 0.95f;
 
     #endregion
 
@@ -46,24 +56,38 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private readonly Channel<Func<Task>> _commandQueue;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Lock _queueLock = new();
-    private readonly Lock _seekDebounce = new();
     private readonly Lock _volumeLock = new();
-    private volatile int _session;
+    private readonly Lock _seekLock = new();
+
+    private int _session;
 
     #endregion
 
-    #region State
+    #region Seek State
+
+    private CancellationTokenSource? _seekDebounceCts;
+    private TimeSpan _pendingSeekPosition;
+    private bool _hasScheduledSeek;
+
+    #endregion
+
+    #region Volume State
+
+    private int _volumePercent;
+    private float _currentGain;
+    private bool _volumeInitialized;
+    private CancellationTokenSource? _smoothVolumeCts;
+
+    #endregion
+
+    #region Playback State
 
     private int _consecutiveErrors;
-    private int _volumePercent;
-    private bool _volumeInitialized;
-    private CancellationTokenSource? _lastSeekCts;
 
-    // Smooth volume
-    private float _currentGain;
-    private float _targetGain;
-    private CancellationTokenSource? _smoothVolumeCts;
-    private Task? _smoothVolumeTask;
+    /// <summary>
+    /// Текущий коэффициент нормализации для трека (1.0 = без изменений).
+    /// </summary>
+    private float _normalizationFactor = 1.0f;
 
     #endregion
 
@@ -71,31 +95,30 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private readonly List<TrackInfo> _queue = new(64);
     private readonly List<TrackInfo> _history = new(MaxHistorySize);
+    private IReadOnlyList<TrackInfo>? _queueSnapshot;
     private int _currentIndex = -1;
 
     #endregion
 
-    #region Properties
+    #region Observable Properties
 
     [Reactive] public TrackInfo? CurrentTrack { get; private set; }
     [Reactive] public AudioStreamInfo StreamInfo { get; private set; } = AudioStreamInfo.Empty;
 
     public bool IsPlaying => _player.State == PlaybackState.Playing;
     public bool IsPaused => _player.State == PlaybackState.Paused;
-    public bool IsLoading => _player.State == PlaybackState.Loading || _player.State == PlaybackState.Buffering;
+    public bool IsLoading => _player.State is PlaybackState.Loading or PlaybackState.Buffering;
 
-    [AllowNull]
     public IReadOnlyList<TrackInfo> Queue
     {
         get
         {
             lock (_queueLock)
             {
-                field ??= [.. _queue];
-                return field;
+                _queueSnapshot ??= [.. _queue];
+                return _queueSnapshot;
             }
         }
-        private set;
     }
 
     public int CurrentQueueIndex => Volatile.Read(ref _currentIndex);
@@ -104,7 +127,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public TimeSpan CurrentPosition => _player.Position;
     public TimeSpan TotalDuration => _player.Duration;
-
     public double BufferProgress => _player.BufferProgress;
     public bool IsFullyBuffered => _player.IsFullyBuffered;
 
@@ -116,6 +138,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action? OnPlaybackStopped;
     public event Action<string>? OnError;
     public event Action<TimeSpan>? OnPositionChanged;
+    public event Action<TimeSpan>? OnSeekCompleted;
     public event Action<bool, bool>? OnPlaybackStateChanged;
     public event Action? OnQueueChanged;
     public event Action<bool>? OnLoadingStateChanged;
@@ -126,38 +149,25 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
+    #region Constructor
+
     public AudioEngine(YoutubeProvider youtube, LibraryService library)
     {
         _youtube = youtube;
         _library = library;
 
-        var options = new AudioPlayerOptions
+        _player = new AudioPlayer(new AudioPlayerOptions
         {
-            UrlRefreshCallback = RefreshUrlCallback,
+            UrlRefreshCallback = RefreshUrlCallbackAsync,
             PositionUpdateInterval = TimeSpan.FromMilliseconds(200),
             MaxRetryAttempts = 3,
             UseNullBackend = false
-        };
+        });
 
-        _player = new AudioPlayer(options);
+        SubscribeToPlayerEvents();
+        InitializeFromSettings();
 
-        _player.Events.PositionChanged += pos => RaiseOnUI(() => OnPositionChanged?.Invoke(pos));
-        _player.Events.StateChanged += OnPlayerStateChanged;
-        _player.Events.TrackEnded += OnPlayerTrackEnded;
-        _player.Events.ErrorOccurred += err => RaiseOnUI(() => OnError?.Invoke(err.Message));
-        _player.Events.StreamInfoChanged += OnStreamInfoReceived;
-        _player.Events.BufferStateChanged += state =>
-            RaiseOnUI(() => OnBufferStateChanged?.Invoke(state));
-
-        ShuffleEnabled = library.Settings.ShuffleEnabled;
-        RepeatMode = library.Settings.RepeatMode;
-
-        var savedVolume = library.Settings.Volume;
-        _volumePercent = savedVolume > 0 ? NormalizeVolume(savedVolume) : 60;
-
-        ApplyVolume(instant: true);
-
-        _commandQueue = Channel.CreateBounded<Func<Task>>(new BoundedChannelOptions(16)
+        _commandQueue = Channel.CreateBounded<Func<Task>>(new BoundedChannelOptions(CommandQueueCapacity)
         {
             SingleReader = true,
             FullMode = BoundedChannelFullMode.DropOldest
@@ -166,187 +176,33 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _ = ProcessCommandsAsync();
         _ = VolumeSaveLoopAsync();
 
-        Log.Info($"[AudioEngine] Native Engine Ready. Volume={_volumePercent}%");
+        Log.Info($"[AudioEngine] Ready. Volume={_volumePercent}%");
     }
 
-    #region Stream Info
-
-    private void OnStreamInfoReceived(AudioStreamInfo info)
+    private void SubscribeToPlayerEvents()
     {
-        RaiseOnUI(() =>
-        {
-            StreamInfo = info;
-            OnStreamInfoChanged?.Invoke(info);
-            Log.Debug($"[AudioEngine] Stream info: {info.FormatDisplay}");
-        });
+        _player.Events.PositionChanged += pos => RaiseOnUI(() => OnPositionChanged?.Invoke(pos));
+        _player.Events.StateChanged += HandlePlayerStateChanged;
+        _player.Events.TrackEnded += HandlePlayerTrackEnded;
+        _player.Events.ErrorOccurred += err => RaiseOnUI(() => OnError?.Invoke(err.Message));
+        _player.Events.StreamInfoChanged += HandleStreamInfoChanged;
+        _player.Events.BufferStateChanged += state => RaiseOnUI(() => OnBufferStateChanged?.Invoke(state));
+        _player.Events.SeekCompleted += t => RaiseOnUI(() => OnSeekCompleted?.Invoke(t));
     }
 
-    public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo()
+    private void InitializeFromSettings()
     {
-        var info = StreamInfo;
-        return (info.Codec, info.Bitrate, info.IsValid);
-    }
+        var settings = _library.Settings;
 
-    #endregion
+        ShuffleEnabled = settings.ShuffleEnabled;
+        RepeatMode = settings.RepeatMode;
 
-    #region Public API
-
-    public void EnqueueRange(IEnumerable<TrackInfo> tracks)
-    {
-        lock (_queueLock)
-        {
-            _queue.AddRange(tracks);
-            InvalidateQueueSnapshot();
-        }
-        RaiseOnUI(() => OnQueueChanged?.Invoke());
-    }
-
-    public void ShuffleQueue()
-    {
-        lock (_queueLock)
-        {
-            if (_queue.Count < 2) return;
-
-            var current = _currentIndex >= 0 && _currentIndex < _queue.Count ? _queue[_currentIndex] : null;
-
-            var n = _queue.Count;
-            while (n > 1)
-            {
-                n--;
-                var k = Random.Shared.Next(n + 1);
-                (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
-            }
-
-            if (current != null)
-            {
-                var newIndex = _queue.IndexOf(current);
-                if (newIndex != 0)
-                {
-                    _queue.RemoveAt(newIndex);
-                    _queue.Insert(0, current);
-                    _currentIndex = 0;
-                }
-                else
-                {
-                    _currentIndex = 0;
-                }
-            }
-            else
-            {
-                _currentIndex = -1;
-            }
-
-            InvalidateQueueSnapshot();
-        }
-        RaiseOnUI(() => OnQueueChanged?.Invoke());
-    }
-
-    public void UpdateAudioSettings()
-    {
-        ApplyVolume(instant: false);
-        RaiseOnUI(() => OnMaxVolumeChanged?.Invoke(_library.Settings.MaxVolumeLimit));
-    }
-
-    /// <summary>
-    /// Вызывается при изменении MaxVolumeLimit.
-    /// Пересчитывает текущую громкость чтобы она не превышала новый лимит.
-    /// </summary>
-    public void OnMaxVolumeLimitChanged(int newMaxVolume)
-    {
-        lock (_volumeLock)
-        {
-            // Если текущая громкость больше нового лимита — урезаем
-            if (_volumePercent > newMaxVolume)
-            {
-                _volumePercent = newMaxVolume;
-                Log.Info($"[AudioEngine] Volume clamped to new MaxVolume: {newMaxVolume}");
-            }
-        }
+        _volumePercent = settings.Volume > 0
+            ? Math.Clamp((int)settings.Volume, 0, settings.MaxVolumeLimit)
+            : 60;
 
         ApplyVolume(instant: true);
-        RaiseOnUI(() => OnMaxVolumeChanged?.Invoke(newMaxVolume));
     }
-
-    public static Task ReinitializeWithProfileAsync(InternetProfile profile)
-    {
-        Log.Info($"[AudioEngine] Profile switched to {profile}. (No-op in Native Engine)");
-        return Task.CompletedTask;
-    }
-
-    public static void NotifyAppMinimized()
-    {
-        GC.Collect(1, GCCollectionMode.Optimized, false);
-    }
-
-    public async Task SwitchQualityAsync(string container, int bitrate)
-    {
-        if (CurrentTrack == null) return;
-
-        var pos = CurrentPosition;
-        var track = CurrentTrack;
-
-        track.TransientContainer = container;
-        track.TransientBitrate = bitrate;
-
-        if (_library.Settings.RememberTrackFormat)
-        {
-            track.PreferredContainer = container;
-            track.PreferredBitrate = bitrate;
-        }
-
-        Log.Info($"[AudioEngine] Switching quality to {container}/{bitrate}kbps at {pos.TotalSeconds:F1}s");
-
-        var session = Interlocked.Increment(ref _session);
-
-        await EnqueueCommandAsync(async () =>
-        {
-            if (_session != session) return;
-
-            try
-            {
-                await _player.StopAsync();
-                track.StreamUrl = "";
-
-                var streamInfo = await _youtube.RefreshStreamUrlAsync(track, true, CancellationToken.None);
-                if (streamInfo == null)
-                {
-                    Log.Error("[AudioEngine] Failed to get new stream URL");
-                    RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
-                    return;
-                }
-
-                await _player.PlayAsync(streamInfo.Value.Url, track.Id, bitrate, CancellationToken.None);
-
-                if (pos.TotalSeconds > 1)
-                {
-                    await WaitForPlayerReadyAsync(TimeSpan.FromSeconds(2));
-                    await _player.SeekAsync(pos);
-                }
-
-                Log.Info($"[AudioEngine] Quality switched to {container}/{bitrate}kbps");
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
-                RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
-            }
-        });
-    }
-
-    private async Task WaitForPlayerReadyAsync(TimeSpan timeout)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            var state = _player.State;
-            if (state == PlaybackState.Playing || state == PlaybackState.Paused)
-                return;
-            await Task.Delay(50);
-        }
-    }
-
-    public long GetDownloadedBytes() => _player.GetDownloadedBytes();
-    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => _player.GetBufferedRanges();
 
     #endregion
 
@@ -355,17 +211,30 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public Task PlayTrackAsync(TrackInfo track)
     {
         if (track == null) return Task.CompletedTask;
-        var session = Interlocked.Increment(ref _session);
+
+        int session = Interlocked.Increment(ref _session);
 
         return EnqueueCommandAsync(async () =>
         {
-            if (_session != session) return;
+            if (Volatile.Read(ref _session) != session) return;
+
             lock (_queueLock)
             {
-                var idx = _queue.FindIndex(t => t.Id == track.Id);
-                if (idx >= 0) { _currentIndex = idx; _queue[idx] = track; }
-                else { _queue.Clear(); _queue.Add(track); _currentIndex = 0; InvalidateQueueSnapshot(); }
+                int idx = _queue.FindIndex(t => t.Id == track.Id);
+                if (idx >= 0)
+                {
+                    _currentIndex = idx;
+                    _queue[idx] = track;
+                }
+                else
+                {
+                    _queue.Clear();
+                    _queue.Add(track);
+                    _currentIndex = 0;
+                    InvalidateQueueSnapshot();
+                }
             }
+
             RaiseOnUI(() => OnQueueChanged?.Invoke());
             await PlayCurrentIndexAsync(session);
         });
@@ -373,17 +242,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public Task StartQueueAsync(IEnumerable<TrackInfo> tracks, TrackInfo startTrack)
     {
-        var session = Interlocked.Increment(ref _session);
+        int session = Interlocked.Increment(ref _session);
+
         return EnqueueCommandAsync(async () =>
         {
-            if (_session != session) return;
+            if (Volatile.Read(ref _session) != session) return;
+
             lock (_queueLock)
             {
-                _queue.Clear(); _queue.AddRange(tracks);
+                _queue.Clear();
+                _queue.AddRange(tracks);
                 _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
                 if (_currentIndex == -1 && _queue.Count > 0) _currentIndex = 0;
                 InvalidateQueueSnapshot();
             }
+
             RaiseOnUI(() => OnQueueChanged?.Invoke());
             await PlayCurrentIndexAsync(session);
         });
@@ -391,39 +264,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public async Task SetPlaybackStateAsync(bool shouldPlay)
     {
-        await EnqueueCommandAsync(async () =>
+        if (shouldPlay)
         {
-            if (shouldPlay)
+            if (_player.State == PlaybackState.Paused)
             {
-                if (_player.State == PlaybackState.Paused) _player.Resume();
-                else if (_player.State == PlaybackState.Stopped && CurrentTrack != null) 
-                    await PlayCurrentIndexAsync(_session);
+                _player.Resume();
             }
-            else _player.Pause();
-        });
-    }
-
-    public async ValueTask SeekAsync(TimeSpan position)
-    {
-        lock (_seekDebounce)
-        {
-            _lastSeekCts?.Cancel();
-            _lastSeekCts?.Dispose();
-            _lastSeekCts = new CancellationTokenSource();
+            else if (_player.State == PlaybackState.Stopped && CurrentTrack != null)
+            {
+                int session = Interlocked.Increment(ref _session);
+                await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+            }
         }
-
-        var localCts = _lastSeekCts;
-
-        try
+        else
         {
-            await Task.Delay(50, localCts.Token);
-            await _player.SeekAsync(position, localCts.Token);
-        }
-        catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioEngine] Seek error: {ex.Message}");
+            _player.Pause();
         }
     }
 
@@ -431,6 +286,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         Interlocked.Increment(ref _session);
         _player.Stop();
+        _normalizationFactor = 1.0f;
+
         RaiseOnUI(() =>
         {
             CurrentTrack = null;
@@ -440,12 +297,76 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         });
     }
 
-    public Task PlayNextAsync() => NavigateAsync(true, true);
-    public Task PlayPreviousAsync() => NavigateAsync(false, true);
+    public Task PlayNextAsync() => NavigateAsync(forward: true, userInitiated: true);
+    public Task PlayPreviousAsync() => NavigateAsync(forward: false, userInitiated: true);
 
     #endregion
 
-    #region Internal Logic
+    #region Seek
+
+    /// <summary>
+    /// Seek с дебаунсингом для слайдера.
+    /// </summary>
+    public void SeekDebounced(TimeSpan position)
+    {
+        lock (_seekLock)
+        {
+            _pendingSeekPosition = position;
+
+            if (_hasScheduledSeek) return;
+
+            _seekDebounceCts?.Cancel();
+            _seekDebounceCts?.Dispose();
+            _seekDebounceCts = new CancellationTokenSource();
+            _hasScheduledSeek = true;
+
+            _ = ExecuteDebouncedSeekAsync(_seekDebounceCts.Token);
+        }
+    }
+
+    /// <summary>
+    /// Прямой seek без дебаунсинга.
+    /// </summary>
+    public ValueTask SeekAsync(TimeSpan position)
+    {
+        lock (_seekLock)
+        {
+            _seekDebounceCts?.Cancel();
+            _hasScheduledSeek = false;
+        }
+
+        return _player.SeekAsync(position);
+    }
+
+    private async Task ExecuteDebouncedSeekAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(SeekDebounceMs, ct);
+
+            TimeSpan pos;
+            lock (_seekLock)
+            {
+                pos = _pendingSeekPosition;
+                _hasScheduledSeek = false;
+            }
+
+            await _player.SeekAsync(pos, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            lock (_seekLock) _hasScheduledSeek = false;
+        }
+        catch (Exception ex)
+        {
+            lock (_seekLock) _hasScheduledSeek = false;
+            Log.Warn($"[AudioEngine] Seek error: {ex.Message}");
+        }
+    }
+
+    #endregion
+
+    #region Internal Playback
 
     private async Task PlayCurrentIndexAsync(int session)
     {
@@ -455,7 +376,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (_currentIndex < 0 || _currentIndex >= _queue.Count) return;
             track = _queue[_currentIndex];
         }
+
         if (track == null) return;
+
+        _normalizationFactor = 1.0f;
 
         RaiseOnUI(() =>
         {
@@ -467,56 +391,137 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         try
         {
-            string? streamUrl = track.StreamUrl;
-            int bitrateHint = track.TransientBitrate;
+            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track);
 
-            var cached = AudioSourceFactory.FindAnyCachedTrack(track.Id);
+            if (Volatile.Read(ref _session) != session) return;
 
-            if (cached != null && string.IsNullOrEmpty(streamUrl))
-            {
-                Log.Debug($"[AudioEngine] Using cache: {cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps");
-                streamUrl = "";
-                bitrateHint = cached.Value.Entry.Bitrate;
-            }
-            else if (string.IsNullOrEmpty(streamUrl))
-            {
-                var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None);
-                if (streamInfo == null) throw new Exception("Failed to resolve URL");
-                streamUrl = streamInfo.Value.Url;
-                if (bitrateHint <= 0)
-                    bitrateHint = streamInfo.Value.Bitrate;
-            }
-
-            if (_session != session) return;
-
-            await _player.PlayAsync(streamUrl ?? "", track.Id, bitrateHint, CancellationToken.None);
+            await _player.PlayAsync(streamUrl, track.Id, bitrateHint, CancellationToken.None);
             AddToHistory(track);
+
+            _consecutiveErrors = 0;
+        }
+        catch (Youtube.Exceptions.StreamUnavailableException ex)
+        {
+            Log.Error($"[AudioEngine] Stream unavailable: {ex.Reason} for {ex.VideoId}");
+
+            RaiseOnUI(() =>
+            {
+                OnError?.Invoke(ex.Message);
+            });
+
+            // Показываем диалог
+            ShowStreamUnavailableDialog(ex);
+
+            await HandlePlaybackErrorAsync();
+        }
+        catch (Youtube.Exceptions.BotDetectionException ex)
+        {
+            Log.Warn($"[AudioEngine] Bot detection: {ex.FormatRemainingTime()}");
+            RaiseOnUI(() => OnError?.Invoke("Rate limited by YouTube"));
+            // Диалог уже показан через VideoController
         }
         catch (Exception ex)
         {
+            // Проверяем, не является ли inner exception StreamUnavailableException
+            var streamEx = FindStreamUnavailableException(ex);
+            if (streamEx != null)
+            {
+                Log.Error($"[AudioEngine] Stream unavailable (wrapped): {streamEx.Reason} for {streamEx.VideoId}");
+
+                RaiseOnUI(() =>
+                {
+                    OnError?.Invoke(streamEx.Message);
+                });
+
+                ShowStreamUnavailableDialog(streamEx);
+                await HandlePlaybackErrorAsync();
+                return;
+            }
+
             Log.Error($"[AudioEngine] Play error: {ex.Message}");
             RaiseOnUI(() => OnError?.Invoke(ex.Message));
             await HandlePlaybackErrorAsync();
         }
     }
 
-    private async ValueTask<string?> RefreshUrlCallback(string trackId, CancellationToken ct)
+    private static Youtube.Exceptions.StreamUnavailableException? FindStreamUnavailableException(Exception ex)
     {
-        var track = await _library.GetTrackAsync(trackId);
-        if (track == null) return null;
-        var info = await _youtube.RefreshStreamUrlAsync(track, true, ct);
-        return info?.Url;
+        var current = ex;
+        while (current != null)
+        {
+            if (current is Youtube.Exceptions.StreamUnavailableException streamEx)
+                return streamEx;
+            current = current.InnerException;
+        }
+        return null;
+    }
+
+    private static void ShowStreamUnavailableDialog(Youtube.Exceptions.StreamUnavailableException ex)
+    {
+        try
+        {
+            var dialogService = Program.Services.GetService<IDialogService>();
+            if (dialogService != null)
+            {
+                _ = dialogService.ShowStreamUnavailableAsync(ex);
+            }
+        }
+        catch (Exception dialogEx)
+        {
+            Log.Warn($"[AudioEngine] Failed to show dialog: {dialogEx.Message}");
+        }
+    }
+
+    private async Task<(string Url, int Bitrate)> ResolveStreamUrlAsync(TrackInfo track)
+    {
+        string? streamUrl = track.StreamUrl;
+        int bitrateHint = track.TransientBitrate;
+
+        // ВСЕГДА проверяем кэш первым — даже если есть streamUrl
+        var cached = AudioSourceFactory.FindAnyCachedTrack(track.Id);
+        if (cached != null)
+        {
+            Log.Debug($"[AudioEngine] Using cache: {cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps");
+            // Передаём пустой URL — AudioSourceFactory создаст LocalFileSource
+            return ("", cached.Value.Entry.Bitrate);
+        }
+
+        if (string.IsNullOrEmpty(streamUrl))
+        {
+            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None);
+            if (streamInfo == null)
+                throw new InvalidOperationException("Failed to resolve stream URL");
+
+            streamUrl = streamInfo.Value.Url;
+            if (bitrateHint <= 0)
+                bitrateHint = streamInfo.Value.Bitrate;
+        }
+
+        return (streamUrl ?? "", bitrateHint);
     }
 
     private async Task NavigateAsync(bool forward, bool userInitiated)
     {
-        var session = Interlocked.Increment(ref _session);
+        int session = Interlocked.Increment(ref _session);
         bool canMove;
-        lock (_queueLock) { canMove = forward ? TryMoveNext(userInitiated) : TryMovePrevious(); }
 
-        if (canMove) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
-        else if (!forward && _player.State != PlaybackState.Stopped) await _player.SeekAsync(TimeSpan.Zero);
-        else Stop();
+        lock (_queueLock)
+        {
+            canMove = forward ? TryMoveNext(userInitiated) : TryMovePrevious();
+        }
+
+        if (canMove)
+        {
+            await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+        }
+        else if (!forward && _player.State != PlaybackState.Stopped)
+        {
+            await _player.SeekAsync(TimeSpan.Zero);
+        }
+        else
+        {
+            Stop();
+        }
     }
 
     private bool TryMoveNext(bool userInitiated)
@@ -546,11 +551,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             _consecutiveErrors = 0;
             return;
         }
+
         await Task.Delay(1000);
         await PlayNextAsync();
     }
 
-    private void OnPlayerStateChanged(PlaybackState state)
+    #endregion
+
+    #region Event Handlers
+
+    private void HandlePlayerStateChanged(PlaybackState state)
     {
         RaiseOnUI(() =>
         {
@@ -560,39 +570,53 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(TotalDuration));
 
             OnPlaybackStateChanged?.Invoke(state == PlaybackState.Playing, state == PlaybackState.Paused);
-            OnLoadingStateChanged?.Invoke(state == PlaybackState.Loading || state == PlaybackState.Buffering);
-
-            if (state == PlaybackState.Playing) _consecutiveErrors = 0;
+            OnLoadingStateChanged?.Invoke(state is PlaybackState.Loading or PlaybackState.Buffering);
         });
     }
 
-    private void OnPlayerTrackEnded()
+    private void HandlePlayerTrackEnded()
     {
-        var session = Interlocked.Increment(ref _session);
+        int session = Interlocked.Increment(ref _session);
+
         _ = Task.Run(async () =>
         {
             bool canAdvance;
-            lock (_queueLock) { canAdvance = TryMoveNext(false); }
-            if (canAdvance) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
-            else Stop();
+            lock (_queueLock) { canAdvance = TryMoveNext(userInitiated: false); }
+
+            if (canAdvance)
+                await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+            else
+                Stop();
         });
+    }
+
+    private void HandleStreamInfoChanged(AudioStreamInfo info)
+    {
+        RaiseOnUI(() =>
+        {
+            StreamInfo = info;
+            OnStreamInfoChanged?.Invoke(info);
+        });
+    }
+
+    private async ValueTask<string?> RefreshUrlCallbackAsync(string trackId, CancellationToken ct)
+    {
+        var track = await _library.GetTrackAsync(trackId);
+        if (track == null) return null;
+
+        var info = await _youtube.RefreshStreamUrlAsync(track, true, ct);
+        return info?.Url;
     }
 
     #endregion
 
     #region Volume
 
-    public void SaveVolumeNow() => _library.UpdateSettings(s => s.Volume = _volumePercent);
     public float GetVolume() => _volumePercent;
 
-    /// <summary>
-    /// Устанавливает громкость мгновенно.
-    /// Значение в единицах VM (0..MaxVolume).
-    /// </summary>
     public void SetVolumeInstant(float value)
     {
-        int maxVol = _library.Settings.MaxVolumeLimit;
-        if (maxVol < 100) maxVol = 100;
+        int maxVol = Math.Max(_library.Settings.MaxVolumeLimit, 100);
 
         lock (_volumeLock)
         {
@@ -602,49 +626,77 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ApplyVolume(instant: true);
     }
 
-    /// <summary>
-    /// Применяет текущий _volumePercent к плееру.
-    /// </summary>
-    /// <param name="instant">true = мгновенное изменение, false = smooth если включено</param>
+    public void SaveVolumeNow()
+    {
+        _library.UpdateSettings(s => s.Volume = _volumePercent);
+    }
+
+    public void OnMaxVolumeLimitChanged(int newMaxVolume)
+    {
+        int currentMax = Math.Max(_library.Settings.MaxVolumeLimit, 100);
+
+        // Не вызываем если значение не изменилось
+        if (currentMax == newMaxVolume) return;
+
+        lock (_volumeLock)
+        {
+            if (_volumePercent > newMaxVolume)
+                _volumePercent = newMaxVolume;
+        }
+
+        ApplyVolume(instant: true);
+        RaiseOnUI(() => OnMaxVolumeChanged?.Invoke(newMaxVolume));
+    }
+
+    public void UpdateAudioSettings()
+    {
+        ApplyVolume(instant: false);
+        RaiseOnUI(() => OnMaxVolumeChanged?.Invoke(_library.Settings.MaxVolumeLimit));
+    }
+
+    public void InitializeVolumeFromSettings()
+    {
+        if (_volumeInitialized) return;
+
+        var settings = _library.Settings;
+        int maxVol = Math.Max(settings.MaxVolumeLimit, 100);
+
+        float savedVolume = settings.Volume;
+        _volumePercent = savedVolume switch
+        {
+            > 0 and <= 1.0f => (int)(savedVolume * 100),
+            > 1 => Math.Clamp((int)savedVolume, 0, maxVol),
+            _ => 50
+        };
+
+        _volumeInitialized = true;
+        ApplyVolume(instant: true);
+
+        Log.Info($"[AudioEngine] Volume initialized: {_volumePercent}");
+    }
+
     private void ApplyVolume(bool instant)
     {
         var settings = _library.Settings;
         var audioSettings = settings.Audio;
-        int maxVolume = settings.MaxVolumeLimit;
-        if (maxVolume < 100) maxVolume = 100;
+        int maxVolume = Math.Max(settings.MaxVolumeLimit, 100);
 
-        float gain;
-
-        if (_volumePercent <= 0)
-        {
-            gain = 0f;
-        }
-        else if (audioSettings.VolumeBoostEnabled)
-        {
-            // Режим boost: первые VolumeNormalRange единиц = 0..1, далее boost
-            gain = ComputeBoostGain(_volumePercent, maxVolume, audioSettings.VolumeCurve);
-        }
-        else
-        {
-            // Режим точной настройки: 0..maxVolume → 0..1
-            float t = (float)_volumePercent / maxVolume;
-            gain = ApplyVolumeCurve(t, audioSettings.VolumeCurve);
-        }
+        float gain = ComputeGain(_volumePercent, maxVolume, audioSettings);
 
         // Применяем пользовательский gain из настроек
         float targetGainDb = Math.Clamp(settings.TargetGainDb, -20f, 20f);
-        float settingsGain = MathF.Pow(10f, targetGainDb / 20f);
+        gain *= MathF.Pow(10f, targetGainDb / 20f);
 
-        gain *= settingsGain;
+        // Применяем нормализацию если включена
+        if (audioSettings.NormalizationEnabled)
+            gain *= _normalizationFactor;
+
         gain = Math.Clamp(gain, 0f, MaxGain);
-
-        _targetGain = gain;
 
         if (instant || !audioSettings.SmoothVolumeEnabled)
         {
             _currentGain = gain;
             _player.Volume = gain;
-            Log.Debug($"[AudioEngine] Volume instant: {_volumePercent} → gain={gain:F3}");
         }
         else
         {
@@ -652,29 +704,28 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
-    /// <summary>
-    /// Вычисляет gain в режиме boost.
-    /// </summary>
-    private static float ComputeBoostGain(int volumePercent, int maxVolume, VolumeCurveType curve)
+    private float ComputeGain(int volumePercent, int maxVolume, AudioSettings audioSettings)
     {
-        if (volumePercent <= VolumeNormalRange)
+        if (volumePercent <= 0) return 0f;
+
+        if (audioSettings.VolumeBoostEnabled)
         {
-            // Нормальный диапазон: 0..200 → 0..1
-            float t = volumePercent / (float)VolumeNormalRange;
-            return ApplyVolumeCurve(t, curve);
-        }
-        else
-        {
-            // Boost диапазон: >200 → 1.0 + линейный прирост
+            // Boost режим: 0-200 = 0-100%, >200 = boost
+            if (volumePercent <= VolumeNormalRange)
+            {
+                float t = volumePercent / (float)VolumeNormalRange;
+                return ApplyVolumeCurve(t, audioSettings.VolumeCurve);
+            }
+
             float boostUnits = volumePercent - VolumeNormalRange;
-            float boostGain = boostUnits / VolumeNormalRange;
-            return 1.0f + boostGain;
+            return 1.0f + boostUnits / VolumeNormalRange;
         }
+
+        // Точная настройка: 0-maxVolume = 0-100%
+        float normalized = (float)volumePercent / maxVolume;
+        return ApplyVolumeCurve(normalized, audioSettings.VolumeCurve);
     }
 
-    /// <summary>
-    /// Применяет выбранную кривую к нормализованному значению t (0..1).
-    /// </summary>
     private static float ApplyVolumeCurve(float t, VolumeCurveType curve)
     {
         t = Math.Clamp(t, 0f, 1f);
@@ -690,9 +741,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         };
     }
 
-    /// <summary>
-    /// Запускает плавный переход громкости.
-    /// </summary>
     private void StartSmoothVolumeTransition(float targetGain, int durationMs)
     {
         _smoothVolumeCts?.Cancel();
@@ -700,18 +748,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _smoothVolumeCts = new CancellationTokenSource();
 
         var ct = _smoothVolumeCts.Token;
-        var startGain = _currentGain;
+        float startGain = _currentGain;
         var startTime = DateTime.UtcNow;
         var duration = TimeSpan.FromMilliseconds(durationMs);
 
-        _smoothVolumeTask = Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
             try
             {
                 while (!ct.IsCancellationRequested)
                 {
-                    var elapsed = DateTime.UtcNow - startTime;
-                    var progress = (float)(elapsed.TotalMilliseconds / duration.TotalMilliseconds);
+                    float progress = (float)(DateTime.UtcNow - startTime).TotalMilliseconds / durationMs;
 
                     if (progress >= 1f)
                     {
@@ -730,44 +777,179 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }, ct);
     }
 
-    public void InitializeVolumeFromSettings()
+    private async Task VolumeSaveLoopAsync()
     {
-        if (_volumeInitialized) return;
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(VolumeSaveIntervalMs));
 
-        var savedVolume = _library.Settings.Volume;
-
-        if (savedVolume > 0 && savedVolume <= 1.0f)
+        try
         {
-            _volumePercent = (int)(savedVolume * 100);
+            while (await timer.WaitForNextTickAsync(_lifetimeCts.Token))
+            {
+                _library.UpdateSettings(s => s.Volume = _volumePercent);
+            }
         }
-        else if (savedVolume > 1)
+        catch (OperationCanceledException) { }
+    }
+
+    #endregion
+
+    #region Normalization
+
+    /// <summary>
+    /// Вычисляет коэффициент нормализации на основе пиковых значений PCM данных.
+    /// Вызывается из AudioPipeline после декодирования первых фреймов.
+    /// </summary>
+    public void ComputeNormalization(ReadOnlySpan<float> samples)
+    {
+        if (!_library.Settings.Audio.NormalizationEnabled || samples.IsEmpty)
         {
-            int maxVol = _library.Settings.MaxVolumeLimit;
-            if (maxVol < 100) maxVol = 100;
-            _volumePercent = Math.Clamp((int)savedVolume, 0, maxVol);
+            _normalizationFactor = 1.0f;
+            return;
+        }
+
+        float peakValue = FindPeakValue(samples);
+
+        if (peakValue > 0.001f && peakValue > NormalizationTargetPeak)
+        {
+            _normalizationFactor = NormalizationTargetPeak / peakValue;
+            Log.Debug($"[AudioEngine] Normalization: peak={peakValue:F3}, factor={_normalizationFactor:F3}");
         }
         else
         {
-            _volumePercent = 50;
+            _normalizationFactor = 1.0f;
         }
 
-        _volumeInitialized = true;
+        // Переприменяем громкость с новым фактором
         ApplyVolume(instant: true);
-
-        Log.Info($"[AudioEngine] Volume initialized: {_volumePercent} units");
     }
 
-    private async Task VolumeSaveLoopAsync()
+    private static float FindPeakValue(ReadOnlySpan<float> samples)
     {
-        while (!_lifetimeCts.IsCancellationRequested)
+        float peak = 0f;
+        int i = 0;
+
+        // SIMD поиск максимума
+        if (Vector.IsHardwareAccelerated && samples.Length >= Vector<float>.Count)
         {
-            await Task.Delay(2000, _lifetimeCts.Token);
-            _library.UpdateSettings(s => s.Volume = _volumePercent);
+            var maxVec = Vector<float>.Zero;
+            // var signMask = new Vector<float>(-0f); // Для абсолютного значения
+
+            var vectors = MemoryMarshal.Cast<float, Vector<float>>(samples);
+
+            foreach (var vec in vectors)
+            {
+                var abs = Vector.Abs(vec);
+                maxVec = Vector.Max(maxVec, abs);
+            }
+
+            for (int j = 0; j < Vector<float>.Count; j++)
+                peak = MathF.Max(peak, maxVec[j]);
+
+            i = vectors.Length * Vector<float>.Count;
+        }
+
+        // Скалярный хвост
+        for (; i < samples.Length; i++)
+            peak = MathF.Max(peak, MathF.Abs(samples[i]));
+
+        return peak;
+    }
+
+    /// <summary>
+    /// Применяет boost усиление через SIMD (вызывается из AudioCallback).
+    /// </summary>
+    public static void ApplyGainSimd(Span<float> data, float gain)
+    {
+        if (MathF.Abs(gain - 1.0f) < 0.001f) return;
+
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && data.Length >= Vector<float>.Count)
+        {
+            var vecGain = new Vector<float>(gain);
+            var vecMin = new Vector<float>(-1.0f);
+            var vecMax = new Vector<float>(1.0f);
+
+            var vectors = MemoryMarshal.Cast<float, Vector<float>>(data);
+
+            for (int j = 0; j < vectors.Length; j++)
+                vectors[j] = Vector.Min(Vector.Max(vectors[j] * vecGain, vecMin), vecMax);
+
+            i = vectors.Length * Vector<float>.Count;
+        }
+
+        for (; i < data.Length; i++)
+            data[i] = Math.Clamp(data[i] * gain, -1f, 1f);
+    }
+
+    #endregion
+
+    #region Quality Switching
+
+    public async Task SwitchQualityAsync(string container, int bitrate)
+    {
+        if (CurrentTrack == null) return;
+
+        var pos = CurrentPosition;
+        var track = CurrentTrack;
+
+        track.TransientContainer = container;
+        track.TransientBitrate = bitrate;
+
+        if (_library.Settings.RememberTrackFormat)
+        {
+            track.PreferredContainer = container;
+            track.PreferredBitrate = bitrate;
+        }
+
+        Log.Info($"[AudioEngine] Switching quality to {container}/{bitrate}kbps at {pos.TotalSeconds:F1}s");
+
+        int session = Interlocked.Increment(ref _session);
+
+        await EnqueueCommandAsync(async () =>
+        {
+            if (Volatile.Read(ref _session) != session) return;
+
+            try
+            {
+                _player.Stop();
+                track.StreamUrl = "";
+
+                var streamInfo = await _youtube.RefreshStreamUrlAsync(track, true, CancellationToken.None);
+                if (streamInfo == null)
+                {
+                    RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
+                    return;
+                }
+
+                await _player.PlayAsync(streamInfo.Value.Url, track.Id, bitrate, CancellationToken.None);
+
+                if (pos.TotalSeconds > 1)
+                {
+                    await WaitForPlayerReadyAsync(TimeSpan.FromSeconds(2));
+                    await _player.SeekAsync(pos);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
+                RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
+            }
+        });
+    }
+
+    private async Task WaitForPlayerReadyAsync(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (_player.State is PlaybackState.Playing or PlaybackState.Paused)
+                return;
+
+            await Task.Delay(50);
         }
     }
-
-    private static int NormalizeVolume(float saved) =>
-        Math.Clamp((int)saved, 0, 1000);
 
     #endregion
 
@@ -781,14 +963,63 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             _queue.Add(track);
             InvalidateQueueSnapshot();
         }
+
         RaiseOnUI(() => OnQueueChanged?.Invoke());
 
         if (CurrentTrack == null && !IsPlaying && !IsLoading)
         {
             lock (_queueLock) _currentIndex = _queue.Count - 1;
-            var session = Interlocked.Increment(ref _session);
+            int session = Interlocked.Increment(ref _session);
             _ = EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
         }
+    }
+
+    public void EnqueueRange(IEnumerable<TrackInfo> tracks)
+    {
+        lock (_queueLock)
+        {
+            _queue.AddRange(tracks);
+            InvalidateQueueSnapshot();
+        }
+        RaiseOnUI(() => OnQueueChanged?.Invoke());
+    }
+
+    public void ShuffleQueue()
+    {
+        lock (_queueLock)
+        {
+            if (_queue.Count < 2) return;
+
+            var current = _currentIndex >= 0 && _currentIndex < _queue.Count
+                ? _queue[_currentIndex]
+                : null;
+
+            // Fisher-Yates shuffle
+            for (int n = _queue.Count - 1; n > 0; n--)
+            {
+                int k = Random.Shared.Next(n + 1);
+                (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
+            }
+
+            // Текущий трек в начало
+            if (current != null)
+            {
+                int newIndex = _queue.IndexOf(current);
+                if (newIndex > 0)
+                {
+                    _queue.RemoveAt(newIndex);
+                    _queue.Insert(0, current);
+                }
+                _currentIndex = 0;
+            }
+            else
+            {
+                _currentIndex = -1;
+            }
+
+            InvalidateQueueSnapshot();
+        }
+        RaiseOnUI(() => OnQueueChanged?.Invoke());
     }
 
     public void ClearQueue()
@@ -798,7 +1029,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             var current = CurrentTrack;
             _queue.Clear();
             _currentIndex = -1;
-            if (current != null) { _queue.Add(current); _currentIndex = 0; }
+
+            if (current != null)
+            {
+                _queue.Add(current);
+                _currentIndex = 0;
+            }
+
             InvalidateQueueSnapshot();
         }
         RaiseOnUI(() => OnQueueChanged?.Invoke());
@@ -807,9 +1044,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public void RemoveFromQueue(TrackInfo track)
     {
         bool needStop = false;
+
         lock (_queueLock)
         {
-            var idx = _queue.FindIndex(t => t.Id == track.Id);
+            int idx = _queue.FindIndex(t => t.Id == track.Id);
             if (idx == -1) return;
 
             if (idx == _currentIndex)
@@ -817,12 +1055,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 needStop = _queue.Count == 1;
                 if (idx == _queue.Count - 1) _currentIndex--;
             }
-            else if (idx < _currentIndex) _currentIndex--;
+            else if (idx < _currentIndex)
+            {
+                _currentIndex--;
+            }
 
             _queue.RemoveAt(idx);
             InvalidateQueueSnapshot();
         }
+
         RaiseOnUI(() => OnQueueChanged?.Invoke());
+
         if (needStop) Stop();
     }
 
@@ -830,27 +1073,49 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         lock (_queueLock)
         {
-            if (from < 0 || from >= _queue.Count || to < 0 || to >= _queue.Count) return;
+            if (from < 0 || from >= _queue.Count || to < 0 || to >= _queue.Count)
+                return;
+
             var item = _queue[from];
             _queue.RemoveAt(from);
             _queue.Insert(to, item);
 
-            if (_currentIndex == from) _currentIndex = to;
-            else if (from < _currentIndex && to >= _currentIndex) _currentIndex--;
-            else if (from > _currentIndex && to <= _currentIndex) _currentIndex++;
+            // Корректируем currentIndex
+            if (_currentIndex == from)
+                _currentIndex = to;
+            else if (from < _currentIndex && to >= _currentIndex)
+                _currentIndex--;
+            else if (from > _currentIndex && to <= _currentIndex)
+                _currentIndex++;
 
             InvalidateQueueSnapshot();
         }
         RaiseOnUI(() => OnQueueChanged?.Invoke());
     }
 
-    private void InvalidateQueueSnapshot() { Queue = null; }
+    private void InvalidateQueueSnapshot() => _queueSnapshot = null;
 
     private void AddToHistory(TrackInfo track)
     {
-        if (_history.LastOrDefault()?.Id == track.Id) return;
+        if (_history.Count > 0 && _history[^1].Id == track.Id) return;
+
         _history.Add(track);
-        if (_history.Count > MaxHistorySize) _history.RemoveAt(0);
+
+        if (_history.Count > MaxHistorySize)
+            _history.RemoveAt(0);
+    }
+
+    #endregion
+
+    #region Statistics
+
+    public long GetDownloadedBytes() => _player.GetDownloadedBytes();
+    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => _player.GetBufferedRanges();
+
+    public (string Format, int Bitrate, bool IsReady) GetCurrentStreamInfo()
+    {
+        var info = StreamInfo;
+        return (info.Codec, info.Bitrate, info.IsValid);
     }
 
     #endregion
@@ -863,37 +1128,64 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             await foreach (var cmd in _commandQueue.Reader.ReadAllAsync(_lifetimeCts.Token))
             {
-                await cmd();
+                try
+                {
+                    await cmd();
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    Log.Error($"[AudioEngine] Command error: {ex.Message}");
+                }
             }
         }
         catch (OperationCanceledException) { }
     }
 
-    private async Task EnqueueCommandAsync(Func<Task> command)
+    private Task EnqueueCommandAsync(Func<Task> command)
     {
-        await _commandQueue.Writer.WriteAsync(command);
+        return _commandQueue.Writer.WriteAsync(command).AsTask();
     }
 
     private static void RaiseOnUI(Action action)
     {
-        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess()) action();
-        else Avalonia.Threading.Dispatcher.UIThread.Post(action);
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            action();
+        else
+            Avalonia.Threading.Dispatcher.UIThread.Post(action);
     }
+
+    public static Task ReinitializeWithProfileAsync(InternetProfile profile)
+    {
+        Log.Info($"[AudioEngine] Profile switched to {profile}");
+        return Task.CompletedTask;
+    }
+
+    public static void NotifyAppMinimized()
+    {
+        GC.Collect(1, GCCollectionMode.Optimized, false);
+    }
+
+    #endregion
+
+    #region Dispose
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
-            lock (_seekDebounce)
+            lock (_seekLock)
             {
-                _lastSeekCts?.Cancel();
-                _lastSeekCts?.Dispose();
+                _seekDebounceCts?.Cancel();
+                _seekDebounceCts?.Dispose();
             }
 
             _smoothVolumeCts?.Cancel();
             _smoothVolumeCts?.Dispose();
 
             _lifetimeCts.Cancel();
+            _lifetimeCts.Dispose();
+
             _player.Dispose();
         }
 

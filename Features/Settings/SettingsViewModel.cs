@@ -3,6 +3,8 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Avalonia.Media;
+using LMP.Core.Audio;
+using LMP.Core.Audio.Cache;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -30,9 +32,9 @@ public enum ImageCachePreset
 public sealed class SettingsViewModel : ViewModelBase, IDisposable
 {
     private readonly LibraryService _library;
+    private readonly TrackRegistry _registry;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
-    private readonly StreamCacheManager _streamCache;
     private readonly ThemeManagerService _themeManager;
     private readonly CookieAuthService _auth;
     private readonly IDialogService _dialog;
@@ -123,7 +125,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     #region Audio
 
     public List<AudioQualityPreference> QualityOptions { get; } = [.. Enum.GetValues<AudioQualityPreference>()];
-    
+
     [Reactive] public int MaxVolumeLimit { get; set; }
     [Reactive] public float TargetGainDb { get; set; }
     [Reactive] public AudioQualityPreference QualityPreference { get; set; }
@@ -172,9 +174,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     public SettingsViewModel(
         LibraryService library,
+        TrackRegistry registry,
         SearchCacheService searchCache,
         ImageCacheService imageCache,
-        StreamCacheManager streamCache,
         ThemeManagerService themeManager,
         CookieAuthService auth,
         IDialogService dialog,
@@ -182,9 +184,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         YoutubeProvider youtube)
     {
         _library = library;
+        _registry = registry;
         _searchCache = searchCache;
         _imageCache = imageCache;
-        _streamCache = streamCache;
         _themeManager = themeManager;
         _auth = auth;
         _dialog = dialog;
@@ -261,7 +263,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         InternetProfileOptions.Clear();
         foreach (var p in Enum.GetValues<InternetProfile>())
             InternetProfileOptions.Add(new LocalizedItem<InternetProfile>(p, SL[$"NetProfile_{p}"]));
-        SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == currentProfile) 
+        SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == currentProfile)
                                   ?? InternetProfileOptions[1];
 
         var currentImgPreset = SelectedImageCachePreset?.Value ?? ImageCachePreset.Custom;
@@ -289,7 +291,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         VolumeCurveOptions.Add(new(VolumeCurveType.Logarithmic, SL["VolumeCurve_Logarithmic"]));
         VolumeCurveOptions.Add(new(VolumeCurveType.Cubic, SL["VolumeCurve_Cubic"]));
         VolumeCurveOptions.Add(new(VolumeCurveType.SpeedOfLight, SL["VolumeCurve_SpeedOfLight"]));
-        SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == currentCurve) 
+        SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == currentCurve)
                               ?? VolumeCurveOptions[1];
     }
 
@@ -315,7 +317,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort, 
+        this.WhenAnyValue(x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort,
                           x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
@@ -509,7 +511,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private void LoadAllSettings()
     {
         _isLoadingSettings = true;
-        
+
         try
         {
             var s = _library.Settings;
@@ -539,11 +541,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             RaiseAccountProperties();
 
             var savedProfile = s.InternetProfile;
-            SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == savedProfile) 
+            SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == savedProfile)
                                       ?? InternetProfileOptions[1];
 
             var savedClient = s.YoutubeClient;
-            SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == savedClient) 
+            SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == savedClient)
                              ?? ClientOptions[0];
 
             ProxyEnabled = s.Proxy.Enabled;
@@ -714,15 +716,26 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private async Task ClearAudioCacheAsync()
     {
-        await _streamCache.ClearAllAsync();
+        var cache = AudioSourceFactory.GlobalCache;
+        if (cache != null)
+        {
+            await cache.ClearAllAsync();
+        }
+        else
+        {
+            Log.Warn($"[AudioCache] AudioCacheManager not initialized, cannot clear cache.");
+        }
         UpdateCacheStats();
     }
 
     private void UpdateCacheStats()
     {
         var (memItems, _, imgCount, imgSizeMb) = _imageCache.GetStats();
-        var (audioFileCount, audioSizeMb) = StreamCacheManager.GetStats();
-        var (downloadFileCount, downloadSizeMb) = StreamCacheManager.GetDownloadsStats();
+
+        // Используем AudioCacheManager вместо StreamCacheManager
+        var cache = AudioSourceFactory.GlobalCache;
+        var (audioFileCount, audioSizeMb) = cache?.GetStatsCompact() ?? (0, 0);
+        var (downloadFileCount, downloadSizeMb) = AudioCacheManager.GetDownloadsStats();
 
         ImageCacheStats = $"{imgSizeMb} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]}, RAM: {memItems})";
         AudioCacheStats = $"{audioSizeMb} MB / {AudioCacheLimitMb} MB ({audioFileCount} {SL["Common_Files"]})";
@@ -844,7 +857,17 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (!await _dialog.ConfirmAsync(SL["Dialog_Confirm_Title"], SL["Settings_ClearDownloadsConfirm"]))
             return;
 
-        await StreamCacheManager.ClearDownloadsAsync();
+        await AudioCacheManager.ClearDownloadsAsync();
+
+        foreach (var track in _registry.GetPinnedTracks())
+        {
+            if (track.IsDownloaded)
+            {
+                track.IsDownloaded = false;
+                track.LocalPath = null;
+            }
+        }
+
         UpdateCacheStats();
     }
 

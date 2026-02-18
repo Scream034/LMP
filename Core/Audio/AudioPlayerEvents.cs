@@ -1,4 +1,3 @@
-// Core/Audio/AudioPlayerEvents.cs
 namespace LMP.Core.Audio;
 
 /// <summary>

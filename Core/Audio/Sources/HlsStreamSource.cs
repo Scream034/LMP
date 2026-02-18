@@ -1,13 +1,16 @@
+using System.Net;
 using System.Text.RegularExpressions;
 using LMP.Core.Audio.Interfaces;
+using LMP.Core.Youtube.Exceptions;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio.Sources;
 
-public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpClient = null) : IAudioSource
+public sealed partial class HlsStreamSource : IAudioSource
 {
-    private readonly string _masterUrl = masterUrl ?? throw new ArgumentNullException(nameof(masterUrl));
-    private readonly HttpClient _httpClient = httpClient ?? Http.SharedHttpClient.Instance;
+    private readonly string _masterUrl;
+    private readonly string? _trackId;
+    private readonly HttpClient _httpClient;
 
     private string _currentPlaylistUrl = string.Empty;
     private List<HlsSegment> _segments = [];
@@ -22,6 +25,13 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
     private Task? _prefetchTask;
     private readonly HashSet<int> _downloadedSegments = [];
     private readonly HashSet<int> _loadingSegments = [];
+
+    public HlsStreamSource(string masterUrl, HttpClient? httpClient = null, string? trackId = null)
+    {
+        _masterUrl = masterUrl ?? throw new ArgumentNullException(nameof(masterUrl));
+        _httpClient = httpClient ?? Http.SharedHttpClient.Instance;
+        _trackId = trackId;
+    }
 
     public long DurationMs { get; private set; } = -1;
     public long PositionMs => Volatile.Read(ref _positionMs);
@@ -65,7 +75,7 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
 
             _currentPlaylistUrl = await ResolvePlaylistUrlAsync(ct);
 
-            var mediaContent = await _httpClient.GetStringAsync(_currentPlaylistUrl, ct);
+            var mediaContent = await GetStringWithErrorHandlingAsync(_currentPlaylistUrl, ct);
             _segments = ParseMediaPlaylist(mediaContent, _currentPlaylistUrl);
 
             if (_segments.Count == 0)
@@ -83,16 +93,47 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
             Log.Info($"[HLS] Initialized: {_segments.Count} segments, duration={DurationMs}ms");
             return true;
         }
+        catch (StreamUnavailableException)
+        {
+            throw;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
+        {
+            Log.Error($"[HLS] Init failed: 403 Forbidden");
+            throw new StreamUnavailableException(
+                "HLS manifest returned 403 Forbidden",
+                _trackId ?? "unknown",
+                StreamUnavailableReason.Forbidden403,
+                httpStatusCode: 403,
+                wasHlsFallback: true);
+        }
         catch (Exception ex)
         {
             Log.Error($"[HLS] Init failed: {ex.Message}", ex);
-            return false;
+            throw;
+        }
+    }
+
+    private async Task<string> GetStringWithErrorHandlingAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            return await _httpClient.GetStringAsync(url, ct);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
+        {
+            throw new StreamUnavailableException(
+                "HLS request returned 403 Forbidden",
+                _trackId ?? "unknown",
+                StreamUnavailableReason.Forbidden403,
+                httpStatusCode: 403,
+                wasHlsFallback: true);
         }
     }
 
     private async Task<string> ResolvePlaylistUrlAsync(CancellationToken ct)
     {
-        var masterContent = await _httpClient.GetStringAsync(_masterUrl, ct);
+        var masterContent = await GetStringWithErrorHandlingAsync(_masterUrl, ct);
         var audioPlaylistUrl = ParseMasterPlaylist(masterContent, _masterUrl);
         return string.IsNullOrEmpty(audioPlaylistUrl) ? _masterUrl : audioPlaylistUrl;
     }
@@ -366,7 +407,7 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
         {
             Log.Debug($"[HLS] Loading segment {index}");
 
-            var data = await _httpClient.GetByteArrayAsync(segment.Url, ct);
+            var data = await GetBytesWithErrorHandlingAsync(segment.Url, index, ct);
             var frames = ExtractAacFramesFromTs(data, segment.StartMs);
 
             lock (_bufferLock)
@@ -382,14 +423,34 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
 
             Log.Debug($"[HLS] Segment {index}: {frames.Count} frames");
         }
+        catch (StreamUnavailableException)
+        {
+            lock (_bufferLock) { _loadingSegments.Remove(index); }
+            throw;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            lock (_bufferLock)
-            {
-                _loadingSegments.Remove(index);
-            }
+            lock (_bufferLock) { _loadingSegments.Remove(index); }
             Log.Warn($"[HLS] Segment {index} failed: {ex.Message}");
             throw;
+        }
+    }
+
+    private async Task<byte[]> GetBytesWithErrorHandlingAsync(string url, int segmentIndex, CancellationToken ct)
+    {
+        try
+        {
+            return await _httpClient.GetByteArrayAsync(url, ct);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
+        {
+            Log.Warn($"[HLS] Segment {segmentIndex} failed: 403 Forbidden");
+            throw new StreamUnavailableException(
+                $"HLS segment {segmentIndex} returned 403 Forbidden",
+                _trackId ?? "unknown",
+                StreamUnavailableReason.Forbidden403,
+                httpStatusCode: 403,
+                wasHlsFallback: true);
         }
     }
 
@@ -521,6 +582,11 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
                 await PrefetchSegmentsAhead(ct);
             }
             catch (OperationCanceledException) { break; }
+            catch (StreamUnavailableException ex)
+            {
+                Log.Warn($"[HLS] Prefetch stopped due to 403: {ex.Message}");
+                break;
+            }
             catch (Exception ex)
             {
                 Log.Warn($"[HLS] Prefetch error: {ex.Message}");
@@ -592,6 +658,5 @@ public sealed partial class HlsStreamSource(string masterUrl, HttpClient? httpCl
     #endregion
 
     private sealed record HlsSegment(string Url, double DurationMs, long StartMs);
-
     private readonly record struct AacFrame(byte[] Data, long TimestampMs, int DurationMs);
 }

@@ -16,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Audio;
 
 namespace LMP.Core.Services;
 
@@ -87,7 +88,80 @@ public partial class YoutubeProvider : IDisposable
             ReloadClient();
             AuthService.OnAuthStateChanged += ReloadClient;
         }
+
+        VideoController.OnBotDetectionCooldown += HandleBotDetectionCooldown;
+        VideoController.OnStreamUnavailable += HandleStreamUnavailable;
     }
+
+    #region Bot Detection Handling
+
+    /// <summary>
+    /// Проверяет можно ли воспроизвести трек без запросов к YouTube.
+    /// </summary>
+    public bool CanPlayOffline(TrackInfo track)
+    {
+        if (string.IsNullOrEmpty(track.Id))
+            return false;
+
+        // Извлекаем сырой ID
+        var rawId = track.GetRawIdSpan().ToString();
+        if (string.IsNullOrEmpty(rawId))
+            return false;
+
+        // Проверяем кэш любого формата/битрейта
+        var cached = AudioSourceFactory.FindAnyCachedTrack(rawId);
+        return cached != null;
+    }
+
+    /// <summary>
+    /// Проверяет можно ли выполнить сетевую операцию.
+    /// Возвращает true если можно, false если в cooldown.
+    /// </summary>
+    public static bool CanPerformNetworkOperation()
+    {
+        return !VideoController.IsInCooldown;
+    }
+
+    /// <summary>
+    /// Выбрасывает BotDetectionException если в cooldown.
+    /// </summary>
+    /// <exception cref="BotDetectionException">Если YouTube rate limiting активен.</exception>
+    public static void ThrowIfInCooldown()
+    {
+        if (VideoController.IsInCooldown)
+        {
+            var remaining = VideoController.GetRemainingCooldown();
+            throw new BotDetectionException(
+                $"Rate limited by YouTube. Please wait {remaining.TotalSeconds:F0} seconds.",
+                remaining);
+        }
+    }
+
+    private void HandleBotDetectionCooldown(TimeSpan waitTime)
+    {
+        Log.Warn($"[YouTube] Bot detection cooldown: {waitTime.TotalSeconds:F0}s");
+
+        // Показываем диалог через DialogService
+        var dialogService = Program.Services.GetService<IDialogService>();
+        if (dialogService != null)
+        {
+            // Fire-and-forget — диалог показывается async
+            _ = dialogService.ShowBotDetectionCooldownAsync(waitTime);
+        }
+    }
+
+    private void HandleStreamUnavailable(StreamUnavailableException exception)
+    {
+        Log.Error($"[YouTube] Stream unavailable: {exception.Reason} for {exception.VideoId}");
+
+        var dialogService = Program.Services.GetService<IDialogService>();
+        if (dialogService != null)
+        {
+            _ = dialogService.ShowStreamUnavailableAsync(exception);
+        }
+    }
+
+    #endregion
 
     /// <summary>
     /// переиспользуем SocketsHttpHandler вместо создания нового каждый раз.
@@ -212,15 +286,32 @@ public partial class YoutubeProvider : IDisposable
     {
         if (AuthService?.IsAuthenticated != true) return [];
 
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Home blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return [];
+        }
+
         try
         {
             var shelves = await _youtube.Music.GetPersonalizedHomeAsync(ct);
 
-            // pre-allocate с точной емкостью
             var sections = new List<HomeSection>(shelves.Count);
 
             foreach (var shelf in shelves)
             {
+                // Проверяем cooldown между обработкой секций
+                if (VideoController.IsInCooldown)
+                {
+                    Log.Warn("[YouTube] Home loading interrupted by bot detection");
+                    break;
+                }
+
                 var section = new HomeSection { Title = shelf.Title };
 
                 for (int i = 0; i < shelf.Items.Count; i++)
@@ -260,6 +351,10 @@ public partial class YoutubeProvider : IDisposable
             }
 
             return sections;
+        }
+        catch (BotDetectionException)
+        {
+            return [];
         }
         catch (Exception ex)
         {
@@ -325,9 +420,9 @@ public partial class YoutubeProvider : IDisposable
     /// Для заблокированных треков использует HLS через IOS.
     /// </summary>
     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
-        TrackInfo track,
-        bool forceRefresh = false,
-        CancellationToken ct = default)
+     TrackInfo track,
+     bool forceRefresh = false,
+     CancellationToken ct = default)
     {
         var videoId = track.GetRawIdSpan().ToString();
         if (string.IsNullOrEmpty(videoId))
@@ -339,8 +434,27 @@ public partial class YoutubeProvider : IDisposable
         var sw = Stopwatch.StartNew();
 
         // ══════════════════════════════════════════════════════════════════
-        // Если трек уже помечен как HLS-only — сразу возвращаем HLS
+        // ПРОВЕРКА КЭША — ПРИОРИТЕТ №1 (работает даже в cooldown)
         // ══════════════════════════════════════════════════════════════════
+
+        if (!forceRefresh)
+        {
+            var cached = AudioSourceFactory.FindAnyCachedTrack(videoId);
+            if (cached != null)
+            {
+                Log.Info($"[YouTube] [{videoId}] Using fully cached track ({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
+                track.StreamUrl = ""; // Пустой URL = AudioPlayer использует кэш
+                return ("", cached.Value.Entry.TotalSize,
+                        cached.Value.Entry.Bitrate,
+                        cached.Value.Entry.Codec.ToString(),
+                        cached.Value.Entry.Format.ToString());
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // Если трек помечен как HLS-only — сразу возвращаем HLS
+        // ══════════════════════════════════════════════════════════════════
+
         if (track.IsHlsOnly)
         {
             if (!string.IsNullOrEmpty(track.HlsManifestUrl) && !forceRefresh)
@@ -349,7 +463,17 @@ public partial class YoutubeProvider : IDisposable
                 return (track.HlsManifestUrl, 0, 128, "HLS", "m3u8");
             }
 
-            // Нужен свежий HLS URL
+            // Проверяем cooldown перед сетевым запросом
+            try
+            {
+                ThrowIfInCooldown();
+            }
+            catch (BotDetectionException ex)
+            {
+                NotifyError($"[YouTube] [{videoId}] Rate limited: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+                return null;
+            }
+
             var freshHls = await GetHlsManifestAsync(videoId, ct);
             if (freshHls != null)
             {
@@ -357,7 +481,29 @@ public partial class YoutubeProvider : IDisposable
                 return (freshHls, 0, 128, "HLS", "m3u8");
             }
 
-            NotifyError($"[YouTube] [{videoId}] Failed to refresh HLS manifest");
+            // HLS не доступен — показываем ошибку
+            var hlsException = new StreamUnavailableException(
+                $"HLS manifest unavailable for {videoId}",
+                videoId,
+                StreamUnavailableReason.AllClientsFailed,
+                wasHlsFallback: true);
+
+            NotifyStreamError(hlsException);
+            return null;
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // ПРОВЕРКА BOT DETECTION — ПЕРЕД СЕТЕВЫМИ ЗАПРОСАМИ
+        // ══════════════════════════════════════════════════════════════════
+
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] [{videoId}] Rate limited: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            // Диалог уже показан через HandleBotDetectionCooldown
             return null;
         }
 
@@ -380,22 +526,19 @@ public partial class YoutubeProvider : IDisposable
 
         string cacheKey = GenerateCacheKeyFromString(videoId, targetContainer, targetBitrate);
 
-        // Проверяем кэш
-        if (!forceRefresh && TryGetFromCache(cacheKey, out var cached))
+        // Проверяем кэш URL
+        if (!forceRefresh && TryGetFromCache(cacheKey, out var cachedUrl))
         {
-            track.StreamUrl = cached.Url;
-            NotifyStatus($"[YouTube] [{videoId}] Cached ({cached.Codec}/{cached.Bitrate}kbps)");
-            return (cached.Url, cached.Size, cached.Bitrate, cached.Codec, cached.Container);
+            track.StreamUrl = cachedUrl.Url;
+            NotifyStatus($"[YouTube] [{videoId}] Cached ({cachedUrl.Codec}/{cachedUrl.Bitrate}kbps)");
+            return (cachedUrl.Url, cachedUrl.Size, cachedUrl.Bitrate, cachedUrl.Codec, cachedUrl.Container);
         }
 
         try
         {
             var vId = VideoId.Parse(videoId);
 
-            // ══════════════════════════════════════════════════════════════════
             // STEP 1: Пробуем получить обычные audio-only стримы
-            //         (ANDROID_VR, ANDROID_MUSIC, WEB, TVHTML5 — БЕЗ IOS!)
-            // ══════════════════════════════════════════════════════════════════
 
             try
             {
@@ -435,42 +578,90 @@ public partial class YoutubeProvider : IDisposable
 
                 Log.Warn($"[YouTube] [{videoId}] No audio-only streams available");
             }
+            catch (BotDetectionException)
+            {
+                // Пробрасываем bot detection — диалог уже показан
+                throw;
+            }
             catch (VideoUnplayableException ex)
             {
                 Log.Warn($"[YouTube] [{videoId}] Video unplayable: {ex.Message}");
+
+                // Проверяем, не bot detection ли это
+                if (IsBotDetectionError(ex.Message))
+                {
+                    // Bot detection — не пробуем HLS, просто выходим
+                    return null;
+                }
+            }
+            catch (StreamUnavailableException ex) when (ex.HttpStatusCode == 403)
+            {
+                Log.Error($"[YouTube] [{videoId}] HTTP 403 Forbidden");
+                NotifyStreamError(ex);
+                return null;
             }
             catch (Exception ex)
             {
                 Log.Warn($"[YouTube] [{videoId}] Stream manifest failed: {ex.Message}");
             }
 
-            // ══════════════════════════════════════════════════════════════════
             // STEP 2: HLS Fallback (IOS в приоритете!)
-            // ══════════════════════════════════════════════════════════════════
 
             Log.Info($"[YouTube] [{videoId}] Falling back to HLS (IOS priority)...");
 
-            var hlsUrl = await GetHlsManifestAsync(videoId, ct);
-
-            if (!string.IsNullOrEmpty(hlsUrl))
+            try
             {
-                // Помечаем трек как HLS-only
-                track.IsHlsOnly = true;
-                track.HlsManifestUrl = hlsUrl;
-                track.StreamUrl = hlsUrl;
-                track.TransientContainer = "m3u8";
-                track.CachedCodec = "HLS";
-                track.CachedBitrate = 128; // Примерный битрейт
-                track.CachedContainer = "m3u8";
+                var hlsUrl = await GetHlsManifestAsync(videoId, ct);
 
-                sw.Stop();
-                NotifyStatus($"[YouTube] [{videoId}] ⚠️ HLS-only track (via IOS) in {sw.ElapsedMilliseconds}ms");
-                Log.Warn($"[YouTube] [{videoId}] Track marked as HLS-only — normal streams unavailable");
+                if (!string.IsNullOrEmpty(hlsUrl))
+                {
+                    // Помечаем трек как HLS-only
+                    track.IsHlsOnly = true;
+                    track.HlsManifestUrl = hlsUrl;
+                    track.StreamUrl = hlsUrl;
+                    track.TransientContainer = "m3u8";
+                    track.CachedCodec = "HLS";
+                    track.CachedBitrate = 128;
+                    track.CachedContainer = "m3u8";
 
-                return (hlsUrl, 0, 128, "HLS", "m3u8");
+                    sw.Stop();
+                    NotifyStatus($"[YouTube] [{videoId}] ⚠️ HLS-only track in {sw.ElapsedMilliseconds}ms");
+                    Log.Warn($"[YouTube] [{videoId}] Track marked as HLS-only — normal streams unavailable");
+
+                    return (hlsUrl, 0, 128, "HLS", "m3u8");
+                }
+            }
+            catch (StreamUnavailableException ex) when (ex.WasHlsFallback)
+            {
+                // HLS тоже 403 — показываем специальную ошибку
+                Log.Error($"[YouTube] [{videoId}] HLS fallback also failed with 403");
+                NotifyStreamError(ex);
+                return null;
+            }
+            catch (BotDetectionException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[YouTube] [{videoId}] HLS fallback failed: {ex.Message}");
             }
 
-            NotifyError($"[YouTube] [{videoId}] No streams available (including HLS)");
+            // ВСЕ МЕТОДЫ ПРОВАЛИЛИСЬ
+
+            Log.Error($"[YouTube] [{videoId}] No streams available (including HLS)");
+
+            var allFailedException = new StreamUnavailableException(
+                $"Could not get any stream for video {videoId}",
+                videoId,
+                StreamUnavailableReason.AllClientsFailed);
+
+            NotifyStreamError(allFailedException);
+            return null;
+        }
+        catch (BotDetectionException)
+        {
+            // Уже обработано выше
             return null;
         }
         catch (OperationCanceledException)
@@ -482,6 +673,26 @@ public partial class YoutubeProvider : IDisposable
             NotifyError($"[YouTube] [{videoId}] Error: {ex.Message}");
             return null;
         }
+    }
+
+    private static void NotifyStreamError(StreamUnavailableException exception)
+    {
+        Log.Error($"[YouTube] Stream error: {exception.Message}");
+
+        var dialogService = Program.Services.GetService<IDialogService>();
+        if (dialogService != null)
+        {
+            _ = dialogService.ShowStreamUnavailableAsync(exception);
+        }
+    }
+
+    private static bool IsBotDetectionError(string error)
+    {
+        return error.Contains("bot", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("LOGIN_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Выполните вход", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Войдите", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -842,12 +1053,24 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
-        string query,
-        int maxResults = 300,
-        SearchFilter filter = SearchFilter.None,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+     string query,
+     int maxResults = 300,
+     SearchFilter filter = SearchFilter.None,
+     [EnumeratorCancellation] CancellationToken ct = default)
     {
-        if (!IsReady || string.IsNullOrWhiteSpace(query)) yield break;
+        if (!IsReady || string.IsNullOrWhiteSpace(query))
+            yield break;
+
+        // Проверка cooldown
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Search blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            yield break;
+        }
 
         var sw = Stopwatch.StartNew();
         int count = 0;
@@ -858,6 +1081,13 @@ public partial class YoutubeProvider : IDisposable
         await foreach (var batch in _youtube.Search.GetResultBatchesAsync(query, filter, ct))
         {
             if (ct.IsCancellationRequested) yield break;
+
+            // Проверяем cooldown между батчами
+            if (VideoController.IsInCooldown)
+            {
+                Log.Warn("[YouTube] Search interrupted by bot detection cooldown");
+                yield break;
+            }
 
             var tracks = new List<TrackInfo>(batch.Items.Count);
 
@@ -886,11 +1116,22 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async Task<List<TrackInfo>> SearchFastAsync(
-        string query,
-        int maxResults = 100,
-        SearchFilter filter = SearchFilter.None,
-        CancellationToken ct = default)
+     string query,
+     int maxResults = 100,
+     SearchFilter filter = SearchFilter.None,
+     CancellationToken ct = default)
     {
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Search blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return [];
+        }
+
         var results = new List<TrackInfo>(maxResults);
 
         try
@@ -904,6 +1145,10 @@ public partial class YoutubeProvider : IDisposable
         catch (OperationCanceledException)
         {
             NotifyStatus($"[YouTube] Search cancelled after {results.Count} results");
+        }
+        catch (BotDetectionException)
+        {
+            // Уже обработано
         }
         catch (Exception ex)
         {
@@ -1100,6 +1345,18 @@ public partial class YoutubeProvider : IDisposable
     public async Task<(string Name, List<TrackInfo> Tracks)?> GetPlaylistAsync(string url)
     {
         if (!IsReady) return null;
+
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Playlist blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return null;
+        }
+
         try
         {
             var playlistId = PlaylistId.TryParse(url);
@@ -1114,6 +1371,10 @@ public partial class YoutubeProvider : IDisposable
             NotifyStatus($"[YouTube] Playlist '{playlist.Name}': {tracks.Count} tracks");
             return (playlist.Name, tracks.ToList());
         }
+        catch (BotDetectionException)
+        {
+            return null;
+        }
         catch (Exception ex)
         {
             NotifyError($"[YouTube] GetPlaylistAsync error: {ex.Message}");
@@ -1122,8 +1383,19 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async Task<(string ChannelName, List<PlaylistSearchResult> Playlists)?> GetChannelPlaylistsForSyncAsync(
-        string channelUrl, CancellationToken ct = default)
+     string channelUrl, CancellationToken ct = default)
     {
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Sync blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return null;
+        }
+
         var channel = await GetChannelFromUrlAsync(channelUrl, ct);
         if (channel is null) return null;
 
@@ -1135,6 +1407,13 @@ public partial class YoutubeProvider : IDisposable
 
             await foreach (var pl in _youtube.Channels.GetPlaylistsAsync(channel.Id, ct))
             {
+                // Проверяем cooldown между запросами
+                if (VideoController.IsInCooldown)
+                {
+                    Log.Warn("[YouTube] Channel sync interrupted by bot detection");
+                    break;
+                }
+
                 if (pl.Name.Equals("Uploads", StringComparison.OrdinalIgnoreCase)) continue;
 
                 var thumbs = new List<Thumbnail>();
@@ -1153,6 +1432,10 @@ public partial class YoutubeProvider : IDisposable
             NotifyStatus($"[YouTube] Found {results.Count} playlists.");
             return (channel.Title, results);
         }
+        catch (BotDetectionException)
+        {
+            return (channel.Title, []);
+        }
         catch (Exception ex)
         {
             NotifyError($"[YouTube] Error parsing channel playlists: {ex.Message}");
@@ -1167,8 +1450,19 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async Task<Playlist?> ImportPlaylistAsync(
-        string playlistId, bool isAccountSync = false, CancellationToken ct = default)
+     string playlistId, bool isAccountSync = false, CancellationToken ct = default)
     {
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Import blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return null;
+        }
+
         try
         {
             var plId = new PlaylistId(playlistId);
@@ -1186,6 +1480,10 @@ public partial class YoutubeProvider : IDisposable
                 playlist.TrackIds.Add(track.Id);
             }
             return playlist;
+        }
+        catch (BotDetectionException)
+        {
+            return null;
         }
         catch (Exception ex)
         {
@@ -1269,9 +1567,23 @@ public partial class YoutubeProvider : IDisposable
         return result.Length > 0;
     }
 
+
     public async Task<List<TrackInfo>> GetRadioAsync(TrackInfo sourceTrack, int count = 25)
     {
-        if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url)) return [];
+        if (!IsReady || string.IsNullOrEmpty(sourceTrack.Url))
+            return [];
+
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Radio blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return [];
+        }
+
         try
         {
             var videoIdSpan = sourceTrack.GetRawIdSpan();
@@ -1295,11 +1607,29 @@ public partial class YoutubeProvider : IDisposable
 
             return output;
         }
-        catch { return []; }
+        catch (BotDetectionException)
+        {
+            return [];
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     public async Task<List<TrackInfo>> GetTrendingAsync(int count = 20)
     {
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Trending blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return [];
+        }
+
         try
         {
             var url = "https://music.youtube.com/playlist?list=RDCLAK5uy_kmPRjHDECIcuVwnKsx2Ng7fyNgFKWNJFs";
@@ -1314,6 +1644,10 @@ public partial class YoutubeProvider : IDisposable
 
             return await SearchAsync("top music 2024", count);
         }
+        catch (BotDetectionException)
+        {
+            return [];
+        }
         catch
         {
             return await SearchAsync("top music 2024", count);
@@ -1321,11 +1655,23 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async Task<string?> DownloadTrackAsync(
-        TrackInfo track,
-        IProgress<float>? progress = null,
-        CancellationToken ct = default)
+    TrackInfo track,
+    IProgress<float>? progress = null,
+    CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrEmpty(track.Url)) return null;
+
+        // ─── Проверка cooldown ───
+        try
+        {
+            ThrowIfInCooldown();
+        }
+        catch (BotDetectionException ex)
+        {
+            NotifyError($"[YouTube] Download blocked: wait {ex.RemainingCooldown.TotalSeconds:F0}s");
+            return null;
+        }
+
         try
         {
             var videoIdSpan = track.GetRawIdSpan();
@@ -1347,6 +1693,10 @@ public partial class YoutubeProvider : IDisposable
             await _youtube.Videos.Streams.DownloadAsync(stream, filePath, progress: prog, cancellationToken: ct);
             NotifyStatus($"[YouTube] Downloaded: {fileName}");
             return filePath;
+        }
+        catch (BotDetectionException)
+        {
+            return null;
         }
         catch (Exception ex)
         {
@@ -1425,6 +1775,8 @@ public partial class YoutubeProvider : IDisposable
         _disposed = true;
 
         AuthService?.OnAuthStateChanged -= ReloadClient;
+        VideoController.OnBotDetectionCooldown -= HandleBotDetectionCooldown;
+        VideoController.OnStreamUnavailable -= HandleStreamUnavailable;
 
         DisposeCurrentClient();
 

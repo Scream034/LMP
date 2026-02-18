@@ -17,9 +17,11 @@ public sealed class NAudioBackend : IPlaybackBackend
     private byte[]? _byteBuffer;
 
     private volatile bool _playing;
-    private volatile bool _flushing;
     private volatile bool _disposed;
-    private volatile bool _fillLoopActive;
+    
+    // НЕ volatile — используем только через Interlocked
+    private int _flushGeneration;
+    
     private Task? _fillTask;
     private CancellationTokenSource? _cts;
 
@@ -74,7 +76,7 @@ public sealed class NAudioBackend : IPlaybackBackend
             () => FillBufferLoopAsync(_cts.Token),
             TaskCreationOptions.LongRunning);
 
-        Log.Info($"[NAudioBackend] Initialized: {sampleRate}Hz, {channels}ch, vol={Volume:P0}");
+        Log.Info($"[NAudioBackend] Initialized: {sampleRate}Hz, {channels}ch");
     }
 
     public void Start()
@@ -98,32 +100,20 @@ public sealed class NAudioBackend : IPlaybackBackend
     {
         if (_provider == null || _disposed) return;
 
-        _flushing = true;
-
-        try
-        {
-            // Ждём пока fill loop завершит текущую итерацию
-            int waitCount = 0;
-            while (_fillLoopActive && waitCount < 50)
-            {
-                Thread.Sleep(5);
-                waitCount++;
-            }
-
-            // Очищаем буфер
-            _provider.ClearBuffer();
-
-            // Дополнительная пауза для NAudio
-            Thread.Sleep(30);
-        }
-        finally
-        {
-            _flushing = false;
-        }
+        // Инкрементируем generation чтобы fill loop знал что нужно пропустить текущие данные
+        Interlocked.Increment(ref _flushGeneration);
+        
+        // Очищаем буфер
+        _provider.ClearBuffer();
+        
+        Log.Debug("[NAudioBackend] Flushed");
     }
 
     private async Task FillBufferLoopAsync(CancellationToken ct)
     {
+        // Читаем начальное значение через Interlocked
+        int lastGeneration = Interlocked.CompareExchange(ref _flushGeneration, 0, 0);
+        
         while (!ct.IsCancellationRequested && !_disposed)
         {
             try
@@ -132,45 +122,45 @@ public sealed class NAudioBackend : IPlaybackBackend
                     || _floatBuffer == null || _byteBuffer == null)
                     break;
 
-                // Пропускаем если flush или не играем
-                if (_flushing || !_playing)
+                // Проверяем flush generation через Interlocked
+                int currentGeneration = Interlocked.CompareExchange(ref _flushGeneration, 0, 0);
+                if (currentGeneration != lastGeneration)
                 {
-                    _fillLoopActive = false;
+                    lastGeneration = currentGeneration;
                     await Task.Delay(10, ct);
                     continue;
                 }
 
-                // Не переполняем буфер
+                if (!_playing)
+                {
+                    await Task.Delay(10, ct);
+                    continue;
+                }
+
                 if (_provider.BufferedDuration.TotalSeconds > InternalBufferSeconds * 0.8)
                 {
-                    _fillLoopActive = false;
                     await Task.Delay(20, ct);
                     continue;
                 }
 
-                _fillLoopActive = true;
-
-                // Двойная проверка после установки флага
-                if (_flushing || !_playing)
+                int framesRead = _callback(_floatBuffer);
+                
+                // Проверяем generation ещё раз после чтения через Interlocked
+                int generationAfterRead = Interlocked.CompareExchange(ref _flushGeneration, 0, 0);
+                if (generationAfterRead != lastGeneration)
                 {
-                    _fillLoopActive = false;
+                    lastGeneration = generationAfterRead;
                     continue;
                 }
 
-                int framesRead = _callback(_floatBuffer);
-
-                // Проверяем ещё раз перед записью
-                if (framesRead > 0 && !_flushing && _playing)
+                if (framesRead > 0 && _playing)
                 {
                     int totalSamples = framesRead * _channels;
                     int bytes = totalSamples * sizeof(float);
                     Buffer.BlockCopy(_floatBuffer, 0, _byteBuffer, 0, bytes);
                     _provider.AddSamples(_byteBuffer, 0, bytes);
                 }
-
-                _fillLoopActive = false;
-
-                if (framesRead <= 0)
+                else if (framesRead <= 0)
                 {
                     await Task.Delay(10, ct);
                 }
@@ -179,15 +169,16 @@ public sealed class NAudioBackend : IPlaybackBackend
             {
                 break;
             }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
             catch (Exception ex)
             {
                 Log.Error($"[NAudioBackend] Fill loop error: {ex.Message}");
-                _fillLoopActive = false;
                 await Task.Delay(100, ct);
             }
         }
-
-        _fillLoopActive = false;
     }
 
     public void Dispose()
@@ -196,7 +187,6 @@ public sealed class NAudioBackend : IPlaybackBackend
         _disposed = true;
 
         _playing = false;
-        _flushing = true;
         _cts?.Cancel();
 
         if (_fillTask != null)

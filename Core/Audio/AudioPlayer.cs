@@ -1,13 +1,5 @@
-using System.Buffers;
-using System.Numerics;
-using System.Runtime.InteropServices;
-using LMP.Core.Audio.Backends;
-using LMP.Core.Audio.Cache;
-using LMP.Core.Audio.Decoders;
-using LMP.Core.Audio.Helpers;
-using LMP.Core.Audio.Http;
+using System.Threading.Channels;
 using LMP.Core.Audio.Interfaces;
-using LMP.Core.Exceptions;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
@@ -21,60 +13,53 @@ public sealed class AudioPlayerOptions
     public bool UseNullBackend { get; init; }
 }
 
+/// <summary>
+/// Аудио плеер с акторной моделью обработки команд.
+/// 
+/// Все публичные методы неблокирующие — они только отправляют команды в очередь.
+/// Обработка идёт строго последовательно в фоновом потоке.
+/// </summary>
 public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 {
     #region Fields
 
     private readonly AudioPlayerOptions _options;
     private readonly AudioPlayerEvents _events = new();
-    private readonly SemaphoreSlim _stateLock = new(1, 1);
-    private readonly SemaphoreSlim _seekLock = new(1, 1);
+    private readonly Channel<IAudioCommand> _commandChannel;
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly Task _commandProcessorTask;
 
-    private IAudioSource? _source;
-    private IAudioDecoder? _decoder;
-    private IPlaybackBackend? _backend;
+    // Atomic pipeline swap
+    private volatile AudioPipeline? _activePipeline;
 
-    private CircularBuffer<float>? _pcmBuffer;
-    private float[]? _decodeBuffer;
-
-    private volatile PlaybackState _state = PlaybackState.Stopped;
+    // State machine
+    private volatile PlayerState _state = PlayerState.Idle;
     private volatile float _volume = 1.0f;
     private volatile bool _disposed;
 
-    private int _seekVersion;
-    private int _skipFramesCounter;
+    // Session management - НЕ volatile, используем только через Interlocked
+    private int _sessionId;
 
-    private AudioStreamInfo _currentStreamInfo = AudioStreamInfo.Empty;
-    private long _playedSamples;
-    private string? _currentTrackId;
-    private int _currentBitrateHint;
-
-    private CancellationTokenSource? _playbackCts;
-    private CancellationTokenSource? _decoderCts;
-    private Task? _decoderTask;
+    // Position tracking
     private Timer? _positionTimer;
     private Timer? _bufferTimer;
+
+    // Track info
+    private string? _currentTrackId;
 
     #endregion
 
     #region Properties
 
     public AudioPlayerEvents Events => _events;
-    public AudioStreamInfo StreamInfo => _currentStreamInfo;
 
-    /// <summary>
-    /// Gain множитель. 0..1 = нормальный диапазон, >1 = boost.
-    /// NAudio backend получает min(volume, 1), SIMD boost применяется в AudioCallback.
-    /// </summary>
     public float Volume
     {
         get => _volume;
         set
         {
-            // Разрешаем до 4.0 для boost (MaxGain в AudioEngine)
             _volume = Math.Clamp(value, 0f, 4f);
-            if (_backend != null)
-                _backend.Volume = Math.Min(_volume, 1f);
+            _activePipeline?.SetVolume(_volume);
         }
     }
 
@@ -82,14 +67,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     {
         get
         {
-            if (_decoder == null || _decoder.SampleRate <= 0 || _backend == null)
-                return TimeSpan.Zero;
+            var pipeline = _activePipeline;
+            if (pipeline == null) return TimeSpan.Zero;
 
-            long totalWritten = Volatile.Read(ref _playedSamples);
-            int backendBuffered = _backend.BufferedSamples;
-            long heardSamples = Math.Max(0, totalWritten - backendBuffered);
-
-            double seconds = (double)heardSamples / (_decoder.SampleRate * _decoder.Channels);
+            long playedSamples = Math.Max(0, pipeline.PlayedSamples - pipeline.BackendBufferedSamples);
+            double seconds = (double)playedSamples / (pipeline.SampleRate * pipeline.Channels);
 
             var duration = Duration;
             if (duration.TotalSeconds > 0 && seconds > duration.TotalSeconds)
@@ -99,12 +81,16 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
     }
 
-    public TimeSpan Duration => TimeSpan.FromMilliseconds(_currentStreamInfo.DurationMs);
-    public PlaybackState State => _state;
+    public TimeSpan Duration => _activePipeline != null
+        ? TimeSpan.FromMilliseconds(_activePipeline.StreamInfo.DurationMs)
+        : TimeSpan.Zero;
+
+    public PlaybackState State => MapState(_state);
+    public AudioStreamInfo StreamInfo => _activePipeline?.StreamInfo ?? AudioStreamInfo.Empty;
 
     #endregion
 
-    #region Legacy Events
+    #region Events (Legacy compatibility)
 
     public event Action<TimeSpan>? PositionChanged
     {
@@ -128,507 +114,446 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     #endregion
 
+    #region Constructor
+
     public AudioPlayer(AudioPlayerOptions? options = null)
     {
         _options = options ?? new AudioPlayerOptions();
+
         _events.ErrorOccurred += err => ErrorOccurred?.Invoke(err.Exception ?? new Exception(err.Message));
+
+        _commandChannel = Channel.CreateBounded<IAudioCommand>(new BoundedChannelOptions(32)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest
+        });
+
+        _commandProcessorTask = Task.Run(ProcessCommandsAsync);
+
+        Log.Info("[AudioPlayer] Created with actor model");
     }
 
-    #region Public Methods
+    #endregion
 
-    public async Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0, CancellationToken ct = default)
+    #region Public API (Non-blocking)
+
+    /// <summary>
+    /// Запускает воспроизведение. Неблокирующий вызов.
+    /// </summary>
+    public void Play(string url, string? trackId = null, int bitrateHint = 0)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        await _stateLock.WaitAsync(ct);
-        try
-        {
-            await StopInternalAsync();
+        int session = Interlocked.Increment(ref _sessionId);
+        _currentTrackId = trackId;
 
-            _currentTrackId = trackId;
-            _currentBitrateHint = bitrateHint;
-            Interlocked.Exchange(ref _skipFramesCounter, 0);
-            _currentStreamInfo = AudioStreamInfo.Empty;
+        // Optimistic UI update
+        SetState(PlayerState.Loading);
 
-            SetState(PlaybackState.Loading);
-
-            await InitializePipelineAsync(url, ct);
-
-            _playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            StartDecoderLoop();
-
-            SetState(PlaybackState.Buffering);
-            await WaitForInitialBufferAsync(_playbackCts.Token);
-
-            _backend!.Start();
-
-            StartTimers();
-
-            SetState(PlaybackState.Playing);
-            Log.Info($"[AudioPlayer] Started track: {trackId ?? "unknown"}, bitrate hint={bitrateHint}kbps");
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[AudioPlayer] Play failed: {ex.Message}", ex);
-            SetState(PlaybackState.Error);
-            _events.RaiseError(new AudioPlayerError(ex.Message, ex));
-            await StopInternalAsync();
-            throw;
-        }
-        finally
-        {
-            _stateLock.Release();
-        }
+        _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session));
     }
 
+    /// <summary>
+    /// Async версия Play для обратной совместимости.
+    /// Возвращает Task который завершается когда воспроизведение началось или ошибка.
+    /// </summary>
+    public Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnStateChanged(PlaybackState state)
+        {
+            if (state == PlaybackState.Playing)
+            {
+                _events.StateChanged -= OnStateChanged;
+                _events.ErrorOccurred -= OnError;
+                tcs.TrySetResult(true);
+            }
+        }
+
+        void OnError(AudioPlayerError error)
+        {
+            _events.StateChanged -= OnStateChanged;
+            _events.ErrorOccurred -= OnError;
+            tcs.TrySetException(error.Exception ?? new Exception(error.Message));
+        }
+
+        _events.StateChanged += OnStateChanged;
+        _events.ErrorOccurred += OnError;
+
+        ct.Register(() =>
+        {
+            _events.StateChanged -= OnStateChanged;
+            _events.ErrorOccurred -= OnError;
+            tcs.TrySetCanceled(ct);
+        });
+
+        Play(url, trackId, bitrateHint);
+
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Пауза. Неблокирующий вызов.
+    /// </summary>
     public void Pause()
     {
-        if (_state != PlaybackState.Playing) return;
-        _backend?.Stop();
-        SetState(PlaybackState.Paused);
+        if (_state != PlayerState.Playing) return;
+
+        // Optimistic UI update
+        SetState(PlayerState.Paused);
+        _activePipeline?.Stop();
     }
 
+    /// <summary>
+    /// Возобновление. Неблокирующий вызов.
+    /// </summary>
     public void Resume()
     {
-        if (_state != PlaybackState.Paused) return;
-        _backend?.Start();
-        SetState(PlaybackState.Playing);
+        if (_state != PlayerState.Paused) return;
+
+        // Optimistic UI update
+        SetState(PlayerState.Playing);
+        _activePipeline?.Start();
     }
 
+    /// <summary>
+    /// Остановка. Неблокирующий вызов.
+    /// </summary>
     public void Stop()
     {
-        if (_state == PlaybackState.Stopped) return;
-        _ = StopAsync();
+        if (_state == PlayerState.Idle || _state == PlayerState.Disposed) return;
+
+        int session = Interlocked.Increment(ref _sessionId);
+        _commandChannel.Writer.TryWrite(new StopCommand(session));
     }
 
+    /// <summary>
+    /// Async версия Stop.
+    /// </summary>
     public async Task StopAsync()
     {
-        if (_state == PlaybackState.Stopped) return;
+        if (_state == PlayerState.Idle || _state == PlayerState.Disposed) return;
 
-        await _stateLock.WaitAsync();
-        try
+        int session = Interlocked.Increment(ref _sessionId);
+        await _commandChannel.Writer.WriteAsync(new StopCommand(session));
+
+        // Ждём перехода в Idle
+        int waitCount = 0;
+        while (_state != PlayerState.Idle && _state != PlayerState.Disposed && waitCount < 100)
         {
-            await StopInternalAsync();
+            await Task.Delay(10);
+            waitCount++;
         }
-        finally
-        {
-            _stateLock.Release();
-        }
-        Log.Info("[AudioPlayer] Stopped");
     }
 
-    public async ValueTask SeekAsync(TimeSpan position, CancellationToken ct = default)
+    /// <summary>
+    /// Seek. Неблокирующий вызов, UI обновляется мгновенно.
+    /// </summary>
+    public ValueTask SeekAsync(TimeSpan position, CancellationToken ct = default)
     {
-        if (_disposed) return;
+        if (_disposed) return ValueTask.CompletedTask;
+        if (_state is not (PlayerState.Playing or PlayerState.Paused)) return ValueTask.CompletedTask;
 
-        if (_source == null || !_source.CanSeek || _decoder == null)
-            return;
+        var pipeline = _activePipeline;
+        if (pipeline == null || !pipeline.Source.CanSeek) return ValueTask.CompletedTask;
 
-        if (!await _seekLock.WaitAsync(0, ct))
-            return;
+        // Optimistic UI update — позиция обновляется мгновенно
+        _events.RaisePositionChanged(position);
 
-        try
-        {
-            int currentSeekVersion = Interlocked.Increment(ref _seekVersion);
-            bool wasPlaying = _state == PlaybackState.Playing;
-            long posMs = (long)position.TotalMilliseconds;
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ct.Register(() => tcs.TrySetCanceled(ct));
 
-            await StopDecoderLoopGracefullyAsync();
+        int session = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+        _commandChannel.Writer.TryWrite(new SeekCommand(position, session, tcs));
 
-            if (_disposed || Interlocked.CompareExchange(ref _seekVersion, 0, 0) != currentSeekVersion)
-                return;
-
-            _backend?.Stop();
-            await Task.Delay(20, ct);
-            _backend?.Flush();
-            _pcmBuffer?.Clear();
-
-            int skipFrames = _source.Codec == AudioCodec.Aac
-                ? SkipFramesAfterSeekAac
-                : SkipFramesAfterSeekOpus;
-            Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
-
-            bool success = await _source.SeekAsync(posMs, ct);
-
-            if (_disposed || Interlocked.CompareExchange(ref _seekVersion, 0, 0) != currentSeekVersion)
-                return;
-
-            if (success)
-            {
-                long targetSamples = (long)(posMs / 1000.0 * _decoder.SampleRate * _decoder.Channels);
-                Volatile.Write(ref _playedSamples, targetSamples);
-
-                StartDecoderLoop();
-
-                if (wasPlaying && !_disposed)
-                {
-                    try
-                    {
-                        await WaitForMinimalBufferAsync(ct);
-                    }
-                    catch { }
-
-                    if (!_disposed)
-                    {
-                        _backend?.Start();
-                        SetState(PlaybackState.Playing);
-                    }
-                }
-                else if (!_disposed)
-                {
-                    SetState(PlaybackState.Paused);
-                }
-
-                _events.RaiseSeekCompleted(position);
-                Log.Debug($"[AudioPlayer] Seeked to {posMs}ms");
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPlayer] Seek error: {ex.Message}");
-        }
-        finally
-        {
-            try { _seekLock.Release(); }
-            catch (ObjectDisposedException) { }
-        }
+        return new ValueTask(tcs.Task);
     }
 
     #endregion
 
-    #region Pipeline Initialization
+    #region Command Processing
 
-    private async Task InitializePipelineAsync(string url, CancellationToken ct)
+    private async Task ProcessCommandsAsync()
     {
-        _source = await AudioSourceFactory.CreateAsync(
-            url,
-            SharedHttpClient.Instance,
-            CreateUrlRefresher(),
-            _currentTrackId,
-            _currentBitrateHint,
-            ct);
+        var reader = _commandChannel.Reader;
 
-        if (!await _source.InitializeAsync(ct))
-            throw new AudioSourceException("Failed to initialize audio source");
-
-        _decoder = CreateDecoder(_source);
-
-        _currentStreamInfo = BuildStreamInfo(_source, _currentTrackId);
-        _events.RaiseStreamInfo(_currentStreamInfo);
-
-        int bufferSize = _decoder.SampleRate * _decoder.Channels * BufferSizeSeconds;
-        _pcmBuffer = new CircularBuffer<float>(bufferSize);
-        _decodeBuffer = ArrayPool<float>.Shared.Rent(DecoderBufferFrames * _decoder.Channels);
-
-        _backend = CreateBackend();
-        _backend.Initialize(_decoder.SampleRate, _decoder.Channels, AudioCallback);
-        _backend.Volume = Math.Min(_volume, 1f);
-
-        Log.Debug($"[AudioPlayer] Initialized: {_currentStreamInfo.FormatDisplay}");
-    }
-
-    private AudioStreamInfo BuildStreamInfo(IAudioSource source, string? trackId)
-    {
-        CacheEntry? cacheEntry = null;
-        string container = "";
-        int bitrate = 0;
-
-        if (!string.IsNullOrEmpty(trackId))
+        try
         {
-            var cached = AudioSourceFactory.FindAnyCachedTrack(trackId);
-            if (cached != null)
+            await foreach (var command in reader.ReadAllAsync(_lifetimeCts.Token))
             {
-                cacheEntry = cached.Value.Entry;
-                container = cacheEntry.Format.ToString();
-                bitrate = cacheEntry.Bitrate;
-            }
-        }
+                int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
 
-        if (source is Sources.CachingStreamSource cachingSource)
-        {
-            bitrate = cachingSource.Bitrate;
-
-            if (string.IsNullOrEmpty(container))
-            {
-                container = source.Codec switch
+                // Проверяем актуальность сессии
+                if (command.SessionId < currentSession && command is not DisposeCommand)
                 {
-                    AudioCodec.Opus => "WebM",
-                    AudioCodec.Aac => "Mp4",
-                    _ => "Unknown"
-                };
-            }
-        }
+                    Log.Debug($"[AudioPlayer] Skipping outdated command: {command.GetType().Name} (session {command.SessionId} < {currentSession})");
 
-        if (_currentBitrateHint > 0)
-            bitrate = _currentBitrateHint;
+                    if (command is SeekCommand { Completion: { } tcs })
+                        tcs.TrySetCanceled();
 
-        return new AudioStreamInfo
-        {
-            TrackId = trackId ?? "",
-            Container = container,
-            Codec = source.Codec.ToString(),
-            Bitrate = bitrate > 0 ? bitrate : EstimateBitrate(source),
-            SampleRate = source.SampleRate > 0 ? source.SampleRate : DefaultSampleRate,
-            Channels = source.Channels > 0 ? source.Channels : DefaultChannels,
-            DurationMs = source.DurationMs,
-            IsFromCache = cacheEntry?.IsComplete ?? false
-        };
-    }
-
-    private static int EstimateBitrate(IAudioSource source) => source.Codec switch
-    {
-        AudioCodec.Opus => 128,
-        AudioCodec.Aac => 96,
-        _ => 128
-    };
-
-    private IAudioDecoder CreateDecoder(IAudioSource source)
-    {
-        int rate = source.SampleRate > 0 ? source.SampleRate : DefaultSampleRate;
-        int ch = source.Channels > 0 ? source.Channels : DefaultChannels;
-
-        return source.Codec switch
-        {
-            AudioCodec.Opus => new OpusDecoder(rate, ch),
-            AudioCodec.Aac => CreateAacDecoder(source, rate, ch),
-            _ => throw new NotSupportedException($"Codec {source.Codec} not supported")
-        };
-    }
-
-    private static AacDecoder CreateAacDecoder(IAudioSource source, int rate, int ch)
-    {
-        var dec = new AacDecoder(rate, ch);
-        if (source.DecoderConfig != null)
-            dec.Initialize(source.DecoderConfig);
-        return dec;
-    }
-
-    private IPlaybackBackend CreateBackend()
-    {
-        if (_options.UseNullBackend)
-            return new NullAudioBackend();
-
-        try
-        {
-            return new NAudioBackend();
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPlayer] NAudio init failed: {ex.Message}, using NullBackend");
-            return new NullAudioBackend();
-        }
-    }
-
-    #endregion
-
-    #region Decoder Loop
-
-    private void StartDecoderLoop()
-    {
-        _decoderCts?.Dispose();
-
-        _decoderCts = _playbackCts != null
-            ? CancellationTokenSource.CreateLinkedTokenSource(_playbackCts.Token)
-            : new CancellationTokenSource();
-
-        _decoderTask = Task.Run(
-            () => DecoderLoopAsync(_decoderCts.Token),
-            _decoderCts.Token);
-    }
-
-    private async Task StopDecoderLoopGracefullyAsync()
-    {
-        if (_decoderCts == null || _decoderTask == null)
-            return;
-
-        _decoderCts.Cancel();
-
-        try
-        {
-            await _decoderTask.WaitAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs));
-        }
-        catch (TimeoutException)
-        {
-            Log.Warn("[AudioPlayer] Decoder loop graceful stop timeout");
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPlayer] Decoder loop stop error: {ex.Message}");
-        }
-
-        _decoderCts.Dispose();
-        _decoderCts = null;
-        _decoderTask = null;
-    }
-
-    private async Task DecoderLoopAsync(CancellationToken ct)
-    {
-        if (_source == null || _decoder == null || _pcmBuffer == null || _decodeBuffer == null)
-            return;
-
-        int retryCount = 0;
-        bool useResetDecode = false;
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                int skipCount = Interlocked.CompareExchange(ref _skipFramesCounter, 0, 0);
-                if (skipCount > 0)
-                    useResetDecode = true;
-
-                if (_pcmBuffer.Available < _decoder.MaxFrameSize * _decoder.Channels)
-                {
-                    await Task.Delay(5, ct);
                     continue;
                 }
 
-                AudioFrame? frame;
-                try
+                // Проверяем допустимость команды для текущего состояния
+                if (!PlayerStateTransitions.CanAcceptCommand(_state, command))
                 {
-                    frame = await _source.ReadFrameAsync(ct);
-                    retryCount = 0;
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (UrlExpiredException)
-                {
-                    if (await TryRefreshUrlAsync(ct)) continue;
-                    throw;
-                }
-                catch (Exception ex) when (retryCount++ < _options.MaxRetryAttempts)
-                {
-                    Log.Warn($"[AudioPlayer] Read retry {retryCount}/{_options.MaxRetryAttempts}: {ex.Message}");
-                    await Task.Delay(_options.RetryDelay, ct);
+                    Log.Debug($"[AudioPlayer] Ignoring {command.GetType().Name} in state {_state}");
+
+                    if (command is SeekCommand { Completion: { } tcs })
+                        tcs.TrySetResult(false);
+
                     continue;
                 }
 
-                if (frame == null)
-                {
-                    await DrainBufferAsync(ct);
-                    OnTrackEnded();
-                    break;
-                }
-
-                ct.ThrowIfCancellationRequested();
-
                 try
                 {
-                    int samplesDecoded;
-
-                    if (useResetDecode)
-                    {
-                        samplesDecoded = _decoder.DecodeWithReset(
-                            frame.Value.Data.Span, _decodeBuffer);
-                        useResetDecode = false;
-                    }
-                    else
-                    {
-                        samplesDecoded = _decoder.Decode(
-                            frame.Value.Data.Span, _decodeBuffer);
-                    }
-
-                    skipCount = Interlocked.CompareExchange(ref _skipFramesCounter, 0, 0);
-                    if (skipCount > 0)
-                    {
-                        Interlocked.Decrement(ref _skipFramesCounter);
-                        continue;
-                    }
-
-                    if (samplesDecoded > 0 && !ct.IsCancellationRequested)
-                    {
-                        _pcmBuffer.Write(
-                            _decodeBuffer.AsSpan(0, samplesDecoded * _decoder.Channels));
-                    }
+                    await ProcessCommandAsync(command);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
                 {
                     break;
                 }
                 catch (Exception ex)
                 {
-                    Log.Warn($"[AudioPlayer] Decode error: {ex.Message}");
+                    Log.Error($"[AudioPlayer] Command error: {ex.Message}", ex);
+                    HandleError(ex);
                 }
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Log.Error($"[AudioPlayer] Decoder loop fatal: {ex.Message}", ex);
-            SetState(PlaybackState.Error);
+            Log.Error($"[AudioPlayer] Command processor fatal: {ex.Message}", ex);
+        }
+    }
+
+    private async Task ProcessCommandAsync(IAudioCommand command)
+    {
+        switch (command)
+        {
+            case PlayCommand play:
+                await HandlePlayAsync(play);
+                break;
+
+            case StopCommand:
+                await HandleStopAsync();
+                break;
+
+            case SeekCommand seek:
+                await HandleSeekAsync(seek);
+                break;
+
+            case DisposeCommand:
+                await HandleDisposeAsync();
+                break;
+        }
+    }
+
+    private async Task HandlePlayAsync(PlayCommand cmd)
+    {
+        Log.Info($"[AudioPlayer] Play: {cmd.TrackId ?? "unknown"}, bitrate hint: {cmd.BitrateHint}");
+
+        SetState(PlayerState.Loading);
+
+        var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
+        if (oldPipeline != null)
+        {
+            await oldPipeline.DisposeAsync();
+        }
+
+        StopTimers();
+
+        try
+        {
+            var pipeline = await AudioPipeline.CreateAsync(
+                cmd.Url,
+                cmd.TrackId,
+                cmd.BitrateHint,
+                CreateUrlRefresher(),
+                _options,
+                _lifetimeCts.Token);
+
+            int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+            if (cmd.SessionId < currentSession)
+            {
+                Log.Debug($"[AudioPlayer] Play cancelled: session {cmd.SessionId} < {currentSession}");
+                await pipeline.DisposeAsync();
+                return;
+            }
+
+            pipeline.SetVolume(_volume);
+            _events.RaiseStreamInfo(pipeline.StreamInfo);
+
+            var replaced = Interlocked.Exchange(ref _activePipeline, pipeline);
+            if (replaced != null)
+            {
+                await replaced.DisposeAsync();
+            }
+
+            pipeline.StartDecoding(
+                CreateUrlRefresher(),
+                _options,
+                OnTrackEnded,
+                HandleError);
+
+            SetState(PlayerState.Buffering);
+
+            int threshold = pipeline.SampleRate * pipeline.Channels * MinBufferMs / 1000;
+            await pipeline.WaitForBufferAsync(threshold, 5000, _lifetimeCts.Token);
+
+            currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+            if (cmd.SessionId < currentSession)
+            {
+                Log.Debug($"[AudioPlayer] Play cancelled after buffering: session {cmd.SessionId} < {currentSession}");
+                var stale = Interlocked.Exchange(ref _activePipeline, null);
+                if (stale != null) await stale.DisposeAsync();
+                return;
+            }
+
+            pipeline.Start();
+            StartTimers();
+            SetState(PlayerState.Playing);
+
+            Log.Info($"[AudioPlayer] Playing: {pipeline.StreamInfo.FormatDisplay}");
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Debug("[AudioPlayer] Play cancelled");
+            if (_state == PlayerState.Loading || _state == PlayerState.Buffering)
+                SetState(PlayerState.Idle);
+        }
+        catch (Youtube.Exceptions.StreamUnavailableException ex)
+        {
+            // Специальная обработка StreamUnavailableException — пробрасываем наверх
+            Log.Error($"[AudioPlayer] Play failed: {ex.Message}", ex);
+            SetState(PlayerState.Error);
             _events.RaiseError(new AudioPlayerError(ex.Message, ex));
+            throw; // Пробрасываем для обработки в AudioEngine
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[AudioPlayer] Play failed: {ex.Message}", ex);
+            SetState(PlayerState.Error);
+            _events.RaiseError(new AudioPlayerError(ex.Message, ex));
+            throw;
         }
     }
 
-    private async Task DrainBufferAsync(CancellationToken ct)
+    private async Task HandleStopAsync()
     {
-        while (_pcmBuffer is { IsEmpty: false } && !ct.IsCancellationRequested)
+        Log.Debug("[AudioPlayer] Stop");
+
+        StopTimers();
+
+        var pipeline = Interlocked.Exchange(ref _activePipeline, null);
+        if (pipeline != null)
         {
-            await Task.Delay(50, ct);
+            await pipeline.DisposeAsync();
+        }
+
+        _currentTrackId = null;
+
+        SetState(PlayerState.Idle);
+    }
+
+    private async Task HandleSeekAsync(SeekCommand cmd)
+    {
+        var pipeline = _activePipeline;
+        if (pipeline == null || !pipeline.Source.CanSeek)
+        {
+            cmd.Completion?.TrySetResult(false);
+            return;
+        }
+
+        bool wasPlaying = _state == PlayerState.Playing;
+        SetState(PlayerState.Seeking);
+
+        try
+        {
+            // Останавливаем декодер
+            await pipeline.StopDecodingAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs));
+
+            // Проверяем сессию
+            int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+            if (cmd.SessionId < currentSession)
+            {
+                cmd.Completion?.TrySetCanceled();
+                return;
+            }
+
+            // Останавливаем и очищаем backend
+            pipeline.Stop();
+            await Task.Delay(20);
+            pipeline.Flush();
+
+            // Подготавливаем к seek
+            pipeline.PrepareForSeek();
+
+            // Выполняем seek
+            long posMs = (long)cmd.Position.TotalMilliseconds;
+            bool success = await pipeline.Source.SeekAsync(posMs, _lifetimeCts.Token);
+
+            if (!success)
+            {
+                cmd.Completion?.TrySetResult(false);
+                SetState(wasPlaying ? PlayerState.Playing : PlayerState.Paused);
+                if (wasPlaying) pipeline.Start();
+                return;
+            }
+
+            // Устанавливаем позицию
+            long targetSamples = (long)(posMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
+            pipeline.SetDecodedSamplesPosition(targetSamples);
+
+            // Перезапускаем декодер
+            pipeline.StartDecoding(
+                CreateUrlRefresher(),
+                _options,
+                OnTrackEnded,
+                HandleError);
+
+            // Ждём минимальный буфер
+            int minSamples = pipeline.SampleRate * pipeline.Channels * MinSeekResumeBufferMs / 1000;
+            await pipeline.WaitForBufferAsync(minSamples, 300, _lifetimeCts.Token);
+
+            if (wasPlaying)
+            {
+                pipeline.Start();
+                SetState(PlayerState.Playing);
+            }
+            else
+            {
+                SetState(PlayerState.Paused);
+            }
+
+            _events.RaiseSeekCompleted(cmd.Position);
+            cmd.Completion?.TrySetResult(true);
+
+            Log.Debug($"[AudioPlayer] Seeked to {posMs}ms");
+        }
+        catch (OperationCanceledException)
+        {
+            cmd.Completion?.TrySetCanceled();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioPlayer] Seek error: {ex.Message}");
+            cmd.Completion?.TrySetException(ex);
+
+            // Восстанавливаем состояние
+            SetState(wasPlaying ? PlayerState.Playing : PlayerState.Paused);
+            if (wasPlaying) pipeline.Start();
         }
     }
 
-    #endregion
-
-    #region Audio Callback
-
-    private int AudioCallback(Span<float> buffer)
+    private async Task HandleDisposeAsync()
     {
-        if (_state != PlaybackState.Playing || _pcmBuffer == null)
-        {
-            buffer.Clear();
-            return 0;
-        }
-
-        int read = _pcmBuffer.Read(buffer);
-
-        if (read > 0)
-        {
-            Interlocked.Add(ref _playedSamples, read);
-
-            // Применяем boost если gain > 1.0
-            // NAudio backend уже применил gain до 1.0 через свой Volume
-            if (_volume > 1.0f)
-                ApplyBoostSimd(buffer[..read], _volume);
-        }
-
-        if (read < buffer.Length)
-            buffer[read..].Clear();
-
-        return read / (_decoder?.Channels ?? 2);
-    }
-
-    /// <summary>
-    /// Применяет boost усиление через SIMD.
-    /// Вызывается только при gain > 1.0 (boost режим).
-    /// Soft clipping для защиты от жёсткого клиппинга.
-    /// </summary>
-    private static void ApplyBoostSimd(Span<float> data, float gain)
-    {
-        if (MathF.Abs(gain - 1.0f) < 0.001f) return;
-
-        int i = 0;
-
-        if (Vector.IsHardwareAccelerated)
-        {
-            var vecGain = new Vector<float>(gain);
-            var vecMin = new Vector<float>(-1.0f);
-            var vecMax = new Vector<float>(1.0f);
-
-            var vectors = MemoryMarshal.Cast<float, Vector<float>>(data);
-            for (int j = 0; j < vectors.Length; j++)
-                vectors[j] = Vector.Min(Vector.Max(vectors[j] * vecGain, vecMin), vecMax);
-
-            i = vectors.Length * Vector<float>.Count;
-        }
-
-        for (; i < data.Length; i++)
-            data[i] = Math.Clamp(data[i] * gain, -1f, 1f);
+        await HandleStopAsync();
+        SetState(PlayerState.Disposed);
     }
 
     #endregion
@@ -639,83 +564,82 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     {
         _positionTimer = new Timer(
             _ => _events.RaisePositionChanged(Position),
-            null, 0,
-            (int)_options.PositionUpdateInterval.TotalMilliseconds);
+            null, 0, (int)_options.PositionUpdateInterval.TotalMilliseconds);
 
         _bufferTimer = new Timer(
             _ => RaiseBufferState(),
             null, 0, BufferStateUpdateIntervalMs);
     }
 
+    private void StopTimers()
+    {
+        _positionTimer?.Dispose();
+        _positionTimer = null;
+
+        _bufferTimer?.Dispose();
+        _bufferTimer = null;
+    }
+
     private void RaiseBufferState()
     {
-        if (_source == null) return;
+        var pipeline = _activePipeline;
+        if (pipeline == null) return;
 
+        var source = pipeline.Source;
         var state = new BufferState(
-            _source.BufferProgress,
-            _source.IsFullyBuffered,
-            _source.GetBufferedRanges());
+            source.BufferProgress,
+            source.IsFullyBuffered,
+            source.GetBufferedRanges());
 
         _events.RaiseBufferState(state);
     }
 
     #endregion
 
-    #region Buffering
+    #region Helpers
 
-    private async Task WaitForInitialBufferAsync(CancellationToken ct)
+    private void OnTrackEnded()
     {
-        if (_decoder == null || _pcmBuffer == null) return;
-
-        int threshold = _decoder.SampleRate * _decoder.Channels * MinBufferMs / 1000;
-
-        while (_pcmBuffer.Count < threshold
-               && !ct.IsCancellationRequested
-               && _source?.IsFullyBuffered == false)
+        if (_state != PlayerState.Idle && _state != PlayerState.Disposed)
         {
-            await Task.Delay(5, ct);
+            _events.RaiseTrackEnded();
+            SetState(PlayerState.Idle);
         }
     }
 
-    private async Task WaitForMinimalBufferAsync(CancellationToken ct)
+    private void HandleError(Exception ex)
     {
-        if (_decoder == null || _pcmBuffer == null) return;
-
-        int minSamples = _decoder.SampleRate * _decoder.Channels * MinSeekResumeBufferMs / 1000;
-        int waited = 0;
-
-        while (_pcmBuffer.Count < minSamples && waited < 300 && !ct.IsCancellationRequested && !_disposed)
-        {
-            await Task.Delay(10, ct);
-            waited += 10;
-        }
+        SetState(PlayerState.Error);
+        _events.RaiseError(new AudioPlayerError(ex.Message, ex));
     }
 
-    #endregion
-
-    #region URL Refresh
-
-    private async Task<bool> TryRefreshUrlAsync(CancellationToken ct)
+    private void SetState(PlayerState newState)
     {
-        if (_options.UrlRefreshCallback == null || string.IsNullOrEmpty(_currentTrackId))
-            return false;
+        var oldState = _state;
+        if (oldState == newState) return;
 
-        try
+        if (!PlayerStateTransitions.CanTransition(oldState, newState))
         {
-            var newUrl = await _options.UrlRefreshCallback(_currentTrackId, ct);
-            if (!string.IsNullOrEmpty(newUrl))
-            {
-                Log.Info("[AudioPlayer] URL refreshed");
-                return true;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPlayer] URL refresh failed: {ex.Message}");
+            Log.Warn($"[AudioPlayer] Invalid transition: {oldState} -> {newState}");
+            return;
         }
 
-        return false;
+        _state = newState;
+        _events.RaiseStateChanged(MapState(newState));
     }
+
+    private static PlaybackState MapState(PlayerState state) => state switch
+    {
+        PlayerState.Idle => PlaybackState.Stopped,
+        PlayerState.Loading => PlaybackState.Loading,
+        PlayerState.Buffering => PlaybackState.Buffering,
+        PlayerState.Playing => PlaybackState.Playing,
+        PlayerState.Paused => PlaybackState.Paused,
+        PlayerState.Seeking => PlaybackState.Playing, // Визуально как Playing
+        PlayerState.Error => PlaybackState.Error,
+        PlayerState.Disposed => PlaybackState.Stopped,
+        _ => PlaybackState.Stopped
+    };
 
     private Func<CancellationToken, Task<string?>>? CreateUrlRefresher()
     {
@@ -729,94 +653,33 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     #endregion
 
-    #region Lifecycle
-
-    private async Task StopInternalAsync()
-    {
-        _playbackCts?.Cancel();
-        await StopDecoderLoopGracefullyAsync();
-
-        _positionTimer?.Dispose();
-        _positionTimer = null;
-
-        _bufferTimer?.Dispose();
-        _bufferTimer = null;
-
-        _backend?.Dispose();
-        _backend = null;
-
-        _decoder?.Dispose();
-        _decoder = null;
-
-        if (_source != null)
-        {
-            await _source.DisposeAsync();
-            _source = null;
-        }
-
-        if (_decodeBuffer != null)
-        {
-            ArrayPool<float>.Shared.Return(_decodeBuffer);
-            _decodeBuffer = null;
-        }
-
-        _pcmBuffer = null;
-
-        Volatile.Write(ref _playedSamples, 0);
-        Interlocked.Exchange(ref _skipFramesCounter, 0);
-        _currentTrackId = null;
-        _currentBitrateHint = 0;
-        _currentStreamInfo = AudioStreamInfo.Empty;
-
-        _playbackCts?.Dispose();
-        _playbackCts = null;
-
-        SetState(PlaybackState.Stopped);
-    }
-
-    private void OnTrackEnded()
-    {
-        if (_state != PlaybackState.Stopped)
-            _events.RaiseTrackEnded();
-        SetState(PlaybackState.Stopped);
-    }
-
-    private void SetState(PlaybackState newState)
-    {
-        if (_state == newState) return;
-        _state = newState;
-        _events.RaiseStateChanged(newState);
-    }
-
-    #endregion
-
     #region Statistics
 
-    public double BufferProgress => _source?.BufferProgress ?? 0;
-    public bool IsFullyBuffered => _source?.IsFullyBuffered ?? false;
+    public double BufferProgress => _activePipeline?.Source.BufferProgress ?? 0;
+    public bool IsFullyBuffered => _activePipeline?.Source.IsFullyBuffered ?? false;
 
     public long GetDownloadedBytes()
     {
-        return _source switch
+        var pipeline = _activePipeline;
+        if (pipeline == null) return 0;
+
+        return pipeline.Source switch
         {
             Sources.CachingStreamSource caching => caching.DownloadedBytes,
-            Sources.LocalFileSource => _source.IsFullyBuffered ? EstimateTotalBytes() : 0,
-            _ => (long)(_source?.BufferProgress / 100.0 * EstimateTotalBytes() ?? 0)
+            Sources.LocalFileSource => pipeline.Source.IsFullyBuffered
+                ? (long)(pipeline.StreamInfo.DurationMs * pipeline.StreamInfo.Bitrate / 8)
+                : 0,
+            _ => (long)(pipeline.Source.BufferProgress / 100.0
+                * pipeline.StreamInfo.DurationMs * pipeline.StreamInfo.Bitrate / 8)
         };
-    }
-
-    private long EstimateTotalBytes()
-    {
-        if (_currentStreamInfo.DurationMs <= 0) return 0;
-        return _currentStreamInfo.DurationMs * _currentStreamInfo.Bitrate / 8;
     }
 
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
     {
-        return _source?.GetBufferedRanges() ?? [];
+        return _activePipeline?.Source.GetBufferedRanges() ?? [];
     }
 
-    public string CurrentCodec => _currentStreamInfo.Codec;
+    public string CurrentCodec => _activePipeline?.StreamInfo.Codec ?? "";
 
     #endregion
 
@@ -826,9 +689,18 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        Stop();
-        _stateLock.Dispose();
-        _seekLock.Dispose();
+
+        _commandChannel.Writer.TryWrite(new DisposeCommand(int.MaxValue));
+        _lifetimeCts.Cancel();
+
+        try
+        {
+            _commandProcessorTask.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch { }
+
+        _lifetimeCts.Dispose();
+
         GC.SuppressFinalize(this);
     }
 
@@ -836,9 +708,18 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        await StopAsync();
-        _stateLock.Dispose();
-        _seekLock.Dispose();
+
+        await _commandChannel.Writer.WriteAsync(new DisposeCommand(int.MaxValue));
+        _lifetimeCts.Cancel();
+
+        try
+        {
+            await _commandProcessorTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch { }
+
+        _lifetimeCts.Dispose();
+
         GC.SuppressFinalize(this);
     }
 

@@ -1,0 +1,103 @@
+namespace LMP.Core.Youtube.Exceptions;
+
+/// <summary>
+/// Выбрасывается когда стримы недоступны (403, блокировка региона, и т.д.).
+/// </summary>
+public sealed class StreamUnavailableException(
+    string message,
+    string videoId,
+    StreamUnavailableReason reason,
+    int? httpStatusCode = null,
+    bool wasHlsFallback = false) : YoutubeExplodeException(message)
+{
+    /// <summary>
+    /// Тип недоступности стрима.
+    /// </summary>
+    public StreamUnavailableReason Reason { get; } = reason;
+
+    /// <summary>
+    /// ID видео.
+    /// </summary>
+    public string VideoId { get; } = videoId;
+
+    /// <summary>
+    /// HTTP статус код (если применимо).
+    /// </summary>
+    public int? HttpStatusCode { get; } = httpStatusCode;
+
+    /// <summary>
+    /// Был ли это HLS fallback.
+    /// </summary>
+    public bool WasHlsFallback { get; } = wasHlsFallback;
+
+    /// <summary>
+    /// Ключ локализации для данного типа ошибки.
+    /// </summary>
+    public string GetLocalizationKey()
+    {
+        return Reason switch
+        {
+            StreamUnavailableReason.Forbidden403 when WasHlsFallback 
+                => "Error_Stream_HlsForbidden",
+            
+            StreamUnavailableReason.Forbidden403 
+                => "Error_Stream_Forbidden",
+            
+            StreamUnavailableReason.AllClientsFailed 
+                => "Error_Stream_AllClientsFailed",
+            
+            StreamUnavailableReason.RegionBlocked 
+                => "Error_Stream_RegionBlocked",
+            
+            StreamUnavailableReason.AgeRestricted 
+                => "Error_Stream_AgeRestricted",
+            
+            StreamUnavailableReason.LiveStream 
+                => "Error_Stream_LiveStream",
+            
+            StreamUnavailableReason.Private 
+                => "Error_Stream_Private",
+            
+            StreamUnavailableReason.Removed 
+                => "Error_Stream_Removed",
+            
+            StreamUnavailableReason.PaymentRequired 
+                => "Error_Stream_PaymentRequired",
+            
+            _ => "Error_Stream_Unknown"
+        };
+    }
+}
+
+/// <summary>
+/// Причина недоступности стрима.
+/// </summary>
+public enum StreamUnavailableReason
+{
+    /// <summary>Неизвестная причина.</summary>
+    Unknown = 0,
+
+    /// <summary>HTTP 403 Forbidden.</summary>
+    Forbidden403,
+
+    /// <summary>Все клиенты не смогли получить стрим.</summary>
+    AllClientsFailed,
+
+    /// <summary>Заблокировано в регионе.</summary>
+    RegionBlocked,
+
+    /// <summary>Возрастные ограничения.</summary>
+    AgeRestricted,
+
+    /// <summary>Прямая трансляция (не VOD).</summary>
+    LiveStream,
+
+    /// <summary>Приватное видео.</summary>
+    Private,
+
+    /// <summary>Видео удалено.</summary>
+    Removed,
+
+    /// <summary>Требуется подписка/оплата.</summary>
+    PaymentRequired
+}

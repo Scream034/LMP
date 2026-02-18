@@ -41,10 +41,7 @@ public partial class PlayerBarView : UserControl
     private bool _isVolumeButtonHovered;
     private bool _isWindowActive = true;
     private bool _isSuspended;
-    
-    /// <summary>
-    /// Флаг: тултип громкости активен (показывать слева от слайдера).
-    /// </summary>
+
     private bool _isVolumeTooltipActive;
 
     private double _seekDragRatio;
@@ -213,6 +210,8 @@ public partial class PlayerBarView : UserControl
 
         if (e.PropertyName == nameof(PlayerBarViewModel.IsLoading))
         {
+            if (_isSuspended) return; // Не запускаем spark в suspended
+
             if (vm.IsLoading)
                 StartSparkAnimation();
             else
@@ -256,17 +255,31 @@ public partial class PlayerBarView : UserControl
                 UpdateVolumeSliderHeight(vm.MaxVolume);
                 if (!_isDraggingVolume) UpdateVolumeVisual();
                 break;
+
+            case nameof(PlayerBarViewModel.IsSeekBusy):
+                if (!vm.IsSeekBusy)
+                {
+                    UpdateBufferVisual();
+                }
+                break;
         }
     }
 
     private void ApplySliderReset()
     {
+        // Скрываем прогресс и thumb мгновенно
         ProgressBar.Classes.Add("hidden");
         ProgressBar.Width = 0;
         SeekThumb.Classes.Add("hidden");
         SeekCursor.Classes.Add("hidden");
-        HideAllBufferSegments();
         PlayingGlow.Width = 0;
+
+        // Полностью очищаем буферные сегменты
+        HideAllBufferSegments();
+
+        // Запускаем spark только если не suspended
+        if (!_isSuspended)
+            StartSparkAnimation();
     }
 
     private void RemoveSliderReset()
@@ -275,9 +288,16 @@ public partial class PlayerBarView : UserControl
         SeekThumb.Classes.Remove("hidden");
         SeekCursor.Classes.Remove("hidden");
 
-        UpdateSeekVisual();
-        UpdateBufferVisual();
-        UpdatePlayingGlow();
+        // Останавливаем spark если не загружаемся
+        if (_currentViewModel?.IsLoading != true)
+            StopSparkAnimation();
+
+        if (!_isSuspended)
+        {
+            UpdateSeekVisual();
+            UpdateBufferVisual();
+            UpdatePlayingGlow();
+        }
     }
 
     public void OnSuspend()
@@ -409,7 +429,6 @@ public partial class PlayerBarView : UserControl
 
     private void OnVolumePopupClosed(object? sender, EventArgs e)
     {
-        // Скрываем тултип при закрытии popup
         _isVolumeTooltipActive = false;
         VolumeTooltipPopup.IsOpen = false;
     }
@@ -659,15 +678,22 @@ public partial class PlayerBarView : UserControl
     }
 
     /// <summary>
-    /// Показывает тултип громкости слева от слайдера.
+    /// Показывает тултип громкости слева от текущей позиции ползунка.
+    /// Выравнивает центр тултипа с позицией на слайдере.
     /// </summary>
     private void ShowVolumeTooltip(int currentVolume, int maxVolume, double ratio)
     {
         VolumeTooltipText.Text = $"{currentVolume}% / {maxVolume}%";
 
         double height = VolumeSliderPanel.Height;
-        double yOffset = height * (1 - ratio) - (height / 2);
-        VolumeTooltipPopup.VerticalOffset = yOffset;
+        if (height <= 0) height = VolumeSliderMinHeight;
+
+        // Позиция ползунка от верха панели
+        double thumbY = height * (1 - ratio);
+
+        // VerticalOffset относительно центра PlacementTarget (VolumeHitBox)
+        double panelCenter = height / 2.0;
+        VolumeTooltipPopup.VerticalOffset = thumbY - panelCenter;
 
         _isVolumeTooltipActive = true;
         VolumeTooltipPopup.IsOpen = true;
@@ -887,7 +913,6 @@ public partial class PlayerBarView : UserControl
     {
         if (DataContext is not PlayerBarViewModel vm) return;
 
-        // Получаем шаг из ViewModel
         int step = vm.GetVolumeScrollStep();
         int delta = e.Delta.Y > 0 ? step : -step;
         int newVolume = Math.Clamp(vm.Volume + delta, 0, vm.MaxVolume);
@@ -898,7 +923,6 @@ public partial class PlayerBarView : UserControl
             vm.OnVolumeChangeComplete();
         }
 
-        // Показываем тултип слева от слайдера
         double ratio = Math.Clamp((double)newVolume / vm.MaxVolume, 0, 1);
         ShowVolumeTooltip(newVolume, vm.MaxVolume, ratio);
 
@@ -933,6 +957,7 @@ public partial class PlayerBarView : UserControl
         }
         else if (hitBox.IsPointerOver)
         {
+            // Показываем tooltip при наведении мыши (как при колёсике)
             ShowVolumeTooltip(volumePercent, vm.MaxVolume, ratio);
         }
     }
@@ -997,8 +1022,6 @@ public partial class PlayerBarView : UserControl
         _isDraggingVolume = false;
         pointer.Capture(null);
         VolumeThumb.Classes.Remove("dragging");
-        
-        // Не скрываем тултип сразу — пусть таймер скроет
     }
 
     private void CancelVolumeDrag()

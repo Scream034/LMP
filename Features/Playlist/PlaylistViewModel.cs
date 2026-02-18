@@ -1,4 +1,5 @@
 ﻿using Avalonia.Controls;
+using LMP.Core.Audio;
 using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
@@ -16,7 +17,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 {
     #region Fields
 
-    private readonly StreamCacheManager _cacheManager;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
@@ -101,14 +101,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     #region Constructor
 
     public PlaylistViewModel(
-        StreamCacheManager cacheManager,
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
         IDialogService dialog,
         TrackViewModelFactory vmFactory)
     {
-        _cacheManager = cacheManager;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
@@ -251,10 +249,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         // Синхронизируем состояние воспроизведения (трек мог смениться)
         _ = CheckPlaybackStateAsync();
-        
+
         // Инвалидируем кэш — данные могли измениться
         InvalidateAllTracksCache();
-        
+
         // Обновляем UI-свойства
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
@@ -371,23 +369,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         try
         {
             var tracks = GetLoadedItemsSnapshot();
-            await Task.Run(() =>
-            {
-                foreach (var track in tracks)
-                {
-                    if (!track.IsDownloaded && !track.IsCached)
-                    {
-                        if (_cacheManager.IsFullyCached(track.Id))
-                        {
-                            var meta = StreamCacheManager.TryGetMetadata(track.Id);
-                            if (meta != null)
-                                track.MarkAsCached(meta.Container, meta.Bitrate);
-                            else
-                                track.IsCached = true;
-                        }
-                    }
-                }
-            });
+            var audioCache = AudioSourceFactory.GlobalCache;
+            if (audioCache == null) return;
+
+            await Task.Run(() => audioCache.HydrateCacheStatus(tracks));
         }
         catch (Exception ex)
         {

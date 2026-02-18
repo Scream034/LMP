@@ -297,6 +297,10 @@
   "Input_Watermark": "Введите текст...",
   "Input_PasteHere": "Вставьте сюда...",
 
+  "Dialog_BotDetection_Title": "Временное ограничение",
+  "Dialog_BotDetection_Message": "YouTube обнаружил необычную активность и временно ограничил воспроизведение.\n\nЭто нормально после быстрого переключения треков.",
+  "Dialog_BotDetection_Hint": "Воспроизведение возобновится автоматически. Не закрывайте плеер.",
+
   "Sync_Action": "Импорт",
   "Sync_DuplicateName": "Импортировано",
   "Sync_ConfigureUrlFirst": "Сначала укажите ссылку на канал в настройках.",
@@ -348,5 +352,21 @@
   "Delete_LocalOnly": "Только из библиотеки",
   "Delete_LocalOnlyHint": "Плейлист останется на YouTube",
   "Delete_Everywhere": "Удалить везде",
-  "Delete_EverywhereHint": "Удалить также из аккаунта YouTube"
+  "Delete_EverywhereHint": "Удалить также из аккаунта YouTube",
+
+  "Error_CopyDetails": "Копировать детали",
+  
+  "Error_BotDetection_Message": "YouTube ограничил доступ. Подождите {0}.",
+  
+  "Error_Stream_HlsForbidden": "HLS поток заблокирован (403). Обратитесь к разработчику.",
+  "Error_Stream_Forbidden": "Доступ к треку запрещён (403). Попробуйте другой трек или обратитесь к разработчику.",
+  "Error_Stream_AllClientsFailed": "Не удалось получить доступ к треку. Обратитесь к разработчику.",
+  "Error_Stream_RegionBlocked": "Трек недоступен в вашем регионе.",
+  "Error_Stream_AgeRestricted": "Трек имеет возрастные ограничения. Войдите в аккаунт YouTube.",
+  "Error_Stream_LiveStream": "Прямые трансляции пока не поддерживаются.",
+  "Error_Stream_Private": "Это приватное видео.",
+  "Error_Stream_Removed": "Видео было удалено.",
+  "Error_Stream_PaymentRequired": "Для этого контента требуется подписка.",
+  "Error_Stream_Unknown": "Трек недоступен. Обратитесь к разработчику.",
+  "Error_Stream_Generic": "Не удалось воспроизвести трек. Обратитесь к разработчику."
 }

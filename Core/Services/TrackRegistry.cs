@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using LMP.Core.Audio;
+using LMP.Core.Audio.Cache;
 using LMP.Core.Data.Repositories;
 using LMP.Core.Models;
 
@@ -12,13 +14,10 @@ namespace LMP.Core.Services;
 /// </summary>
 public sealed class TrackRegistry
 {
-    // StringComparer.Ordinal для лучшей производительности
-    private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _cache = 
+    private readonly ConcurrentDictionary<string, WeakReference<TrackInfo>> _cache =
         new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, TrackInfo> _pinned = 
+    private readonly ConcurrentDictionary<string, TrackInfo> _pinned =
         new(StringComparer.Ordinal);
-
-    public StreamCacheManager? CacheManager { get; set; }
 
     private readonly ITrackRepository? _repository;
     private readonly IPlaylistRepository? _playlists;
@@ -30,56 +29,50 @@ public sealed class TrackRegistry
     }
 
     /// <summary>
+    /// Получает AudioCacheManager из AudioSourceFactory (lazy, singleton).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static AudioCacheManager? GetAudioCache() => AudioSourceFactory.GlobalCache;
+
+    /// <summary>
     /// Registers or updates a track. Returns the canonical instance.
-    /// минимизированы проверки и аллокации.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TrackInfo RegisterOrUpdate(TrackInfo incoming)
     {
         if (string.IsNullOrEmpty(incoming.Id)) return incoming;
 
-        // 1. Check pinned (Strong Reference) — fastest path
         if (_pinned.TryGetValue(incoming.Id, out var pinned))
         {
             pinned.UpdateMetadata(incoming);
             return pinned;
         }
 
-        // 2. Check weak cache
         if (_cache.TryGetValue(incoming.Id, out var weakRef) && weakRef.TryGetTarget(out var cached))
         {
             cached.UpdateMetadata(incoming);
             return cached;
         }
 
-        // 3. New registration
         _cache[incoming.Id] = new WeakReference<TrackInfo>(incoming);
 
-        // Обновляем статус кэширования БЕЗ синхронных IO операций
-        if (CacheManager != null && !incoming.IsDownloaded && !incoming.IsCached)
+        // Обновляем статус кэширования из AudioCacheManager
+        if (!incoming.IsDownloaded && !incoming.IsCached)
         {
-            // Быстрая проверка из памяти
-            if (CacheManager.IsFullyCached(incoming.Id))
+            var audioCache = GetAudioCache();
+            if (audioCache != null && audioCache.IsTrackFullyCached(incoming.Id))
             {
-                var meta = StreamCacheManager.TryGetMetadata(incoming.Id);
-                if (meta != null)
-                {
-                    incoming.MarkAsCached(meta.Container, meta.Bitrate);
-                }
+                var bestEntry = audioCache.FindBestCacheByTrackId(incoming.Id);
+                if (bestEntry != null)
+                    incoming.MarkAsCached(bestEntry.Format.ToString(), bestEntry.Bitrate);
                 else
-                {
                     incoming.IsCached = true;
-                }
             }
         }
 
         return incoming;
     }
 
-    /// <summary>
-    /// Gets track from L1 cache only (no DB access).
-    /// ValueTask для sync-path.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TrackInfo? TryGet(string id)
     {
@@ -91,10 +84,6 @@ public sealed class TrackRegistry
         return null;
     }
 
-    /// <summary>
-    /// Gets track from cache or loads from database.
-    /// ValueTask для fast path (cache hit).
-    /// </summary>
     public async ValueTask<TrackInfo?> GetOrLoadAsync(string id, CancellationToken ct = default)
     {
         var cached = TryGet(id);
@@ -116,17 +105,12 @@ public sealed class TrackRegistry
         return canonical;
     }
 
-    /// <summary>
-    /// Batch preload tracks into cache.
-    /// один SQL-запрос вместо N.
-    /// </summary>
     public async Task PreloadAsync(IEnumerable<string> ids, CancellationToken ct = default)
     {
         if (_repository == null) return;
 
-        // используем HashSet для быстрой проверки дубликатов
         var toLoadSet = new HashSet<string>(StringComparer.Ordinal);
-        
+
         foreach (var id in ids)
         {
             if (TryGet(id) == null)
@@ -138,21 +122,20 @@ public sealed class TrackRegistry
         var loaded = await _repository.GetByIdsAsync(toLoadSet, ct);
         if (loaded.Count == 0) return;
 
-        // Batch загрузка плейлистов — ОДИН SQL запрос
         Dictionary<string, HashSet<string>>? playlistsMap = null;
         if (_playlists != null)
         {
             var loadedIds = new List<string>(loaded.Count);
             for (int i = 0; i < loaded.Count; i++)
                 loadedIds.Add(loaded[i].Id);
-            
+
             playlistsMap = await _playlists.GetPlaylistsForTracksAsync(loadedIds, ct);
         }
 
         for (int i = 0; i < loaded.Count; i++)
         {
             var track = loaded[i];
-            
+
             if (playlistsMap != null && playlistsMap.TryGetValue(track.Id, out var pls))
             {
                 track.InPlaylists = pls;
@@ -163,10 +146,6 @@ public sealed class TrackRegistry
         }
     }
 
-    /// <summary>
-    /// Updates pinning status based on track importance.
-    /// инлайнинг и минимизация условий.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool UpdatePinStatusInternal(TrackInfo track)
     {
@@ -199,10 +178,6 @@ public sealed class TrackRegistry
         UpdatePinStatusInternal(track);
     }
 
-    /// <summary>
-    /// Hydrates registry from database.
-    /// batch загрузка плейлистов одним запросом.
-    /// </summary>
     public async Task HydrateAsync(CancellationToken ct = default)
     {
         if (_repository == null) return;
@@ -210,7 +185,6 @@ public sealed class TrackRegistry
         Log.Info("[TrackRegistry] Hydrating from database...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        // pre-allocate с запасом
         var allLoaded = new List<TrackInfo>(2200);
 
         var liked = await _repository.GetLikedAsync(1000, 0, ct);
@@ -222,7 +196,6 @@ public sealed class TrackRegistry
         var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
         allLoaded.AddRange(recent);
 
-        // КРИТИЧНАЯ ОДИН batch-запрос для всех плейлистов
         var allIds = new HashSet<string>(allLoaded.Count, StringComparer.Ordinal);
         for (int i = 0; i < allLoaded.Count; i++)
             allIds.Add(allLoaded[i].Id);
@@ -237,7 +210,7 @@ public sealed class TrackRegistry
         for (int i = 0; i < allLoaded.Count; i++)
         {
             var t = allLoaded[i];
-            
+
             if (playlistsMap != null && playlistsMap.TryGetValue(t.Id, out var pls))
             {
                 t.InPlaylists = pls;
@@ -247,7 +220,9 @@ public sealed class TrackRegistry
             UpdatePinStatusInternal(canonical);
         }
 
-        CacheManager?.HydrateCacheStatus(_pinned.Values);
+        // Массовая гидрация кэш-статуса через AudioCacheManager
+        var audioCache = GetAudioCache();
+        audioCache?.HydrateCacheStatus(_pinned.Values);
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} pinned tracks in {sw.ElapsedMilliseconds}ms");
@@ -255,10 +230,6 @@ public sealed class TrackRegistry
         MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", _pinned.Count * 1024);
     }
 
-    /// <summary>
-    /// Flushes pinned tracks to database.
-    /// batch upsert вместо N запросов.
-    /// </summary>
     public async Task FlushAsync(CancellationToken ct = default)
     {
         if (_repository == null) return;
@@ -279,15 +250,10 @@ public sealed class TrackRegistry
 
     public IEnumerable<TrackInfo> GetPinnedTracks() => _pinned.Values;
 
-    /// <summary>
-    /// Cleans up dead weak references.
-    /// используем ArrayPool для буфера удаляемых ключей.
-    /// </summary>
     public int CleanupDeadReferences()
     {
-        // Оценка максимального размера — все кэшированные записи
         var maxDeadCount = _cache.Count;
-        
+
         var deadKeysArray = ArrayPool<string>.Shared.Rent(maxDeadCount);
         int deadCount = 0;
 
@@ -322,5 +288,89 @@ public sealed class TrackRegistry
         MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", 0);
         _cache.Clear();
         _pinned.Clear();
+    }
+
+    /// <summary>
+    /// Подписывается на события AudioCacheManager.
+    /// Вызывать после инициализации AudioSourceFactory.GlobalCache.
+    /// </summary>
+    public void SubscribeToCacheEvents()
+    {
+        var audioCache = GetAudioCache();
+        if (audioCache == null)
+        {
+            Log.Warn("[TrackRegistry] AudioCache not available for event subscription");
+            return;
+        }
+
+        audioCache.OnCacheCleared += HandleCacheCleared;
+        audioCache.OnFormatCached += HandleFormatCached;
+
+        Log.Info("[TrackRegistry] Subscribed to AudioCache events");
+    }
+
+    /// <summary>
+    /// Вызывается когда весь кэш очищен — сбрасываем IsCached у всех треков.
+    /// </summary>
+    private void HandleCacheCleared()
+    {
+        int cleared = 0;
+
+        // Сбрасываем у pinned (сильные ссылки — гарантированно живые)
+        foreach (var track in _pinned.Values)
+        {
+            if (track.IsCached && !track.IsDownloaded)
+            {
+                track.ClearCacheStatus();
+                cleared++;
+            }
+        }
+
+        // Сбрасываем у обычного кэша (слабые ссылки)
+        foreach (var weakRef in _cache.Values)
+        {
+            if (weakRef.TryGetTarget(out var track) && track.IsCached && !track.IsDownloaded)
+            {
+                // Не дублируем если уже обработали в pinned
+                if (!_pinned.ContainsKey(track.Id))
+                {
+                    track.ClearCacheStatus();
+                    cleared++;
+                }
+            }
+        }
+
+        Log.Info($"[TrackRegistry] Cache cleared: reset IsCached on {cleared} tracks");
+    }
+
+    /// <summary>
+    /// Вызывается когда формат трека полностью закэширован — помечаем трек.
+    /// </summary>
+    private void HandleFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
+    {
+        if (string.IsNullOrEmpty(trackId)) return;
+
+        // Ищем трек в pinned
+        if (_pinned.TryGetValue(trackId, out var pinned))
+        {
+            if (isDownloaded)
+                pinned.MarkAsDownloaded(pinned.LocalPath ?? "", container, bitrate);
+            else
+                pinned.MarkAsCached(container, bitrate);
+
+            Log.Debug($"[TrackRegistry] Marked pinned track {trackId} as cached ({container}/{bitrate}kbps)");
+            return;
+        }
+
+        // Ищем в слабом кэше
+        if (_cache.TryGetValue(trackId, out var weakRef) && weakRef.TryGetTarget(out var cached))
+        {
+            if (isDownloaded)
+                cached.MarkAsDownloaded(cached.LocalPath ?? "", container, bitrate);
+            else
+                cached.MarkAsCached(container, bitrate);
+
+            Log.Debug($"[TrackRegistry] Marked cached track {trackId} as cached ({container}/{bitrate}kbps)");
+        }
     }
 }

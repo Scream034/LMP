@@ -8,21 +8,103 @@ namespace LMP.Core.Youtube.Videos;
 
 internal class VideoController(HttpClient http)
 {
-    private string? _visitorData;
+    #region Bot Detection State
 
+    private static DateTime _lastBotDetection = DateTime.MinValue;
+    private static int _consecutiveFailures;
+    private static readonly SemaphoreSlim _requestThrottle = new(1, 1);
+    private static readonly Lock _stateLock = new();
+
+    /// <summary>
+    /// Событие для UI — показать диалог cooldown.
+    /// </summary>
+    public static event Action<TimeSpan>? OnBotDetectionCooldown;
+
+    /// <summary>
+    /// Событие для критических ошибок стримов (403, все клиенты failed).
+    /// </summary>
+    public static event Action<StreamUnavailableException>? OnStreamUnavailable;
+
+    /// <summary>
+    /// Длительность cooldown.
+    /// </summary>
+    public static readonly TimeSpan CooldownDuration = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Глобальная проверка — в cooldown ли мы сейчас?
+    /// </summary>
+    public static bool IsInCooldown
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                if (_consecutiveFailures < 3) return false;
+                var elapsed = DateTime.UtcNow - _lastBotDetection;
+                return elapsed < CooldownDuration;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Получить оставшееся время cooldown.
+    /// </summary>
+    public static TimeSpan GetRemainingCooldown()
+    {
+        lock (_stateLock)
+        {
+            if (_consecutiveFailures < 3) return TimeSpan.Zero;
+
+            var elapsed = DateTime.UtcNow - _lastBotDetection;
+            var remaining = CooldownDuration - elapsed;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+    }
+
+    /// <summary>
+    /// Сбросить состояние bot detection.
+    /// </summary>
+    public static void ResetBotDetectionState()
+    {
+        lock (_stateLock)
+        {
+            _consecutiveFailures = 0;
+            _lastBotDetection = DateTime.MinValue;
+            Log.Info("[VideoController] Bot detection state reset");
+        }
+    }
+
+    #endregion
+
+    #region Throttle
+
+    private static TimeSpan GetThrottleDelay()
+    {
+        int failures;
+        lock (_stateLock) failures = _consecutiveFailures;
+
+        return failures switch
+        {
+            0 => TimeSpan.FromMilliseconds(150),
+            1 => TimeSpan.FromSeconds(1),
+            2 => TimeSpan.FromSeconds(3),
+            _ => TimeSpan.FromSeconds(5)
+        };
+    }
+
+    #endregion
+
+    private string? _visitorData;
     protected HttpClient Http { get; } = http;
 
-    private async ValueTask<string> ResolveVisitorDataAsync(
-        CancellationToken cancellationToken = default)
+    #region Visitor Data
+
+    private async ValueTask<string> ResolveVisitorDataAsync(CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(_visitorData))
             return _visitorData;
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            "https://www.youtube.com/sw.js_data"
-        );
-
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("User-Agent", YoutubeClientUtils.UaWeb);
 
@@ -34,15 +116,17 @@ internal class VideoController(HttpClient http)
             jsonString = jsonString[4..];
 
         var json = Json.Parse(jsonString);
-
         var value = json[0][2][0][0][13].GetStringOrNull();
+
         if (string.IsNullOrWhiteSpace(value))
-        {
             throw new YoutubeExplodeException("Failed to resolve visitor data.");
-        }
 
         return _visitorData = value;
     }
+
+    #endregion
+
+    #region Watch Page
 
     public async ValueTask<VideoWatchPage> GetVideoWatchPageAsync(
         VideoId videoId,
@@ -53,18 +137,12 @@ internal class VideoController(HttpClient http)
             var watchPage = VideoWatchPage.TryParse(
                 await Http.GetStringAsync(
                     $"https://www.youtube.com/watch?v={videoId}&bpctr=9999999999",
-                    cancellationToken
-                )
-            );
+                    cancellationToken));
 
             if (watchPage is null)
             {
-                if (retriesRemaining > 0)
-                    continue;
-
-                throw new YoutubeExplodeException(
-                    "Video watch page is broken. Please try again in a few minutes."
-                );
+                if (retriesRemaining > 0) continue;
+                throw new YoutubeExplodeException("Video watch page is broken. Please try again in a few minutes.");
             }
 
             if (!watchPage.IsAvailable)
@@ -74,50 +152,69 @@ internal class VideoController(HttpClient http)
         }
     }
 
-    /// <summary>
-    /// Стандартный запрос с текущим профилем клиента.
-    /// </summary>
+    #endregion
+
+    #region GetPlayerResponse
+
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
         var clientName = YoutubeClientUtils.CurrentProfile.ToString().ToUpperInvariant();
         if (clientName == "ANDROIDVR") clientName = "ANDROID_VR";
-
         return await GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
     }
 
-    /// <summary>
-    /// Запрос с конкретным клиентом.
-    /// </summary>
     public async ValueTask<PlayerResponse> GetPlayerResponseWithClientAsync(
         VideoId videoId,
         string clientName,
         CancellationToken cancellationToken = default,
         string? signatureTimestamp = null)
     {
+        // Cooldown check
+        if (IsInCooldown)
+        {
+            var remaining = GetRemainingCooldown();
+            if (remaining > TimeSpan.Zero)
+            {
+                Log.Warn($"[VideoController] Bot detection cooldown active, waiting {remaining.TotalSeconds:F0}s...");
+                NotifyBotDetectionCooldown(remaining);
+
+                try
+                {
+                    await Task.Delay(remaining, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+            }
+        }
+
+        // Throttle
+        await _requestThrottle.WaitAsync(cancellationToken);
+        try
+        {
+            var delay = GetThrottleDelay();
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, cancellationToken);
+        }
+        finally
+        {
+            _requestThrottle.Release();
+        }
+
         Log.Info($"GetPlayerResponse START ({clientName}): {videoId}");
 
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            "https://www.youtube.com/youtubei/v1/player"
-        );
-
-        // Флаг для Handler'а
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/player");
         request.Options.Set(YoutubeHttpHandler.IsPlayerContext, true);
-
-        // Устанавливаем User-Agent для конкретного клиента
         request.Headers.Remove("User-Agent");
         request.Headers.Add("User-Agent", YoutubeClientUtils.GetUserAgentForClient(clientName));
 
         string jsonBody = YoutubeClientUtils.GeneratePlayerContextForClient(
-            clientName,
-            videoId.Value,
-            visitorData,
-            signatureTimestamp
-        );
+            clientName, videoId.Value, visitorData, signatureTimestamp);
 
         request.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
 
@@ -126,24 +223,101 @@ internal class VideoController(HttpClient http)
 
         if (!response.IsSuccessStatusCode)
         {
-            Log.Warn($"[VideoController] [{videoId}] {clientName} HTTP {(int)response.StatusCode}");
+            var statusCode = (int)response.StatusCode;
+            Log.Warn($"[VideoController] [{videoId}] {clientName} HTTP {statusCode}");
+
+            if (statusCode == 403)
+            {
+                throw new StreamUnavailableException(
+                    $"HTTP 403 Forbidden for video {videoId} via {clientName}",
+                    videoId.Value,
+                    StreamUnavailableReason.Forbidden403,
+                    httpStatusCode: 403);
+            }
+
             throw new YoutubeExplodeException($"HTTP {response.StatusCode} for client {clientName}");
         }
 
-        return PlayerResponse.Parse(content);
+        var playerResponse = PlayerResponse.Parse(content);
+        TrackBotDetection(playerResponse, videoId.Value);
+
+        return playerResponse;
     }
 
-    /// <summary>
-    /// Пробует получить PlayerResponse с работающими стримами.
-    /// НЕ использует IOS для обычных стримов.
-    /// </summary>
+    #endregion
+
+    #region Bot Detection Tracking
+
+    private static void TrackBotDetection(PlayerResponse response, string videoId)
+    {
+        if (IsBotDetectionResponse(response))
+        {
+            lock (_stateLock)
+            {
+                _consecutiveFailures++;
+                _lastBotDetection = DateTime.UtcNow;
+
+                if (_consecutiveFailures == 1)
+                {
+                    Log.Warn("[VideoController] ⚠️ Bot detection triggered — slowing down requests");
+                }
+                else if (_consecutiveFailures == 3)
+                {
+                    Log.Error("[VideoController] ❌ Multiple bot detections — entering 2min cooldown");
+                    NotifyBotDetectionCooldown(CooldownDuration);
+                }
+            }
+        }
+        else if (response.IsPlayable)
+        {
+            lock (_stateLock)
+            {
+                if (_consecutiveFailures > 0)
+                {
+                    Log.Info($"[VideoController] ✓ Bot detection cleared after {_consecutiveFailures} failures");
+                    _consecutiveFailures = 0;
+                }
+            }
+        }
+    }
+
+    private static bool IsBotDetectionResponse(PlayerResponse response)
+    {
+        var error = response.PlayabilityError;
+        if (string.IsNullOrEmpty(error)) return false;
+
+        return error.Contains("bot", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Выполните вход", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Войдите", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("LOGIN_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("confirm you're not", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("подтвердить", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void NotifyBotDetectionCooldown(TimeSpan waitTime)
+    {
+        try { OnBotDetectionCooldown?.Invoke(waitTime); }
+        catch (Exception ex) { Log.Warn($"[VideoController] OnBotDetectionCooldown handler error: {ex.Message}"); }
+    }
+
+    private static void NotifyStreamUnavailable(StreamUnavailableException exception)
+    {
+        try { OnStreamUnavailable?.Invoke(exception); }
+        catch (Exception ex) { Log.Warn($"[VideoController] OnStreamUnavailable handler error: {ex.Message}"); }
+    }
+
+    #endregion
+
+    #region Fallback Methods
+
     public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
         var errors = new List<string>();
+        var allBotDetection = true;
 
-        // Пробуем клиенты для обычных стримов (без IOS!)
         foreach (var clientName in YoutubeClientUtils.StreamFallbackClients)
         {
             try
@@ -159,21 +333,33 @@ internal class VideoController(HttpClient http)
                 var error = response.PlayabilityError ?? "Not playable / No streams";
                 Log.Warn($"[VideoController] [{videoId}] {clientName}: {error}");
                 errors.Add($"{clientName}: {error}");
+
+                if (!IsBotDetectionResponse(response))
+                    allBotDetection = false;
             }
+            catch (StreamUnavailableException) { throw; }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Log.Warn($"[VideoController] [{videoId}] {clientName} exception: {ex.Message}");
                 errors.Add($"{clientName}: {ex.Message}");
+                allBotDetection = false;
             }
         }
 
         var allErrors = string.Join("; ", errors);
-        throw new VideoUnplayableException($"All stream clients failed for {videoId}: {allErrors}");
+
+        if (allBotDetection && IsInCooldown)
+        {
+            throw new BotDetectionException(
+                $"All clients blocked by bot detection for {videoId}",
+                GetRemainingCooldown());
+        }
+
+        throw new VideoUnplayableException(
+            $"Video {videoId} is not available through any client. Errors: {allErrors}");
     }
 
-    /// <summary>
-    /// Получает HLS манифест URL. IOS в приоритете.
-    /// </summary>
     public async ValueTask<string?> GetHlsManifestUrlAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
@@ -191,6 +377,22 @@ internal class VideoController(HttpClient http)
                     return hlsUrl;
                 }
             }
+            catch (StreamUnavailableException ex) when (ex.HttpStatusCode == 403)
+            {
+                Log.Warn($"[VideoController] [{videoId}] HLS via {clientName} got 403");
+
+                var hlsException = new StreamUnavailableException(
+                    $"HLS stream returned 403 for video {videoId}",
+                    videoId.Value,
+                    StreamUnavailableReason.Forbidden403,
+                    httpStatusCode: 403,
+                    wasHlsFallback: true);
+
+                NotifyStreamUnavailable(hlsException);
+                throw hlsException;
+            }
+            catch (BotDetectionException) { throw; }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Log.Debug($"[VideoController] [{videoId}] HLS via {clientName} failed: {ex.Message}");
@@ -201,20 +403,14 @@ internal class VideoController(HttpClient http)
         return null;
     }
 
-    /// <summary>
-    /// Fallback с signatureTimestamp (для age-restricted).
-    /// </summary>
     public async ValueTask<PlayerResponse> GetPlayerResponseAsync(
         VideoId videoId,
         string? signatureTimestamp,
         CancellationToken cancellationToken = default)
     {
-        // Используем TVHTML5 для age-restricted
         return await GetPlayerResponseWithClientAsync(
-            videoId,
-            "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-            cancellationToken,
-            signatureTimestamp
-        );
+            videoId, "TVHTML5_SIMPLY_EMBEDDED_PLAYER", cancellationToken, signatureTimestamp);
     }
+
+    #endregion
 }

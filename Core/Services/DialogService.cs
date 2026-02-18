@@ -4,6 +4,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using LMP.Core.Models;
+using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Youtube.Videos;
 using LMP.UI.Dialogs;
 using LMP.Core.Youtube.Search;
 
@@ -16,17 +18,34 @@ public interface IDialogService
     Task<string?> SelectFolderAsync(string? startPath = null);
     Task ShowInfoAsync(string title, string message);
     Task ShowInfoAsync(string title, string message, string buttonText);
-
     Task<string?> ShowInputAsync(string title, string prompt, string? watermark = null);
-
     Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items);
     Task<List<MergeDecision>> ShowMergeConflictResolutionDialogAsync(List<string> playlistNames);
     Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated);
+
+    /// <summary>
+    /// Показывает диалог ожидания bot detection cooldown.
+    /// </summary>
+    Task ShowBotDetectionCooldownAsync(TimeSpan waitTime);
+
+    /// <summary>
+    /// Показывает диалог ошибки недоступности стрима.
+    /// </summary>
+    Task ShowStreamUnavailableAsync(StreamUnavailableException exception);
+
+    /// <summary>
+    /// Показывает диалог общей ошибки воспроизведения.
+    /// </summary>
+    Task ShowPlaybackErrorAsync(string videoId, string errorMessage, Exception? exception = null);
 }
 
 public class DialogService : IDialogService
 {
     private static readonly LocalizationService L = LocalizationService.Instance;
+
+    // Синглтоны для диалогов, которые не должны дублироваться
+    private BotDetectionDialog? _activeBotDetectionDialog;
+    private readonly Lock _botDetectionLock = new();
 
     private static Window? GetMainWindow()
     {
@@ -55,7 +74,8 @@ public class DialogService : IDialogService
         }
     }
 
-    // --- REALIZATION OF NEW METHOD ---
+    #region Basic Dialogs
+
     public async Task<string?> ShowInputAsync(string title, string prompt, string? watermark = null)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -134,16 +154,20 @@ public class DialogService : IDialogService
     public async Task ShowInfoAsync(string title, string message) =>
         await ShowInfoAsync(title, message, L["Common_OK"]);
 
+    #endregion
+
+    #region Sync/Merge Dialogs
+
     public async Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
-            if (window == null) return [];
+            if (window == null) return new List<PlaylistSearchResult>();
             var vm = new SyncSelectionViewModel(items);
             var dialog = new SyncSelectionDialog { DataContext = vm };
             var result = await ShowDialogSafeAsync<List<PlaylistSearchResult>>(dialog, window);
-            return result ?? [];
+            return result ?? new List<PlaylistSearchResult>();
         });
     }
 
@@ -152,11 +176,13 @@ public class DialogService : IDialogService
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
-            if (window == null) return [.. playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip))];
+            if (window == null) 
+                return playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
+            
             var vm = new MergeConflictResolutionViewModel(playlistNames);
             var dialog = new MergeConflictResolutionDialog { DataContext = vm };
             var result = await ShowDialogSafeAsync<List<MergeDecision>>(dialog, window);
-            return result ?? [.. playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip))];
+            return result ?? playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
         });
     }
 
@@ -171,4 +197,83 @@ public class DialogService : IDialogService
             return await ShowDialogSafeAsync<DeletePlaylistResult?>(dialog, window);
         });
     }
+
+    #endregion
+
+    #region Bot Detection / Stream Errors
+
+    public async Task ShowBotDetectionCooldownAsync(TimeSpan waitTime)
+    {
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var window = GetMainWindow();
+            if (window == null) return;
+
+            lock (_botDetectionLock)
+            {
+                // Если диалог уже открыт — обновляем его, не создаём новый
+                if (_activeBotDetectionDialog != null && _activeBotDetectionDialog.IsVisible)
+                {
+                    // Обновляем таймер существующего диалога
+                    _activeBotDetectionDialog.UpdateCountdown(
+                        VideoController.GetRemainingCooldown(),
+                        VideoController.CooldownDuration);
+                    return;
+                }
+
+                // Создаём новый диалог
+                _activeBotDetectionDialog = new BotDetectionDialog
+                {
+                    DialogTitle = L["Dialog_BotDetection_Title"],
+                    Message = L["Dialog_BotDetection_Message"],
+                    Hint = L["Dialog_BotDetection_Hint"],
+                    CloseButtonText = L["Common_OK"]
+                };
+            }
+
+            _activeBotDetectionDialog.StartCountdown(waitTime);
+
+            try
+            {
+                await ShowDialogSafeAsync<bool?>(_activeBotDetectionDialog, window);
+            }
+            finally
+            {
+                lock (_botDetectionLock)
+                {
+                    _activeBotDetectionDialog = null;
+                }
+            }
+        });
+    }
+
+    public async Task ShowStreamUnavailableAsync(StreamUnavailableException exception)
+    {
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var window = GetMainWindow();
+            if (window == null) return;
+
+            var dialog = new StreamUnavailableDialog();
+            dialog.ConfigureForException(exception);
+
+            await ShowDialogSafeAsync<object>(dialog, window);
+        });
+    }
+
+    public async Task ShowPlaybackErrorAsync(string videoId, string errorMessage, Exception? exception = null)
+    {
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var window = GetMainWindow();
+            if (window == null) return;
+
+            var dialog = new StreamUnavailableDialog();
+            dialog.ConfigureForError(videoId, errorMessage, exception);
+
+            await ShowDialogSafeAsync<object>(dialog, window);
+        });
+    }
+
+    #endregion
 }

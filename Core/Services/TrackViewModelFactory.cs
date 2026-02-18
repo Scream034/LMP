@@ -10,27 +10,27 @@ namespace LMP.Core.Services;
 /// </summary>
 public class TrackViewModelFactory
 {
+    private readonly LibraryService _library;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
     private readonly TrackRegistry _registry;
-    private readonly StreamCacheManager _cacheManager;
 
     // Кэш для "общих" VM (используются в Home, Search, Library, Playlist)
     private readonly ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> _cache = new();
 
     public TrackViewModelFactory(
+        LibraryService library,
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
-        TrackRegistry registry,
-        StreamCacheManager cacheManager)
+        TrackRegistry registry)
     {
+        _library = library;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
         _registry = registry;
-        _cacheManager = cacheManager;
     }
 
     /// <summary>
@@ -103,7 +103,7 @@ public class TrackViewModelFactory
             _audio,
             _downloads,
             _manager,
-            _cacheManager,
+            _library,
             playAction);
     }
 

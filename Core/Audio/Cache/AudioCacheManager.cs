@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LMP.Core.Audio.Interfaces;
+using LMP.Core.Models;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio.Cache;
@@ -13,11 +14,29 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     private readonly string _cacheDirectory;
     private readonly long _maxCacheSize;
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
+    
+    /// <summary>
+    /// Reverse index: trackId → list of cacheKeys.
+    /// Ускоряет поиск кэшей трека с O(N) до O(1).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, List<string>> _trackIndex = new();
+    
     private readonly SemaphoreSlim _saveLock = new(1, 1);
     private readonly CancellationTokenSource _timerCts = new();
     private readonly Task _autoSaveTask;
 
     private volatile bool _disposed;
+
+    /// <summary>
+    /// Событие: формат трека полностью закэширован.
+    /// (trackId, container, bitrate, isDownloaded)
+    /// </summary>
+    public event Action<string, string, int, bool>? OnFormatCached;
+
+    /// <summary>
+    /// Событие: весь кэш очищен.
+    /// </summary>
+    public event Action? OnCacheCleared;
 
     public AudioCacheManager(string? cacheDirectory = null, long maxCacheSizeMb = 2048)
     {
@@ -34,32 +53,109 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     #region Public API
 
+    /// <summary>
+    /// Проверяет, полностью ли закэширован трек любого формата/битрейта (по trackId).
+    /// O(1) благодаря reverse index.
+    /// </summary>
+    public bool IsTrackFullyCached(string trackId)
+    {
+        if (string.IsNullOrEmpty(trackId)) return false;
+
+        if (!_trackIndex.TryGetValue(trackId, out var keys))
+            return false;
+
+        foreach (var key in keys)
+        {
+            if (_entries.TryGetValue(key, out var entry) && entry.IsComplete)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Возвращает метаданные лучшего полного кэша по trackId.
+    /// O(k) где k — количество форматов трека (обычно 1-3).
+    /// </summary>
+    public CacheEntry? FindBestCacheByTrackId(string trackId) => FindBestCache(trackId);
+
+    /// <summary>
+    /// Массовая проверка и обновление IsCached статуса треков.
+    /// Оптимизированная версия: O(entries) вместо O(tracks × entries).
+    /// </summary>
+    public void HydrateCacheStatus(IEnumerable<TrackInfo> tracks)
+    {
+        var trackMap = new Dictionary<string, List<TrackInfo>>(StringComparer.Ordinal);
+
+        foreach (var track in tracks)
+        {
+            if (track.IsDownloaded || track.IsCached || string.IsNullOrEmpty(track.Id))
+                continue;
+
+            if (!trackMap.TryGetValue(track.Id, out var list))
+            {
+                list = new List<TrackInfo>(1);
+                trackMap[track.Id] = list;
+            }
+            list.Add(track);
+        }
+
+        if (trackMap.Count == 0) return;
+
+        // Используем reverse index для быстрого поиска
+        foreach (var (trackId, tracksList) in trackMap)
+        {
+            if (!_trackIndex.TryGetValue(trackId, out var keys))
+                continue;
+
+            CacheEntry? bestEntry = null;
+
+            foreach (var key in keys)
+            {
+                if (_entries.TryGetValue(key, out var entry) 
+                    && entry.IsComplete 
+                    && (bestEntry == null || entry.Bitrate > bestEntry.Bitrate))
+                {
+                    bestEntry = entry;
+                }
+            }
+
+            if (bestEntry != null)
+            {
+                foreach (var track in tracksList)
+                {
+                    track.MarkAsCached(bestEntry.Format.ToString(), bestEntry.Bitrate);
+                }
+            }
+        }
+    }
+
     public bool IsFullyCached(string cacheKey)
     {
         if (!_entries.TryGetValue(cacheKey, out var entry))
             return false;
 
-        if (!entry.IsComplete)
-            return false;
-
-        var filePath = GetCachePath(cacheKey);
-        if (!File.Exists(filePath))
-            return false;
-
-        var fileInfo = new FileInfo(filePath);
-        return fileInfo.Length >= entry.TotalSize;
+        return entry.IsComplete;
     }
 
     public CacheEntry? FindBestCache(string trackId)
     {
-        return _entries.Values
-            .Where(e => e.TrackId == trackId && e.IsComplete)
-            .OrderByDescending(e => e.Bitrate)
-            .FirstOrDefault(e =>
+        if (!_trackIndex.TryGetValue(trackId, out var keys))
+            return null;
+
+        CacheEntry? best = null;
+
+        foreach (var key in keys)
+        {
+            if (_entries.TryGetValue(key, out var entry) 
+                && entry.IsComplete 
+                && (best == null || entry.Bitrate > best.Bitrate))
             {
-                var path = GetCachePath(e.CacheKey);
-                return File.Exists(path) && new FileInfo(path).Length >= e.TotalSize;
-            });
+                best = entry;
+            }
+        }
+
+        return best;
     }
 
     public bool HasPartialCache(string cacheKey)
@@ -122,6 +218,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         if (durationMs > 0)
             entry.DurationMs = durationMs;
 
+        // Обновляем reverse index
+        AddToTrackIndex(trackId, cacheKey);
+
         return entry;
     }
 
@@ -139,8 +238,31 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             if (bitrate.HasValue)
                 entry.Bitrate = bitrate.Value;
 
+            // Обновляем кэшированный размер файла
+            UpdateFileSizeCache(entry);
+
             Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
+            
             _ = SaveIndexAsync();
+
+            // Поднимаем событие для UI
+            RaiseFormatCached(entry);
+        }
+    }
+
+    private void RaiseFormatCached(CacheEntry entry)
+    {
+        try
+        {
+            OnFormatCached?.Invoke(
+                entry.TrackId,
+                entry.Format.ToString(),
+                entry.Bitrate,
+                false);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioCache] OnFormatCached handler error: {ex.Message}");
         }
     }
 
@@ -175,7 +297,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             {
                 entry.IsComplete = true;
                 entry.CompletedAt = DateTime.UtcNow;
+                UpdateFileSizeCache(entry);
                 Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
+                RaiseFormatCached(entry);
             }
         }
         catch (Exception ex)
@@ -252,8 +376,11 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     public void RemoveCache(string cacheKey)
     {
-        if (_entries.TryRemove(cacheKey, out _))
+        if (_entries.TryRemove(cacheKey, out var entry))
         {
+            // Удаляем из reverse index
+            RemoveFromTrackIndex(entry.TrackId, cacheKey);
+
             var filePath = GetCachePath(cacheKey);
             try
             {
@@ -268,7 +395,8 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     public async Task CleanupAsync(CancellationToken ct = default)
     {
-        long totalSize = CalculateTotalCacheSize();
+        var stats = GetStats();
+        long totalSize = stats.TotalSizeBytes;
 
         if (totalSize <= _maxCacheSize)
             return;
@@ -284,18 +412,20 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             if (totalSize <= _maxCacheSize * CacheCleanupThreshold)
                 break;
 
-            var filePath = GetCachePath(entry.CacheKey);
-            if (File.Exists(filePath))
-            {
-                totalSize -= new FileInfo(filePath).Length;
-            }
-
+            totalSize -= entry.ActualFileSize;
             RemoveCache(entry.CacheKey);
         }
 
         Log.Info($"[AudioCache] Cleanup complete, new size: {totalSize / 1024 / 1024}MB");
     }
 
+    #endregion
+
+    #region Statistics
+
+    /// <summary>
+    /// Возвращает статистику кэша БЕЗ IO (использует кэшированные размеры).
+    /// </summary>
     public CacheStats GetStats()
     {
         long totalSize = 0;
@@ -304,11 +434,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         foreach (var entry in _entries.Values)
         {
-            var filePath = GetCachePath(entry.CacheKey);
-            if (File.Exists(filePath))
-            {
-                totalSize += new FileInfo(filePath).Length;
-            }
+            totalSize += entry.ActualFileSize;
 
             if (entry.IsComplete)
                 completeCount++;
@@ -326,24 +452,471 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         };
     }
 
+    /// <summary>
+    /// Возвращает кортеж (fileCount, sizeMb) для совместимости со старым API.
+    /// </summary>
+    public (int FileCount, int SizeMb) GetStatsCompact()
+    {
+        var stats = GetStats();
+        return (stats.CompleteEntries, (int)(stats.TotalSizeBytes / 1024 / 1024));
+    }
+
+    /// <summary>
+    /// Возвращает статистику папки Downloads.
+    /// </summary>
+    public static (int FileCount, int SizeMb) GetDownloadsStats()
+    {
+        try
+        {
+            var dir = new DirectoryInfo(G.Folder.Downloads);
+            if (!dir.Exists)
+                return (0, 0);
+
+            var files = dir.GetFiles("*.*", SearchOption.TopDirectoryOnly);
+            long totalBytes = files.Sum(f => f.Length);
+
+            return (files.Length, (int)(totalBytes / 1024 / 1024));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioCache] GetDownloadsStats error: {ex.Message}");
+            return (0, 0);
+        }
+    }
+
+    /// <summary>
+    /// Возвращает список закэшированных форматов для трека.
+    /// O(k) где k — количество форматов.
+    /// </summary>
+    public List<(string Container, int Bitrate)> GetCachedFormats(string trackId)
+    {
+        var result = new List<(string, int)>();
+
+        if (!_trackIndex.TryGetValue(trackId, out var keys))
+            return result;
+
+        foreach (var key in keys)
+        {
+            if (_entries.TryGetValue(key, out var entry) && entry.IsComplete)
+            {
+                result.Add((entry.Format.ToString(), entry.Bitrate));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Проверяет, закэширован ли конкретный формат/битрейт.
+    /// </summary>
+    public bool IsFormatCached(string trackId, string container, int bitrate)
+    {
+        var normalizedBitrate = NormalizeBitrate(bitrate);
+
+        if (!Enum.TryParse<AudioFormat>(container, true, out var format))
+            return false;
+
+        var cacheKey = BuildCacheKey(trackId, format, normalizedBitrate);
+        return IsFullyCached(cacheKey);
+    }
+
+    /// <summary>
+    /// Строит уникальный ключ кэша: trackId + формат + нормализованный битрейт.
+    /// </summary>
+    public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
+    {
+        int normalizedBitrate = NormalizeBitrate(bitrate);
+        return $"{trackId}_{format}_{normalizedBitrate}";
+    }
+
+    /// <summary>
+    /// Нормализует битрейт к ближайшему "стандартному" значению.
+    /// </summary>
+    public static int NormalizeBitrate(int bitrate)
+    {
+        if (bitrate <= 0) return 128;
+
+        int[] standards = [48, 64, 96, 128, 160, 192, 256, 320];
+
+        int closest = standards[0];
+        int minDiff = Math.Abs(bitrate - closest);
+
+        foreach (int std in standards)
+        {
+            int diff = Math.Abs(bitrate - std);
+            if (diff < minDiff)
+            {
+                minDiff = diff;
+                closest = std;
+            }
+        }
+
+        return minDiff > 20 ? bitrate : closest;
+    }
+
     #endregion
 
-    #region Private Methods
+    #region Export to Downloads
 
-    private long CalculateTotalCacheSize()
+    /// <summary>
+    /// Экспортирует полностью закэшированный трек в папку Downloads.
+    /// </summary>
+    public async Task<bool> ExportTrackToDownloadsAsync(
+        string trackId, 
+        Func<string, Task<TrackInfo?>> getTrackFunc,
+        Func<TrackInfo, Task> updateTrackFunc,
+        CancellationToken ct = default)
     {
-        long totalSize = 0;
+        var entry = FindBestCache(trackId);
+        if (entry == null)
+        {
+            Log.Warn($"[AudioCache] Track {trackId} not fully cached, cannot export");
+            return false;
+        }
 
-        foreach (var entry in _entries.Values)
+        return await PromoteCacheToDownloadsAsync(entry, getTrackFunc, updateTrackFunc, ct);
+    }
+
+    private async Task<bool> PromoteCacheToDownloadsAsync(
+        CacheEntry entry,
+        Func<string, Task<TrackInfo?>> getTrackFunc,
+        Func<TrackInfo, Task> updateTrackFunc,
+        CancellationToken ct)
+    {
+        if (!await _saveLock.WaitAsync(1000, ct))
+            return false;
+
+        try
+        {
+            var track = await getTrackFunc(entry.TrackId);
+            if (track == null)
+            {
+                Log.Warn($"[AudioCache] Track not found: {entry.TrackId}");
+                return false;
+            }
+
+            if (track.IsDownloaded && !string.IsNullOrEmpty(track.LocalPath) && File.Exists(track.LocalPath))
+            {
+                Log.Debug($"[AudioCache] Already downloaded: {track.Title}");
+                return true;
+            }
+
+            var cachePath = GetCachePath(entry.CacheKey);
+            if (!File.Exists(cachePath))
+            {
+                Log.Warn($"[AudioCache] Cache file not found: {cachePath}");
+                return false;
+            }
+
+            var fileInfo = new FileInfo(cachePath);
+            if (fileInfo.Length < entry.TotalSize)
+            {
+                Log.Warn($"[AudioCache] Incomplete cache file: {fileInfo.Length} < {entry.TotalSize}");
+                return false;
+            }
+
+            string ext = entry.Format switch
+            {
+                AudioFormat.WebM => "webm",
+                AudioFormat.Mp4 => "m4a",
+                AudioFormat.Ogg => "ogg",
+                _ => "audio"
+            };
+
+            string safeName = SanitizeFileName($"{track.Author} - {track.Title}.{ext}");
+            string destPath = Path.Combine(G.Folder.Downloads, safeName);
+
+            if (File.Exists(destPath))
+            {
+                var existingInfo = new FileInfo(destPath);
+                if (existingInfo.Length == entry.TotalSize)
+                {
+                    track.MarkAsDownloaded(destPath, entry.Format.ToString(), entry.Bitrate);
+                    await updateTrackFunc(track);
+                    Log.Debug($"[AudioCache] File already exists: {safeName}");
+                    return true;
+                }
+
+                var baseName = Path.GetFileNameWithoutExtension(safeName);
+                destPath = Path.Combine(G.Folder.Downloads, $"{baseName}_{entry.Bitrate}kbps.{ext}");
+            }
+
+            Log.Info($"[AudioCache] Exporting to Downloads: {Path.GetFileName(destPath)}");
+
+            File.Copy(cachePath, destPath, overwrite: true);
+
+            track.MarkAsDownloaded(destPath, entry.Format.ToString(), entry.Bitrate);
+            await updateTrackFunc(track);
+
+            OnFormatCached?.Invoke(entry.TrackId, entry.Format.ToString(), entry.Bitrate, true);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[AudioCache] Export failed: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sanitized = string.Join("_", fileName.Split(invalid, StringSplitOptions.RemoveEmptyEntries));
+        return sanitized.Length > 200 ? sanitized[..200] : sanitized;
+    }
+
+    #endregion
+
+    #region Clear & Maintenance
+
+    /// <summary>
+    /// Полностью очищает кэш аудио.
+    /// </summary>
+    public async Task ClearAllAsync(CancellationToken ct = default)
+    {
+        if (!await _saveLock.WaitAsync(5000, ct))
+        {
+            Log.Warn("[AudioCache] ClearAllAsync: couldn't acquire lock");
+            return;
+        }
+
+        try
+        {
+            Log.Info("[AudioCache] Clearing all cache...");
+
+            _entries.Clear();
+            _trackIndex.Clear();
+
+            var dir = new DirectoryInfo(_cacheDirectory);
+            if (dir.Exists)
+            {
+                foreach (var file in dir.GetFiles())
+                {
+                    try
+                    {
+                        file.Delete();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[AudioCache] Failed to delete {file.Name}: {ex.Message}");
+                    }
+                }
+            }
+
+            Log.Info("[AudioCache] Cache cleared");
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
+
+        // Уведомляем подписчиков ПОСЛЕ освобождения лока
+        try
+        {
+            OnCacheCleared?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioCache] OnCacheCleared handler error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Очищает папку Downloads.
+    /// </summary>
+    public static async Task ClearDownloadsAsync(CancellationToken ct = default)
+    {
+        await Task.Run(() =>
+        {
+            try
+            {
+                var dir = new DirectoryInfo(G.Folder.Downloads);
+                if (!dir.Exists)
+                    return;
+
+                Log.Info("[AudioCache] Clearing downloads folder...");
+
+                foreach (var file in dir.GetFiles())
+                {
+                    try
+                    {
+                        file.Delete();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[AudioCache] Failed to delete {file.Name}: {ex.Message}");
+                    }
+                }
+
+                Log.Info("[AudioCache] Downloads cleared");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[AudioCache] ClearDownloadsAsync error: {ex.Message}");
+            }
+        }, ct);
+    }
+
+    /// <summary>
+    /// Удаляет кэш конкретного трека (все форматы).
+    /// </summary>
+    public void RemoveTrackCache(string trackId)
+    {
+        if (!_trackIndex.TryGetValue(trackId, out var keys))
+            return;
+
+        var keysToRemove = keys.ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            RemoveCache(key);
+        }
+
+        Log.Debug($"[AudioCache] Removed {keysToRemove.Count} cache entries for track {trackId}");
+    }
+
+    /// <summary>
+    /// Удаляет неполные/повреждённые кэши.
+    /// </summary>
+    public async Task RemoveIncompleteAsync(CancellationToken ct = default)
+    {
+        var incomplete = _entries
+            .Where(kv => !kv.Value.IsComplete)
+            .Select(kv => kv.Key)
+            .ToList();
+
+        foreach (var key in incomplete)
+        {
+            RemoveCache(key);
+        }
+
+        if (incomplete.Count > 0)
+        {
+            Log.Info($"[AudioCache] Removed {incomplete.Count} incomplete cache entries");
+            await SaveIndexAsync();
+        }
+    }
+
+    /// <summary>
+    /// Проверяет целостность кэша и удаляет сиротские файлы.
+    /// </summary>
+    public async Task ValidateAndCleanupAsync(CancellationToken ct = default)
+    {
+        // 1. Удаляем записи без файлов
+        var orphanedEntries = new List<string>();
+
+        foreach (var (key, entry) in _entries)
+        {
+            var filePath = GetCachePath(key);
+            if (!File.Exists(filePath))
+            {
+                orphanedEntries.Add(key);
+            }
+            else
+            {
+                // Обновляем кэшированный размер
+                UpdateFileSizeCache(entry);
+            }
+        }
+
+        foreach (var key in orphanedEntries)
+        {
+            if (_entries.TryRemove(key, out var entry))
+            {
+                RemoveFromTrackIndex(entry.TrackId, key);
+            }
+        }
+
+        // 2. Удаляем файлы без записей
+        var validFiles = _entries.Keys
+            .Select(GetCachePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var dir = new DirectoryInfo(_cacheDirectory);
+        if (dir.Exists)
+        {
+            foreach (var file in dir.GetFiles($"*{CacheFileExtension}"))
+            {
+                if (!validFiles.Contains(file.FullName))
+                {
+                    try
+                    {
+                        file.Delete();
+                        Log.Debug($"[AudioCache] Deleted orphaned file: {file.Name}");
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        if (orphanedEntries.Count > 0)
+        {
+            Log.Info($"[AudioCache] Validation: removed {orphanedEntries.Count} orphaned entries");
+            await SaveIndexAsync();
+        }
+    }
+
+    #endregion
+
+    #region Private Helpers
+
+    /// <summary>
+    /// Добавляет cacheKey в reverse index для trackId.
+    /// </summary>
+    private void AddToTrackIndex(string trackId, string cacheKey)
+    {
+        _trackIndex.AddOrUpdate(
+            trackId,
+            _ => new List<string> { cacheKey },
+            (_, list) =>
+            {
+                if (!list.Contains(cacheKey))
+                    list.Add(cacheKey);
+                return list;
+            });
+    }
+
+    /// <summary>
+    /// Удаляет cacheKey из reverse index.
+    /// </summary>
+    private void RemoveFromTrackIndex(string trackId, string cacheKey)
+    {
+        if (_trackIndex.TryGetValue(trackId, out var list))
+        {
+            list.Remove(cacheKey);
+            if (list.Count == 0)
+                _trackIndex.TryRemove(trackId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Обновляет кэшированный размер файла в entry (без IO при следующих вызовах GetStats).
+    /// </summary>
+    private void UpdateFileSizeCache(CacheEntry entry)
+    {
+        try
         {
             var filePath = GetCachePath(entry.CacheKey);
             if (File.Exists(filePath))
             {
-                totalSize += new FileInfo(filePath).Length;
+                entry.ActualFileSize = new FileInfo(filePath).Length;
             }
         }
+        catch
+        {
+            // Игнорируем ошибки IO при обновлении размера
+        }
+    }
 
-        return totalSize;
+    private long CalculateTotalCacheSize()
+    {
+        // Используем кэшированные размеры вместо IO
+        return _entries.Values.Sum(e => e.ActualFileSize);
     }
 
     private void LoadIndex()
@@ -369,7 +942,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                     if (File.Exists(filePath))
                     {
                         entry.RestoreChunkMask();
+                        UpdateFileSizeCache(entry);
                         _entries.TryAdd(entry.CacheKey, entry);
+                        AddToTrackIndex(entry.TrackId, entry.CacheKey);
                     }
                 }
             }
@@ -501,6 +1076,12 @@ public sealed class CacheEntry
     public DateTime LastAccessedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public bool IsComplete { get; set; }
+
+    /// <summary>
+    /// Кэшированный размер файла (обновляется при MarkComplete/WriteChunk).
+    /// Избегаем IO при GetStats().
+    /// </summary>
+    public long ActualFileSize { get; set; }
 
     public string? ChunkMaskData { get; set; }
 

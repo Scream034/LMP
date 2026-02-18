@@ -101,7 +101,6 @@ class Program
         services.AddSingleton<IClipboardService, ClipboardService>();
 
         // === Caching ===
-        services.AddSingleton<StreamCacheManager>();
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
 

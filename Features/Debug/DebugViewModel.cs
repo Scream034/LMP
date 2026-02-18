@@ -17,7 +17,6 @@ using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Backends;
-using LMP.Core.Helpers;
 #endif
 
 namespace LMP.Features.Debug;

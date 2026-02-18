@@ -90,6 +90,9 @@ public sealed class LibraryService : IAsyncDisposable
         // Hydrate cache
         await _registry.HydrateAsync(ct);
 
+        // Подписываем registry на события кэша
+        _registry.SubscribeToCacheEvents();
+
         // Ensure liked playlist
         await EnsureLikedPlaylistAsync(ct);
 
