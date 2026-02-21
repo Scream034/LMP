@@ -22,9 +22,9 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
     public static readonly HttpRequestOptionsKey<string> VisitorDataKey = new("VisitorData");
     public static readonly HttpRequestOptionsKey<bool> IsPlayerContext = new("IsPlayerContext");
-
-    // Кэшированные байты для SAPISIDHASH — избегаем повторной аллокации
-    private static readonly byte[] SapisidPrefix = " "u8.ToArray();
+    
+    // ✅ Новый ключ для указания что это мобильный/TV клиент (без SAPISIDHASH)
+    public static readonly HttpRequestOptionsKey<bool> IsMobileClient = new("IsMobileClient");
 
     public static string GetHl() => LocalizationService.Instance.CurrentLanguageCode ?? "en";
 
@@ -42,11 +42,8 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         if (string.IsNullOrWhiteSpace(sapisid)) return null;
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-        // Формируем payload для хеширования
         var timestampStr = timestamp.ToString(CultureInfo.InvariantCulture);
 
-        // Используем stackalloc для промежуточного буфера
         int payloadLen = timestampStr.Length + 1 + sapisid.Length + 1 + origin.Length;
         Span<char> payloadChars = payloadLen <= 256
             ? stackalloc char[payloadLen]
@@ -61,14 +58,12 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         payloadChars[pos++] = ' ';
         origin.AsSpan().CopyTo(payloadChars[pos..]);
 
-        // UTF-8 encode в stackalloc буфер
         int utf8Len = Encoding.UTF8.GetByteCount(payloadChars);
         Span<byte> utf8Bytes = utf8Len <= 512
             ? stackalloc byte[utf8Len]
             : new byte[utf8Len];
         Encoding.UTF8.GetBytes(payloadChars, utf8Bytes);
 
-        // SHA1 hash
         Span<byte> hash = stackalloc byte[20];
         SHA1.HashData(utf8Bytes, hash);
         var hashHex = Convert.ToHexStringLower(hash);
@@ -82,16 +77,13 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
         var host = request.RequestUri.Host;
         bool isMusic = host.Contains("music.youtube.com");
-
         bool isPlayerRequest = request.Options.TryGetValue(IsPlayerContext, out var p) && p;
+        
+        // ✅ Проверяем, это мобильный/TV клиент (ANDROID_VR, ANDROID_MUSIC, IOS, TV)
+        bool isMobileClient = request.Options.TryGetValue(IsMobileClient, out var m) && m;
 
-        if (isPlayerRequest)
-        {
-            if (!request.Headers.Contains("User-Agent")) request.Headers.Add("User-Agent", YoutubeClientUtils.UserAgent);
-            if (!YoutubeClientUtils.RequiresAuth)
-                return request;
-        }
-        else
+        // User-Agent: НЕ добавляем если уже есть (установлен в VideoController)
+        if (!request.Headers.Contains("User-Agent"))
         {
             request.Headers.Add("User-Agent", YoutubeClientUtils.UaWeb);
         }
@@ -100,19 +92,20 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         if (!request.Headers.Contains("Accept-Language"))
             request.Headers.Add("Accept-Language", "en,ru;q=0.9");
 
-        // Cookies
-        if (authService is { IsAuthenticated: true })
+        // ✅ Cookies — только для WEB клиентов, НЕ для мобильных
+        if (!isMobileClient && authService is { IsAuthenticated: true })
         {
             var cookieHeader = authService.GetCookieHeader();
             if (!string.IsNullOrEmpty(cookieHeader))
             {
-                if (request.Headers.Contains("Cookie")) request.Headers.Remove("Cookie");
+                if (request.Headers.Contains("Cookie"))
+                    request.Headers.Remove("Cookie");
                 request.Headers.Add("Cookie", cookieHeader);
             }
         }
 
-        // Music headers
-        if (isMusic)
+        // Music headers — только для НЕ-player запросов
+        if (isMusic && !isPlayerRequest)
         {
             request.Headers.Remove("X-YouTube-Client-Name");
             request.Headers.Remove("X-YouTube-Client-Version");
@@ -129,13 +122,10 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
             if (authService?.IsAuthenticated == true)
                 request.Headers.Add("X-Goog-AuthUser", "0");
         }
-        else if (!isPlayerRequest)
+        else if (!isPlayerRequest && request.Method == HttpMethod.Post)
         {
-            if (request.Method == HttpMethod.Post)
-            {
-                if (!request.Headers.Contains("Origin"))
-                    request.Headers.Add("Origin", YoutubeOrigin);
-            }
+            if (!request.Headers.Contains("Origin"))
+                request.Headers.Add("Origin", YoutubeOrigin);
         }
 
         // Visitor Data
@@ -146,14 +136,17 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
             request.Headers.Add("X-Goog-Visitor-Id", visitorData);
         }
 
-        // SAPISIDHASH Authorization
+        // ✅ SAPISIDHASH — ТОЛЬКО для WEB клиентов, НЕ для мобильных/TV
         bool isYoutubeApi = host.Contains("youtube.com") &&
                             request.RequestUri.AbsolutePath.Contains("/youtubei/v1/");
 
-        if (request.Method == HttpMethod.Post && isYoutubeApi && !isPlayerRequest)
+        if (request.Method == HttpMethod.Post && 
+            isYoutubeApi && 
+            !isMobileClient &&  // ✅ Не добавляем для мобильных клиентов
+            authService?.IsAuthenticated == true)
         {
             var origin = isMusic ? MusicOrigin : YoutubeOrigin;
-            var sapisid = authService?.GetCookieValue("SAPISID");
+            var sapisid = authService.GetCookieValue("SAPISID");
 
             if (!string.IsNullOrWhiteSpace(sapisid))
             {
@@ -163,6 +156,18 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                     if (request.Headers.Contains("Authorization"))
                         request.Headers.Remove("Authorization");
                     request.Headers.Add("Authorization", authHeader);
+
+                    // Origin должен совпадать с тем что в SAPISIDHASH
+                    if (request.Headers.Contains("Origin"))
+                        request.Headers.Remove("Origin");
+                    request.Headers.Add("Origin", origin);
+
+                    if (request.Headers.Contains("X-Origin"))
+                        request.Headers.Remove("X-Origin");
+                    request.Headers.Add("X-Origin", origin);
+
+                    if (!request.Headers.Contains("X-Goog-AuthUser"))
+                        request.Headers.Add("X-Goog-AuthUser", "0");
                 }
             }
         }
@@ -280,10 +285,6 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         throw new YoutubeExplodeException("Не удалось выполнить запрос после нескольких попыток.");
     }
 
-    /// <summary>
-    /// Оптимизированное клонирование запроса.
-    /// Для Content используем ReadAsByteArrayAsync (одна копия) вместо CopyToAsync + MemoryStream.
-    /// </summary>
     private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request)
     {
         var clone = new HttpRequestMessage(request.Method, request.RequestUri)
@@ -299,7 +300,6 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
         if (request.Content != null)
         {
-            // ReadAsByteArrayAsync буферизует контент внутри — одна копия вместо MemoryStream
             var bytes = await request.Content.ReadAsByteArrayAsync();
             clone.Content = new ByteArrayContent(bytes);
 

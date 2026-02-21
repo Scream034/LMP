@@ -18,7 +18,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 {
     #region Constants
 
-    private const int MaxConsecutiveErrors = 3;
     private const int MaxHistorySize = 100;
     private const int CommandQueueCapacity = 32;
     private const int SeekDebounceMs = 100;
@@ -82,8 +81,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Playback State
 
-    private int _consecutiveErrors;
-
     /// <summary>
     /// Текущий коэффициент нормализации для трека (1.0 = без изменений).
     /// </summary>
@@ -142,7 +139,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<bool, bool>? OnPlaybackStateChanged;
     public event Action? OnQueueChanged;
     public event Action<bool>? OnLoadingStateChanged;
-    public event Action<string, string>? OnCriticalError;
     public event Action<int>? OnMaxVolumeChanged;
     public event Action<AudioStreamInfo>? OnStreamInfoChanged;
     public event Action<BufferState>? OnBufferStateChanged;
@@ -397,8 +393,22 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             await _player.PlayAsync(streamUrl, track.Id, bitrateHint, CancellationToken.None);
             AddToHistory(track);
+        }
+        catch (Youtube.Exceptions.LoginRequiredException ex)
+        {
+            // ✅ НОВОЕ: Обработка LOGIN_REQUIRED
+            Log.Warn($"[AudioEngine] Login required: {ex.Reason} for {ex.VideoId}");
 
-            _consecutiveErrors = 0;
+            RaiseOnUI(() =>
+            {
+                OnError?.Invoke(LocalizationService.Instance[ex.GetLocalizationKey()]);
+            });
+
+            // Показываем диалог
+            ShowLoginRequiredDialog(ex);
+
+            // НЕ пропускаем трек — просто останавливаемся
+            Stop();
         }
         catch (Youtube.Exceptions.StreamUnavailableException ex)
         {
@@ -409,9 +419,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 OnError?.Invoke(ex.Message);
             });
 
-            // Показываем диалог
             ShowStreamUnavailableDialog(ex);
-
             await HandlePlaybackErrorAsync();
         }
         catch (Youtube.Exceptions.BotDetectionException ex)
@@ -454,6 +462,22 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             current = current.InnerException;
         }
         return null;
+    }
+
+    private static void ShowLoginRequiredDialog(Youtube.Exceptions.LoginRequiredException ex)
+    {
+        try
+        {
+            var dialogService = Program.Services.GetService<IDialogService>();
+            if (dialogService != null)
+            {
+                _ = dialogService.ShowLoginRequiredAsync(ex);
+            }
+        }
+        catch (Exception dialogEx)
+        {
+            Log.Warn($"[AudioEngine] Failed to show login dialog: {dialogEx.Message}");
+        }
     }
 
     private static void ShowStreamUnavailableDialog(Youtube.Exceptions.StreamUnavailableException ex)
@@ -544,14 +568,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task HandlePlaybackErrorAsync()
     {
-        if (++_consecutiveErrors >= MaxConsecutiveErrors)
-        {
-            Stop();
-            RaiseOnUI(() => OnCriticalError?.Invoke("Error", "Too many playback errors"));
-            _consecutiveErrors = 0;
-            return;
-        }
-
         await Task.Delay(1000);
         await PlayNextAsync();
     }

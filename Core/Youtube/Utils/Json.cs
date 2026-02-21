@@ -53,32 +53,6 @@ internal static class Json
     }
 
     /// <summary>
-    /// парсит JSON из ReadOnlySpan char с использованием ArrayPool.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static JsonElement ParseSpan(ReadOnlySpan<char> json)
-    {
-        // Конвертируем в UTF-8 используя ArrayPool
-        var maxByteCount = Encoding.UTF8.GetMaxByteCount(json.Length);
-        var utf8Buffer = ArrayPool<byte>.Shared.Rent(maxByteCount);
-        
-        try
-        {
-            var actualByteCount = Encoding.UTF8.GetBytes(json, utf8Buffer);
-            
-            // ИСПРАВЛЕНИЕ: используем ReadOnlyMemory<byte> вместо Span<byte>
-            var utf8Memory = new ReadOnlyMemory<byte>(utf8Buffer, 0, actualByteCount);
-            
-            using var document = JsonDocument.Parse(utf8Memory);
-            return document.RootElement.Clone();
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(utf8Buffer);
-        }
-    }
-
-    /// <summary>
     /// Парсит JSON строку. Клонирует RootElement для отвязки от документа.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -166,10 +166,10 @@ internal class VideoController(HttpClient http)
     }
 
     public async ValueTask<PlayerResponse> GetPlayerResponseWithClientAsync(
-        VideoId videoId,
-        string clientName,
-        CancellationToken cancellationToken = default,
-        string? signatureTimestamp = null)
+    VideoId videoId,
+    string clientName,
+    CancellationToken cancellationToken,
+    string? signatureTimestamp = null)
     {
         // Cooldown check
         if (IsInCooldown)
@@ -179,15 +179,8 @@ internal class VideoController(HttpClient http)
             {
                 Log.Warn($"[VideoController] Bot detection cooldown active, waiting {remaining.TotalSeconds:F0}s...");
                 NotifyBotDetectionCooldown(remaining);
-
-                try
-                {
-                    await Task.Delay(remaining, cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
+                try { await Task.Delay(remaining, cancellationToken); }
+                catch (OperationCanceledException) { throw; }
             }
         }
 
@@ -199,19 +192,42 @@ internal class VideoController(HttpClient http)
             if (delay > TimeSpan.Zero)
                 await Task.Delay(delay, cancellationToken);
         }
-        finally
-        {
-            _requestThrottle.Release();
-        }
+        finally { _requestThrottle.Release(); }
 
         Log.Info($"GetPlayerResponse START ({clientName}): {videoId}");
 
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/player");
-        request.Options.Set(YoutubeHttpHandler.IsPlayerContext, true);
-        request.Headers.Remove("User-Agent");
+        // SignatureTimestamp для веб-клиентов
+        if (signatureTimestamp == null && clientName is "WEB" or "WEB_REMIX" or "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
+        {
+            signatureTimestamp = await ResolveSignatureTimestampAsync(cancellationToken);
+        }
+
+        // ✅ Правильный URL
+        var playerUrl = clientName == "WEB_REMIX"
+            ? "https://music.youtube.com/youtubei/v1/player"
+            : "https://www.youtube.com/youtubei/v1/player";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, playerUrl);
+
+        // ✅ User-Agent устанавливаем ЗДЕСЬ
         request.Headers.Add("User-Agent", YoutubeClientUtils.GetUserAgentForClient(clientName));
+
+        bool isMobileClient = clientName is "ANDROID_VR" or "ANDROID_MUSIC" or "IOS" or
+                      "TVHTML5_SIMPLY_EMBEDDED_PLAYER" or "ANDROID_TESTSUITE";
+
+        if (isMobileClient)
+        {
+            request.Options.Set(YoutubeHttpHandler.IsMobileClient, true);
+            request.Options.Set(YoutubeHttpHandler.IsPlayerContext, true);
+        }
+        else
+        {
+            // ✅ Для WEB — cookies должны пройти
+            request.Options.Set(YoutubeHttpHandler.IsMobileClient, false);
+            // НЕ устанавливаем IsPlayerContext для WEB
+        }
 
         string jsonBody = YoutubeClientUtils.GeneratePlayerContextForClient(
             clientName, videoId.Value, visitorData, signatureTimestamp);
@@ -239,9 +255,52 @@ internal class VideoController(HttpClient http)
         }
 
         var playerResponse = PlayerResponse.Parse(content);
+
+        if (playerResponse.IsLoginRequired)
+        {
+            Log.Warn($"[VideoController] [{videoId}] LOGIN_REQUIRED via {clientName}: {playerResponse.LoginRequiredReason}");
+
+            throw new LoginRequiredException(
+                $"Video {videoId} requires login: {playerResponse.LoginRequiredReason}",
+                videoId.Value,
+                playerResponse.LoginRequiredReason);
+        }
+
         TrackBotDetection(playerResponse, videoId.Value);
 
         return playerResponse;
+    }
+
+    private string? _signatureTimestamp;
+
+    private async ValueTask<string?> ResolveSignatureTimestampAsync(CancellationToken ct)
+    {
+        if (_signatureTimestamp != null) return _signatureTimestamp;
+
+        try
+        {
+            var iframe = await Http.GetStringAsync("https://www.youtube.com/iframe_api", ct);
+            var versionMatch = System.Text.RegularExpressions.Regex.Match(iframe, @"player\\?/([0-9a-fA-F]{8})\\?/");
+            if (!versionMatch.Success) return null;
+
+            var version = versionMatch.Groups[1].Value;
+            var playerJs = await Http.GetStringAsync(
+                $"https://www.youtube.com/s/player/{version}/player_ias.vflset/en_US/base.js", ct);
+
+            var stsMatch = System.Text.RegularExpressions.Regex.Match(playerJs, @"signatureTimestamp[=:]\s*(\d+)");
+            if (stsMatch.Success)
+            {
+                _signatureTimestamp = stsMatch.Groups[1].Value;
+                Log.Info($"[VideoController] SignatureTimestamp: {_signatureTimestamp}");
+            }
+
+            return _signatureTimestamp;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[VideoController] Failed to get signatureTimestamp: {ex.Message}");
+            return null;
+        }
     }
 
     #endregion
@@ -310,13 +369,14 @@ internal class VideoController(HttpClient http)
     #endregion
 
     #region Fallback Methods
-
     public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
         var errors = new List<string>();
         var allBotDetection = true;
+        bool hasLoginRequired = false;
+        LoginRequiredException? loginException = null;
 
         foreach (var clientName in YoutubeClientUtils.StreamFallbackClients)
         {
@@ -337,6 +397,17 @@ internal class VideoController(HttpClient http)
                 if (!IsBotDetectionResponse(response))
                     allBotDetection = false;
             }
+            catch (LoginRequiredException ex)
+            {
+                // Сохраняем первое исключение LOGIN_REQUIRED
+                if (!hasLoginRequired)
+                {
+                    hasLoginRequired = true;
+                    loginException = ex;
+                }
+                errors.Add($"{clientName}: LOGIN_REQUIRED");
+                allBotDetection = false;
+            }
             catch (StreamUnavailableException) { throw; }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -345,6 +416,13 @@ internal class VideoController(HttpClient http)
                 errors.Add($"{clientName}: {ex.Message}");
                 allBotDetection = false;
             }
+        }
+
+        // Если ВСЕ клиенты вернули LOGIN_REQUIRED — выбрасываем
+        if (hasLoginRequired && loginException != null)
+        {
+            Log.Error($"[VideoController] [{videoId}] All clients require login: {loginException.Reason}");
+            throw loginException;
         }
 
         var allErrors = string.Join("; ", errors);

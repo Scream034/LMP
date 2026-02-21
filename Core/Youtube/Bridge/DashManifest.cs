@@ -61,6 +61,8 @@ internal partial class DashManifest
                 .Pipe(WebUtility.UrlDecode);
 
         private bool IsAudioOnly => content.Element("AudioChannelConfiguration") is not null;
+        
+        public string? MimeType => content.Attribute("mimeType")?.Value;
 
         public string? AudioCodec => IsAudioOnly ? (string?)content.Attribute("codecs") : null;
 

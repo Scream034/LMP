@@ -37,6 +37,11 @@ public interface IDialogService
     /// Показывает диалог общей ошибки воспроизведения.
     /// </summary>
     Task ShowPlaybackErrorAsync(string videoId, string errorMessage, Exception? exception = null);
+
+    /// <summary>
+    /// Показывает диалог требования авторизации.
+    /// </summary>
+    Task ShowLoginRequiredAsync(LoginRequiredException exception);
 }
 
 public class DialogService : IDialogService
@@ -176,9 +181,9 @@ public class DialogService : IDialogService
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
-            if (window == null) 
+            if (window == null)
                 return playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
-            
+
             var vm = new MergeConflictResolutionViewModel(playlistNames);
             var dialog = new MergeConflictResolutionDialog { DataContext = vm };
             var result = await ShowDialogSafeAsync<List<MergeDecision>>(dialog, window);
@@ -270,6 +275,25 @@ public class DialogService : IDialogService
 
             var dialog = new StreamUnavailableDialog();
             dialog.ConfigureForError(videoId, errorMessage, exception);
+
+            await ShowDialogSafeAsync<object>(dialog, window);
+        });
+    }
+
+    public async Task ShowLoginRequiredAsync(LoginRequiredException exception)
+    {
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var window = GetMainWindow();
+            if (window == null) return;
+
+            var L = LocalizationService.Instance;
+            var dialog = new InfoDialog
+            {
+                DialogTitle = L["Dialog_Login_Title"],
+                Message = L[exception.GetLocalizationKey()],
+                ButtonText = L["Common_OK"]
+            };
 
             await ShowDialogSafeAsync<object>(dialog, window);
         });

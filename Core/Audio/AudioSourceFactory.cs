@@ -155,10 +155,25 @@ public static class AudioSourceFactory
         if (string.IsNullOrEmpty(url))
             return AudioFormat.Unknown;
 
+        // HLS
         if (url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
             url.Contains("/hls/", StringComparison.OrdinalIgnoreCase))
             return AudioFormat.Hls;
 
+        // Проверяем mime= параметр (YouTube использует это)
+        if (url.Contains("mime=audio%2Fwebm", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("mime=audio/webm", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.WebM;
+
+        if (url.Contains("mime=audio%2Fmp4", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("mime=audio/mp4", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.Mp4;
+
+        if (url.Contains("mime=audio%2Fogg", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("mime=audio/ogg", StringComparison.OrdinalIgnoreCase))
+            return AudioFormat.Ogg;
+
+        // Fallback на расширение файла
         if (url.Contains(".webm", StringComparison.OrdinalIgnoreCase))
             return AudioFormat.WebM;
 
@@ -218,38 +233,32 @@ public static class AudioSourceFactory
     }
 
     private static async Task<(long ContentLength, AudioCodec Codec, int Bitrate)> GetStreamInfoAsync(
-        string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
+    string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
     {
         long contentLength = 0;
 
-        try
-        {
-            using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
-            using var headResponse = await httpClient.SendAsync(headRequest, ct);
+        bool isYouTube = url.Contains("googlevideo.com/videoplayback");
 
-            if (headResponse.IsSuccessStatusCode)
-                contentLength = headResponse.Content.Headers.ContentLength ?? 0;
+        if (isYouTube)
+        {
+            // Для YouTube берём clen из URL
+            contentLength = ExtractContentLengthFromUrl(url);
         }
-        catch { }
-
-        if (contentLength == 0)
+        else
         {
+            // Для остальных делаем HEAD
             try
             {
-                using var rangeRequest = SharedHttpClient.CreateRangeRequest(url, 0, 0);
-                using var rangeResponse = await httpClient.SendAsync(rangeRequest, ct);
-
-                if (rangeResponse.Content.Headers.ContentRange?.Length != null)
-                    contentLength = rangeResponse.Content.Headers.ContentRange.Length.Value;
+                using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
+                using var headResponse = await httpClient.SendAsync(headRequest, ct);
+                if (headResponse.IsSuccessStatusCode)
+                    contentLength = headResponse.Content.Headers.ContentLength ?? 0;
             }
-            catch
-            {
-                contentLength = 100 * 1024 * 1024;
-            }
+            catch { }
         }
 
         if (contentLength <= 0)
-            contentLength = 100 * 1024 * 1024;
+            contentLength = 100 * 1024 * 1024; // fallback
 
         var codec = GetCodecForFormat(format);
         int bitrate = ExtractBitrateFromUrl(url);
@@ -257,6 +266,20 @@ public static class AudioSourceFactory
             bitrate = codec == AudioCodec.Opus ? 128 : 96;
 
         return (contentLength, codec, bitrate);
+    }
+
+    private static long ExtractContentLengthFromUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            var clenStr = query["clen"];
+            if (!string.IsNullOrEmpty(clenStr) && long.TryParse(clenStr, out var clen))
+                return clen;
+        }
+        catch { }
+        return 0;
     }
 
     private static int ExtractBitrateFromUrl(string url)

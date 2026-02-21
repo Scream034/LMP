@@ -14,6 +14,8 @@ internal interface IStreamData
 
     long? Bitrate { get; }
 
+    string? MimeType { get; }
+
     string? Container { get; }
 
     string? AudioCodec { get; }

@@ -137,7 +137,7 @@ public sealed class CachingStreamSource : IAudioSource
             _cacheEntry.Bitrate = _bitrate;
 
             _initialized = true;
-            _preloadTask = Task.Run(() => PreloadLoopAsync(_operationCts.Token));
+            _preloadTask = Task.Run(() => PreloadLoopAsync(_operationCts.Token), ct);
 
             Log.Info($"[CachingSource] Initialized: duration={DurationMs}ms, cached={_cacheEntry.DownloadProgress:F0}%");
             return true;
@@ -183,7 +183,7 @@ public sealed class CachingStreamSource : IAudioSource
 
         int count = Math.Min(InitialChunksToLoad, _cacheEntry.TotalChunks);
         var tasks = new Task[count];
-        
+
         for (int i = 0; i < count; i++)
             tasks[i] = EnsureChunkAsync(i, ct);
 
@@ -350,7 +350,7 @@ public sealed class CachingStreamSource : IAudioSource
     public void ReleaseRamBuffers()
     {
         int current = Volatile.Read(ref _currentChunk);
-        
+
         foreach (var idx in _ramChunks.Keys.Where(i => Math.Abs(i - current) > RamEvictionDistance).ToList())
             _ramChunks.TryRemove(idx, out _);
     }
@@ -405,32 +405,105 @@ public sealed class CachingStreamSource : IAudioSource
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(DownloadTimeoutMs);
 
-            using var request = SharedHttpClient.CreateRangeRequest(_currentUrl, start, end);
-            using var response = await _httpClient.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            bool isYouTube = _currentUrl.Contains("googlevideo.com/videoplayback");
 
-            if (response.StatusCode == HttpStatusCode.Forbidden)
+            HttpRequestMessage request;
+            if (isYouTube)
             {
-                await RefreshUrlAsync(ct);
-                return;
+                Log.Debug($"[CachingSource] Chunk {index} request:");
+                Log.Debug($"[CachingSource] Original URL: {_currentUrl}");
+                Log.Debug($"  Range: {start}-{end}");
+
+                request = SharedHttpClient.CreateRangeRequest(_currentUrl, start, end);
+
+                Log.Debug($"[CachingSource] Cleaned URL: {request.RequestUri}");
+
+                foreach (var header in request.Headers)
+                {
+                    Log.Debug($"  {header.Key}: {string.Join(", ", header.Value)}");
+                }
+            }
+            else
+            {
+                request = new HttpRequestMessage(HttpMethod.Get, _currentUrl);
+                request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(start, end);
             }
 
-            response.EnsureSuccessStatusCode();
-
-            var data = await response.Content.ReadAsByteArrayAsync(cts.Token);
-            _ramChunks.TryAdd(index, data);
-
-            try
+            using (request)
             {
-                await _cacheManager.WriteChunkAsync(_cacheKey, index, data, ct);
-            }
-            catch (IOException ex)
-            {
-                Log.Warn($"[CachingSource] Disk write failed: {ex.Message}");
-            }
+                using var response = await _httpClient.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
 
-            if (_ramChunks.Count > MaxRamChunks)
-                EvictDistantRamChunks();
+                // ✅ Логируем ответ
+                Log.Debug($"[CachingSource] Chunk {index} response:");
+                Log.Debug($"  Status: {(int)response.StatusCode} {response.StatusCode}");
+                Log.Debug($"  Content-Type: {response.Content.Headers.ContentType?.MediaType}");
+                Log.Debug($"  Content-Length: {response.Content.Headers.ContentLength}");
+
+                if (response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    Log.Error($"[CachingSource] 403 Forbidden for chunk {index}");
+                    Log.Error($"  URL expire time: {ExtractExpireTime(_currentUrl)}");
+                    Log.Error($"  Current time: {DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
+
+                    await RefreshUrlAsync(ct);
+                    return;
+                }
+
+                // Проверяем UMP
+                if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
+                {
+                    Log.Error($"[CachingSource] Chunk {index} received UMP format!");
+                    Log.Error($"  This means URL contains ump=1 or server forcing UMP");
+                    return;
+                }
+
+                response.EnsureSuccessStatusCode();
+
+                var data = await response.Content.ReadAsByteArrayAsync(cts.Token);
+
+                // ✅ Проверяем первые байты
+                if (index == 0 && data.Length >= 16)
+                {
+                    var hex = string.Join(" ", data.Take(16).Select(b => b.ToString("X2")));
+                    Log.Info($"[CachingSource] First 16 bytes: {hex}");
+
+                    // MP4 check
+                    if (data.Length >= 8)
+                    {
+                        var ftyp = System.Text.Encoding.ASCII.GetString(data, 4, 4);
+                        if (ftyp == "ftyp")
+                        {
+                            Log.Info($"[CachingSource] ✅ Valid MP4 container detected");
+                        }
+                        else
+                        {
+                            Log.Warn($"[CachingSource] ❌ Not MP4, ftyp check failed: '{ftyp}'");
+                        }
+                    }
+
+                    // WebM check
+                    if (data.Length >= 4 && data[0] == 0x1A && data[1] == 0x45 &&
+                        data[2] == 0xDF && data[3] == 0xA3)
+                    {
+                        Log.Info($"[CachingSource] ✅ Valid WebM/EBML container detected");
+                    }
+                }
+
+                _ramChunks.TryAdd(index, data);
+
+                try
+                {
+                    await _cacheManager.WriteChunkAsync(_cacheKey, index, data, ct);
+                }
+                catch (IOException ex)
+                {
+                    Log.Warn($"[CachingSource] Disk write failed: {ex.Message}");
+                }
+
+                if (_ramChunks.Count > MaxRamChunks)
+                    EvictDistantRamChunks();
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -445,6 +518,20 @@ public sealed class CachingStreamSource : IAudioSource
                 catch { }
             }
         }
+    }
+
+    private static long ExtractExpireTime(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            var expireStr = query["expire"];
+            if (long.TryParse(expireStr, out var expire))
+                return expire;
+        }
+        catch { }
+        return 0;
     }
 
     private void EvictDistantRamChunks()
@@ -490,7 +577,7 @@ public sealed class CachingStreamSource : IAudioSource
     {
         int available = Math.Min(buffer.Length, chunkData.Length - offset);
         if (available <= 0) return 0;
-        
+
         chunkData.AsSpan(offset, available).CopyTo(buffer.Span);
         return available;
     }

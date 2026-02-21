@@ -43,15 +43,6 @@ public class MainWindowViewModel : ViewModelBase
         var audio = services.GetRequiredService<AudioEngine>();
         var dialog = services.GetRequiredService<IDialogService>();
 
-        audio.OnCriticalError += (title, msg) =>
-        {
-            // Гарантируем, что диалог не заблокирует поток обработки аудио
-            RxApp.MainThreadScheduler.Schedule(async () =>
-            {
-                await dialog.ShowInfoAsync(title, msg);
-            });
-        };
-
         // Навигация возможна только если не заблокирована
         var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
 

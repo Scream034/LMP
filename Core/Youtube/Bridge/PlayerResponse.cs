@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
 
@@ -15,6 +16,54 @@ internal partial class PlayerResponse(JsonElement content)
         Playability?.GetPropertyOrNull("status")?.GetStringOrNull();
 
     public string? PlayabilityError => Playability?.GetPropertyOrNull("reason")?.GetStringOrNull();
+
+    /// <summary>
+    /// Требуется ли авторизация для просмотра (LOGIN_REQUIRED).
+    /// </summary>
+    public bool IsLoginRequired =>
+        string.Equals(PlayabilityStatus, "LOGIN_REQUIRED", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Причина требования авторизации.
+    /// </summary>
+    public LoginRequiredReason LoginRequiredReason
+    {
+        get
+        {
+            if (!IsLoginRequired)
+                return LoginRequiredReason.Unknown;
+
+            var reason = PlayabilityError ?? "";
+            var desktopAgeGateReason = Playability
+                ?.GetPropertyOrNull("desktopLegacyAgeGateReason")
+                ?.GetInt32OrNull();
+
+            // desktopLegacyAgeGateReason: 1 = age restricted
+            if (desktopAgeGateReason == 1 ||
+                reason.Contains("age", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("возраст", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("confirm your age", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("подтвердить возраст", StringComparison.OrdinalIgnoreCase))
+            {
+                return LoginRequiredReason.AgeRestricted;
+            }
+
+            if (reason.Contains("private", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("приватн", StringComparison.OrdinalIgnoreCase))
+            {
+                return LoginRequiredReason.Private;
+            }
+
+            if (reason.Contains("members", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("подписчик", StringComparison.OrdinalIgnoreCase) ||
+                reason.Contains("member", StringComparison.OrdinalIgnoreCase))
+            {
+                return LoginRequiredReason.MembersOnly;
+            }
+
+            return LoginRequiredReason.Unknown;
+        }
+    }
 
     public string? Category =>
         content
@@ -117,6 +166,9 @@ internal partial class PlayerResponse(JsonElement content)
 
     private JsonElement? StreamingData => content.GetPropertyOrNull("streamingData");
 
+    private string? ServerAbrStreamingUrl =>
+        StreamingData?.GetPropertyOrNull("serverAbrStreamingUrl")?.GetStringOrNull();
+
     public string? DashManifestUrl =>
         StreamingData?.GetPropertyOrNull("dashManifestUrl")?.GetStringOrNull();
 
@@ -124,6 +176,28 @@ internal partial class PlayerResponse(JsonElement content)
         StreamingData?.GetPropertyOrNull("hlsManifestUrl")?.GetStringOrNull();
 
     // Lazy enumerable to save allocations
+    // public IEnumerable<IStreamData> Streams
+    // {
+    //     get
+    //     {
+    //         var serverAbrUrl = ServerAbrStreamingUrl;
+
+    //         var formats = StreamingData?.GetPropertyOrNull("formats");
+    //         if (formats != null)
+    //         {
+    //             foreach (var j in formats.Value.EnumerateArrayOrEmpty())
+    //                 yield return new StreamData(j, serverAbrUrl);
+    //         }
+
+    //         var adaptiveFormats = StreamingData?.GetPropertyOrNull("adaptiveFormats");
+    //         if (adaptiveFormats != null)
+    //         {
+    //             foreach (var j in adaptiveFormats.Value.EnumerateArrayOrEmpty())
+    //                 yield return new StreamData(j, serverAbrUrl);
+    //         }
+    //     }
+    // }
+
     public IEnumerable<IStreamData> Streams
     {
         get
@@ -193,27 +267,41 @@ internal partial class PlayerResponse
 
 internal partial class PlayerResponse
 {
-    public class StreamData(JsonElement content) : IStreamData
+    public class StreamData : IStreamData
     {
-        public int? Itag => content.GetPropertyOrNull("itag")?.GetInt32OrNull();
+        private readonly JsonElement _content;
+
+        public StreamData(JsonElement content)
+        {
+            _content = content;
+        }
+
+        public int? Itag => _content.GetPropertyOrNull("itag")?.GetInt32OrNull();
 
         private IReadOnlyDictionary<string, string>? CipherData =>
-            content.GetPropertyOrNull("cipher")?.GetStringOrNull()?.Pipe(UrlEx.GetQueryParameters)
-            ?? content
+            _content.GetPropertyOrNull("cipher")?.GetStringOrNull()?.Pipe(UrlEx.GetQueryParameters)
+            ?? _content
                 .GetPropertyOrNull("signatureCipher")
                 ?.GetStringOrNull()
                 ?.Pipe(UrlEx.GetQueryParameters);
 
         public string? Url =>
-            content.GetPropertyOrNull("url")?.GetStringOrNull()
-            ?? CipherData?.GetValueOrDefault("url");
+            _content.GetPropertyOrNull("url")?.GetStringOrNull()
+            ?? CipherData?.GetValueOrDefault("url").Pipe(u =>
+            {
+                Console.WriteLine($"[CIPHER DEBUG] Found ciphered URL");
+                Console.WriteLine($"  URL: {u}");
+                Console.WriteLine($"  Signature: {CipherData?.GetValueOrDefault("s")}");
+                Console.WriteLine($"  SP: {CipherData?.GetValueOrDefault("sp")}");
+                return u;
+            });
 
         public string? Signature => CipherData?.GetValueOrDefault("s");
-
         public string? SignatureParameter => CipherData?.GetValueOrDefault("sp");
 
+        // ContentLength тоже может отсутствовать — берём из JSON
         public long? ContentLength =>
-            content
+            _content
                 .GetPropertyOrNull("contentLength")
                 ?.GetStringOrNull()
                 ?.Pipe(s =>
@@ -229,14 +317,14 @@ internal partial class PlayerResponse
                         : (long?)null
                 );
 
-        public long? Bitrate => content.GetPropertyOrNull("bitrate")?.GetInt64OrNull();
+        public long? Bitrate => _content.GetPropertyOrNull("bitrate")?.GetInt64OrNull();
 
-        private string? MimeType => content.GetPropertyOrNull("mimeType")?.GetStringOrNull();
-
-        public string? Container => MimeType?.SubstringUntil(";").SubstringAfter("/");
+        public string? MimeType => _content.GetPropertyOrNull("mimeType")?.GetStringOrNull();
 
         private bool IsAudioOnly =>
             MimeType?.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) ?? false;
+
+        public string? Container => MimeType?.SubstringUntil(";").SubstringAfter("/");
 
         public string? Codecs => MimeType?.SubstringAfter("codecs=\"").SubstringUntil("\"");
 
@@ -244,20 +332,20 @@ internal partial class PlayerResponse
             IsAudioOnly ? Codecs : Codecs?.SubstringAfter(", ").NullIfWhiteSpace();
 
         public string? AudioLanguageCode =>
-            content
+            _content
                 .GetPropertyOrNull("audioTrack")
                 ?.GetPropertyOrNull("id")
                 ?.GetStringOrNull()
                 ?.SubstringUntil(".");
 
         public string? AudioLanguageName =>
-            content
+            _content
                 .GetPropertyOrNull("audioTrack")
                 ?.GetPropertyOrNull("displayName")
                 ?.GetStringOrNull();
 
         public bool? IsAudioLanguageDefault =>
-            content
+            _content
                 .GetPropertyOrNull("audioTrack")
                 ?.GetPropertyOrNull("audioIsDefault")
                 ?.GetBooleanOrNull();
@@ -276,13 +364,11 @@ internal partial class PlayerResponse
         }
 
         public string? VideoQualityLabel =>
-            content.GetPropertyOrNull("qualityLabel")?.GetStringOrNull();
+            _content.GetPropertyOrNull("qualityLabel")?.GetStringOrNull();
 
-        public int? VideoWidth => content.GetPropertyOrNull("width")?.GetInt32OrNull();
-
-        public int? VideoHeight => content.GetPropertyOrNull("height")?.GetInt32OrNull();
-
-        public int? VideoFramerate => content.GetPropertyOrNull("fps")?.GetInt32OrNull();
+        public int? VideoWidth => _content.GetPropertyOrNull("width")?.GetInt32OrNull();
+        public int? VideoHeight => _content.GetPropertyOrNull("height")?.GetInt32OrNull();
+        public int? VideoFramerate => _content.GetPropertyOrNull("fps")?.GetInt32OrNull();
     }
 }
 
