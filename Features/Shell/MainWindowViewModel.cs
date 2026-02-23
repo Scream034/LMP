@@ -11,7 +11,6 @@ using LMP.Features.Home;
 using LMP.Features.Library;
 using LMP.Features.Settings;
 using LMP.Features.Playlist;
-using System.Reactive.Concurrency;
 using System.Runtime;
 
 namespace LMP.Features.Shell;

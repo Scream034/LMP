@@ -15,6 +15,10 @@ using Avalonia;
 using AsyncImageLoader;
 using LMP.UI.Dialogs;
 using LMP.Core.Audio.Cache;
+using LMP.Core.Youtube.Bridge.NToken;
+using LMP.Core.Audio.Http;
+using LMP.Core.Youtube.Bridge.SigCipher;
+using LMP.Core.Youtube.Bridge.Common;
 
 namespace LMP;
 
@@ -99,6 +103,10 @@ class Program
         services.AddSingleton<MusicLibraryManager>();
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
+
+        services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));
+        services.AddSingleton<ISigCipherDecryptor, SigCipherDecryptor>();
+        services.AddSingleton<INTokenDecryptor, NTokenDecryptor>();
 
         // === Caching ===
         services.AddSingleton<SearchCacheService>();

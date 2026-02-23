@@ -913,12 +913,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
     }
 
-    private long CalculateTotalCacheSize()
-    {
-        // Используем кэшированные размеры вместо IO
-        return _entries.Values.Sum(e => e.ActualFileSize);
-    }
-
     private void LoadIndex()
     {
         var indexPath = Path.Combine(_cacheDirectory, CacheMetadataFileName);

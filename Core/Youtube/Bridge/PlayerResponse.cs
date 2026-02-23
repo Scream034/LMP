@@ -166,9 +166,6 @@ internal partial class PlayerResponse(JsonElement content)
 
     private JsonElement? StreamingData => content.GetPropertyOrNull("streamingData");
 
-    private string? ServerAbrStreamingUrl =>
-        StreamingData?.GetPropertyOrNull("serverAbrStreamingUrl")?.GetStringOrNull();
-
     public string? DashManifestUrl =>
         StreamingData?.GetPropertyOrNull("dashManifestUrl")?.GetStringOrNull();
 

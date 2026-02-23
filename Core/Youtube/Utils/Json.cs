@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Globalization;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.Json;
 
 namespace LMP.Core.Youtube.Utils;

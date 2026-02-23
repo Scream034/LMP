@@ -17,6 +17,8 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Audio;
+using LMP.Core.Youtube.Bridge.NToken;
+using LMP.Core.Youtube.Bridge.SigCipher;
 
 namespace LMP.Core.Services;
 
@@ -25,6 +27,8 @@ public partial class YoutubeProvider : IDisposable
     private const int DefaultCacheLifetimeHours = 4;
     private const int MaxCacheSize = 200;
 
+    private readonly INTokenDecryptor _nTokenDecryptor;
+    private readonly ISigCipherDecryptor _sigCipherDecryptor;
     private readonly TrackRegistry _trackRegistry;
     public readonly CookieAuthService? AuthService;
     private readonly LibraryService? _libraryService;
@@ -77,11 +81,18 @@ public partial class YoutubeProvider : IDisposable
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
-    public YoutubeProvider(TrackRegistry trackRegistry, LibraryService? libraryService, CookieAuthService? cookieAuth)
+    public YoutubeProvider(
+        TrackRegistry trackRegistry,
+        LibraryService? libraryService,
+        CookieAuthService? cookieAuth,
+        INTokenDecryptor nTokenDecryptor,
+        ISigCipherDecryptor sigCipherDecryptor)
     {
         _trackRegistry = trackRegistry;
         _libraryService = libraryService;
         AuthService = cookieAuth;
+        _nTokenDecryptor = nTokenDecryptor;
+        _sigCipherDecryptor = sigCipherDecryptor;
 
         if (AuthService != null)
         {
@@ -98,7 +109,7 @@ public partial class YoutubeProvider : IDisposable
     /// <summary>
     /// Проверяет можно ли воспроизвести трек без запросов к YouTube.
     /// </summary>
-    public bool CanPlayOffline(TrackInfo track)
+    public static bool CanPlayOffline(TrackInfo track)
     {
         if (string.IsNullOrEmpty(track.Id))
             return false;
@@ -209,7 +220,7 @@ public partial class YoutubeProvider : IDisposable
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        _youtube = new YoutubeClient(_currentHttpClient, ownsHttpClient: false);
+        _youtube = new YoutubeClient(_currentHttpClient, _nTokenDecryptor, _sigCipherDecryptor, ownsHttpClient: false);
 
         Log.Info($"[YouTube] Client reloaded. Auth: {AuthService?.IsAuthenticated ?? false}");
     }
@@ -726,7 +737,7 @@ public partial class YoutubeProvider : IDisposable
             Log.Debug($"[YouTube] [{videoId}] Trying HLS...");
 
             // Получаем PlayerResponse с HLS URL
-            var playerResponse = await _youtube.GetPlayerResponseAsync(videoId, ct);
+            var playerResponse = await _youtube.Videos.GetPlayerResponseAsync(videoId, ct);
             var hlsUrl = playerResponse.HlsManifestUrl;
 
             if (string.IsNullOrEmpty(hlsUrl))

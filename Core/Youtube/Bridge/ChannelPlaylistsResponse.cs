@@ -24,7 +24,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             ?.GetPropertyOrNull("token")
             ?.GetStringOrNull();
 
-    private IEnumerable<Playlist> ParsePlaylists(JsonElement root)
+    private static IEnumerable<Playlist> ParsePlaylists(JsonElement root)
     {
         var tabs = root.GetPropertyOrNull("contents")
             ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")

@@ -8,6 +8,10 @@ using AsyncImageLoader;
 using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 
+#if DEBUG
+using LMP.Tests;
+#endif
+
 namespace LMP;
 
 public partial class App : Application
@@ -23,21 +27,21 @@ public partial class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // 0. Load theme BEFORE any UI is created
+            // 0. Load theme
             var themeManager = Program.Services.GetRequiredService<ThemeManagerService>();
             themeManager.LoadAndApplyThemeOnStartup();
 
             // 1. Get library service
             var library = Program.Services.GetRequiredService<LibraryService>();
 
-            // 2. Initialize localization with default
+            // 2. Initialize localization
             LocalizationService.Instance.Initialize("en");
 
-            // 3. Initialize GLOBAL audio cache
+            // 3. Initialize audio cache
             var audioCacheManager = Program.Services.GetRequiredService<AudioCacheManager>();
             AudioSourceFactory.InitializeGlobalCache(audioCacheManager);
 
-            // 4. Start Memory Monitor
+            // 4. Memory monitor
             MemoryDiagnostics.Instance.OnMemoryWarning += Log.Warn;
             MemoryDiagnostics.Instance.WarningThresholdMb = 400;
             MemoryDiagnostics.Instance.CriticalThresholdMb = 450;
@@ -49,12 +53,12 @@ public partial class App : Application
                 DataContext = mainWindowVM
             };
 
-            Log.Info("Main window created and shown.");
+            Log.Info("Main window created.");
 
             var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
 
-            // 6. Initialize services IN BACKGROUND
+            // 6. Background initialization
             _ = InitializeServicesAsync(library);
 
             // 7. Cleanup on shutdown
@@ -64,10 +68,7 @@ public partial class App : Application
                 {
                     MemoryDiagnostics.LogReport();
                     MemoryDiagnostics.Instance.Dispose();
-
-                    // Dispose audio cache
                     await audioCacheManager.DisposeAsync();
-
                     await library.DisposeAsync();
                 }
                 catch (Exception ex)
@@ -77,6 +78,37 @@ public partial class App : Application
             };
 
 #if DEBUG
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(2000); // Даём время на инициализацию
+                    
+                    // ═══════════════════════════════════════════════════════
+                    // ВЫБЕРИ ОДИН ИЗ ВАРИАНТОВ:
+                    // ═══════════════════════════════════════════════════════
+                    
+                    // 1. Полный test suite
+                    // await ManualTests.RunAllAsync();
+                    
+                    // 2. Только N-Token (самый важный)
+                    await ManualTests.TestNTokenQuickAsync();
+                    
+                    // 3. Только Sig Cipher
+                    await ManualTests.TestSigCipherQuickAsync();
+                    
+                    // 4. Полный pipeline для конкретного видео
+                    // await ManualTests.TestSigCipherFullAsync("dQw4w9WgXcQ");
+                    
+                    // 5. Benchmark
+                    // await LMP.Tests.Unit.NTokenTests.BenchmarkAsync(Program.Services);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Tests failed: {ex.Message}");
+                }
+            });
+
             desktop.MainWindow.AttachDevTools();
 
             desktop.MainWindow.KeyDown += (s, e) =>
@@ -84,6 +116,22 @@ public partial class App : Application
                 if (e.Key == Avalonia.Input.Key.F9)
                 {
                     new Features.Debug.DebugWindow().Show();
+                }
+
+                // F10 — запустить тесты вручную
+                if (e.Key == Avalonia.Input.Key.F10)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await ManualTests.RunAllAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error($"Manual test error: {ex.Message}");
+                        }
+                    });
                 }
             };
 #endif
@@ -96,10 +144,8 @@ public partial class App : Application
     {
         try
         {
-            // Initialize database (this can take time on first run)
             await library.InitializeAsync();
 
-            // Update localization with saved language
             var savedLang = library.Settings.LanguageCode;
             if (!string.IsNullOrEmpty(savedLang) && savedLang != "en")
             {
@@ -107,17 +153,16 @@ public partial class App : Application
                 LocalizationService.Instance.CurrentLanguage = savedLang;
             }
 
-            // Initialize YouTube
             var youtube = Program.Services.GetRequiredService<YoutubeProvider>();
             await youtube.InitializeAsync();
 
-            // Sync liked tracks if authenticated
             var musicLibraryManager = Program.Services.GetRequiredService<MusicLibraryManager>();
 
 #if DEBUG
             var dialogService = Program.Services.GetRequiredService<IDialogService>();
             var canSync = await dialogService.ConfirmAsync("Debug", "Sync liked tracks?", "Yes", "No");
-            if (canSync) await musicLibraryManager.SyncLikedTracksAsync();
+            if (canSync)
+                await musicLibraryManager.SyncLikedTracksAsync();
 #else
             await musicLibraryManager.SyncLikedTracksAsync();
 #endif

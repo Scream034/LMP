@@ -720,7 +720,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
     }
 
-    private float ComputeGain(int volumePercent, int maxVolume, AudioSettings audioSettings)
+    private static float ComputeGain(int volumePercent, int maxVolume, AudioSettings audioSettings)
     {
         if (volumePercent <= 0) return 0f;
 

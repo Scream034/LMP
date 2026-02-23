@@ -4,12 +4,13 @@ namespace LMP.Core.Youtube.Utils;
 
 public static class YoutubeClientUtils
 {
-    public static YoutubeClientProfile CurrentProfile { get; set; } = YoutubeClientProfile.AndroidVR;
+    public static YoutubeClientProfile CurrentProfile { get; set; } = YoutubeClientProfile.WebRemix;
 
     // User-Agents
     public const string UaVr = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)";
     public const string UaTv = "Mozilla/5.0 (PlayStation; PlayStation 4/12.02) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15";
     public const string UaWeb = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+    public const string UaWebRemix = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
     public const string UaAndroidMusic = "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US; Pixel 8 Pro; Build/AP2A.240805.005)";
     public const string UaIos = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)";
 
@@ -18,36 +19,37 @@ public static class YoutubeClientUtils
         YoutubeClientProfile.AndroidVR => UaVr,
         YoutubeClientProfile.TV => UaTv,
         YoutubeClientProfile.Web => UaWeb,
-        _ => UaVr
+        YoutubeClientProfile.WebRemix => UaWebRemix,
+        _ => UaWebRemix
     };
 
-    public static bool RequiresAuth => CurrentProfile == YoutubeClientProfile.Web;
+    public static bool RequiresAuth => CurrentProfile is YoutubeClientProfile.Web or YoutubeClientProfile.WebRemix;
 
     /// <summary>
     /// Порядок клиентов для fallback.
-    /// IOS НЕ включён — для него используем только HLS.
+    /// WEB_REMIX первый (YouTube Music), затем ANDROID_VR как fallback.
     /// </summary>
     public static readonly string[] StreamFallbackClients = 
     [
-        "ANDROID_VR",
-        "ANDROID_MUSIC", 
-        "WEB",
+        "WEB_REMIX",      // YouTube Music - основной
+        "ANDROID_VR",     // Fallback без signature
+        "ANDROID_MUSIC",
         "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
     ];
 
     /// <summary>
-    /// Клиенты для получения HLS (IOS в приоритете).
+    /// Клиенты для получения HLS.
     /// </summary>
     public static readonly string[] HlsFallbackClients = 
     [
         "IOS",
         "ANDROID_VR",
-        "WEB"
+        "WEB_REMIX"
     ];
 
     public static string GeneratePlayerContext(string videoId, string? visitorData)
     {
-        return GeneratePlayerContextForClient(CurrentProfile.ToString().ToUpperInvariant(), videoId, visitorData);
+        return GeneratePlayerContextForClient(CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"), videoId, visitorData);
     }
 
     /// <summary>
@@ -65,6 +67,31 @@ public static class YoutubeClientUtils
 
         return clientName switch
         {
+            "WEB_REMIX" => $$"""
+            {
+              "videoId": {{vidJson}},
+              "contentCheckOk": true,
+              "racyCheckOk": true,
+              "context": {
+                "client": {
+                  "clientName": "WEB_REMIX",
+                  "clientVersion": "1.20260209.03.00",
+                  "visitorData": {{vdJson}},
+                  "hl": {{hlJson}},
+                  "gl": {{glJson}},
+                  "utcOffsetMinutes": 0
+                }
+              }{{(signatureTimestamp != null ? $$"""
+              ,
+              "playbackContext": {
+                "contentPlaybackContext": {
+                  "signatureTimestamp": {{Json.Serialize(signatureTimestamp)}}
+                }
+              }
+              """ : "")}}
+            }
+            """,
+
             "ANDROID_VR" => $$"""
             {
               "videoId": {{vidJson}},
@@ -179,7 +206,7 @@ public static class YoutubeClientUtils
             }
             """,
 
-            _ => GeneratePlayerContextForClient("ANDROID_VR", videoId, visitorData)
+            _ => GeneratePlayerContextForClient("WEB_REMIX", videoId, visitorData)
         };
     }
 
@@ -188,11 +215,12 @@ public static class YoutubeClientUtils
     /// </summary>
     public static string GetUserAgentForClient(string clientName) => clientName switch
     {
+        "WEB_REMIX" => UaWebRemix,
         "ANDROID_VR" => UaVr,
         "ANDROID_MUSIC" => UaAndroidMusic,
         "WEB" => UaWeb,
         "IOS" => UaIos,
         "TVHTML5_SIMPLY_EMBEDDED_PLAYER" => UaTv,
-        _ => UaVr
+        _ => UaWebRemix
     };
 }

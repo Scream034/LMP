@@ -2,11 +2,12 @@ namespace LMP.Core.Models;
 
 public enum YoutubeClientProfile
 {
-    AndroidVR, // Oculus Quest (Текущий рабочий)
-    TV,        // Smart TV / Console (Резервный)
-    Web,       // Обычный браузер (Требует n-token, но иногда работает)
-    IOS,
-    // iOS/Android пока убираем, так как они 100% требуют PO Token
+    WebRemix,    // n + sig (Работают все ролики)
+    AndroidVR,   // большинство роликов работают
+    Web, // n + sig
+    TV, // не работает
+    Ios, // HLS в основном
+    AndroidMusic // требует доп. действий
 }
 
 public enum InternetProfile

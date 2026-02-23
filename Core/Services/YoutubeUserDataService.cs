@@ -129,7 +129,7 @@ public partial class YoutubeUserDataService
         return await _provider.CreatePlaylistAsync(title) ?? throw new Exception("Create failed");
     }
 
-    public async Task DeletePlaylistAsync(string youtubePlaylistId)
+    public static async Task DeletePlaylistAsync(string youtubePlaylistId)
     {
         await Task.CompletedTask;
     }

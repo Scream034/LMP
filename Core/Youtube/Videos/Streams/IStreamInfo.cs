@@ -8,15 +8,13 @@ namespace LMP.Core.Youtube.Videos.Streams;
 public interface IStreamInfo
 {
     /// <summary>
-    /// Stream URL.
+    /// Stream Itag (Format ID).
     /// </summary>
-    /// <remarks>
-    /// While this URL can be used to access the underlying stream, you need a series
-    /// of carefully crafted HTTP requests in order to do so.
-    /// It's highly recommended to use
-    /// <see cref="StreamClient.GetAsync" /> or <see cref="StreamClient.DownloadAsync" />
-    /// instead, as they will perform all the heavy lifting for you.
-    /// </remarks>
+    int Itag { get; }
+
+    /// <summary>
+    /// Stream URL. Fully decrypted and ready for playback.
+    /// </summary>
     string Url { get; }
 
     /// <summary>
@@ -35,15 +33,11 @@ public interface IStreamInfo
     Bitrate Bitrate { get; }
 }
 
-/// <summary>
-/// Extensions for <see cref="IStreamInfo" />.
-/// </summary>
 public static class StreamInfoExtensions
 {
-    /// <inheritdoc cref="StreamInfoExtensions" />
-    extension(IStreamInfo streamInfo)
+    extension<T>(T streamInfo) where T : IStreamInfo
     {
-        internal bool IsThrottled() =>
+        public bool IsThrottled() =>
             !string.Equals(
                 UrlEx.TryGetQueryParameterValue(streamInfo.Url, "ratebypass"),
                 "yes",
@@ -51,19 +45,11 @@ public static class StreamInfoExtensions
             );
     }
 
-    /// <inheritdoc cref="StreamInfoExtensions" />
-    extension(IEnumerable<IStreamInfo> streamInfos)
+    extension<T>(IEnumerable<T> streamInfos) where T : IStreamInfo
     {
-        /// <summary>
-        /// Gets the stream with the highest bitrate.
-        /// Returns null if the sequence is empty.
-        /// </summary>
-        public IStreamInfo? TryGetWithHighestBitrate() => streamInfos.MaxBy(static s => s.Bitrate);
+        public T? TryGetWithHighestBitrate() => streamInfos.MaxBy(static s => s.Bitrate);
 
-        /// <summary>
-        /// Gets the stream with the highest bitrate.
-        /// </summary>
-        public IStreamInfo GetWithHighestBitrate() =>
+        public T GetWithHighestBitrate() =>
             streamInfos.TryGetWithHighestBitrate()
             ?? throw new InvalidOperationException("Input stream collection is empty.");
     }
