@@ -17,13 +17,21 @@ public class StreamClient
     private readonly INTokenDecryptor _nTokenDecryptor;
     private readonly ISigCipherDecryptor _sigCipherDecryptor;
     private CipherManifest? _cipherManifest;
+    
+    /// <summary>
+    /// Callback для проверки авторизации.
+    /// Устанавливается при создании клиента.
+    /// </summary>
+    private readonly Func<bool>? _isAuthenticatedCheck;
 
-    public StreamClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor)
+    public StreamClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor, 
+        Func<bool>? isAuthenticatedCheck = null)
     {
         _http = http;
         _controller = new StreamController(http);
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
+        _isAuthenticatedCheck = isAuthenticatedCheck;
     }
 
     /// <summary>
@@ -73,14 +81,11 @@ public class StreamClient
             var audioCodec = streamData.AudioCodec;
             if (string.IsNullOrWhiteSpace(audioCodec)) continue;
 
-            // URL уже извлечён из signatureCipher.url (если был) через StreamData.Url
             var url = streamData.Url;
             if (string.IsNullOrWhiteSpace(url)) continue;
 
             // ════════════════════════════════════════════════════════
             // SIGNATURE DECRYPTION
-            // StreamData.Signature = поле "s" из signatureCipher
-            // StreamData.SignatureParameter = поле "sp" (обычно "sig")
             // ════════════════════════════════════════════════════════
             if (!string.IsNullOrWhiteSpace(streamData.Signature))
             {
@@ -102,7 +107,7 @@ public class StreamClient
                 catch (Exception ex)
                 {
                     Log.Error($"[StreamClient] itag={itag} sig decryption failed: {ex.Message}");
-                    continue; // Пропускаем этот стрим — без подписи не работает
+                    continue;
                 }
             }
 
@@ -120,7 +125,6 @@ public class StreamClient
                 catch (Exception ex)
                 {
                     Log.Warn($"[StreamClient] itag={itag} n-token failed: {ex.Message}");
-                    // Продолжаем — без n-token будет throttling, но работать будет
                 }
             }
 
@@ -172,15 +176,15 @@ public class StreamClient
         CancellationToken cancellationToken = default)
     {
         PlayerResponse playerResponse;
+        bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
 
         try
         {
             (playerResponse, _) = await _controller.GetPlayerResponseWithFallbackAsync(
-                videoId, cancellationToken);
+                videoId, cancellationToken, isAuthenticated: isAuth);
         }
         catch (VideoUnplayableException)
         {
-            // Fallback: пробуем с signatureTimestamp
             var cipherManifest = await ResolveCipherManifestAsync(cancellationToken);
             playerResponse = await _controller.GetPlayerResponseAsync(
                 videoId,

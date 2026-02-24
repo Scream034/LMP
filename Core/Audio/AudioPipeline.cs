@@ -8,8 +8,29 @@ using static LMP.Core.Audio.AudioConstants;
 namespace LMP.Core.Audio;
 
 /// <summary>
-/// Инкапсулирует полный конвейер воспроизведения:
-/// Source → Decoder → PCM Buffer → Backend.
+/// Полный конвейер воспроизведения: Source → Decoder → PCM Buffer → Backend.
+/// 
+/// <para><b>Lifecycle:</b></para>
+/// <list type="number">
+///   <item><see cref="CreateAsync"/> — создаёт source, decoder, backend, PCM buffer</item>
+///   <item><see cref="StartDecoding"/> — запускает decoder loop (фоновый Task)</item>
+///   <item><see cref="Start"/> — запускает backend (NAudio playback)</item>
+///   <item><see cref="StopDecodingAsync"/> — останавливает decoder loop (для seek)</item>
+///   <item><see cref="Flush"/> — очищает PCM buffer и backend buffer</item>
+///   <item><see cref="DisposeAsync"/> — освобождает все ресурсы</item>
+/// </list>
+/// 
+/// <para><b>Seek sequence (вызывается из AudioPlayer.HandleSeekAsync):</b></para>
+/// <code>
+/// StopDecodingAsync()    — decoder loop завершается
+/// Stop()                 — backend paused
+/// Flush()                — PCM buffer + backend buffer очищены
+/// PrepareForSeek()       — skip frames counter установлен
+/// Source.SeekAsync()     — epoch reset, stream repositioned
+/// StartDecoding()        — новый decoder loop
+/// WaitForBufferAsync()   — ждём минимум данных
+/// Start()                — backend resumed
+/// </code>
 /// </summary>
 public sealed class AudioPipeline : IAsyncDisposable
 {
@@ -106,7 +127,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                 bitrateHint,
                 lifetimeCts.Token);
 
-            // InitializeAsync может выбросить StreamUnavailableException
             if (!await source.InitializeAsync(lifetimeCts.Token))
                 throw new Exceptions.AudioSourceException("Failed to initialize audio source");
 
@@ -130,7 +150,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
         catch (LMP.Core.Youtube.Exceptions.StreamUnavailableException)
         {
-            // Cleanup и пробрасываем без оборачивания
             CleanupOnError(source, decoder, backend, decodeBuffer, lifetimeCts);
             throw;
         }
@@ -138,7 +157,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         {
             CleanupOnError(source, decoder, backend, decodeBuffer, lifetimeCts);
 
-            // Если это уже AudioSourceException — пробрасываем
             if (ex is Exceptions.AudioSourceException)
                 throw;
 
@@ -240,19 +258,23 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Decoder Loop
 
+    /// <summary>
+    /// Запускает decoder loop в фоновом потоке.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">Pipeline disposed.</exception>
+    /// <exception cref="InvalidOperationException">Decoder уже запущен.</exception>
     public void StartDecoding(
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
         Action? onTrackEnded,
         Action<Exception>? onError)
     {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(AudioPipeline));
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (_decoderTask != null && !_decoderTask.IsCompleted)
             throw new InvalidOperationException("Decoder already running");
 
-        // Создаём новый CTS для декодера, связанный с lifetime
+        // Dispose старый CTS (если есть) и создаём новый
         _decoderCts?.Dispose();
         _decoderCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
 
@@ -265,21 +287,35 @@ public sealed class AudioPipeline : IAsyncDisposable
         Log.Debug("[AudioPipeline] Decoder started");
     }
 
+    /// <summary>
+    /// Останавливает decoder loop и ожидает его завершения.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Безопасность CTS dispose:</b></para>
+    /// Старый <see cref="_decoderCts"/> dispose'ится только ПОСЛЕ подтверждённого
+    /// завершения <see cref="_decoderTask"/>. Это предотвращает use-after-dispose
+    /// если таска всё ещё использует токен.
+    /// </remarks>
     public async Task StopDecodingAsync(TimeSpan timeout)
     {
-        if (_decoderCts == null || _decoderTask == null)
+        var cts = _decoderCts;
+        var task = _decoderTask;
+
+        if (cts == null || task == null)
             return;
 
-        // Отменяем только decoder CTS, не lifetime
-        _decoderCts.Cancel();
+        // Отменяем decoder CTS
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { }
 
+        // Ждём завершения таски
         try
         {
-            await _decoderTask.WaitAsync(timeout);
+            await task.WaitAsync(timeout);
         }
         catch (TimeoutException)
         {
-            Log.Warn("[AudioPipeline] Decoder stop timeout");
+            Log.Warn("[AudioPipeline] Decoder stop timeout — task still running");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -287,15 +323,20 @@ public sealed class AudioPipeline : IAsyncDisposable
             Log.Warn($"[AudioPipeline] Decoder stop error: {ex.Message}");
         }
 
+        // Обнуляем ПЕРЕД dispose — чтобы StartDecoding не увидел disposed CTS
         _decoderTask = null;
-
-        // Dispose старый CTS — новый создастся в StartDecoding
-        _decoderCts.Dispose();
         _decoderCts = null;
+
+        // Dispose ПОСЛЕ обнуления и ПОСЛЕ завершения таски
+        try { cts.Dispose(); }
+        catch (ObjectDisposedException) { }
 
         Log.Debug("[AudioPipeline] Decoder stopped");
     }
 
+    /// <summary>
+    /// Основной цикл декодирования: читает фреймы из source, декодирует, пишет в PCM buffer.
+    /// </summary>
     private async Task DecoderLoopAsync(
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
@@ -323,7 +364,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                     continue;
                 }
 
-                // Читаем фрейм
+                // Читаем фрейм из source
                 AudioFrame? frame;
                 try
                 {
@@ -339,10 +380,17 @@ public sealed class AudioPipeline : IAsyncDisposable
                     var newUrl = await urlRefresher(ct);
                     if (!string.IsNullOrEmpty(newUrl))
                     {
-                        Log.Info("[AudioPipeline] URL refreshed");
+                        Log.Info("[AudioPipeline] URL refreshed in decoder loop");
                         continue;
                     }
                     throw;
+                }
+                catch (IOException ex) when (retryCount++ < options.MaxRetryAttempts)
+                {
+                    // IOException от ReadAtAsync — сеть недоступна, retry
+                    Log.Warn($"[AudioPipeline] Read retry {retryCount}: {ex.Message}");
+                    await Task.Delay(options.RetryDelay, ct);
+                    continue;
                 }
                 catch (Exception ex) when (retryCount++ < options.MaxRetryAttempts)
                 {
@@ -359,7 +407,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                     break;
                 }
 
-                // Декодируем
+                // Декодируем фрейм
                 try
                 {
                     int samplesDecoded = useResetDecode
@@ -368,6 +416,7 @@ public sealed class AudioPipeline : IAsyncDisposable
 
                     useResetDecode = false;
 
+                    // Пропуск фреймов после seek (pre-skip / encoder delay)
                     skipCount = Interlocked.CompareExchange(ref _skipFramesCounter, 0, 0);
                     if (skipCount > 0)
                     {
@@ -388,7 +437,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    Log.Warn($"[AudioPipeline] Decode error: {ex.Message}");
+                    Log.Warn($"[AudioPipeline] Decode error (non-fatal): {ex.Message}");
                 }
             }
         }
@@ -401,6 +450,9 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Ожидает пока PCM буфер не будет воспроизведён (drain при конце трека).
+    /// </summary>
     private async Task DrainBufferAsync(CancellationToken ct)
     {
         while (!_pcmBuffer.IsEmpty && !ct.IsCancellationRequested)
@@ -440,6 +492,9 @@ public sealed class AudioPipeline : IAsyncDisposable
         _backend.Volume = Math.Min(volume, 1f);
     }
 
+    /// <summary>
+    /// Подготавливает decoder к seek: устанавливает skip frames counter.
+    /// </summary>
     public void PrepareForSeek()
     {
         int skipFrames = _source.Codec == AudioCodec.Aac
@@ -449,6 +504,9 @@ public sealed class AudioPipeline : IAsyncDisposable
         Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
     }
 
+    /// <summary>
+    /// Устанавливает позицию decoded samples (для корректного Position reporting после seek).
+    /// </summary>
     public void SetDecodedSamplesPosition(long samples)
     {
         Interlocked.Exchange(ref _decodedSamples, samples);
@@ -458,6 +516,9 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Audio Callback
 
+    /// <summary>
+    /// Callback вызывается из NAudioBackend fill loop для получения PCM данных.
+    /// </summary>
     private int AudioCallback(Span<float> buffer)
     {
         if (_disposed)
@@ -478,6 +539,9 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Buffer Info
 
+    /// <summary>
+    /// Ожидает накопления минимального количества PCM данных в буфере.
+    /// </summary>
     public async Task WaitForBufferAsync(int minSamples, int maxWaitMs, CancellationToken ct)
     {
         int waited = 0;
@@ -498,17 +562,20 @@ public sealed class AudioPipeline : IAsyncDisposable
         _disposed = true;
 
         // Отменяем всё
-        _lifetimeCts.Cancel();
-        _decoderCts?.Cancel();
+        try { _lifetimeCts.Cancel(); }
+        catch (ObjectDisposedException) { }
 
-        // Ждём завершения декодера
+        try { _decoderCts?.Cancel(); }
+        catch (ObjectDisposedException) { }
+
+        // Ждём decoder loop
         if (_decoderTask != null)
         {
             try
             {
                 await _decoderTask.WaitAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs));
             }
-            catch { }
+            catch { /* Timeout or cancelled — OK */ }
         }
 
         _backend.Dispose();
@@ -517,8 +584,11 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         ArrayPool<float>.Shared.Return(_decodeBuffer);
 
-        _decoderCts?.Dispose();
-        _lifetimeCts.Dispose();
+        try { _decoderCts?.Dispose(); }
+        catch (ObjectDisposedException) { }
+
+        try { _lifetimeCts.Dispose(); }
+        catch (ObjectDisposedException) { }
 
         Log.Debug("[AudioPipeline] Disposed");
     }

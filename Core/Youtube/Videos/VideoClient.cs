@@ -7,12 +7,12 @@ using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Youtube.Videos;
 
-public class VideoClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor)
+public class VideoClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor,
+    Func<bool>? isAuthenticatedCheck = null)
 {
     private readonly VideoController _controller = new(http);
-    
-    // Внедряем зависимость в Streams
-    public StreamClient Streams { get; } = new(http, nTokenDecryptor, sigCipherDecryptor);
+
+    public StreamClient Streams { get; } = new(http, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
 
     public async ValueTask<TrackInfo> GetAsync(
         VideoId videoId,
@@ -46,14 +46,13 @@ public class VideoClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISig
         };
     }
 
-    /// <summary>
-    /// Публичный метод для получения PlayerResponse (используется для HLS fallback).
-    /// </summary>
     internal async ValueTask<PlayerResponse> GetPlayerResponseAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        var (response, _) = await _controller.GetPlayerResponseWithFallbackAsync(videoId, cancellationToken);
+        bool isAuth = isAuthenticatedCheck?.Invoke() ?? false;
+        var (response, _) = await _controller.GetPlayerResponseWithFallbackAsync(
+            videoId, cancellationToken, isAuthenticated: isAuth);
         return response;
     }
 }

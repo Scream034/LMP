@@ -377,6 +377,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         _normalizationFactor = 1.0f;
 
+        // ① Останавливаем через StopAsync — ждём реальной остановки pipeline
+        await _player.StopAsync();
+
+        // Проверяем сессию после async stop
+        if (Volatile.Read(ref _session) != session) return;
+
+        // ② Теперь обновляем UI
         RaiseOnUI(() =>
         {
             CurrentTrack = track;
@@ -396,29 +403,15 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
         catch (Youtube.Exceptions.LoginRequiredException ex)
         {
-            // ✅ НОВОЕ: Обработка LOGIN_REQUIRED
             Log.Warn($"[AudioEngine] Login required: {ex.Reason} for {ex.VideoId}");
-
-            RaiseOnUI(() =>
-            {
-                OnError?.Invoke(LocalizationService.Instance[ex.GetLocalizationKey()]);
-            });
-
-            // Показываем диалог
+            RaiseOnUI(() => OnError?.Invoke(LocalizationService.Instance[ex.GetLocalizationKey()]));
             ShowLoginRequiredDialog(ex);
-
-            // НЕ пропускаем трек — просто останавливаемся
             Stop();
         }
         catch (Youtube.Exceptions.StreamUnavailableException ex)
         {
             Log.Error($"[AudioEngine] Stream unavailable: {ex.Reason} for {ex.VideoId}");
-
-            RaiseOnUI(() =>
-            {
-                OnError?.Invoke(ex.Message);
-            });
-
+            RaiseOnUI(() => OnError?.Invoke(ex.Message));
             ShowStreamUnavailableDialog(ex);
             await HandlePlaybackErrorAsync();
         }
@@ -426,21 +419,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             Log.Warn($"[AudioEngine] Bot detection: {ex.FormatRemainingTime()}");
             RaiseOnUI(() => OnError?.Invoke("Rate limited by YouTube"));
-            // Диалог уже показан через VideoController
         }
         catch (Exception ex)
         {
-            // Проверяем, не является ли inner exception StreamUnavailableException
             var streamEx = FindStreamUnavailableException(ex);
             if (streamEx != null)
             {
-                Log.Error($"[AudioEngine] Stream unavailable (wrapped): {streamEx.Reason} for {streamEx.VideoId}");
-
-                RaiseOnUI(() =>
-                {
-                    OnError?.Invoke(streamEx.Message);
-                });
-
+                Log.Error($"[AudioEngine] Stream unavailable (wrapped): {streamEx.Reason}");
+                RaiseOnUI(() => OnError?.Invoke(streamEx.Message));
                 ShowStreamUnavailableDialog(streamEx);
                 await HandlePlaybackErrorAsync();
                 return;

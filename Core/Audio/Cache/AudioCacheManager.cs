@@ -486,7 +486,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Возвращает список закэшированных форматов для трека.
-    /// O(k) где k — количество форматов.
     /// </summary>
     public List<(string Container, int Bitrate)> GetCachedFormats(string trackId)
     {
@@ -498,9 +497,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         foreach (var key in keys)
         {
             if (_entries.TryGetValue(key, out var entry) && entry.IsComplete)
-            {
                 result.Add((entry.Format.ToString(), entry.Bitrate));
-            }
         }
 
         return result;
@@ -511,48 +508,34 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// </summary>
     public bool IsFormatCached(string trackId, string container, int bitrate)
     {
-        var normalizedBitrate = NormalizeBitrate(bitrate);
-
         if (!Enum.TryParse<AudioFormat>(container, true, out var format))
             return false;
 
-        var cacheKey = BuildCacheKey(trackId, format, normalizedBitrate);
+        var cacheKey = BuildCacheKey(trackId, format, bitrate);
         return IsFullyCached(cacheKey);
     }
 
     /// <summary>
     /// Строит уникальный ключ кэша: trackId + формат + нормализованный битрейт.
+    /// Делегирует к <see cref="AudioConstants.NormalizeBitrate"/> — единственному
+    /// источнику истины для нормализации.
     /// </summary>
     public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
     {
-        int normalizedBitrate = NormalizeBitrate(bitrate);
+        // Делегируем к AudioConstants — одна логика нормализации на всё приложение
+        int normalizedBitrate = AudioConstants.NormalizeBitrate(bitrate);
         return $"{trackId}_{format}_{normalizedBitrate}";
     }
 
     /// <summary>
-    /// Нормализует битрейт к ближайшему "стандартному" значению.
+    /// Нормализует битрейт. Делегирует к <see cref="AudioConstants.NormalizeBitrate"/>.
     /// </summary>
-    public static int NormalizeBitrate(int bitrate)
-    {
-        if (bitrate <= 0) return 128;
-
-        int[] standards = [48, 64, 96, 128, 160, 192, 256, 320];
-
-        int closest = standards[0];
-        int minDiff = Math.Abs(bitrate - closest);
-
-        foreach (int std in standards)
-        {
-            int diff = Math.Abs(bitrate - std);
-            if (diff < minDiff)
-            {
-                minDiff = diff;
-                closest = std;
-            }
-        }
-
-        return minDiff > 20 ? bitrate : closest;
-    }
+    /// <remarks>
+    /// Оставлен для обратной совместимости. Новый код должен использовать
+    /// <see cref="AudioConstants.NormalizeBitrate"/> напрямую.
+    /// </remarks>
+    [Obsolete("Use AudioConstants.NormalizeBitrate() directly.")]
+    public static int NormalizeBitrate(int bitrate) => AudioConstants.NormalizeBitrate(bitrate);
 
     #endregion
 

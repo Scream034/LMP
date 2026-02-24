@@ -474,7 +474,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         try
         {
-            // Останавливаем декодер
+            // Останавливаем декодер — он больше не читает из source
             await pipeline.StopDecodingAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs));
 
             // Проверяем сессию
@@ -485,15 +485,18 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
-            // Останавливаем и очищаем backend
+            // Останавливаем backend и очищаем все буферы
+            // NAudioBackend.Flush() использует _flushGeneration — 
+            // fill loop пропустит устаревшие данные без дополнительных задержек
             pipeline.Stop();
-            await Task.Delay(20);
             pipeline.Flush();
 
-            // Подготавливаем к seek
+            // Подготавливаем decoder (skip frames counter)
             pipeline.PrepareForSeek();
 
-            // Выполняем seek
+            // Выполняем seek в source
+            // CachingStreamSource: epoch reset → старые загрузки умирают →
+            // preload новых чанков → position update → parser reset
             long posMs = (long)cmd.Position.TotalMilliseconds;
             bool success = await pipeline.Source.SeekAsync(posMs, _lifetimeCts.Token);
 
@@ -505,11 +508,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
-            // Устанавливаем позицию
+            // Обновляем позицию для корректного Position reporting
             long targetSamples = (long)(posMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
             pipeline.SetDecodedSamplesPosition(targetSamples);
 
-            // Перезапускаем декодер
+            // Перезапускаем decoder loop
             pipeline.StartDecoding(
                 CreateUrlRefresher(),
                 _options,
@@ -520,6 +523,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             int minSamples = pipeline.SampleRate * pipeline.Channels * MinSeekResumeBufferMs / 1000;
             await pipeline.WaitForBufferAsync(minSamples, 300, _lifetimeCts.Token);
 
+            // Возобновляем воспроизведение
             if (wasPlaying)
             {
                 pipeline.Start();

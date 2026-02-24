@@ -220,7 +220,12 @@ public partial class YoutubeProvider : IDisposable
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        _youtube = new YoutubeClient(_currentHttpClient, _nTokenDecryptor, _sigCipherDecryptor, ownsHttpClient: false);
+        _youtube = new YoutubeClient(
+            _currentHttpClient,
+            _nTokenDecryptor,
+            _sigCipherDecryptor,
+            isAuthenticatedCheck: () => AuthService?.IsAuthenticated ?? false,
+            ownsHttpClient: false);
 
         Log.Info($"[YouTube] Client reloaded. Auth: {AuthService?.IsAuthenticated ?? false}");
     }

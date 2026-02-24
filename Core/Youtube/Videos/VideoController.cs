@@ -369,16 +369,29 @@ internal class VideoController(HttpClient http)
     #endregion
 
     #region Fallback Methods
+
+    /// <summary>
+    /// Получает PlayerResponse с fallback по списку клиентов.
+    /// Список клиентов зависит от состояния авторизации.
+    /// </summary>
+    /// <param name="videoId">ID видео.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <param name="isAuthenticated">
+    /// Авторизован ли пользователь. Если true — WEB_REMIX включается в fallback
+    /// (с авторизацией pot не требуется). Если false — только ANDROID_VR и ANDROID_MUSIC.
+    /// </param>
     public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
         VideoId videoId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken,
+        bool isAuthenticated = false)
     {
+        var clients = YoutubeClientUtils.GetStreamFallbackClients(isAuthenticated);
         var errors = new List<string>();
         var allBotDetection = true;
         bool hasLoginRequired = false;
         LoginRequiredException? loginException = null;
 
-        foreach (var clientName in YoutubeClientUtils.StreamFallbackClients)
+        foreach (var clientName in clients)
         {
             try
             {
@@ -399,7 +412,6 @@ internal class VideoController(HttpClient http)
             }
             catch (LoginRequiredException ex)
             {
-                // Сохраняем первое исключение LOGIN_REQUIRED
                 if (!hasLoginRequired)
                 {
                     hasLoginRequired = true;
@@ -418,7 +430,6 @@ internal class VideoController(HttpClient http)
             }
         }
 
-        // Если ВСЕ клиенты вернули LOGIN_REQUIRED — выбрасываем
         if (hasLoginRequired && loginException != null)
         {
             Log.Error($"[VideoController] [{videoId}] All clients require login: {loginException.Reason}");

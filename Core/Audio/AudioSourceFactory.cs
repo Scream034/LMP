@@ -1,3 +1,5 @@
+// Core/Audio/AudioSourceFactory.cs
+
 using System.Net;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Http;
@@ -7,21 +9,39 @@ using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
 
+/// <summary>
+/// Фабрика аудио источников. Определяет формат, проверяет кэш,
+/// создаёт подходящий <see cref="IAudioSource"/>.
+/// 
+/// <para><b>Приоритет источников:</b></para>
+/// <list type="number">
+///   <item>Полный дисковый кэш → <see cref="LocalFileSource"/></item>
+///   <item>Частичный кэш или онлайн → <see cref="CachingStreamSource"/></item>
+/// </list>
+/// </summary>
 public static class AudioSourceFactory
 {
     private static AudioCacheManager? _globalCacheManager;
 
+    /// <summary>
+    /// Инициализирует глобальный кэш-менеджер. Должен быть вызван до <see cref="CreateAsync"/>.
+    /// </summary>
     public static void InitializeGlobalCache(AudioCacheManager cacheManager)
     {
         _globalCacheManager = cacheManager ?? throw new ArgumentNullException(nameof(cacheManager));
         Log.Info("[AudioSourceFactory] Global cache initialized");
     }
 
+    /// <summary>Глобальный кэш-менеджер.</summary>
     public static AudioCacheManager? GlobalCache => _globalCacheManager;
 
     /// <summary>
     /// Строит уникальный ключ кэша: trackId + формат + нормализованный битрейт.
     /// </summary>
+    /// <remarks>
+    /// Использует <see cref="AudioConstants.NormalizeBitrate"/> — единственный источник истины
+    /// для нормализации битрейта во всём приложении.
+    /// </remarks>
     public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
     {
         int normalizedBitrate = NormalizeBitrate(bitrate);
@@ -31,6 +51,7 @@ public static class AudioSourceFactory
     /// <summary>
     /// Ищет полностью закэшированный трек любого формата/битрейта.
     /// </summary>
+    /// <returns>Путь к файлу и метаданные, или null.</returns>
     public static (string Path, CacheEntry Entry)? FindAnyCachedTrack(string trackId)
     {
         if (_globalCacheManager == null) return null;
@@ -47,16 +68,16 @@ public static class AudioSourceFactory
     /// <summary>
     /// Создаёт аудио источник.
     /// </summary>
-    /// <param name="url">URL потока.</param>
-    /// <param name="httpClient">HTTP клиент.</param>
-    /// <param name="urlRefresher">Функция обновления URL.</param>
+    /// <param name="url">URL потока. Пустой = искать в кэше по trackId.</param>
+    /// <param name="httpClient">HTTP клиент для загрузки.</param>
+    /// <param name="urlRefresher">Callback обновления протухшего URL.</param>
     /// <param name="trackId">ID трека.</param>
-    /// <param name="bitrateHint">
-    /// Подсказка битрейта (kbps) от вызывающего кода.
-    /// Используется для точного кэш-ключа вместо угадывания из URL.
-    /// 0 = определять автоматически.
-    /// </param>
+    /// <param name="bitrateHint">Битрейт (kbps). 0 = определить автоматически.</param>
     /// <param name="ct">Токен отмены.</param>
+    /// <exception cref="InvalidOperationException">
+    /// <see cref="InitializeGlobalCache"/> не вызван.
+    /// </exception>
+    /// <exception cref="NotSupportedException">Формат не поддерживается.</exception>
     public static async Task<IAudioSource> CreateAsync(
         string url,
         HttpClient httpClient,
@@ -73,44 +94,45 @@ public static class AudioSourceFactory
 
         trackId ??= GenerateTrackIdFromUrl(url);
 
-        // Пустой URL — ищем любой кэш для трека
+        // ── Пустой URL → ищем любой кэш для трека ──
         if (string.IsNullOrEmpty(url))
         {
             var cached = FindAnyCachedTrack(trackId);
             if (cached != null)
             {
                 Log.Info($"[AudioSourceFactory] Using cached: {trackId} " +
-                        $"({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
+                         $"({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
                 return new LocalFileSource(cached.Value.Path);
             }
+
             throw new ArgumentException("No URL provided and no cache available", nameof(url));
         }
 
-        // Определяем формат
+        // ── Определяем формат ──
         var format = await DetectFormatAsync(url, httpClient, ct);
         if (format == AudioFormat.Unknown)
             throw new NotSupportedException($"Could not detect audio format for: {url}");
 
-        // HLS — не кэшируем
+        // ── HLS → deprecated, но поддерживаем для обратной совместимости ──
         if (format == AudioFormat.Hls)
         {
-            Log.Info($"[AudioSourceFactory] HLS stream (RAM-only): {trackId}");
-            return new HlsStreamSource(url, httpClient);
+            Log.Warn("[AudioSourceFactory] HLS format detected — this is deprecated");
+
+#pragma warning disable CS0618 // Type or member is obsolete
+            return new HlsStreamSource(url, httpClient, trackId);
+#pragma warning restore CS0618
         }
 
-        // Получаем метаданные потока
+        // ── Получаем метаданные потока ──
         var (contentLength, codec, detectedBitrate) = await GetStreamInfoAsync(url, format, httpClient, ct);
 
-        // bitrateHint имеет приоритет над автодетектом
+        // bitrateHint приоритетнее автодетекта
         int finalBitrate = bitrateHint > 0 ? bitrateHint : detectedBitrate;
 
         // Строим ключ кэша
         string cacheKey = BuildCacheKey(trackId, format, finalBitrate);
 
-        Log.Debug($"[AudioSourceFactory] Bitrate resolution: hint={bitrateHint}, detected={detectedBitrate}, " +
-                  $"final={finalBitrate}, normalized={NormalizeBitrate(finalBitrate)}, key={cacheKey}");
-
-        // Проверяем точный кэш (формат + битрейт)
+        // ── Проверяем точный кэш ──
         if (_globalCacheManager.IsFullyCached(cacheKey))
         {
             var cachePath = _globalCacheManager.GetCachePath(cacheKey);
@@ -121,21 +143,16 @@ public static class AudioSourceFactory
             }
         }
 
-        Log.Info($"[AudioSourceFactory] Caching {format}/{codec}/{finalBitrate}kbps: {cacheKey}");
+        Log.Info($"[AudioSourceFactory] Streaming {format}/{codec}/{finalBitrate}kbps: {cacheKey}");
 
         return new CachingStreamSource(
-            cacheKey,
-            trackId,
-            url,
-            contentLength,
-            format,
-            codec,
-            finalBitrate,
-            httpClient,
-            _globalCacheManager,
-            urlRefresher);
+            cacheKey, trackId, url, contentLength, format, codec,
+            finalBitrate, httpClient, _globalCacheManager, urlRefresher);
     }
 
+    /// <summary>
+    /// Генерирует trackId из URL (fallback когда trackId не предоставлен).
+    /// </summary>
     private static string GenerateTrackIdFromUrl(string url)
     {
         var hash = System.Security.Cryptography.SHA256.HashData(
@@ -143,6 +160,9 @@ public static class AudioSourceFactory
         return "cache_" + Convert.ToHexString(hash)[..16];
     }
 
+    /// <summary>
+    /// Возвращает информацию о кэше для трека.
+    /// </summary>
     public static CacheEntry? GetCacheInfo(string trackId)
     {
         return _globalCacheManager?.FindBestCache(trackId);
@@ -150,6 +170,9 @@ public static class AudioSourceFactory
 
     #region Format Detection
 
+    /// <summary>
+    /// Определяет формат по URL (mime-параметры, расширение).
+    /// </summary>
     public static AudioFormat DetectFormat(string url)
     {
         if (string.IsNullOrEmpty(url))
@@ -160,7 +183,7 @@ public static class AudioSourceFactory
             url.Contains("/hls/", StringComparison.OrdinalIgnoreCase))
             return AudioFormat.Hls;
 
-        // Проверяем mime= параметр (YouTube использует это)
+        // YouTube mime= parameter
         if (url.Contains("mime=audio%2Fwebm", StringComparison.OrdinalIgnoreCase) ||
             url.Contains("mime=audio/webm", StringComparison.OrdinalIgnoreCase))
             return AudioFormat.WebM;
@@ -173,7 +196,7 @@ public static class AudioSourceFactory
             url.Contains("mime=audio/ogg", StringComparison.OrdinalIgnoreCase))
             return AudioFormat.Ogg;
 
-        // Fallback на расширение файла
+        // File extension fallback
         if (url.Contains(".webm", StringComparison.OrdinalIgnoreCase))
             return AudioFormat.WebM;
 
@@ -188,6 +211,9 @@ public static class AudioSourceFactory
         return AudioFormat.Unknown;
     }
 
+    /// <summary>
+    /// Определяет формат: сначала по URL, потом по magic bytes через HTTP Range request.
+    /// </summary>
     public static async Task<AudioFormat> DetectFormatAsync(
         string url, HttpClient httpClient, CancellationToken ct = default)
     {
@@ -198,8 +224,8 @@ public static class AudioSourceFactory
         try
         {
             using var request = SharedHttpClient.CreateRangeRequest(url, 0, FormatDetectionHeaderSize - 1);
-            using var response = await httpClient.SendAsync(request,
-                HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, ct);
 
             if (response.StatusCode == HttpStatusCode.Forbidden)
                 return AudioFormat.Unknown;
@@ -216,6 +242,9 @@ public static class AudioSourceFactory
         }
     }
 
+    /// <summary>
+    /// Определяет формат по magic bytes заголовка.
+    /// </summary>
     public static AudioFormat DetectFormatByMagic(ReadOnlySpan<byte> header)
     {
         if (header.Length < 4) return AudioFormat.Unknown;
@@ -232,8 +261,11 @@ public static class AudioSourceFactory
         return AudioFormat.Unknown;
     }
 
+    /// <summary>
+    /// Получает метаданные потока: Content-Length, кодек, битрейт.
+    /// </summary>
     private static async Task<(long ContentLength, AudioCodec Codec, int Bitrate)> GetStreamInfoAsync(
-    string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
+        string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
     {
         long contentLength = 0;
 
@@ -241,12 +273,12 @@ public static class AudioSourceFactory
 
         if (isYouTube)
         {
-            // Для YouTube берём clen из URL
+            // YouTube: clen из URL параметров
             contentLength = ExtractContentLengthFromUrl(url);
         }
         else
         {
-            // Для остальных делаем HEAD
+            // Остальные: HEAD request
             try
             {
                 using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
@@ -254,20 +286,24 @@ public static class AudioSourceFactory
                 if (headResponse.IsSuccessStatusCode)
                     contentLength = headResponse.Content.Headers.ContentLength ?? 0;
             }
-            catch { }
+            catch { /* Fallback below */ }
         }
 
         if (contentLength <= 0)
-            contentLength = 100 * 1024 * 1024; // fallback
+            contentLength = 100 * 1024 * 1024; // 100MB fallback
 
         var codec = GetCodecForFormat(format);
         int bitrate = ExtractBitrateFromUrl(url);
+
         if (bitrate == 0)
             bitrate = codec == AudioCodec.Opus ? 128 : 96;
 
         return (contentLength, codec, bitrate);
     }
 
+    /// <summary>
+    /// Извлекает Content-Length из URL параметра "clen" (YouTube).
+    /// </summary>
     private static long ExtractContentLengthFromUrl(string url)
     {
         try
@@ -279,16 +315,19 @@ public static class AudioSourceFactory
                 return clen;
         }
         catch { }
+
         return 0;
     }
 
+    /// <summary>
+    /// Извлекает битрейт из URL параметра "bitrate" (YouTube, в bps → kbps).
+    /// </summary>
     private static int ExtractBitrateFromUrl(string url)
     {
         try
         {
             var uri = new Uri(url);
             var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-
             var bitrateStr = query["bitrate"];
             if (!string.IsNullOrEmpty(bitrateStr) && int.TryParse(bitrateStr, out var br))
                 return br / 1000;
@@ -298,6 +337,9 @@ public static class AudioSourceFactory
         return 0;
     }
 
+    /// <summary>
+    /// Определяет кодек по формату контейнера.
+    /// </summary>
     public static AudioCodec GetCodecForFormat(AudioFormat format) => format switch
     {
         AudioFormat.WebM => AudioCodec.Opus,

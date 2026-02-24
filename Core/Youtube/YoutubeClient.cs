@@ -13,12 +13,17 @@ public class YoutubeClient : IDisposable
     private readonly HttpClient _youtubeHttp;
     private readonly bool _ownsHttpClient;
 
-    public YoutubeClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor, bool ownsHttpClient = false)
+    public YoutubeClient(
+        HttpClient http, 
+        INTokenDecryptor nTokenDecryptor, 
+        ISigCipherDecryptor sigCipherDecryptor, 
+        Func<bool>? isAuthenticatedCheck = null,
+        bool ownsHttpClient = false)
     {
         _youtubeHttp = http;
         _ownsHttpClient = ownsHttpClient;
 
-        Videos = new VideoClient(_youtubeHttp, nTokenDecryptor, sigCipherDecryptor);
+        Videos = new VideoClient(_youtubeHttp, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
         Playlists = new PlaylistClient(_youtubeHttp);
         Channels = new ChannelClient(_youtubeHttp);
         Search = new SearchClient(_youtubeHttp);

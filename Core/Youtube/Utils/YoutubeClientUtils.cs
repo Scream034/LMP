@@ -26,21 +26,50 @@ public static class YoutubeClientUtils
     public static bool RequiresAuth => CurrentProfile is YoutubeClientProfile.Web or YoutubeClientProfile.WebRemix;
 
     /// <summary>
-    /// Порядок клиентов для fallback.
-    /// WEB_REMIX первый (YouTube Music), затем ANDROID_VR как fallback.
+    /// Порядок клиентов для стримов.
+    /// 
+    /// <para><b>ANDROID_VR первый</b> — не требует PO Token (pot), нет лимита на Range requests.
+    /// WEB_REMIX требует pot для скачивания более ~1MB без авторизации.</para>
+    /// 
+    /// <para><b>WEB_REMIX</b> используется как fallback только если пользователь авторизован
+    /// (с siu=1 лимит снимается). См. <see cref="GetStreamFallbackClients"/>.</para>
     /// </summary>
-    public static readonly string[] StreamFallbackClients = 
+    public static readonly string[] StreamFallbackClientsDefault =
     [
-        "WEB_REMIX",      // YouTube Music - основной
-        "ANDROID_VR",     // Fallback без signature
-        "ANDROID_MUSIC",
-        "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
+        "ANDROID_VR",     // Основной — без pot, без sig, без лимита
+        "ANDROID_MUSIC",  // Fallback
     ];
+
+    /// <summary>
+    /// Клиенты для авторизованных пользователей.
+    /// WEB_REMIX включён потому что с авторизацией pot не нужен.
+    /// </summary>
+    public static readonly string[] StreamFallbackClientsAuth =
+    [
+        "ANDROID_VR",     // Основной — без pot, без sig, без лимита
+        "WEB_REMIX",      // С авторизацией — без лимита (siu=1)
+        "ANDROID_MUSIC",  // Fallback
+    ];
+
+    /// <summary>
+    /// Возвращает список клиентов для fallback в зависимости от состояния авторизации.
+    /// </summary>
+    /// <param name="isAuthenticated">Авторизован ли пользователь.</param>
+    public static string[] GetStreamFallbackClients(bool isAuthenticated)
+    {
+        return isAuthenticated ? StreamFallbackClientsAuth : StreamFallbackClientsDefault;
+    }
+
+    /// <summary>
+    /// Обратная совместимость — используется где не передаётся auth state.
+    /// Без авторизации по умолчанию.
+    /// </summary>
+    public static string[] StreamFallbackClients => StreamFallbackClientsDefault;
 
     /// <summary>
     /// Клиенты для получения HLS.
     /// </summary>
-    public static readonly string[] HlsFallbackClients = 
+    public static readonly string[] HlsFallbackClients =
     [
         "IOS",
         "ANDROID_VR",
@@ -49,7 +78,9 @@ public static class YoutubeClientUtils
 
     public static string GeneratePlayerContext(string videoId, string? visitorData)
     {
-        return GeneratePlayerContextForClient(CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"), videoId, visitorData);
+        return GeneratePlayerContextForClient(
+            CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"),
+            videoId, visitorData);
     }
 
     /// <summary>
@@ -59,7 +90,7 @@ public static class YoutubeClientUtils
     {
         var hl = YoutubeHttpHandler.GetHl();
         var gl = YoutubeHttpHandler.GetGl();
-        
+
         var vidJson = Json.Serialize(videoId);
         var vdJson = Json.Serialize(visitorData);
         var hlJson = Json.Serialize(hl);

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Net;
 using System.Text.RegularExpressions;
 using LMP.Core.Audio.Interfaces;
@@ -6,6 +7,19 @@ using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio.Sources;
 
+/// <summary>
+/// HLS stream source — устаревший fallback для YouTube.
+/// 
+/// <para><b>DEPRECATED:</b> YouTube отдаёт прямые WebM/MP4 потоки.
+/// HLS использовался как fallback при недоступности прямых URL.
+/// Новый код не должен создавать экземпляры этого класса.</para>
+/// 
+/// <para>Для удаления: убрать <c>AudioFormat.Hls</c> из enum,
+/// убрать ветку в <c>AudioSourceFactory.CreateAsync</c>,
+/// удалить HLS-константы из <c>AudioConstants</c>.</para>
+/// </summary>
+[Obsolete("HLS fallback is deprecated. Use direct WebM/MP4 stream URLs via CachingStreamSource.", error: false)]
+[EditorBrowsable(EditorBrowsableState.Never)]
 public sealed partial class HlsStreamSource : IAudioSource
 {
     private readonly string _masterUrl;
@@ -38,8 +52,8 @@ public sealed partial class HlsStreamSource : IAudioSource
     public bool CanSeek => _segments.Count > 0;
     public AudioCodec Codec => AudioCodec.Aac;
     public byte[]? DecoderConfig { get; private set; }
-    public int SampleRate { get; private set; } = 44100;
-    public int Channels { get; private set; } = 2;
+    public int SampleRate { get; private set; } = DefaultSampleRate;
+    public int Channels { get; private set; } = DefaultChannels;
 
     public double BufferProgress
     {
@@ -99,7 +113,7 @@ public sealed partial class HlsStreamSource : IAudioSource
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
         {
-            Log.Error($"[HLS] Init failed: 403 Forbidden");
+            Log.Error("[HLS] Init failed: 403 Forbidden");
             throw new StreamUnavailableException(
                 "HLS manifest returned 403 Forbidden",
                 _trackId ?? "unknown",
@@ -163,14 +177,10 @@ public sealed partial class HlsStreamSource : IAudioSource
                 return null;
 
             if (!IsSegmentDownloaded(_currentSegmentIndex))
-            {
                 await LoadSegmentAsync(_currentSegmentIndex, ct);
-            }
 
             if (IsFrameBufferEmpty())
-            {
                 _currentSegmentIndex++;
-            }
         }
     }
 
@@ -190,18 +200,12 @@ public sealed partial class HlsStreamSource : IAudioSource
 
     private bool IsSegmentDownloaded(int index)
     {
-        lock (_bufferLock)
-        {
-            return _downloadedSegments.Contains(index);
-        }
+        lock (_bufferLock) { return _downloadedSegments.Contains(index); }
     }
 
     private bool IsFrameBufferEmpty()
     {
-        lock (_bufferLock)
-        {
-            return _frameBuffer.Count == 0;
-        }
+        lock (_bufferLock) { return _frameBuffer.Count == 0; }
     }
 
     public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct = default)
@@ -212,18 +216,13 @@ public sealed partial class HlsStreamSource : IAudioSource
 
         Log.Debug($"[HLS] Seek to {positionMs}ms → segment {targetSegment}");
 
-        lock (_bufferLock)
-        {
-            _frameBuffer.Clear();
-        }
+        lock (_bufferLock) { _frameBuffer.Clear(); }
 
         _currentSegmentIndex = targetSegment;
         Volatile.Write(ref _positionMs, segmentStartMs);
 
         if (!IsSegmentDownloaded(targetSegment))
-        {
             await LoadSegmentAsync(targetSegment, ct);
-        }
 
         return true;
     }
@@ -235,9 +234,8 @@ public sealed partial class HlsStreamSource : IAudioSource
         for (int i = 0; i < _segments.Count; i++)
         {
             if (accumulated + _segments[i].DurationMs > positionMs)
-            {
                 return (i, accumulated);
-            }
+
             accumulated += (long)_segments[i].DurationMs;
         }
 
@@ -267,7 +265,7 @@ public sealed partial class HlsStreamSource : IAudioSource
                 }
                 else if (!isDownloaded && rangeStart.HasValue)
                 {
-                    ranges.Add(ToNormalizedRange(startMs, currentMs));
+                    ranges.Add(((double)startMs / DurationMs, (double)currentMs / DurationMs));
                     rangeStart = null;
                 }
 
@@ -275,25 +273,15 @@ public sealed partial class HlsStreamSource : IAudioSource
             }
 
             if (rangeStart.HasValue)
-            {
-                ranges.Add(ToNormalizedRange(startMs, DurationMs));
-            }
+                ranges.Add(((double)startMs / DurationMs, 1.0));
         }
 
         return ranges;
     }
 
-    private (double Start, double End) ToNormalizedRange(long startMs, long endMs)
-    {
-        return ((double)startMs / DurationMs, (double)endMs / DurationMs);
-    }
-
     public void ReleaseRamBuffers()
     {
-        lock (_bufferLock)
-        {
-            _frameBuffer.Clear();
-        }
+        lock (_bufferLock) { _frameBuffer.Clear(); }
     }
 
     public void CancelPendingOperations() => _operationCts?.Cancel();
@@ -314,12 +302,10 @@ public sealed partial class HlsStreamSource : IAudioSource
             {
                 var uriMatch = UriRegex().Match(line);
                 if (uriMatch.Success)
-                {
                     return ResolveUrl(baseUrl, uriMatch.Groups[1].Value);
-                }
             }
 
-            if (line.StartsWith("#EXT-X-STREAM-INF:") && i + 1 < lines.Length && !lines[i + 1].StartsWith("#"))
+            if (line.StartsWith("#EXT-X-STREAM-INF:") && i + 1 < lines.Length && !lines[i + 1].StartsWith('#'))
             {
                 var bwMatch = BandwidthRegex().Match(line);
                 int bw = bwMatch.Success ? int.Parse(bwMatch.Groups[1].Value) : 0;
@@ -353,15 +339,10 @@ public sealed partial class HlsStreamSource : IAudioSource
                 var durationStr = line[8..].Split(',')[0];
                 duration = double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture);
             }
-            else if (!line.StartsWith("#") && !string.IsNullOrEmpty(line))
+            else if (!line.StartsWith('#') && !string.IsNullOrEmpty(line))
             {
                 var durationMs = duration * 1000;
-
-                segments.Add(new HlsSegment(
-                    Url: ResolveUrl(baseUrl, line),
-                    DurationMs: durationMs,
-                    StartMs: accumulatedMs));
-
+                segments.Add(new HlsSegment(ResolveUrl(baseUrl, line), durationMs, accumulatedMs));
                 accumulatedMs += (long)durationMs;
                 duration = 0;
             }
@@ -378,7 +359,8 @@ public sealed partial class HlsStreamSource : IAudioSource
         return new Uri(new Uri(baseUrl), relativeUrl).ToString();
     }
 
-    private static string TruncateUrl(string url) => url[..Math.Min(60, url.Length)] + "...";
+    private static string TruncateUrl(string url) =>
+        url.Length <= 60 ? url : string.Concat(url.AsSpan(0, 60), "...");
 
     [GeneratedRegex(@"URI=""([^""]+)""")]
     private static partial Regex UriRegex();
@@ -405,23 +387,17 @@ public sealed partial class HlsStreamSource : IAudioSource
 
         try
         {
-            Log.Debug($"[HLS] Loading segment {index}");
-
             var data = await GetBytesWithErrorHandlingAsync(segment.Url, index, ct);
             var frames = ExtractAacFramesFromTs(data, segment.StartMs);
 
             lock (_bufferLock)
             {
                 foreach (var frame in frames)
-                {
                     _frameBuffer.Enqueue(frame);
-                }
 
                 _downloadedSegments.Add(index);
                 _loadingSegments.Remove(index);
             }
-
-            Log.Debug($"[HLS] Segment {index}: {frames.Count} frames");
         }
         catch (StreamUnavailableException)
         {
@@ -444,7 +420,6 @@ public sealed partial class HlsStreamSource : IAudioSource
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
         {
-            Log.Warn($"[HLS] Segment {segmentIndex} failed: 403 Forbidden");
             throw new StreamUnavailableException(
                 $"HLS segment {segmentIndex} returned 403 Forbidden",
                 _trackId ?? "unknown",
@@ -462,17 +437,11 @@ public sealed partial class HlsStreamSource : IAudioSource
 
         while (pos + 188 <= tsData.Length)
         {
-            if (tsData[pos] != 0x47)
-            {
-                pos++;
-                continue;
-            }
+            if (tsData[pos] != 0x47) { pos++; continue; }
 
             var payload = ExtractTsPayload(tsData, pos);
             if (payload.Length > 0)
-            {
                 ExtractAdtsFrames(payload, ref currentMs, frames);
-            }
 
             pos += 188;
         }
@@ -489,9 +458,7 @@ public sealed partial class HlsStreamSource : IAudioSource
 
         int payloadStart = packetStart + 4;
         if (hasAdaptation)
-        {
             payloadStart += 1 + tsData[payloadStart];
-        }
 
         if (payloadStart >= packetStart + 188) return [];
 
@@ -514,11 +481,7 @@ public sealed partial class HlsStreamSource : IAudioSource
                               (payload[pos + 4] << 3) |
                               ((payload[pos + 5] & 0xE0) >> 5);
 
-            if (frameLength <= 0 || pos + frameLength > payload.Length)
-            {
-                pos++;
-                continue;
-            }
+            if (frameLength <= 0 || pos + frameLength > payload.Length) { pos++; continue; }
 
             if (DecoderConfig == null)
             {
@@ -537,7 +500,6 @@ public sealed partial class HlsStreamSource : IAudioSource
                     TimestampMs = currentMs,
                     DurationMs = HlsAacFrameDurationMs
                 });
-
                 currentMs += HlsAacFrameDurationMs;
             }
 
@@ -550,9 +512,7 @@ public sealed partial class HlsStreamSource : IAudioSource
         int profile = ((adtsHeader[2] & 0xC0) >> 6) + 1;
         int sampleRateIndex = (adtsHeader[2] & 0x3C) >> 2;
         int channelConfig = ((adtsHeader[2] & 0x01) << 2) | ((adtsHeader[3] & 0xC0) >> 6);
-
         int asc = (profile << 11) | (sampleRateIndex << 7) | (channelConfig << 3);
-
         return [(byte)(asc >> 8), (byte)(asc & 0xFF)];
     }
 
@@ -584,7 +544,7 @@ public sealed partial class HlsStreamSource : IAudioSource
             catch (OperationCanceledException) { break; }
             catch (StreamUnavailableException ex)
             {
-                Log.Warn($"[HLS] Prefetch stopped due to 403: {ex.Message}");
+                Log.Warn($"[HLS] Prefetch stopped: {ex.Message}");
                 break;
             }
             catch (Exception ex)
@@ -600,19 +560,17 @@ public sealed partial class HlsStreamSource : IAudioSource
 
         for (int i = 0; i < HlsPrefetchSegments && current + i < _segments.Count; i++)
         {
-            int targetIndex = current + i;
-
+            int target = current + i;
             bool shouldLoad;
+
             lock (_bufferLock)
             {
-                shouldLoad = !_downloadedSegments.Contains(targetIndex) &&
-                             !_loadingSegments.Contains(targetIndex);
+                shouldLoad = !_downloadedSegments.Contains(target) &&
+                             !_loadingSegments.Contains(target);
             }
 
             if (shouldLoad)
-            {
-                await LoadSegmentAsync(targetIndex, ct);
-            }
+                await LoadSegmentAsync(target, ct);
         }
     }
 
@@ -628,10 +586,7 @@ public sealed partial class HlsStreamSource : IAudioSource
         _operationCts?.Cancel();
         _operationCts?.Dispose();
 
-        lock (_bufferLock)
-        {
-            _frameBuffer.Clear();
-        }
+        lock (_bufferLock) { _frameBuffer.Clear(); }
     }
 
     public async ValueTask DisposeAsync()
@@ -644,15 +599,11 @@ public sealed partial class HlsStreamSource : IAudioSource
         if (_prefetchTask != null)
         {
             try { await _prefetchTask.WaitAsync(TimeSpan.FromSeconds(1)); }
-            catch { }
+            catch { /* Timeout OK */ }
         }
 
         _operationCts?.Dispose();
-
-        lock (_bufferLock)
-        {
-            _frameBuffer.Clear();
-        }
+        lock (_bufferLock) { _frameBuffer.Clear(); }
     }
 
     #endregion
