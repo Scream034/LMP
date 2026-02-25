@@ -4,7 +4,7 @@
   <PropertyGroup>
     <!-- Основная версия Avalonia (меняй здесь одну строку при обновлении) -->
     <AvaloniaVersion>11.3.12</AvaloniaVersion>
-    
+
     <!-- Другие версии -->
     <HotAvaloniaVersion>3.1.0</HotAvaloniaVersion>
     <EfCoreVersion>10.0.2</EfCoreVersion>
@@ -16,42 +16,46 @@
   <PropertyGroup>
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
-    
+
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    
+
     <RootNamespace>LMP</RootNamespace>
     <AssemblyName>LMP</AssemblyName>
-    
+
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
-    
+
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    
+
     <NoWarn>$(NoWarn);CS0436</NoWarn>
-    
-    <!-- Версионирование через Git (из твоих Directory.Build.*) -->
+
+    <!-- Версионирование через Git -->
     <VersionPrefix>1.0</VersionPrefix>
+
+    <!-- NuGet Lock File (обязательно для cache: true в GitHub Actions) -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <!-- ====================== ОПТИМИЗАЦИЯ ПАМЯТИ ====================== -->
   <PropertyGroup>
     <!-- Workstation GC — лучший выбор для десктопных UI приложений (меньше памяти) -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
-    
+
     <!-- Background (Concurrent) GC — UI не фризит -->
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
-    
+
     <!-- Отдавать память ОС сразу после сборки мусора -->
     <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
-    
+
     <!-- Компактификация Large Object Heap (борьба с фрагментацией от кэшей изображений/аудио) -->
     <GCLargeObjectHeapCompactionMode>CompactOnce</GCLargeObjectHeapCompactionMode>
-    
-    <!-- Tiered Compilation + PGO (Profile Guided Optimization) — быстрее старт + лучше производительность -->
+
+    <!-- Tiered Compilation + PGO (Profile Guided Optimization) — быстрее старт + лучше
+    производительность -->
     <TieredCompilation>true</TieredCompilation>
     <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
     <TieredPGO>true</TieredPGO>
@@ -62,11 +66,11 @@
     <DebugType>embedded</DebugType>
     <EmbedAllSources>true</EmbedAllSources>
     <Optimize>false</Optimize>
-    
+
     <!-- Hot Reload -->
     <EnableHotReload>true</EnableHotReload>
     <HotReloadEnabled>true</HotReloadEnabled>
-    
+
     <!-- HotAvalonia -->
     <HotAvalonia>true</HotAvalonia>
     <HotAvaloniaMode>Balanced</HotAvaloniaMode> <!-- Minimal | Balanced | Aggressive -->
@@ -84,7 +88,7 @@
     <Compile Remove="External\**" />
     <EmbeddedResource Remove="External\**" />
     <None Remove="External\**" />
-    
+
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
     <Content Include="Assets/app.ico" />
@@ -98,10 +102,12 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.9" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)"
+      Condition="'$(Configuration)' == 'Debug'" />
 
     <!-- Hot Reload для XAML -->
-    <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" PrivateAssets="All" />
+    <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)"
+      Condition="'$(Configuration)' == 'Debug'" PrivateAssets="All" />
 
     <!-- Дополнительные Avalonia пакеты -->
     <PackageReference Include="Avalonia.Controls.ItemsRepeater" Version="11.1.5" />
