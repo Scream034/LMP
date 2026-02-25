@@ -42,6 +42,38 @@ public enum VolumeCurveType
     SpeedOfLight
 }
 
+/// <summary>
+/// Поведение при критических ошибках воспроизведения.
+/// </summary>
+/// <remarks>
+/// <para>Определяет реакцию системы на ошибки типа:</para>
+/// <list type="bullet">
+///   <item><see cref="Youtube.Exceptions.StreamUnavailableException"/> — стрим недоступен (403, geo-block)</item>
+///   <item><see cref="Exceptions.ChunkDownloadFatalException"/> — фатальная ошибка загрузки чанков</item>
+/// </list>
+/// <para>Используется в <see cref="Services.PlaybackErrorOrchestrator"/>.</para>
+/// </remarks>
+public enum PlaybackErrorBehavior
+{
+    /// <summary>
+    /// Показать модальный диалог и остановить воспроизведение.
+    /// Требует явного действия пользователя.
+    /// </summary>
+    Dialog,
+
+    /// <summary>
+    /// Показать toast-уведомление и автоматически перейти к следующему треку.
+    /// Также показывает OS-уведомление если приложение свёрнуто.
+    /// </summary>
+    ToastAndSkip,
+
+    /// <summary>
+    /// Игнорировать ошибку и автоматически перейти к следующему треку.
+    /// Ошибка логируется, но пользователь не уведомляется.
+    /// </summary>
+    Ignore
+}
+
 public sealed class ProxySettings
 {
     public bool Enabled { get; set; } = false;
@@ -117,6 +149,28 @@ public sealed class AudioSettings
     /// Целевой уровень нормализации в LUFS.
     /// </summary>
     public float NormalizationTargetLufs { get; set; } = -14f;
+
+    /// <summary>
+    /// Поведение при критических ошибках воспроизведения.
+    /// </summary>
+    /// <remarks>
+    /// <para>Применяется к ошибкам:</para>
+    /// <list type="bullet">
+    ///   <item>StreamUnavailableException (403, geo-block, все клиенты failed)</item>
+    ///   <item>ChunkDownloadFatalException (превышен лимит 403 при загрузке чанков)</item>
+    /// </list>
+    /// <para>НЕ применяется к:</para>
+    /// <list type="bullet">
+    ///   <item>BotDetectionException — всегда показывает диалог с таймером</item>
+    ///   <item>LoginRequiredException — всегда показывает диалог (требует действия)</item>
+    /// </list>
+    /// </remarks>
+    public PlaybackErrorBehavior CriticalErrorBehavior { get; set; } = PlaybackErrorBehavior.ToastAndSkip;
+
+    /// <summary>
+    /// Воспроизводить звук при ошибке воспроизведения.
+    /// </summary>
+    public bool PlayErrorSound { get; set; } = true;
 }
 
 public enum RepeatMode
@@ -170,6 +224,11 @@ public sealed class AppSettings
     public bool EnableSearchCache { get; set; } = true;
     public int SearchCacheTtlMinutes { get; set; } = 120;
     public bool EnableSmoothLoading { get; set; } = true;
+
+    /// <summary>
+    /// Ширина панели уведомлений.
+    /// </summary>
+    public int NotificationPanelWidth { get; set; } = 360;
 
     // === Fake Account ===
     public string? FakeAccountChannelUrl { get; set; }

@@ -1,0 +1,236 @@
+<Styles xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mi="using:Material.Icons.Avalonia">
+
+    <!-- TRACK LIST BASE -->
+    <Style Selector="ListBox.track-list">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox.track-list ListBoxItem">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <ThicknessTransition Property="BorderThickness" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ListBoxItem">
+                <Border Name="PART_RootBorder" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}">
+                    <ContentPresenter Name="PART_ContentPresenter" Background="Transparent"
+                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                        Content="{TemplateBinding Content}"
+                        ContentTemplate="{TemplateBinding ContentTemplate}" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style
+        Selector="ListBox.track-list ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="ListBox.track-list ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- TRACK ROW (Анимация наведения и активного состояния) -->
+    <Style Selector="Border.track-row">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.track-row:pointerover">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+    </Style>
+    <Style Selector="Border.track-row.is-active">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+    </Style>
+    <Style Selector="Border.track-row.menu-open">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+    </Style>
+    <Style Selector="Border.track-row.is-active.menu-open">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+    </Style>
+    <Style Selector="Border.track-row.menu-open:pointerover">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+    </Style>
+
+    <!-- TRACK TEXT -->
+    <Style Selector="Border.track-row TextBlock.track-title">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.track-row.is-active TextBlock.track-title">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <!-- COVER BUTTON (Обложка трека) -->
+    <Style Selector="Button.cover-btn">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="ClipToBounds" Value="True" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.cover-btn Panel.cover-overlay">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.cover-btn:pointerover Panel.cover-overlay">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.cover-btn mi|MaterialIcon.play-icon">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform" Value="scale(0.85)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.cover-btn:pointerover mi|MaterialIcon.play-icon">
+        <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+    <Style Selector="Button.cover-btn:pressed mi|MaterialIcon.play-icon">
+        <Setter Property="RenderTransform" Value="scale(0.9)" />
+    </Style>
+
+    <!-- PLAYING INDICATOR -->
+    <Style Selector="mi|MaterialIcon.playing-indicator">
+        <Style.Animations>
+            <Animation Duration="0:0:0.8" IterationCount="Infinite" PlaybackDirection="Alternate">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.6" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- LIKE BUTTON -->
+    <Style Selector="Button.like-btn">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform" Value="scale(1)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.like-btn:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.85)" />
+    </Style>
+    <Style Selector="Button.like-btn.is-liked">
+        <Setter Property="RenderTransform" Value="scale(1.05)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25"
+                    Easing="BackEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.like-btn mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.like-btn.is-liked mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- MORE & REMOVE BUTTONS -->
+    <Style Selector="Button.more-btn, Button.remove-btn">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform" Value="scale(0.8)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style
+        Selector="Border.track-row:pointerover Button.more-btn, Border.track-row:pointerover Button.remove-btn">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+        <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+    <Style Selector="Border.track-row.menu-open Button.more-btn">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
+        <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+    <Style Selector="Button.more-btn:pressed, Button.remove-btn:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.9)" />
+    </Style>
+
+    <!-- DURATION TEXT -->
+    <Style Selector="Border.track-row TextBlock.duration-text">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.track-row:pointerover TextBlock.duration-text">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="Border.track-row.menu-open TextBlock.duration-text">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+
+    <!-- DRAG & DROP -->
+    <Style Selector="ListBox.track-list ListBoxItem.dragging">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="ListBox.track-list ListBoxItem.insert-top">
+        <Setter Property="BorderThickness" Value="0,2,0,0" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ListBox.track-list ListBoxItem.insert-bottom">
+        <Setter Property="BorderThickness" Value="0,0,0,2" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+</Styles>

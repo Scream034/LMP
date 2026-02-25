@@ -4,41 +4,89 @@
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:controls="using:LMP.UI.Controls">
 
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- PLAYLIST CARD HOVER STYLES                                          -->
+    <!-- Hover определяется на card-root (весь Border карточки).            -->
+    <!-- Это гарантирует что hover не пропадает при наведении на кнопки.    -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- Базовое состояние карточки -->
+    <Style Selector="ContentControl.playlist-card Border.card-root">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- При hover: только акцентная обводка, фон НЕ меняется -->
+    <Style Selector="ContentControl.playlist-card Border.card-root:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- Action bar: всегда занимает место, но невидим по умолчанию -->
+    <Style Selector="ContentControl.playlist-card Panel.action-bar">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- Показываем action bar при hover на всей карточке -->
+    <Style Selector="ContentControl.playlist-card Border.card-root:pointerover Panel.action-bar">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- PLAYLIST CARD DATA TEMPLATE                                         -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
     <Style Selector="ContentControl.playlist-card">
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                    <Border x:Name="CardBorder"
-                        Background="{DynamicResource BgElevatedBrush}"
+                    <!-- Главный Border с классом card-root для стилей hover -->
+                    <Border Classes="card-root"
                         CornerRadius="8"
-                        Width="160" Height="220"
+                        BorderThickness="1.5"
+                        Width="160" Height="248"
                         Margin="0,0,16,16"
-                        ClipToBounds="True">
+                        ClipToBounds="True"
+                        Cursor="Hand">
 
                         <Grid RowDefinitions="*, Auto">
-                            <!-- MAIN CONTENT -->
+
+                            <!-- ═══ MAIN CONTENT (кликабельная область) ═══ -->
                             <Button Grid.Row="0"
                                 Command="{Binding OpenCommand}"
                                 Background="Transparent"
-                                Padding="12,12,12,8"
+                                BorderThickness="0"
+                                Padding="12,12,12,4"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch"
                                 HorizontalContentAlignment="Stretch"
-                                VerticalContentAlignment="Top">
+                                VerticalContentAlignment="Top"
+                                Cursor="Hand">
                                 <StackPanel>
-                                    <!-- Cover -->
+
+                                    <!-- ═══ COVER IMAGE ═══ -->
                                     <Border Width="136" Height="136" CornerRadius="4"
                                         ClipToBounds="True"
-                                        Margin="0,0,0,12">
-                                        <Panel Background="{DynamicResource BgPrimaryBrush}">
-                                            <!-- Liked Icon -->
+                                        Margin="0,0,0,10">
+                                        <Panel Background="{DynamicResource BgHighlightBrush}">
+
+                                            <!-- Liked Playlist: Heart Icon -->
                                             <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
                                                 Foreground="{DynamicResource AccentBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
                                                 IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
 
-                                            <!-- Playlist Music Icon (для локальных плейлистов) -->
+                                            <!-- YouTube Playlist без обложки: PlaylistMusic Icon -->
                                             <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
                                                 Height="64"
                                                 Foreground="{DynamicResource TextMutedBrush}"
@@ -57,7 +105,32 @@
                                                 </mi:MaterialIcon.IsVisible>
                                             </mi:MaterialIcon>
 
-                                            <!-- High Quality Web Image (400px decode) -->
+                                            <!-- Локальный плейлист без обложки: Fallback PlaylistMusic Icon -->
+                                            <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
+                                                Height="64"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center">
+                                                <mi:MaterialIcon.IsVisible>
+                                                    <MultiBinding
+                                                        Converter="{x:Static BoolConverters.And}">
+                                                        <!-- Нет ThumbnailUrl -->
+                                                        <Binding Path="ThumbnailUrl"
+                                                            Converter="{StaticResource NullToVisible}"
+                                                            ConverterParameter="invert" />
+                                                        <!-- Не liked -->
+                                                        <Binding Path="Id"
+                                                            Converter="{StaticResource StringStartsWithConverter}"
+                                                            ConverterParameter="!liked" />
+                                                        <!-- Не yt_ -->
+                                                        <Binding Path="Id"
+                                                            Converter="{StaticResource StringStartsWithConverter}"
+                                                            ConverterParameter="!yt_" />
+                                                    </MultiBinding>
+                                                </mi:MaterialIcon.IsVisible>
+                                            </mi:MaterialIcon>
+
+                                            <!-- High Quality Web Image -->
                                             <Image
                                                 controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                                 controls:QualityImage.Quality="High"
@@ -72,7 +145,7 @@
                                         </Panel>
                                     </Border>
 
-                                    <!-- Title & Track Count -->
+                                    <!-- ═══ TITLE & TRACK COUNT ═══ -->
                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
                                         FontSize="13"
                                         TextTrimming="CharacterEllipsis" MaxLines="1"
@@ -83,27 +156,31 @@
                                 </StackPanel>
                             </Button>
 
-                            <!-- BOTTOM ACTION BAR -->
-                            <Panel Grid.Row="1"
-                                Margin="8,0,8,8"
-                                Height="36"
-                                IsVisible="{Binding IsPointerOver, ElementName=CardBorder}">
+                            <!-- ═══ BOTTOM ACTION BAR ═══ -->
+                            <!-- Всегда занимает место в layout, видимость через Opacity -->
+                            <Panel Grid.Row="1" Classes="action-bar"
+                                Margin="8,2,8,8"
+                                Height="32">
 
                                 <UniformGrid Rows="1" HorizontalAlignment="Stretch">
 
                                     <!-- Add to Queue -->
                                     <Button Command="{Binding AddToQueueCommand}"
-                                        Classes="card-action-btn"
+                                        Classes="ghost-btn"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
                                         ToolTip.Tip="{Binding L[Queue_Add]}">
-                                        <mi:MaterialIcon Kind="PlaylistPlus" Width="20" Height="20" />
+                                        <mi:MaterialIcon Kind="PlaylistPlus" Width="18" Height="18" />
                                     </Button>
 
                                     <!-- Delete -->
                                     <Button Command="{Binding DeleteCommand}"
-                                        Classes="card-action-btn"
+                                        Classes="ghost-btn"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
                                         IsVisible="{Binding CanDelete}"
                                         ToolTip.Tip="{Binding L[Button_Delete]}">
-                                        <mi:MaterialIcon Kind="DeleteOutline" Width="20" Height="20" />
+                                        <mi:MaterialIcon Kind="DeleteOutline" Width="18" Height="18" />
                                     </Button>
 
                                 </UniformGrid>
@@ -113,38 +190,5 @@
                 </DataTemplate>
             </Setter.Value>
         </Setter>
-    </Style>
-
-    <!-- Card Action Button Style - Ghost / Transparent -->
-    <Style Selector="Button.card-action-btn">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="HorizontalContentAlignment" Value="Center" />
-        <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="Height" Value="36" />
-        <Setter Property="CornerRadius" Value="6" />
-        <Setter Property="Padding" Value="0" />
-        <Setter Property="Cursor" Value="Hand" />
-    </Style>
-
-    <Style Selector="Button.card-action-btn mi|MaterialIcon">
-        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <BrushTransition Property="Foreground" Duration="0:0:0.12" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" />
-            </Transitions>
-        </Setter>
-    </Style>
-
-    <Style Selector="Button.card-action-btn:pointerover mi|MaterialIcon">
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="RenderTransform" Value="scale(1.15)" />
-    </Style>
-
-    <Style Selector="Button.card-action-btn:pressed mi|MaterialIcon">
-        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="RenderTransform" Value="scale(0.95)" />
     </Style>
 </Styles>

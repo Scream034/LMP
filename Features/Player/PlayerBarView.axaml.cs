@@ -980,6 +980,7 @@ public partial class PlayerBarView : UserControl
         _isDraggingVolume = true;
         e.Pointer.Capture(hitBox);
         VolumeThumb.Classes.Add("dragging");
+        VolumeBar.Classes.Add("dragging");
 
         double height = VolumeSliderPanel.Height;
         if (height <= 0) return;
@@ -1022,6 +1023,7 @@ public partial class PlayerBarView : UserControl
         _isDraggingVolume = false;
         pointer.Capture(null);
         VolumeThumb.Classes.Remove("dragging");
+        VolumeBar.Classes.Remove("dragging");
     }
 
     private void CancelVolumeDrag()
@@ -1030,6 +1032,7 @@ public partial class PlayerBarView : UserControl
         {
             _isDraggingVolume = false;
             VolumeThumb.Classes.Remove("dragging");
+            VolumeBar.Classes.Remove("dragging");
         }
 
         _isVolumeTooltipActive = false;

@@ -556,6 +556,36 @@
                         </StackPanel>
                         <ToggleSwitch Grid.Column="1" IsChecked="{Binding RememberTrackFormat}" />
                     </Grid>
+
+                    <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                    <!-- ═══ ERROR NOTIFICATIONS SECTION ═══ -->
+                    <TextBlock Text="{Binding L[Audio_ErrorSection]}" 
+                        FontWeight="SemiBold" FontSize="14"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                    <!-- Error Behavior -->
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_ErrorBehavior]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_ErrorBehaviorDesc]}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding ErrorBehaviorOptions}"
+                            SelectedItem="{Binding SelectedErrorBehavior}"
+                            DisplayMemberBinding="{Binding Name}"
+                            MinWidth="240" />
+                    </Grid>
+
+                    <!-- Play Error Sound -->
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_PlayErrorSound]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_PlayErrorSoundDesc]}" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding PlayErrorSound}" />
+                    </Grid>
+
                 </StackPanel>
             </Border>
 

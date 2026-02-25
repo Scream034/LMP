@@ -36,7 +36,7 @@ public static class BatchItemExtensions
         public async ValueTask<IReadOnlyList<T>> CollectAsync(int count) =>
             await source.TakeAsync(count).ToListAsync();
 
-        /// <inheritdoc cref="BatchItemExtensions.CollectAsync{T}(System.Collections.Generic.IAsyncEnumerable{T})" />
+        /// <inheritdoc cref="CollectAsync{T}(IAsyncEnumerable{T})" />
         public ValueTaskAwaiter<IReadOnlyList<T>> GetAwaiter() =>
             source.CollectAsync().GetAwaiter();
     }

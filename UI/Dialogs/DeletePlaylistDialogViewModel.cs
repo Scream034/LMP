@@ -22,7 +22,7 @@ public class DeletePlaylistDialogViewModel : ViewModelBase
     public ReactiveCommand<Unit, DeletePlaylistResult> ConfirmCommand { get; }
     public ReactiveCommand<Unit, Unit> CancelCommand { get; }
 
-    public DeletePlaylistDialogViewModel(Core.Models.Playlist playlist, bool isAuthenticated)
+    public DeletePlaylistDialogViewModel(Playlist playlist, bool isAuthenticated)
     {
         PlaylistName = playlist.Name;
 

@@ -11,11 +11,11 @@
     UseLayoutRounding="True">
 
     <UserControl.Styles>
-        <!--  PLAYER BUTTONS                                                   -->
+        <!--  PLAYER BUTTONS  -->
         <Style Selector="Button.pb-btn">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
             <Setter Property="BorderThickness" Value="1.5" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Cursor" Value="Hand" />
@@ -39,6 +39,7 @@
             </Setter>
             <Setter Property="Transitions">
                 <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
                     <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
                     <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1"
@@ -46,27 +47,29 @@
                 </Transitions>
             </Setter>
         </Style>
+        <!-- FIX: .active ПЕРЕД :pointerover -->
+        <Style Selector="Button.pb-btn.active">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
         <Style Selector="Button.pb-btn:pointerover">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        </Style>
+        <!-- FIX: Самый специфичный селектор -->
+        <Style Selector="Button.pb-btn.active:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
         <Style Selector="Button.pb-btn:pressed">
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
             <Setter Property="RenderTransform" Value="scale(0.96)" />
         </Style>
-        <Style Selector="Button.pb-btn.active">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-        </Style>
-        <Style Selector="Button.pb-btn.active:pointerover">
-            <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
 
         <!--  MAIN PLAY BUTTON  -->
         <Style Selector="Button.pb-main">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
             <Setter Property="BorderThickness" Value="2" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Cursor" Value="Hand" />
@@ -90,9 +93,10 @@
             </Setter>
             <Setter Property="Transitions">
                 <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
                     <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
                         Easing="CubicEaseOut" />
-                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
         </Style>
@@ -106,9 +110,9 @@
 
         <!--  ICON BUTTON  -->
         <Style Selector="Button.ico-btn">
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
             <Setter Property="BorderThickness" Value="1.5" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Cursor" Value="Hand" />
@@ -132,12 +136,16 @@
             </Setter>
             <Setter Property="Transitions">
                 <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
                     <BrushTransition Property="Foreground" Duration="0:0:0.15" />
                     <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
                     <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
                         Easing="CubicEaseOut" />
                 </Transitions>
             </Setter>
+        </Style>
+        <Style Selector="Button.ico-btn.active mi|MaterialIcon">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
         <Style Selector="Button.ico-btn:pointerover">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -146,9 +154,6 @@
         <Style Selector="Button.ico-btn:pressed">
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
             <Setter Property="RenderTransform" Value="scale(0.92)" />
-        </Style>
-        <Style Selector="Button.ico-btn.active mi|MaterialIcon">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
         <Style Selector="Button.ico-btn.popup-open">
             <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -279,26 +284,26 @@
             <Setter Property="Opacity" Value="0" />
         </Style>
 
-        <!--  VOLUME SLIDER (Minimalist)                                       -->
-
+        <!--  VOLUME SLIDER (Minimalist)  -->
         <Style Selector="Ellipse.vol-thumb">
-            <Setter Property="Fill" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
             <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
             <Setter Property="Transitions">
                 <Transitions>
+                    <BrushTransition Property="Fill" Duration="0:0:0.15" />
+                    <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
                     <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
                         Easing="CubicEaseOut" />
-                    <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
-                    <BrushTransition Property="Fill" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
         </Style>
         <Style Selector="Ellipse.vol-thumb:pointerover">
-            <Setter Property="RenderTransform" Value="scale(1.15)" />
+            <Setter Property="RenderTransform" Value="scale(1.1)" />
+            <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
         </Style>
+        <!-- FIX: Убрали увеличение при dragging, только смена цвета -->
         <Style Selector="Ellipse.vol-thumb.dragging">
-            <Setter Property="RenderTransform" Value="scale(1.2)" />
-            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
         </Style>
         <Style Selector="Ellipse.vol-thumb.boosted">
             <Setter Property="Fill" Value="{DynamicResource SystemWarnOrangeBrush}" />
@@ -307,11 +312,11 @@
         <Style Selector="Border.vol-track">
             <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
             <Setter Property="CornerRadius" Value="2" />
-            <Setter Property="Opacity" Value="0.6" />
+            <Setter Property="Opacity" Value="0.4" />
         </Style>
 
         <Style Selector="Border.vol-fill">
-            <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
             <Setter Property="CornerRadius" Value="2" />
             <Setter Property="Transitions">
                 <Transitions>
@@ -319,6 +324,10 @@
                     <BrushTransition Property="Background" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
+        </Style>
+        <!-- FIX: При dragging слайдер становится ярче -->
+        <Style Selector="Border.vol-fill.dragging">
+            <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
         </Style>
         <Style Selector="Border.vol-fill.boosted">
             <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
@@ -373,9 +382,10 @@
                             CornerRadius="2">
                             <Border.Background>
                                 <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                                    <GradientStop Offset="0" Color="Transparent" />
+                                    <GradientStop Offset="0" Color="{DynamicResource AccentHover}" />
                                     <GradientStop Offset="0.5" Color="{DynamicResource Accent}" />
-                                    <GradientStop Offset="1" Color="Transparent" />
+                                    <GradientStop Offset="1"
+                                        Color="{DynamicResource AccentHoverTransparent}" />
                                 </LinearGradientBrush>
                             </Border.Background>
                         </Border>
@@ -498,10 +508,9 @@
                     Orientation="Horizontal"
                     Spacing="2">
 
-                    <!--  Shuffle  -->
+                    <!-- Shuffle -->
                     <Button
-                        Width="40"
-                        Height="40"
+                        Width="40" Height="40"
                         Classes="pb-btn"
                         Classes.active="{Binding ShuffleEnabled}"
                         Command="{Binding ShuffleQueueCommand}"
@@ -693,7 +702,7 @@
                                         Classes="vol-fill"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
 
-                                    <!--  Thumb  -->
+                                    <!--  Thumb — центрирован через HorizontalAlignment  -->
                                     <Ellipse
                                         Name="VolumeThumb"
                                         Width="12"

@@ -39,7 +39,7 @@ public static class AudioSourceFactory
     /// Строит уникальный ключ кэша: trackId + формат + нормализованный битрейт.
     /// </summary>
     /// <remarks>
-    /// Использует <see cref="AudioConstants.NormalizeBitrate"/> — единственный источник истины
+    /// Использует <see cref="NormalizeBitrate"/> — единственный источник истины
     /// для нормализации битрейта во всём приложении.
     /// </remarks>
     public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)

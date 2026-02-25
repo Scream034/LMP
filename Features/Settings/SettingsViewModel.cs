@@ -15,7 +15,7 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Features.Settings;
 
-public class LocalizedItem<T>(T value, string name)
+public sealed class LocalizedItem<T>(T value, string name)
 {
     public T Value { get; } = value;
     public string Name { get; } = name;
@@ -131,13 +131,18 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public AudioQualityPreference QualityPreference { get; set; }
     [Reactive] public bool RememberTrackFormat { get; set; }
 
-    // Новые настройки аудио
+    // Настройки аудио
     [Reactive] public bool VolumeBoostEnabled { get; set; }
     [Reactive] public bool SmoothVolumeEnabled { get; set; }
     [Reactive] public bool AudioNormalizationEnabled { get; set; }
 
     public List<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
     [Reactive] public LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
+
+    // ── Error notification settings ──
+    public List<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
+    [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
+    [Reactive] public bool PlayErrorSound { get; set; }
 
     #endregion
 
@@ -250,11 +255,116 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void InitializeLists()
     {
+        RefreshThemePresets();
+        RefreshLocalizedLists();
+    }
+
+    /// <summary>
+    /// Перестраивает список пресетов: built-in + кастомный (если есть на диске).
+    /// Кастомная тема добавляется в конец списка, если не совпадает ни с одним built-in.
+    /// </summary>
+    private void RefreshThemePresets()
+    {
+        var currentSelection = SelectedPreset;
         ThemePresets.Clear();
+
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);
 
-        RefreshLocalizedLists();
+        // Если на диске сохранена кастомная тема — добавляем в список
+        var saved = _themeManager.GetCurrentTheme();
+        var isBuiltIn = ThemePresets.Any(p =>
+            string.Equals(p.AccentColor, saved.AccentColor, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.BgPrimary, saved.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.BgSecondary, saved.BgSecondary, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.AccentHover, saved.AccentHover, StringComparison.OrdinalIgnoreCase));
+
+        if (!isBuiltIn && !saved.IsBuiltIn)
+        {
+            ThemePresets.Add(saved);
+        }
+    }
+
+    private void LoadThemeColors()
+    {
+        _isLoadingTheme = true;
+        try
+        {
+            var currentTheme = _themeManager.GetCurrentTheme();
+            ApplyThemeToColorPickers(currentTheme);
+
+            // Ищем точное совпадение среди пресетов по цветам
+            var matchingPreset = ThemePresets.FirstOrDefault(p =>
+                string.Equals(p.AccentColor, currentTheme.AccentColor, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(p.BgPrimary, currentTheme.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(p.BgSecondary, currentTheme.BgSecondary, StringComparison.OrdinalIgnoreCase));
+
+            // Если не нашли по цветам — ищем по имени (кастомная тема)
+            if (matchingPreset == null)
+            {
+                matchingPreset = ThemePresets.FirstOrDefault(p =>
+                    string.Equals(p.Name, currentTheme.Name, StringComparison.OrdinalIgnoreCase));
+            }
+
+            SelectedPreset = matchingPreset ?? ThemePresets.FirstOrDefault();
+            HasUnsavedThemeChanges = false;
+        }
+        finally
+        {
+            _isLoadingTheme = false;
+        }
+    }
+
+    private void ApplyTheme()
+    {
+        static string GetRgbHex(Color c) => $"{c.R:X2}{c.G:X2}{c.B:X2}";
+
+        var theme = new ThemeSettings
+        {
+            Name = SelectedPreset?.Name ?? SL["Theme_Custom"],
+            AccentColor = AccentColor.ToString(),
+            AccentHover = SmartAccentHover(AccentColor).ToString(),
+            BgPrimary = BgPrimaryColor.ToString(),
+            BgSecondary = BgSecondaryColor.ToString(),
+            BgElevated = BgElevatedColor.ToString(),
+            BgHighlight = LightenColor(BgSecondaryColor, 0.1).ToString(),
+            BgHover = LightenColor(BgSecondaryColor, 0.2).ToString(),
+            BgSkeleton = LightenColor(BgSecondaryColor, 0.05).ToString(),
+            BgSkeletonDeep = DarkenColor(BgSecondaryColor, 0.2).ToString(),
+            BgOverlay = $"#CC{GetRgbHex(BgPrimaryColor)}",
+            TextPrimary = TextPrimaryColor.ToString(),
+            TextSecondary = TextSecondaryColor.ToString(),
+            TextMuted = DarkenColor(TextSecondaryColor, 0.3).ToString(),
+            TextDark = BgPrimaryColor.ToString()
+        };
+
+        _themeManager.SaveTheme(theme);
+        _themeManager.ApplyTheme(theme);
+        HasUnsavedThemeChanges = false;
+
+        // Обновляем список пресетов чтобы кастомная тема была видна
+        RefreshThemePresets();
+
+        // Находим только что сохранённую тему в обновлённом списке
+        _isLoadingTheme = true;
+        SelectedPreset = ThemePresets.FirstOrDefault(p =>
+            string.Equals(p.Name, theme.Name, StringComparison.OrdinalIgnoreCase))
+            ?? ThemePresets.FirstOrDefault();
+        _isLoadingTheme = false;
+    }
+
+    /// <summary>
+    /// Умный расчёт AccentHover: светлые цвета затемняем, тёмные — осветляем.
+    /// Решает проблему AMOLED (белый акцент) где LightenColor не даёт видимого эффекта.
+    /// </summary>
+    private static Color SmartAccentHover(Color accent)
+    {
+        // Perceived brightness по формуле ITU-R BT.601
+        var brightness = (0.299 * accent.R + 0.587 * accent.G + 0.114 * accent.B) / 255.0;
+
+        return brightness > 0.7
+            ? DarkenColor(accent, 0.15)    // Светлый акцент → затемняем при hover
+            : LightenColor(accent, 0.15);  // Тёмный акцент → осветляем при hover
     }
 
     private void RefreshLocalizedLists()
@@ -293,6 +403,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         VolumeCurveOptions.Add(new(VolumeCurveType.SpeedOfLight, SL["VolumeCurve_SpeedOfLight"]));
         SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == currentCurve)
                               ?? VolumeCurveOptions[1];
+
+        // Error behavior options
+        var currentErrorBehavior = SelectedErrorBehavior?.Value ?? _library.Settings.Audio.CriticalErrorBehavior;
+        ErrorBehaviorOptions.Clear();
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Dialog, SL["Settings_ErrorBehavior_Dialog"]));
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.ToastAndSkip, SL["Settings_ErrorBehavior_ToastAndSkip"]));
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Ignore, SL["Settings_ErrorBehavior_Ignore"]));
+        SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == currentErrorBehavior)
+                                ?? ErrorBehaviorOptions[0];
     }
 
     private void SetupSubscriptions()
@@ -460,6 +579,25 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
+        // ── Error notification settings ──
+        this.WhenAnyValue(x => x.SelectedErrorBehavior)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(b =>
+            {
+                _library.UpdateSettings(s => s.Audio.CriticalErrorBehavior = b.Value);
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.PlayErrorSound)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Audio.PlayErrorSound = v);
+            })
+            .DisposeWith(Disposables);
+
         // UI settings
         this.WhenAnyValue(x => x.DiscordRpcEnabled)
             .Skip(1)
@@ -536,6 +674,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
                                   ?? VolumeCurveOptions[1];
 
+            // Error notification settings
+            PlayErrorSound = s.Audio.PlayErrorSound;
+            SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
+                                    ?? ErrorBehaviorOptions[0];
+
             FakeChannelInput = _library.FakeAccountUrl ?? "";
             IsAuthenticated = _auth.IsAuthenticated;
             RaiseAccountProperties();
@@ -580,29 +723,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void LoadThemeColors()
-    {
-        _isLoadingTheme = true;
-        try
-        {
-            var currentTheme = _themeManager.GetCurrentTheme();
-            ApplyThemeToColorPickers(currentTheme);
-
-            // Находим соответствующий пресет
-            var matchingPreset = ThemePresets.FirstOrDefault(p =>
-                p.AccentColor == currentTheme.AccentColor &&
-                p.BgPrimary == currentTheme.BgPrimary);
-
-            SelectedPreset = matchingPreset ?? ThemePresets.FirstOrDefault();
-
-            HasUnsavedThemeChanges = false;
-        }
-        finally
-        {
-            _isLoadingTheme = false;
-        }
-    }
-
     private void ApplyPresetToColorPickers(ThemeSettings preset)
     {
         ApplyThemeToColorPickers(preset);
@@ -625,34 +745,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         {
             _isLoadingTheme = false;
         }
-    }
-
-    private void ApplyTheme()
-    {
-        static string GetRgbHex(Color c) => $"{c.R:X2}{c.G:X2}{c.B:X2}";
-
-        var theme = new ThemeSettings
-        {
-            Name = SelectedPreset?.Name ?? SL["Theme_Custom"],
-            AccentColor = AccentColor.ToString(),
-            AccentHover = LightenColor(AccentColor, 0.15).ToString(),
-            BgPrimary = BgPrimaryColor.ToString(),
-            BgSecondary = BgSecondaryColor.ToString(),
-            BgElevated = BgElevatedColor.ToString(),
-            BgHighlight = LightenColor(BgSecondaryColor, 0.1).ToString(),
-            BgHover = LightenColor(BgSecondaryColor, 0.2).ToString(),
-            BgSkeleton = LightenColor(BgSecondaryColor, 0.05).ToString(),
-            BgSkeletonDeep = DarkenColor(BgSecondaryColor, 0.2).ToString(),
-            BgOverlay = $"#CC{GetRgbHex(BgPrimaryColor)}",
-            TextPrimary = TextPrimaryColor.ToString(),
-            TextSecondary = TextSecondaryColor.ToString(),
-            TextMuted = DarkenColor(TextSecondaryColor, 0.3).ToString(),
-            TextDark = BgPrimaryColor.ToString()
-        };
-
-        _themeManager.SaveTheme(theme);
-        _themeManager.ApplyTheme(theme);
-        HasUnsavedThemeChanges = false;
     }
 
     private void ResetTheme()
@@ -732,7 +824,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     {
         var (memItems, _, imgCount, imgSizeMb) = _imageCache.GetStats();
 
-        // Используем AudioCacheManager вместо StreamCacheManager
         var cache = AudioSourceFactory.GlobalCache;
         var (audioFileCount, audioSizeMb) = cache?.GetStatsCompact() ?? (0, 0);
         var (downloadFileCount, downloadSizeMb) = AudioCacheManager.GetDownloadsStats();

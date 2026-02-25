@@ -73,6 +73,26 @@ internal static partial class JsFunctionExtractor
             }
 
             var dictName = DetectDictArrayName(entryDef);
+
+            // ═══ Thin wrapper fallback ═══
+            // If entry is a thin wrapper (e.g. Sxt → Ox.call), dict appears in the
+            // referenced function, not in the wrapper itself.
+            if (dictName is null && entryDef.Length < 300)
+            {
+                foreach (var depName in FindReferencedNames(entryDef))
+                {
+                    if (SkipNames.Contains(depName)) continue;
+                    var depDef = FindAnyDefinition(fullJs, depName);
+                    if (depDef is null || depDef.Length < 200) continue;
+                    dictName = DetectDictArrayName(depDef);
+                    if (dictName is not null)
+                    {
+                        Log.Debug($"[JsExtractor] Dict array '{dictName}' found via dependency '{depName}'");
+                        break;
+                    }
+                }
+            }
+
             string? dictArrayCode = null;
 
             if (dictName is not null)
@@ -96,45 +116,6 @@ internal static partial class JsFunctionExtractor
             int iterations = 0;
             const int maxIterations = 200;
 
-            while (queue.Count > 0 && iterations++ < maxIterations)
-            {
-                var currentName = queue.Dequeue();
-                if (!visited.Add(currentName)) continue;
-
-                var def = FindAnyDefinition(fullJs, currentName);
-
-                if (def is null)
-                {
-                    notFound.Add(currentName);
-                    continue;
-                }
-
-                // Trim trailing ; , whitespace via span, then materialize once
-                var cleanSpan = def.AsSpan().TrimEnd([';', ',', ' ', '\n', '\r']);
-                definitions[currentName] = ConcatSpans(
-                    "var ".AsSpan(),
-                    currentName.AsSpan(),
-                    "=".AsSpan(),
-                    cleanSpan,
-                    ";".AsSpan());
-            }
-
-            // Redo the above properly — string.Concat only has overloads up to 3 ReadOnlySpan<char>.
-            // Let's fix by using the 3-arg overload plus a small helper:
-            // Actually the simplest correct approach: interpolated string with .ToString()
-            // But that allocates the span. Let's just use StringBuilder append for this one spot.
-            // 
-            // CORRECTION: The loop above needs to be fixed. Let me redo it inline:
-
-            // RE-COLLECT definitions with correct string building:
-            definitions.Clear();
-            visited = new HashSet<string>(SkipNames);
-            if (dictName is not null) visited.Add(dictName);
-            queue.Clear();
-            queue.Enqueue(entryFuncName);
-            iterations = 0;
-
-            // Reusable StringBuilder for definition building (avoids per-iteration alloc)
             var defBuilder = new StringBuilder(512);
 
             while (queue.Count > 0 && iterations++ < maxIterations)
@@ -169,7 +150,7 @@ internal static partial class JsFunctionExtractor
 
             if (definitions.Count < 3)
             {
-                Log.Warn($"[JsExtractor] Too few definitions ({definitions.Count}), but building bundle for debug...");
+                Log.Warn($"[JsExtractor] Too few definitions ({definitions.Count})");
             }
 
             var guardVars = FindTypeofGuardVars(entryDef, definitions, dictName);
@@ -179,10 +160,16 @@ internal static partial class JsFunctionExtractor
                     guardVars.Add(guardVar);
             }
 
-            if (guardVars.Count > 0)
-                Log.Debug($"[JsExtractor] Guard vars (typeof === 'undefined'): {string.Join(", ", guardVars)}");
+            // ═══ Add short notFound names as guard vars for safety ═══
+            foreach (var name in notFound)
+            {
+                if (name.Length <= 4 && !guardVars.Contains(name))
+                    guardVars.Add(name);
+            }
 
-            // Build the final bundle with pre-calculated capacity
+            if (guardVars.Count > 0)
+                Log.Debug($"[JsExtractor] Guard vars: {string.Join(", ", guardVars)}");
+
             var totalSize = (dictArrayCode?.Length ?? 0)
                           + definitions.Values.Sum(static d => d.Length)
                           + guardVars.Count * 16
@@ -864,7 +851,6 @@ internal static partial class JsFunctionExtractor
     {
         var fullSpan = fullJs.AsSpan();
 
-        // Build targets outside loop to avoid stackalloc-in-loop warning
         var targetSingle = string.Concat(name, "='");
         var targetDouble = string.Concat(name, "=\"");
         ReadOnlySpan<string> targets = [targetSingle, targetDouble];
@@ -908,16 +894,39 @@ internal static partial class JsFunctionExtractor
                 if (stringLen < 100) continue;
 
                 var stringContent = fullSpan.Slice(quoteStart + 1, quoteEnd - quoteStart - 2);
-                int semicolonCount = 0;
-                foreach (char c in stringContent)
+
+                // ═══ Extract separator from .split("X") and count elements ═══
+                int sepAreaStart = splitParenStart + 1;
+                int sepPos = SkipHorizontalWhitespace(fullSpan, sepAreaStart);
+                if (sepPos >= fullSpan.Length || fullSpan[sepPos] is not ('"' or '\'')) continue;
+
+                char sepQuote = fullSpan[sepPos];
+                int sepContentStart = sepPos + 1;
+                int sepContentEnd = -1;
+                for (int si = sepContentStart; si < fullSpan.Length; si++)
                 {
-                    if (c == ';') semicolonCount++;
+                    if (fullSpan[si] == '\\' && si + 1 < fullSpan.Length) { si++; continue; }
+                    if (fullSpan[si] == sepQuote) { sepContentEnd = si; break; }
                 }
-                if (semicolonCount + 1 < 50) continue;
+                if (sepContentEnd < 0 || sepContentEnd == sepContentStart ||
+                    sepContentEnd - sepContentStart > 10) continue;
+
+                var separator = fullSpan[sepContentStart..sepContentEnd];
+
+                int separatorCount = 0;
+                int sPos = 0;
+                while (sPos <= stringContent.Length - separator.Length)
+                {
+                    int found = stringContent[sPos..].IndexOf(separator, StringComparison.Ordinal);
+                    if (found < 0) break;
+                    separatorCount++;
+                    sPos += found + separator.Length;
+                }
+                if (separatorCount + 1 < 50) continue;
+                // ═══ END ═══
 
                 var definitionSpan = fullSpan[(idx + name.Length + 1)..end];
 
-                // Fix trailing comma
                 if (definitionSpan.Length > 0 && definitionSpan[^1] == ',')
                 {
                     var trimmed = definitionSpan[..^1];

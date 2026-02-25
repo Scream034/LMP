@@ -1,34 +1,46 @@
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "🎵 Launch LMP (Debug)",
-            "type": "coreclr",
-            "request": "launch",
-            "preLaunchTask": "build",
-            "program": "${workspaceFolder}/bin/Debug/net10.0/LMP.dll",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "stopAtEntry": false,
-            "console": "internalConsole",
-            
-            // КЛЮЧЕВЫЕ НАСТРОЙКИ ДЛЯ ОТЛАДКИ ИСКЛЮЧЕНИЙ
-            "justMyCode": false,
-            "enableStepFiltering": false,
-            "suppressJITOptimizations": true,
-            
-            "logging": {
-                "moduleLoad": false,
-                "exceptions": true,
-                "programOutput": true
-            },
-            
-            "env": {
-                "ASPNETCORE_ENVIRONMENT": "Development",
-                "DOTNET_MODERN_CONTROLS": "1",
-                // Отключает оптимизации для лучшей отладки
-                "COMPlus_JITMinOpts": "1"
-            }
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "🎵 Debug (quiet)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build: debug",
+      "program": "${workspaceFolder}/bin/Debug/net10.0/LMP.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+
+      "justMyCode": true,
+      "suppressJITOptimizations": true,
+
+      "logging": {
+        "moduleLoad": false,
+        "exceptions": false,
+        "programOutput": true
+      },
+
+      "symbolOptions": {
+        "searchMicrosoftSymbolServer": false,
+        "searchNuGetOrgSymbolServer": false,
+        "searchPaths": [
+          "${workspaceFolder}/bin/Debug/net10.0"
+        ]
+      }
+    },
+
+    {
+      "name": "🎵 Watch (Hot Reload) + Attach",
+      "type": "coreclr",
+      "request": "attach",
+      "preLaunchTask": "watch",
+      "processId": "${command:pickProcess}",
+
+      "justMyCode": true,
+      "logging": {
+        "moduleLoad": false,
+        "exceptions": false
+      }
+    }
+  ]
 }

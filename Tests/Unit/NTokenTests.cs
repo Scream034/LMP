@@ -70,7 +70,7 @@ public static class NTokenTests
     
     public static async Task TestLiveDecryptionAsync(IServiceProvider services)
     {
-        var decryptor = services.GetRequiredService<INTokenDecryptor>();
+        var decryptor = services.GetRequiredService<NTokenDecryptor>();
         
         var sw = Stopwatch.StartNew();
         var result = await decryptor.DecryptAsync(TestToken);
@@ -85,7 +85,7 @@ public static class NTokenTests
     
     public static async Task TestCacheHitAsync(IServiceProvider services)
     {
-        var decryptor = services.GetRequiredService<INTokenDecryptor>();
+        var decryptor = services.GetRequiredService<NTokenDecryptor>();
         
         // Первый вызов (может быть cache miss)
         var first = await decryptor.DecryptAsync(TestToken);
@@ -103,7 +103,7 @@ public static class NTokenTests
     
     public static async Task BenchmarkAsync(IServiceProvider services)
     {
-        var decryptor = services.GetRequiredService<INTokenDecryptor>();
+        var decryptor = services.GetRequiredService<NTokenDecryptor>();
         
         // Warm up
         await decryptor.DecryptAsync(TestToken);

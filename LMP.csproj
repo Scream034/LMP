@@ -1,66 +1,131 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ====================== ВЕРСИИ ПАКЕТОВ ====================== -->
+  <PropertyGroup>
+    <!-- Основная версия Avalonia (меняй здесь одну строку при обновлении) -->
+    <AvaloniaVersion>11.3.12</AvaloniaVersion>
+    
+    <!-- Другие версии -->
+    <HotAvaloniaVersion>3.1.0</HotAvaloniaVersion>
+    <EfCoreVersion>10.0.2</EfCoreVersion>
+    <ReactiveUIVersion>19.5.41</ReactiveUIVersion>
+    <CommunityToolkitMvvmVersion>8.2.1</CommunityToolkitMvvmVersion>
+  </PropertyGroup>
+
+  <!-- ====================== ОСНОВНЫЕ НАСТРОЙКИ ====================== -->
   <PropertyGroup>
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
+    
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    
+    <RootNamespace>LMP</RootNamespace>
+    <AssemblyName>LMP</AssemblyName>
+    
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/app.ico</ApplicationIcon>
+    
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-
-    <!-- Workstation GC - меньше памяти, быстрее отдаёт ОС -->
-    <ServerGarbageCollection>false</ServerGarbageCollection>
-
-    <!-- Concurrent GC - UI не фризит во время сборки -->
-    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
-
-    <!-- НЕ удерживать VM сегменты (отдавать память ОС) -->
-    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
-
-    <!-- Компактификация LOH (борьба с фрагментацией) -->
-    <GCLargeObjectHeapCompactionMode>CompactOnce</GCLargeObjectHeapCompactionMode>
-
-    <!-- Tiered compilation для быстрого старта -->
-    <TieredCompilation>true</TieredCompilation>
-    <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
-
+    
     <NoWarn>$(NoWarn);CS0436</NoWarn>
+    
+    <!-- Версионирование через Git (из твоих Directory.Build.*) -->
+    <VersionPrefix>1.0</VersionPrefix>
   </PropertyGroup>
 
+  <!-- ====================== ОПТИМИЗАЦИЯ ПАМЯТИ ====================== -->
+  <PropertyGroup>
+    <!-- Workstation GC — лучший выбор для десктопных UI приложений (меньше памяти) -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    
+    <!-- Background (Concurrent) GC — UI не фризит -->
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    
+    <!-- Отдавать память ОС сразу после сборки мусора -->
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
+    
+    <!-- Компактификация Large Object Heap (борьба с фрагментацией от кэшей изображений/аудио) -->
+    <GCLargeObjectHeapCompactionMode>CompactOnce</GCLargeObjectHeapCompactionMode>
+    
+    <!-- Tiered Compilation + PGO (Profile Guided Optimization) — быстрее старт + лучше производительность -->
+    <TieredCompilation>true</TieredCompilation>
+    <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <!-- ====================== DEBUG НАСТРОЙКИ ====================== -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DebugType>embedded</DebugType>
+    <EmbedAllSources>true</EmbedAllSources>
+    <Optimize>false</Optimize>
+    
+    <!-- Hot Reload -->
+    <EnableHotReload>true</EnableHotReload>
+    <HotReloadEnabled>true</HotReloadEnabled>
+    
+    <!-- HotAvalonia -->
+    <HotAvalonia>true</HotAvalonia>
+    <HotAvaloniaMode>Balanced</HotAvaloniaMode> <!-- Minimal | Balanced | Aggressive -->
+  </PropertyGroup>
+
+  <!-- ====================== RELEASE НАСТРОЙКИ ====================== -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <PublishTrimmed>false</PublishTrimmed> <!-- Можно включить partial при необходимости -->
+  </PropertyGroup>
+
+  <!-- ====================== ФАЙЛЫ ====================== -->
   <ItemGroup>
     <Compile Remove="External\**" />
     <EmbeddedResource Remove="External\**" />
     <None Remove="External\**" />
-
+    
     <Folder Include="Models\" />
     <AvaloniaResource Include="Assets\**" />
+    <Content Include="Assets/app.ico" />
+  </ItemGroup>
 
-    <PackageReference Include="AsyncImageLoader.Avalonia" Version="3.5.0" />
-    <PackageReference Include="Avalonia" Version="11.3.11" />
+  <!-- ====================== ПАКЕТЫ ====================== -->
+  <ItemGroup>
+    <!-- Avalonia -->
+    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.9" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
+
+    <!-- Hot Reload для XAML -->
+    <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" PrivateAssets="All" />
+
+    <!-- Дополнительные Avalonia пакеты -->
     <PackageReference Include="Avalonia.Controls.ItemsRepeater" Version="11.1.5" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
-    <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.8" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.11" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.11">
-      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
-      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
-    </PackageReference>
     <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.3.0.6" />
-    <PackageReference Include="Concentus" Version="2.2.2" />
-    <PackageReference Include="Jint" Version="4.6.0" />
-    <PackageReference Include="Material.Icons.Avalonia" Version="2.4.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.2" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2">
+
+    <!-- Entity Framework -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="$(EfCoreVersion)">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="ReactiveUI.Fody" Version="19.5.41" />
 
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.1" />
+    <!-- MVVM + Reactive -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+    <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIVersion)" />
+
+    <!-- Остальные пакеты -->
+    <PackageReference Include="AsyncImageLoader.Avalonia" Version="3.5.0" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="Jint" Version="4.6.0" />
+    <PackageReference Include="Material.Icons.Avalonia" Version="2.4.1" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
   </ItemGroup>
+
 </Project>

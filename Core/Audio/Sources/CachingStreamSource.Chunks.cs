@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
+using LMP.Core.Exceptions;
+using LMP.Core.Youtube.Utils;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio.Sources;
@@ -61,6 +63,9 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Читает данные из указанной позиции, загружая чанки по необходимости.
     /// </summary>
+    /// <exception cref="ChunkDownloadFatalException">
+    /// Выбрасывается когда загрузка чанка невозможна (403 circuit breaker, UMP format и т.д.).
+    /// </exception>
     internal async Task<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
     {
         // ── Настоящий EOF ──
@@ -93,6 +98,7 @@ public sealed partial class CachingStreamSource
                 using var linkedCts = CancellationTokenSource
                     .CreateLinkedTokenSource(ct, downloadToken);
 
+                // EnsureChunkAsync теперь выбрасывает ChunkDownloadFatalException
                 await EnsureChunkAsync(chunkIndex, linkedCts.Token);
 
                 if (_ramChunks.TryGetValue(chunkIndex, out ramData))
@@ -104,6 +110,11 @@ public sealed partial class CachingStreamSource
                     _ramChunks.TryAdd(chunkIndex, diskData);
                     return CopyFromChunk(diskData, offsetInChunk, buffer);
                 }
+            }
+            catch (ChunkDownloadFatalException)
+            {
+                // Пробрасываем фатальные ошибки — декодер должен узнать
+                throw;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -138,6 +149,9 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Гарантирует доступность чанка (загружает если нужно, ждёт если уже качается).
     /// </summary>
+    /// <exception cref="ChunkDownloadFatalException">
+    /// Выбрасывается когда circuit breaker открыт или загрузка невозможна.
+    /// </exception>
     private async Task EnsureChunkAsync(int index, CancellationToken ct)
     {
         if (_cacheEntry == null || IsChunkAvailable(index))
@@ -147,11 +161,30 @@ public sealed partial class CachingStreamSource
         {
             try { await existingTask.WaitAsync(ct); }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+            catch (ChunkDownloadFatalException) { throw; }
 
             if (IsChunkAvailable(index)) return;
         }
 
         ct.ThrowIfCancellationRequested();
+
+        // ══════════════════════════════════════════════════════════════
+        // CIRCUIT BREAKER CHECK — перед началом любых попыток
+        // ══════════════════════════════════════════════════════════════
+        int currentFailures = Volatile.Read(ref _consecutive403Count);
+        if (currentFailures >= Max403BeforeGiveUp)
+        {
+            Log.Error($"[CachingSource] Chunk {index}: circuit breaker OPEN " +
+                      $"({currentFailures} consecutive 403s), throwing fatal exception");
+
+            throw new ChunkDownloadFatalException(
+                $"Stream unavailable: {currentFailures} consecutive HTTP 403 responses",
+                chunkIndex: index,
+                consecutiveFailures: currentFailures,
+                reason: ChunkDownloadFailureReason.Forbidden403,
+                trackId: _trackId,
+                httpStatusCode: 403);
+        }
 
         // Retry loop для 403 → refresh → retry
         for (int attempt = 0; attempt < Max403BeforeGiveUp; attempt++)
@@ -161,6 +194,7 @@ public sealed partial class CachingStreamSource
             if (_activeDownloads.TryAdd(index, downloadTask))
             {
                 try { await downloadTask; }
+                catch (ChunkDownloadFatalException) { throw; }
                 finally { _activeDownloads.TryRemove(index, out _); }
             }
             else
@@ -169,6 +203,7 @@ public sealed partial class CachingStreamSource
                 {
                     try { await concurrentTask.WaitAsync(ct); }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                    catch (ChunkDownloadFatalException) { throw; }
                 }
             }
 
@@ -176,18 +211,34 @@ public sealed partial class CachingStreamSource
             if (IsChunkAvailable(index))
                 return;
 
-            // Чанк не скачан (403?) — ждём перед retry
+            // Чанк не скачан — проверяем circuit breaker
             ct.ThrowIfCancellationRequested();
 
-            // Circuit breaker проверка
-            if (Volatile.Read(ref _consecutive403Count) >= Max403BeforeGiveUp)
+            currentFailures = Volatile.Read(ref _consecutive403Count);
+            if (currentFailures >= Max403BeforeGiveUp)
             {
-                Log.Warn($"[CachingSource] Chunk {index}: circuit breaker open, stopping retries");
-                return;
+                Log.Error($"[CachingSource] Chunk {index}: circuit breaker triggered " +
+                          $"after attempt {attempt + 1}");
+
+                throw new ChunkDownloadFatalException(
+                    $"Stream unavailable: circuit breaker open after {currentFailures} failures",
+                    chunkIndex: index,
+                    consecutiveFailures: currentFailures,
+                    reason: ChunkDownloadFailureReason.Forbidden403,
+                    trackId: _trackId,
+                    httpStatusCode: 403);
             }
 
             await Task.Delay(PostRefreshRetryDelayMs * (attempt + 1), ct);
         }
+
+        // Все попытки исчерпаны
+        throw new ChunkDownloadFatalException(
+            $"Failed to download chunk {index} after {Max403BeforeGiveUp} attempts",
+            chunkIndex: index,
+            consecutiveFailures: Volatile.Read(ref _consecutive403Count),
+            reason: ChunkDownloadFailureReason.MaxRetriesExceeded,
+            trackId: _trackId);
     }
 
     #endregion
@@ -197,6 +248,9 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Скачивает один чанк по HTTP Range request.
     /// </summary>
+    /// <exception cref="ChunkDownloadFatalException">
+    /// Выбрасывается при UMP формате или превышении лимита 403.
+    /// </exception>
     private async Task DownloadChunkCoreAsync(int index, CancellationToken ct)
     {
         if (_cacheEntry == null || _cacheEntry.IsChunkDownloaded(index))
@@ -230,17 +284,24 @@ public sealed partial class CachingStreamSource
 
             ct.ThrowIfCancellationRequested();
 
-            // ═══════════════════════════════════════════════════
+            // ═══════════════════════════════════════════════════════════
             // 403 HANDLING — координированный refresh с cooldown
-            // ═══════════════════════════════════════════════════
+            // ═══════════════════════════════════════════════════════════
             if (response.StatusCode == HttpStatusCode.Forbidden)
             {
                 int count = Interlocked.Increment(ref _consecutive403Count);
 
                 if (count > Max403BeforeGiveUp)
                 {
-                    Log.Error($"[CachingSource] Chunk {index}: {count} consecutive 403s, giving up");
-                    return;
+                    Log.Error($"[CachingSource] Chunk {index}: {count} consecutive 403s — FATAL");
+
+                    throw new ChunkDownloadFatalException(
+                        $"HTTP 403 Forbidden: exceeded {Max403BeforeGiveUp} consecutive failures",
+                        chunkIndex: index,
+                        consecutiveFailures: count,
+                        reason: ChunkDownloadFailureReason.Forbidden403,
+                        trackId: _trackId,
+                        httpStatusCode: 403);
                 }
 
                 Log.Warn($"[CachingSource] 403 for chunk {index} (attempt {count}, rn={rn})");
@@ -255,10 +316,20 @@ public sealed partial class CachingStreamSource
             // Успешный ответ — сбрасываем счётчик 403
             Interlocked.Exchange(ref _consecutive403Count, 0);
 
+            // ═══════════════════════════════════════════════════════════
+            // UMP FORMAT DETECTION — фатальная ошибка
+            // ═══════════════════════════════════════════════════════════
             if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
             {
-                Log.Error($"[CachingSource] Chunk {index} received UMP format");
-                return;
+                Log.Error($"[CachingSource] Chunk {index}: received UMP (encrypted) format — FATAL");
+
+                throw new ChunkDownloadFatalException(
+                    "YouTube returned encrypted UMP format instead of raw audio. " +
+                    "This stream requires different client configuration.",
+                    chunkIndex: index,
+                    consecutiveFailures: 0,
+                    reason: ChunkDownloadFailureReason.UmpFormat,
+                    trackId: _trackId);
             }
 
             response.EnsureSuccessStatusCode();
@@ -284,9 +355,29 @@ public sealed partial class CachingStreamSource
             if (_ramChunks.Count > MaxRamChunks)
                 EvictDistantRamChunks();
         }
-        catch (OperationCanceledException) { }
-        catch (HttpRequestException) when (ct.IsCancellationRequested) { }
-        catch (IOException) when (ct.IsCancellationRequested) { }
+        catch (ChunkDownloadFatalException)
+        {
+            // Пробрасываем фатальные ошибки
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Отмена — не фатальная ошибка
+        }
+        catch (HttpRequestException) when (ct.IsCancellationRequested)
+        {
+            // Отмена во время HTTP — не фатальная ошибка
+        }
+        catch (IOException) when (ct.IsCancellationRequested)
+        {
+            // Отмена во время IO — не фатальная ошибка
+        }
+        catch (HttpRequestException ex)
+        {
+            // Сетевая ошибка — логируем, но не фатальная (retry в EnsureChunkAsync)
+            if (!ct.IsCancellationRequested)
+                Log.Warn($"[CachingSource] Chunk {index} network error: {ex.Message}");
+        }
         catch (Exception ex)
         {
             if (!ct.IsCancellationRequested)
@@ -360,7 +451,7 @@ public sealed partial class CachingStreamSource
 
         if (isYouTube)
         {
-            // Добавляем rn к YouTube URL
+            // Используем оптимизированные хелперы из UrlEx
             string url = AppendYouTubeParams(_currentUrl, rn);
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new RangeHeaderValue(start, end);
@@ -374,40 +465,17 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Добавляет YouTube-specific параметры к URL потока.
+    /// Использует оптимизированные хелперы <see cref="UrlEx"/>.
     /// </summary>
     private static string AppendYouTubeParams(string baseUrl, int rn)
     {
-        string url = RemoveQueryParam(baseUrl, "rn");
-        url = RemoveQueryParam(url, "rbuf");
+        // Удаляем старые параметры через UrlEx (zero-alloc enumeration)
+        string url = UrlEx.RemoveQueryParameter(baseUrl, "rn");
+        url = UrlEx.RemoveQueryParameter(url, "rbuf");
 
-        char separator = url.Contains('?') ? '&' : '?';
-        return $"{url}{separator}rn={rn}&rbuf=0";
-    }
-
-    /// <summary>
-    /// Удаляет query параметр из URL.
-    /// </summary>
-    private static string RemoveQueryParam(string url, string paramName)
-    {
-        string searchAmpersand = $"&{paramName}=";
-        int paramStart = url.IndexOf(searchAmpersand, StringComparison.Ordinal);
-        if (paramStart >= 0)
-        {
-            int valueEnd = url.IndexOf('&', paramStart + 1);
-            return valueEnd < 0
-                ? url[..paramStart]
-                : url[..paramStart] + url[valueEnd..];
-        }
-
-        string searchQuestion = $"?{paramName}=";
-        paramStart = url.IndexOf(searchQuestion, StringComparison.Ordinal);
-        if (paramStart >= 0)
-        {
-            int valueEnd = url.IndexOf('&', paramStart + 1);
-            return valueEnd < 0
-                ? url[..paramStart]
-                : url[..paramStart] + "?" + url[(valueEnd + 1)..];
-        }
+        // Добавляем новые параметры
+        url = UrlEx.SetQueryParameter(url, "rn", rn.ToString());
+        url = UrlEx.SetQueryParameter(url, "rbuf", "0");
 
         return url;
     }

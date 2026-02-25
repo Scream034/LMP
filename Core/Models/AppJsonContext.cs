@@ -15,6 +15,7 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(List<Playlist>))]
 [JsonSerializable(typeof(CacheEntry))]
 [JsonSerializable(typeof(ThemeSettings))]
+[JsonSerializable(typeof(BootstrapSettings))]
 [JsonSourceGenerationOptions(
     WriteIndented = false, 
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

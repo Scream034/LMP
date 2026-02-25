@@ -12,6 +12,7 @@
   "Common_Search": "Поиск",
   "Common_Minutes": "мин",
   "Common_Files": "файлов",
+  "Common_OpenGitHub": "Открыть репозиторий GitHub",
 
   "Window_Minimize": "Свернуть",
   "Window_Maximize": "Развернуть",
@@ -26,6 +27,7 @@
   "Nav_Queue": "Очередь",
   "Nav_Settings": "Настройки",
   "Nav_PleaseWait": "Подождите...",
+  "Nav_Notifications": "Уведомления",
 
   "Home_Greeting_Morning": "Доброе утро",
   "Home_Greeting_Afternoon": "Добрый день",
@@ -86,10 +88,19 @@
   "Settings_AudioNormalization": "Нормализация звука",
   "Settings_AudioNormalization_Tooltip": "Автоматически выравнивать громкость между треками. Может влиять на динамику.",
   
+  "Audio_ErrorSection": "🔔 Уведомления об ошибках",
   "Audio_VolumeSection": "🔊 Громкость",
   "Audio_ProcessingSection": "⚙️ Обработка",
   "Audio_QualitySection": "🎵 Качество",
   
+  "Settings_ErrorBehavior": "Поведение при ошибке воспроизведения",
+  "Settings_ErrorBehaviorDesc": "Реакция на ошибки воспроизведения (стрим недоступен, ошибка загрузки). Обнаружение бота всегда показывает диалог.",
+  "Settings_ErrorBehavior_Dialog": "Показать диалог и поставить на паузу",
+  "Settings_ErrorBehavior_ToastAndSkip": "Показать уведомление и пропустить",
+  "Settings_ErrorBehavior_Ignore": "Пропустить без уведомления",
+  "Settings_PlayErrorSound": "Звук ошибки",
+  "Settings_PlayErrorSoundDesc": "Воспроизводить звук при ошибке воспроизведения.",
+
   "Settings_RememberFormatDesc": "Сохранять предпочитаемый формат для каждого трека",
   
   "Settings_SmoothLoading": "Плавные анимации загрузки",
@@ -354,6 +365,36 @@
   "Delete_Everywhere": "Удалить везде",
   "Delete_EverywhereHint": "Удалить также из аккаунта YouTube",
 
+  "Notification_JustNow": "Только что",
+  "Notification_MinutesAgo": "{0} мин назад",
+  "Notification_HoursAgo": "{0}ч назад",
+  "Notification_MarkAllRead": "Отметить всё прочитанным",
+  "Notification_Clear": "Очистить",
+  "Notification_NoNotifications": "Нет уведомлений",
+  "Notification_ViewDetails": "Подробности",
+  "Notification_HideDetails": "Скрыть подробности",
+  "Notification_CopyError": "Копировать ошибку",
+  "Notification_CopyTrackUrl": "Копировать ссылку на трек",
+
+  "Recommendation_Login": "Перейдите в Настройки → Аккаунт и войдите через cookies YouTube.",
+  "Recommendation_Login_AgeRestricted": "Видео имеет возрастные ограничения. Войдите через Настройки → Аккаунт.",
+  "Recommendation_MembersOnly": "Этот контент доступен только подписчикам канала.",
+  "Recommendation_ChangeClient": "Попробуйте сменить клиент YouTube в Настройки → Сеть.",
+  "Recommendation_UseVPN": "Контент заблокирован в вашем регионе. Попробуйте использовать VPN или прокси.",
+  "Recommendation_Private": "Это приватное видео. Попросите владельца сделать его публичным.",
+  "Recommendation_Removed": "Это видео удалено с YouTube.",
+  "Recommendation_Payment": "Для этого контента нужна подписка YouTube Premium.",
+  "Recommendation_LiveStream": "Прямые трансляции пока не поддерживаются. Попробуйте после окончания стрима.",
+  "Recommendation_CheckNetwork": "Проверьте подключение к интернету и попробуйте снова.",
+  "Recommendation_ContactDev": "Если ошибка повторяется, обратитесь к разработчику.",
+  "Recommendation_Login_403": "Войдите в YouTube через Настройки → Аккаунт для доступа к этому контенту.",
+  "Recommendation_AllClientsFailed_Auth": "Все клиенты не сработали. Попробуйте сменить клиент в Настройки → Сеть или обратитесь к разработчику.",
+  "Notification_Resize": "Потяните для изменения размера",
+
+  "Attempt_Success": "Успешно",
+  "Attempt_Failed": "Ошибка",
+  "Attempt_Trying": "Попытка {0}...",
+
   "Error_CopyDetails": "Копировать детали",
   
   "Error_BotDetection_Message": "YouTube ограничил доступ. Подождите {0}.",
@@ -372,5 +413,24 @@
   "Error_Login_Required": "Для этого контента требуется вход в YouTube. Перейдите в Настройки → Аккаунт и добавьте cookies.",
   "Error_Login_AgeRestricted": "Это видео имеет возрастные ограничения. Войдите в аккаунт YouTube в Настройки → Аккаунт.",
   "Error_Login_Private": "Это приватное видео. Требуется авторизация.",
-  "Error_Login_MembersOnly": "Этот контент доступен только подписчикам канала."
+  "Error_Login_MembersOnly": "Этот контент доступен только подписчикам канала.",
+  "Error_Playback_Title": "Ошибка воспроизведения",
+  "Error_StreamUnavailable_Title": "Стрим недоступен",
+  "Error_Stream_UmpFormat": "YouTube вернул зашифрованный формат. Обратитесь к разработчику.",
+  "Error_Stream_MaxRetries": "Не удалось загрузить поток после нескольких попыток.",
+  "Error_Stream_Network": "Ошибка сети. Проверьте подключение.",
+
+  "Splash_Initializing": "Инициализация...",
+  "Splash_InitAudioCache": "Инициализация аудио кэша...",
+  "Splash_LoadingLibrary": "Загрузка библиотеки...",
+  "Splash_PreparingImages": "Подготовка изображений...",
+  "Splash_ConnectingYouTube": "Подключение к YouTube...",
+  "Splash_BuildingInterface": "Создание интерфейса...",
+  "Splash_Ready": "Готово!",
+  "Splash_Commits": "{0} коммитов",
+  "Splash_Error": "Ошибка: {0}",
+  
+  "Build_Version": "v{0}",
+  "Build_VersionDev": "v{0}-dev",
+  "Build_CommitsCount": "{0} коммитов"
 }

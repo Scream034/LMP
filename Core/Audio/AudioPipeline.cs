@@ -148,7 +148,7 @@ public sealed class AudioPipeline : IAsyncDisposable
 
             return pipeline;
         }
-        catch (LMP.Core.Youtube.Exceptions.StreamUnavailableException)
+        catch (Youtube.Exceptions.StreamUnavailableException)
         {
             CleanupOnError(source, decoder, backend, decodeBuffer, lifetimeCts);
             throw;

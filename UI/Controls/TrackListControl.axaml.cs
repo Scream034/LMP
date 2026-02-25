@@ -671,7 +671,7 @@ public partial class TrackListControl : UserControl
             if (child is T typedChild && (predicate == null || predicate(typedChild)))
                 return typedChild;
 
-            var result = FindDescendantOfType<T>(child, predicate);
+            var result = FindDescendantOfType(child, predicate);
             if (result != null)
                 return result;
         }

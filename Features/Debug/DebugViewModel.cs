@@ -9,15 +9,12 @@ using Microsoft.Extensions.DependencyInjection;
 using LMP.Features.Shared;
 using LMP.Core.Audio.Helpers;
 
-
-#if DEBUG
 using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Backends;
-#endif
 
 namespace LMP.Features.Debug;
 

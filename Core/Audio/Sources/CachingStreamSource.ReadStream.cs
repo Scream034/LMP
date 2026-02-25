@@ -27,7 +27,7 @@ public sealed partial class CachingStreamSource
     ///     если position изменился (seek), возвращает 0
     ///   </item>
     ///   <item>
-    ///     <see cref="CachingStreamSource.ReadAtAsync"/> НИКОГДА не возвращает 0
+    ///     <see cref="ReadAtAsync"/> НИКОГДА не возвращает 0
     ///     для промежуточных позиций — ждёт или бросает
     ///   </item>
     /// </list>
@@ -45,7 +45,7 @@ public sealed partial class CachingStreamSource
         private CancellationTokenSource _readCts = new();
 
         /// <summary>
-        /// Создаёт стрим для онлайн-режима (чтение через <see cref="CachingStreamSource.ReadAtAsync"/>).
+        /// Создаёт стрим для онлайн-режима (чтение через <see cref="ReadAtAsync"/>).
         /// </summary>
         public AsyncCachingReadStream(CachingStreamSource source)
         {
@@ -182,7 +182,7 @@ public sealed partial class CachingStreamSource
         }
 
         /// <summary>
-        /// Ядро чтения — делегирует к <see cref="CachingStreamSource.ReadAtAsync"/>
+        /// Ядро чтения — делегирует к <see cref="ReadAtAsync"/>
         /// с проверкой consistency позиции.
         /// </summary>
         private async ValueTask<int> ReadAsyncCore(Memory<byte> buffer, CancellationToken ct)

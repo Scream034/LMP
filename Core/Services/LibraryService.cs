@@ -76,7 +76,7 @@ public sealed class LibraryService : IAsyncDisposable
         await ctx.EnsureFtsTablesAsync(ct);
 
         // Migrate from JSON if exists
-        var jsonPath = G.File.Library;
+        var jsonPath = G.FilePath.Library;
         if (File.Exists(jsonPath))
         {
             await MigrateFromJsonAsync(jsonPath, ct);

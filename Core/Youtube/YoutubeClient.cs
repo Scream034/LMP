@@ -15,8 +15,8 @@ public class YoutubeClient : IDisposable
 
     public YoutubeClient(
         HttpClient http, 
-        INTokenDecryptor nTokenDecryptor, 
-        ISigCipherDecryptor sigCipherDecryptor, 
+        NTokenDecryptor nTokenDecryptor, 
+        SigCipherDecryptor sigCipherDecryptor, 
         Func<bool>? isAuthenticatedCheck = null,
         bool ownsHttpClient = false)
     {

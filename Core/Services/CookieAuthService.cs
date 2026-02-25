@@ -112,9 +112,9 @@ public partial class CookieAuthService
 
     private void LoadCookies()
     {
-        if (File.Exists(G.File.Cookie))
+        if (File.Exists(G.FilePath.Cookie))
         {
-            var raw = File.ReadAllText(G.File.Cookie);
+            var raw = File.ReadAllText(G.FilePath.Cookie);
             ParseAndSetCookies(raw);
         }
     }
@@ -262,7 +262,7 @@ public partial class CookieAuthService
             _cachedHeaderString = "";
         }
 
-        if (File.Exists(G.File.Cookie)) File.Delete(G.File.Cookie);
+        if (File.Exists(G.FilePath.Cookie)) File.Delete(G.FilePath.Cookie);
 
         State = new AuthState();
         if (File.Exists(_authDataPath)) File.Delete(_authDataPath);
@@ -347,7 +347,7 @@ public partial class CookieAuthService
             try
             {
                 if (_cookieMap.ContainsKey("SAPISID"))
-                    File.WriteAllText(G.File.Cookie, _cachedHeaderString);
+                    File.WriteAllText(G.FilePath.Cookie, _cachedHeaderString);
             }
             catch (Exception ex)
             {

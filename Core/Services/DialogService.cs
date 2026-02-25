@@ -132,7 +132,7 @@ public class DialogService : IDialogService
             if (window == null) return null;
             var storage = window.StorageProvider;
             IStorageFolder? suggestedStartLocation = null;
-            if (!string.IsNullOrEmpty(startPath) && System.IO.Directory.Exists(startPath))
+            if (!string.IsNullOrEmpty(startPath) && Directory.Exists(startPath))
                 suggestedStartLocation = await storage.TryGetFolderFromPathAsync(startPath);
 
             var result = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions

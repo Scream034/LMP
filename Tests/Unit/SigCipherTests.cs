@@ -269,13 +269,12 @@ public static class SigCipherTests
     
     public static async Task TestLiveDecryptionAsync(IServiceProvider services)
     {
-        var decryptor = services.GetRequiredService<ISigCipherDecryptor>();
+        var decryptor = services.GetRequiredService<SigCipherDecryptor>();
         
         // Тестовая подпись (реальный формат YouTube)
-        const string testSig = 
-            "ZEjG4qhkMg80tqLJ275cGl__kUaafdy-yB0G8dDIXtWlAEiAANEgtBgM7ydrIxvh" +
-            "=bo70X1fcmOZkWRVLnGjZiq8UuPAhIgRwE0jiEJAm";
-        
+        const string testSig = "nJAJEij0EwRAIgQSqu3XCiEGzJUPC63SA5FoCkzCVVzlxe5AsIfth4z8MCIFjLG7zmFjuXC5MVgH-ZLRjWrbKPLfTunKycnrel4HQCHQss";
+        // ==Qp1YKc3yCBe010ebBBzBARqwDtO3i6b-8ni5JzSe2r4DQICIo0jkpdUW5g9wPFhNx8MT9NrA5ch1GpqeMPZHyloxIJgIQRwE0jiEJAJ2
+
         var sw = Stopwatch.StartNew();
         var result = await decryptor.DecipherAsync(testSig);
         sw.Stop();

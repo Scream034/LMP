@@ -227,7 +227,7 @@ public partial class StreamUnavailableDialog : Window
     {
         try
         {
-            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            var clipboard = GetTopLevel(this)?.Clipboard;
             if (clipboard != null)
             {
                 await clipboard.SetTextAsync(_fullErrorDetails);

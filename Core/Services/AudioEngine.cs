@@ -2,9 +2,10 @@
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using LMP.Core.Audio;
+using LMP.Core.Exceptions;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
-using Microsoft.Extensions.DependencyInjection;
+using LMP.Core.Youtube.Exceptions;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
@@ -14,6 +15,16 @@ namespace LMP.Core.Services;
 /// Центральный движок аудио воспроизведения.
 /// Координирует AudioPlayer, очередь треков, громкость и UI события.
 /// </summary>
+/// <remarks>
+/// <para><b>Обработка ошибок (SOLID — Single Responsibility):</b></para>
+/// <para>AudioEngine НЕ принимает решения о показе диалогов. Он только:</para>
+/// <list type="bullet">
+///   <item>Ловит исключения из AudioPlayer и YoutubeProvider</item>
+///   <item>Генерирует событие <see cref="OnErrorOccurred"/> с типизированным исключением</item>
+///   <item>Логирует ошибки</item>
+/// </list>
+/// <para>Решение о реакции принимает <see cref="PlaybackErrorOrchestrator"/>.</para>
+/// </remarks>
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {
     #region Constants
@@ -36,7 +47,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>
     /// Целевой уровень для простой нормализации (peak).
-    /// Значения выше будут снижены.
     /// </summary>
     private const float NormalizationTargetPeak = 0.95f;
 
@@ -81,9 +91,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Playback State
 
-    /// <summary>
-    /// Текущий коэффициент нормализации для трека (1.0 = без изменений).
-    /// </summary>
     private float _normalizationFactor = 1.0f;
 
     #endregion
@@ -133,7 +140,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public event Action<TrackInfo?>? OnTrackChanged;
     public event Action? OnPlaybackStopped;
-    public event Action<string>? OnError;
     public event Action<TimeSpan>? OnPositionChanged;
     public event Action<TimeSpan>? OnSeekCompleted;
     public event Action<bool, bool>? OnPlaybackStateChanged;
@@ -142,6 +148,28 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<int>? OnMaxVolumeChanged;
     public event Action<AudioStreamInfo>? OnStreamInfoChanged;
     public event Action<BufferState>? OnBufferStateChanged;
+
+    /// <summary>
+    /// Событие ошибки воспроизведения.
+    /// </summary>
+    /// <remarks>
+    /// <para>Типизированное исключение для обработки в <see cref="PlaybackErrorOrchestrator"/>.</para>
+    /// <para>Возможные типы:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="BotDetectionException"/></item>
+    ///   <item><see cref="LoginRequiredException"/></item>
+    ///   <item><see cref="StreamUnavailableException"/></item>
+    ///   <item><see cref="ChunkDownloadFatalException"/></item>
+    ///   <item>Другие <see cref="Exception"/></item>
+    /// </list>
+    /// </remarks>
+    public event Action<Exception>? OnErrorOccurred;
+
+    /// <summary>
+    /// Legacy событие для совместимости — только строка сообщения.
+    /// </summary>
+    [Obsolete("Use OnErrorOccurred instead for typed exception handling")]
+    public event Action<string>? OnError;
 
     #endregion
 
@@ -180,10 +208,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _player.Events.PositionChanged += pos => RaiseOnUI(() => OnPositionChanged?.Invoke(pos));
         _player.Events.StateChanged += HandlePlayerStateChanged;
         _player.Events.TrackEnded += HandlePlayerTrackEnded;
-        _player.Events.ErrorOccurred += err => RaiseOnUI(() => OnError?.Invoke(err.Message));
         _player.Events.StreamInfoChanged += HandleStreamInfoChanged;
         _player.Events.BufferStateChanged += state => RaiseOnUI(() => OnBufferStateChanged?.Invoke(state));
         _player.Events.SeekCompleted += t => RaiseOnUI(() => OnSeekCompleted?.Invoke(t));
+
+        // Ошибки из AudioPlayer → пробрасываем в наше событие
+        _player.Events.ErrorOccurred += err =>
+        {
+            var exception = err.Exception ?? new Exception(err.Message);
+            RaiseError(exception);
+        };
     }
 
     private void InitializeFromSettings()
@@ -199,6 +233,135 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         ApplyVolume(instant: true);
     }
+
+    #endregion
+
+    #region Internal Playback
+
+    /// <summary>
+    /// Воспроизводит трек по текущему индексу в очереди.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Обработка ошибок:</b></para>
+    /// <para>Все исключения пробрасываются через <see cref="OnErrorOccurred"/>.
+    /// Этот метод НЕ показывает диалоги и НЕ принимает решения о UI.</para>
+    /// </remarks>
+    private async Task PlayCurrentIndexAsync(int session)
+    {
+        TrackInfo? track;
+        lock (_queueLock)
+        {
+            if (_currentIndex < 0 || _currentIndex >= _queue.Count) return;
+            track = _queue[_currentIndex];
+        }
+
+        if (track == null) return;
+
+        _normalizationFactor = 1.0f;
+
+        // Останавливаем через StopAsync — ждём реальной остановки pipeline
+        await _player.StopAsync();
+
+        // Проверяем сессию после async stop
+        if (Volatile.Read(ref _session) != session) return;
+
+        // Обновляем UI
+        RaiseOnUI(() =>
+        {
+            CurrentTrack = track;
+            StreamInfo = AudioStreamInfo.Empty;
+            OnTrackChanged?.Invoke(track);
+            OnPositionChanged?.Invoke(TimeSpan.Zero);
+        });
+
+        try
+        {
+            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track);
+
+            if (Volatile.Read(ref _session) != session) return;
+
+            await _player.PlayAsync(streamUrl, track.Id, bitrateHint, CancellationToken.None);
+            AddToHistory(track);
+        }
+        catch (OperationCanceledException)
+        {
+            // Отмена — не ошибка, просто выходим
+            Log.Debug("[AudioEngine] PlayCurrentIndex cancelled");
+        }
+        catch (Exception ex)
+        {
+            // ВСЕ ИСКЛЮЧЕНИЯ → OnErrorOccurred
+            // Оркестратор решит что делать (диалог, toast, skip)
+            Log.Error($"[AudioEngine] Play error: {ex.GetType().Name}: {ex.Message}");
+            RaiseError(ex);
+        }
+    }
+
+    /// <summary>
+    /// Резолвит URL стрима для трека.
+    /// </summary>
+    /// <exception cref="BotDetectionException">При rate limiting.</exception>
+    /// <exception cref="StreamUnavailableException">При недоступности стрима.</exception>
+    /// <exception cref="LoginRequiredException">При требовании авторизации.</exception>
+    private async Task<(string Url, int Bitrate)> ResolveStreamUrlAsync(TrackInfo track)
+    {
+        string? streamUrl = track.StreamUrl;
+        int bitrateHint = track.TransientBitrate;
+
+        // ВСЕГДА проверяем кэш первым
+        var cached = AudioSourceFactory.FindAnyCachedTrack(track.Id);
+        if (cached != null)
+        {
+            Log.Debug($"[AudioEngine] Using cache: {cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps");
+            return ("", cached.Value.Entry.Bitrate);
+        }
+
+        if (string.IsNullOrEmpty(streamUrl))
+        {
+            // Может выбросить BotDetectionException, StreamUnavailableException, LoginRequiredException
+            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None);
+
+            if (streamInfo == null)
+                throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
+
+            streamUrl = streamInfo.Value.Url;
+            if (bitrateHint <= 0)
+                bitrateHint = streamInfo.Value.Bitrate;
+        }
+
+        return (streamUrl ?? "", bitrateHint);
+    }
+
+    #endregion
+
+    #region Error Handling
+
+    /// <summary>
+    /// Генерирует события ошибки.
+    /// Использует InvokeAsync для гарантированной доставки (не Post).
+    /// </summary>
+    private void RaiseError(Exception exception)
+    {
+        Log.Debug($"[AudioEngine] RaiseError: {exception.GetType().Name}");
+
+        // Для ошибок используем прямой вызов если мы на UI,
+        // иначе InvokeAsync (не Post!) для гарантированной доставки
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            OnErrorOccurred?.Invoke(exception);
+            OnError?.Invoke(exception.Message);
+        }
+        else
+        {
+            // InvokeAsync гарантирует выполнение, Post — нет
+            Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                OnErrorOccurred?.Invoke(exception);
+                OnError?.Invoke(exception.Message);
+            });
+        }
+    }
+
 
     #endregion
 
@@ -298,217 +461,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
-    #region Seek
-
-    /// <summary>
-    /// Seek с дебаунсингом для слайдера.
-    /// </summary>
-    public void SeekDebounced(TimeSpan position)
-    {
-        lock (_seekLock)
-        {
-            _pendingSeekPosition = position;
-
-            if (_hasScheduledSeek) return;
-
-            _seekDebounceCts?.Cancel();
-            _seekDebounceCts?.Dispose();
-            _seekDebounceCts = new CancellationTokenSource();
-            _hasScheduledSeek = true;
-
-            _ = ExecuteDebouncedSeekAsync(_seekDebounceCts.Token);
-        }
-    }
-
-    /// <summary>
-    /// Прямой seek без дебаунсинга.
-    /// </summary>
-    public ValueTask SeekAsync(TimeSpan position)
-    {
-        lock (_seekLock)
-        {
-            _seekDebounceCts?.Cancel();
-            _hasScheduledSeek = false;
-        }
-
-        return _player.SeekAsync(position);
-    }
-
-    private async Task ExecuteDebouncedSeekAsync(CancellationToken ct)
-    {
-        try
-        {
-            await Task.Delay(SeekDebounceMs, ct);
-
-            TimeSpan pos;
-            lock (_seekLock)
-            {
-                pos = _pendingSeekPosition;
-                _hasScheduledSeek = false;
-            }
-
-            await _player.SeekAsync(pos, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            lock (_seekLock) _hasScheduledSeek = false;
-        }
-        catch (Exception ex)
-        {
-            lock (_seekLock) _hasScheduledSeek = false;
-            Log.Warn($"[AudioEngine] Seek error: {ex.Message}");
-        }
-    }
-
-    #endregion
-
-    #region Internal Playback
-
-    private async Task PlayCurrentIndexAsync(int session)
-    {
-        TrackInfo? track;
-        lock (_queueLock)
-        {
-            if (_currentIndex < 0 || _currentIndex >= _queue.Count) return;
-            track = _queue[_currentIndex];
-        }
-
-        if (track == null) return;
-
-        _normalizationFactor = 1.0f;
-
-        // ① Останавливаем через StopAsync — ждём реальной остановки pipeline
-        await _player.StopAsync();
-
-        // Проверяем сессию после async stop
-        if (Volatile.Read(ref _session) != session) return;
-
-        // ② Теперь обновляем UI
-        RaiseOnUI(() =>
-        {
-            CurrentTrack = track;
-            StreamInfo = AudioStreamInfo.Empty;
-            OnTrackChanged?.Invoke(track);
-            OnPositionChanged?.Invoke(TimeSpan.Zero);
-        });
-
-        try
-        {
-            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track);
-
-            if (Volatile.Read(ref _session) != session) return;
-
-            await _player.PlayAsync(streamUrl, track.Id, bitrateHint, CancellationToken.None);
-            AddToHistory(track);
-        }
-        catch (Youtube.Exceptions.LoginRequiredException ex)
-        {
-            Log.Warn($"[AudioEngine] Login required: {ex.Reason} for {ex.VideoId}");
-            RaiseOnUI(() => OnError?.Invoke(LocalizationService.Instance[ex.GetLocalizationKey()]));
-            ShowLoginRequiredDialog(ex);
-            Stop();
-        }
-        catch (Youtube.Exceptions.StreamUnavailableException ex)
-        {
-            Log.Error($"[AudioEngine] Stream unavailable: {ex.Reason} for {ex.VideoId}");
-            RaiseOnUI(() => OnError?.Invoke(ex.Message));
-            ShowStreamUnavailableDialog(ex);
-            await HandlePlaybackErrorAsync();
-        }
-        catch (Youtube.Exceptions.BotDetectionException ex)
-        {
-            Log.Warn($"[AudioEngine] Bot detection: {ex.FormatRemainingTime()}");
-            RaiseOnUI(() => OnError?.Invoke("Rate limited by YouTube"));
-        }
-        catch (Exception ex)
-        {
-            var streamEx = FindStreamUnavailableException(ex);
-            if (streamEx != null)
-            {
-                Log.Error($"[AudioEngine] Stream unavailable (wrapped): {streamEx.Reason}");
-                RaiseOnUI(() => OnError?.Invoke(streamEx.Message));
-                ShowStreamUnavailableDialog(streamEx);
-                await HandlePlaybackErrorAsync();
-                return;
-            }
-
-            Log.Error($"[AudioEngine] Play error: {ex.Message}");
-            RaiseOnUI(() => OnError?.Invoke(ex.Message));
-            await HandlePlaybackErrorAsync();
-        }
-    }
-
-    private static Youtube.Exceptions.StreamUnavailableException? FindStreamUnavailableException(Exception ex)
-    {
-        var current = ex;
-        while (current != null)
-        {
-            if (current is Youtube.Exceptions.StreamUnavailableException streamEx)
-                return streamEx;
-            current = current.InnerException;
-        }
-        return null;
-    }
-
-    private static void ShowLoginRequiredDialog(Youtube.Exceptions.LoginRequiredException ex)
-    {
-        try
-        {
-            var dialogService = Program.Services.GetService<IDialogService>();
-            if (dialogService != null)
-            {
-                _ = dialogService.ShowLoginRequiredAsync(ex);
-            }
-        }
-        catch (Exception dialogEx)
-        {
-            Log.Warn($"[AudioEngine] Failed to show login dialog: {dialogEx.Message}");
-        }
-    }
-
-    private static void ShowStreamUnavailableDialog(Youtube.Exceptions.StreamUnavailableException ex)
-    {
-        try
-        {
-            var dialogService = Program.Services.GetService<IDialogService>();
-            if (dialogService != null)
-            {
-                _ = dialogService.ShowStreamUnavailableAsync(ex);
-            }
-        }
-        catch (Exception dialogEx)
-        {
-            Log.Warn($"[AudioEngine] Failed to show dialog: {dialogEx.Message}");
-        }
-    }
-
-    private async Task<(string Url, int Bitrate)> ResolveStreamUrlAsync(TrackInfo track)
-    {
-        string? streamUrl = track.StreamUrl;
-        int bitrateHint = track.TransientBitrate;
-
-        // ВСЕГДА проверяем кэш первым — даже если есть streamUrl
-        var cached = AudioSourceFactory.FindAnyCachedTrack(track.Id);
-        if (cached != null)
-        {
-            Log.Debug($"[AudioEngine] Using cache: {cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps");
-            // Передаём пустой URL — AudioSourceFactory создаст LocalFileSource
-            return ("", cached.Value.Entry.Bitrate);
-        }
-
-        if (string.IsNullOrEmpty(streamUrl))
-        {
-            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None);
-            if (streamInfo == null)
-                throw new InvalidOperationException("Failed to resolve stream URL");
-
-            streamUrl = streamInfo.Value.Url;
-            if (bitrateHint <= 0)
-                bitrateHint = streamInfo.Value.Bitrate;
-        }
-
-        return (streamUrl ?? "", bitrateHint);
-    }
+    #region Navigation
 
     private async Task NavigateAsync(bool forward, bool userInitiated)
     {
@@ -550,12 +503,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_currentIndex > 0) { _currentIndex--; return true; }
         if (RepeatMode == RepeatMode.RepeatAll) { _currentIndex = _queue.Count - 1; return true; }
         return false;
-    }
-
-    private async Task HandlePlaybackErrorAsync()
-    {
-        await Task.Delay(1000);
-        await PlayNextAsync();
     }
 
     #endregion
@@ -606,8 +553,75 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var track = await _library.GetTrackAsync(trackId);
         if (track == null) return null;
 
-        var info = await _youtube.RefreshStreamUrlAsync(track, true, ct);
-        return info?.Url;
+        try
+        {
+            var info = await _youtube.RefreshStreamUrlAsync(track, true, ct);
+            return info?.Url;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioEngine] URL refresh failed: {ex.Message}");
+            RaiseError(ex);
+            return null;
+        }
+    }
+
+    #endregion
+
+    #region Seek
+
+    public void SeekDebounced(TimeSpan position)
+    {
+        lock (_seekLock)
+        {
+            _pendingSeekPosition = position;
+
+            if (_hasScheduledSeek) return;
+
+            _seekDebounceCts?.Cancel();
+            _seekDebounceCts?.Dispose();
+            _seekDebounceCts = new CancellationTokenSource();
+            _hasScheduledSeek = true;
+
+            _ = ExecuteDebouncedSeekAsync(_seekDebounceCts.Token);
+        }
+    }
+
+    public ValueTask SeekAsync(TimeSpan position)
+    {
+        lock (_seekLock)
+        {
+            _seekDebounceCts?.Cancel();
+            _hasScheduledSeek = false;
+        }
+
+        return _player.SeekAsync(position);
+    }
+
+    private async Task ExecuteDebouncedSeekAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(SeekDebounceMs, ct);
+
+            TimeSpan pos;
+            lock (_seekLock)
+            {
+                pos = _pendingSeekPosition;
+                _hasScheduledSeek = false;
+            }
+
+            await _player.SeekAsync(pos, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            lock (_seekLock) _hasScheduledSeek = false;
+        }
+        catch (Exception ex)
+        {
+            lock (_seekLock) _hasScheduledSeek = false;
+            Log.Warn($"[AudioEngine] Seek error: {ex.Message}");
+        }
     }
 
     #endregion
@@ -1095,18 +1109,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         RaiseOnUI(() => OnQueueChanged?.Invoke());
     }
 
-    private void InvalidateQueueSnapshot() => _queueSnapshot = null;
-
-    private void AddToHistory(TrackInfo track)
-    {
-        if (_history.Count > 0 && _history[^1].Id == track.Id) return;
-
-        _history.Add(track);
-
-        if (_history.Count > MaxHistorySize)
-            _history.RemoveAt(0);
-    }
-
     #endregion
 
     #region Statistics
@@ -1138,6 +1140,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 catch (Exception ex)
                 {
                     Log.Error($"[AudioEngine] Command error: {ex.Message}");
+                    RaiseError(ex);
                 }
             }
         }
@@ -1156,6 +1159,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         else
             Avalonia.Threading.Dispatcher.UIThread.Post(action);
     }
+
+    private void AddToHistory(TrackInfo track)
+    {
+        if (_history.Count > 0 && _history[^1].Id == track.Id) return;
+
+        _history.Add(track);
+
+        if (_history.Count > MaxHistorySize)
+            _history.RemoveAt(0);
+    }
+
+    private void InvalidateQueueSnapshot() => _queueSnapshot = null;
 
     public static Task ReinitializeWithProfileAsync(InternetProfile profile)
     {

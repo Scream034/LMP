@@ -430,3 +430,48 @@ public sealed class WindowButtonVisibilityConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) 
         => throw new NotImplementedException();
 }
+
+/// <summary>
+/// Конвертирует NotificationSeverity в Color из текущей темы.
+/// Error → SystemError, Warning → SystemWarnOrange, Info → SystemInfoBlue, Success → Accent.
+/// </summary>
+public sealed class SeverityToColorConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var severity = value switch
+        {
+            NotificationSeverity s => s,
+            int i => (NotificationSeverity)i,
+            _ => NotificationSeverity.Info
+        };
+
+        var resourceKey = severity switch
+        {
+            NotificationSeverity.Error => "SystemError",
+            NotificationSeverity.Warning => "SystemWarnOrange",
+            NotificationSeverity.Info => "SystemInfoBlue",
+            NotificationSeverity.Success => "Accent",
+            _ => "TextMuted"
+        };
+
+        if (Avalonia.Application.Current?.Resources.TryGetResource(resourceKey, null, out var resource) == true)
+        {
+            if (resource is Color color) return color;
+            if (resource is SolidColorBrush brush) return brush.Color;
+        }
+
+        // Fallback
+        return severity switch
+        {
+            NotificationSeverity.Error => Color.Parse("#FF5555"),
+            NotificationSeverity.Warning => Color.Parse("#FFB86C"),
+            NotificationSeverity.Info => Color.Parse("#8BE9FD"),
+            NotificationSeverity.Success => Color.Parse("#50C878"),
+            _ => Color.Parse("#6272A4")
+        };
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}

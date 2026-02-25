@@ -7,7 +7,7 @@ using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Youtube.Videos;
 
-public class VideoClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor,
+public class VideoClient(HttpClient http, NTokenDecryptor nTokenDecryptor, SigCipherDecryptor sigCipherDecryptor,
     Func<bool>? isAuthenticatedCheck = null)
 {
     private readonly VideoController _controller = new(http);

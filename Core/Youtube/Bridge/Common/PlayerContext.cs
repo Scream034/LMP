@@ -65,13 +65,13 @@ public sealed partial class PlayerContext
     }
     
     private static string GetCachePath(string version) =>
-        Path.Combine(Globals.Folder.NTokenCache, $"player_{version}_basejs.txt");
+        Path.Combine(G.Folder.NTokenCache, $"player_{version}_basejs.txt");
     
     private static void CleanupOldVersions()
     {
         try
         {
-            var files = Directory.GetFiles(Globals.Folder.NTokenCache, "player_*_basejs.txt");
+            var files = Directory.GetFiles(G.Folder.NTokenCache, "player_*_basejs.txt");
             var toDelete = files
                 .Select(f => new FileInfo(f))
                 .OrderByDescending(f => f.LastWriteTimeUtc)

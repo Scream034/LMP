@@ -14,8 +14,8 @@ public class StreamClient
 {
     private readonly StreamController _controller;
     private readonly HttpClient _http;
-    private readonly INTokenDecryptor _nTokenDecryptor;
-    private readonly ISigCipherDecryptor _sigCipherDecryptor;
+    private readonly NTokenDecryptor _nTokenDecryptor;
+    private readonly SigCipherDecryptor _sigCipherDecryptor;
     private CipherManifest? _cipherManifest;
     
     /// <summary>
@@ -24,7 +24,7 @@ public class StreamClient
     /// </summary>
     private readonly Func<bool>? _isAuthenticatedCheck;
 
-    public StreamClient(HttpClient http, INTokenDecryptor nTokenDecryptor, ISigCipherDecryptor sigCipherDecryptor, 
+    public StreamClient(HttpClient http, NTokenDecryptor nTokenDecryptor, SigCipherDecryptor sigCipherDecryptor, 
         Func<bool>? isAuthenticatedCheck = null)
     {
         _http = http;
@@ -36,7 +36,7 @@ public class StreamClient
 
     /// <summary>
     /// Резолвит старый CipherManifest — нужен только для SignatureTimestamp.
-    /// Сама дешифровка sig идёт через ISigCipherDecryptor.
+    /// Сама дешифровка sig идёт через SigCipherDecryptor.
     /// </summary>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
     {

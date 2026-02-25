@@ -1,3 +1,5 @@
+root = true
+
 # Пометить все файлы в папке как "сгенерированный код"
 # Компилятор обычно игнорирует варнинги в таких файлах
 [SharpJaad.AAC/**.cs]
@@ -11,3 +13,13 @@ dotnet_diagnostic.CS8602.severity = none
 dotnet_diagnostic.CS8604.severity = none
 dotnet_diagnostic.CS8625.severity = none
 dotnet_diagnostic.CS0420.severity = none
+
+[*.cs]
+# Отключаем тяжёлые правила в Debug
+dotnet_diagnostic.CA1031.severity = none
+dotnet_diagnostic.CA1062.severity = none
+dotnet_diagnostic.IDE0058.severity = none
+dotnet_diagnostic.IDE0290.severity = none
+
+# Отключаем все StyleCop правила в Debug
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.MaintainabilityRules.severity = none

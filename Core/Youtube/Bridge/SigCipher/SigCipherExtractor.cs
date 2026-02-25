@@ -20,36 +20,80 @@ internal static partial class SigCipherExtractor
 
             Log.Debug($"[SigCipher] Found decipher function '{funcName}', length: {decipherFunc.Value.Code.Length}");
 
-            var dictArrayName = JsFunctionExtractor.DetectDictArrayName(decipherFunc.Value.Code);
+            // ═══ Resolve dictionary references ═══
+            // Detect dict name (e.g., "q") and resolve all q[N] → actual values
+            string funcCode = decipherFunc.Value.Code;
+            string? dictArrayName = null;
             string[]? dictElements = null;
 
-            if (dictArrayName is not null)
+            var detectedDictName = JsDictResolver.DetectDictName(funcCode);
+            if (detectedDictName is not null)
             {
-                dictElements = JsFunctionExtractor.ExtractArrayElements(baseJs, dictArrayName);
-                if (dictElements is not null)
-                    Log.Debug($"[SigCipher] Dict array '{dictArrayName}': {dictElements.Length} elements");
-            }
-            else
-            {
-                Log.Warn("[SigCipher] Dict array name not detected in func body.");
+                dictElements = JsFunctionExtractor.ExtractArrayElements(baseJs, detectedDictName);
+                if (dictElements is not null && dictElements.Length >= 10)
+                {
+                    dictArrayName = detectedDictName;
+                    funcCode = JsDictResolver.Resolve(funcCode, detectedDictName, dictElements);
+                    Log.Debug($"[SigCipher] Resolved dict '{detectedDictName}' ({dictElements.Length} elements) in decipher func");
+                }
             }
 
-            var cipherObjName = FindCipherObjectNameFromCode(
-                decipherFunc.Value.Code, dictArrayName);
-            if (cipherObjName is null) return null;
+            // Fallback: original dict detection
+            if (dictArrayName is null)
+            {
+                dictArrayName = JsFunctionExtractor.DetectDictArrayName(funcCode);
+                if (dictArrayName is not null)
+                {
+                    dictElements = JsFunctionExtractor.ExtractArrayElements(baseJs, dictArrayName);
+                    if (dictElements is not null)
+                        Log.Debug($"[SigCipher] Dict array '{dictArrayName}': {dictElements.Length} elements");
+                }
+            }
+
+            // ═══ Find cipher object ═══
+            var cipherObjName = FindCipherObjectNameFromCode(funcCode, dictArrayName);
+            if (cipherObjName is null)
+            {
+                Log.Warn("[SigCipher] Could not find cipher object name");
+                return null;
+            }
 
             var cipherObjCode = JsFunctionExtractor.FindAnyDefinition(baseJs, cipherObjName);
-            if (cipherObjCode is null) return null;
+            if (cipherObjCode is null)
+            {
+                Log.Warn($"[SigCipher] Could not find cipher object '{cipherObjName}' definition");
+                return null;
+            }
 
             Log.Debug($"[SigCipher] Found cipher object '{cipherObjName}'");
 
-            var methodMap = ParseCipherMethods(cipherObjCode, dictElements);
+            // ═══ Resolve dict in cipher object too ═══
+            string resolvedCipherCode = cipherObjCode;
+            if (dictElements is not null && detectedDictName is not null)
+            {
+                resolvedCipherCode = JsDictResolver.Resolve(cipherObjCode, detectedDictName, dictElements);
+                Log.Debug($"[SigCipher] Resolved dict in cipher object '{cipherObjName}'");
+            }
 
+            // ═══ Parse methods from resolved cipher object ═══
+            var methodMap = ParseCipherMethods(resolvedCipherCode, dictElements);
+
+            if (methodMap.Count == 0)
+            {
+                Log.Warn("[SigCipher] No cipher methods parsed");
+                return null;
+            }
+
+            // ═══ Extract operations from resolved decipher function ═══
             var operations = ExtractOperations(
-                decipherFunc.Value.Code, cipherObjName,
+                funcCode, cipherObjName,
                 methodMap, dictElements, dictArrayName);
 
-            if (operations is null || operations.Count < 3) return null;
+            if (operations is null || operations.Count < 3)
+            {
+                Log.Warn($"[SigCipher] Too few operations: {operations?.Count ?? 0}");
+                return null;
+            }
 
             sw.Stop();
             var manifest = new SigCipherManifest(playerVersion, operations, "extracted");
@@ -64,12 +108,41 @@ internal static partial class SigCipherExtractor
         }
     }
 
-    /// <summary>
-    /// Finds decipher function name by searching for:
-    ///   = funcName ( 26 , decodeURIComponent
-    /// Span-based backward scan, zero intermediate allocations.
-    /// </summary>
+    // ═══════════════════════════════════════════════════════════════
+    // FIND DECIPHER FUNCTION NAME — multi-strategy
+    // ═══════════════════════════════════════════════════════════════
+
     public static string? FindDecipherFunctionName(string baseJs)
+    {
+        // Strategy 1: = funcName(N, decodeURIComponent(...)  — any number
+        var result = FindByDecodeURIComponentWithNumber(baseJs);
+        if (result is not null)
+        {
+            Log.Debug($"[SigCipher] Found decipher func '{result}' via Strategy 1 (number+decodeURI)");
+            return result;
+        }
+
+        // Strategy 2: = funcName(decodeURIComponent(...)  — no number prefix
+        result = FindByDecodeURIComponentDirect(baseJs);
+        if (result is not null)
+        {
+            Log.Debug($"[SigCipher] Found decipher func '{result}' via Strategy 2 (direct decodeURI)");
+            return result;
+        }
+
+        // Strategy 3: Regex-based patterns
+        result = FindByRegexPatterns(baseJs);
+        if (result is not null)
+        {
+            Log.Debug($"[SigCipher] Found decipher func '{result}' via Strategy 3 (regex)");
+            return result;
+        }
+
+        Log.Warn("[SigCipher] Could not find decipher function name");
+        return null;
+    }
+
+    private static string? FindByDecodeURIComponentWithNumber(string baseJs)
     {
         var span = baseJs.AsSpan();
         ReadOnlySpan<char> marker = "decodeURIComponent";
@@ -82,7 +155,6 @@ internal static partial class SigCipherExtractor
             markerIdx += searchFrom;
             searchFrom = markerIdx + marker.Length;
 
-            // Walk backwards: skip whitespace, expect ',', digits "26", '(', identifier, '='
             int pos = markerIdx - 1;
             while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
             if (pos < 0 || span[pos] != ',') continue;
@@ -90,13 +162,13 @@ internal static partial class SigCipherExtractor
 
             while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
 
-            // Read digits backwards
             int digitEnd = pos + 1;
             while (pos >= 0 && char.IsAsciiDigit(span[pos])) pos--;
-            if (digitEnd - pos - 1 == 0) continue;
+            int digitCount = digitEnd - pos - 1;
+            if (digitCount == 0) continue;
 
-            var numSpan = span.Slice(pos + 1, digitEnd - pos - 1);
-            if (!numSpan.SequenceEqual("26")) continue;
+            var numSpan = span.Slice(pos + 1, digitCount);
+            if (!int.TryParse(numSpan, out int num) || num < 1 || num > 999) continue;
 
             while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
             if (pos < 0 || span[pos] != '(') continue;
@@ -104,7 +176,6 @@ internal static partial class SigCipherExtractor
 
             while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
 
-            // Read identifier backwards
             int identEnd = pos + 1;
             while (pos >= 0 && (char.IsLetterOrDigit(span[pos]) || span[pos] is '_' or '$'))
                 pos--;
@@ -114,25 +185,132 @@ internal static partial class SigCipherExtractor
 
             while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
             if (pos < 0 || span[pos] != '=') continue;
+            if (pos > 0 && span[pos - 1] == '=') continue;
 
-            return span.Slice(identStart, identLen).ToString();
+            var funcName = span.Slice(identStart, identLen).ToString();
+
+            if (ValidateDecipherCandidate(baseJs, funcName))
+                return funcName;
+        }
+
+        return null;
+    }
+
+    private static string? FindByDecodeURIComponentDirect(string baseJs)
+    {
+        var span = baseJs.AsSpan();
+        ReadOnlySpan<char> marker = "decodeURIComponent(";
+
+        int searchFrom = 0;
+        while (searchFrom < span.Length)
+        {
+            int markerIdx = span[searchFrom..].IndexOf(marker, StringComparison.Ordinal);
+            if (markerIdx < 0) return null;
+            markerIdx += searchFrom;
+            searchFrom = markerIdx + marker.Length;
+
+            int pos = markerIdx - 1;
+            while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
+            if (pos < 0 || span[pos] != '(') continue;
+            pos--;
+
+            while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
+
+            int identEnd = pos + 1;
+            while (pos >= 0 && (char.IsLetterOrDigit(span[pos]) || span[pos] is '_' or '$'))
+                pos--;
+            int identStart = pos + 1;
+            int identLen = identEnd - identStart;
+            if (identLen == 0) continue;
+
+            var funcName = span.Slice(identStart, identLen).ToString();
+            if (funcName is "encodeURIComponent" or "decodeURIComponent" or "decodeURI" or "encodeURI")
+                continue;
+
+            while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
+            if (pos < 0 || span[pos] != '=') continue;
+            if (pos > 0 && span[pos - 1] == '=') continue;
+
+            if (ValidateDecipherCandidate(baseJs, funcName))
+                return funcName;
+        }
+
+        return null;
+    }
+
+    private static string? FindByRegexPatterns(string baseJs)
+    {
+        foreach (Match m in SplitJoinFunctionRegex().Matches(baseJs))
+        {
+            if (ValidateDecipherCandidate(baseJs, m.Groups[1].Value))
+                return m.Groups[1].Value;
+        }
+
+        foreach (Match m in DecipherCallRegex().Matches(baseJs))
+        {
+            if (ValidateDecipherCandidate(baseJs, m.Groups[1].Value))
+                return m.Groups[1].Value;
         }
 
         return null;
     }
 
     /// <summary>
-    /// Finds cipher object name (e.g., TZ) from function code.
-    /// Searches for pattern: ObjName[dictArrayName[digits]]
+    /// Validates candidate by checking if its body (with dict resolved) contains
+    /// split("") and join("") — the hallmarks of a signature decipher function.
     /// </summary>
+    private static bool ValidateDecipherCandidate(string baseJs, string funcName)
+    {
+        var funcInfo = JsFunctionExtractor.FindFunctionByName(baseJs, funcName);
+        if (funcInfo is null) return false;
+
+        var code = funcInfo.Value.Code;
+        if (code.Length < 30) return false;
+
+        // Try resolving dict references first
+        var dictName = JsDictResolver.DetectDictName(code);
+        if (dictName is not null)
+        {
+            var elements = JsFunctionExtractor.ExtractArrayElements(baseJs, dictName);
+            if (elements is not null && elements.Length >= 10)
+                code = JsDictResolver.Resolve(code, dictName, elements);
+        }
+
+        var codeSpan = code.AsSpan();
+
+        bool hasSplit = codeSpan.Contains(".split(", StringComparison.Ordinal) ||
+                        codeSpan.Contains("[\"split\"]", StringComparison.Ordinal);
+
+        bool hasJoin = codeSpan.Contains(".join(", StringComparison.Ordinal) ||
+                       codeSpan.Contains("[\"join\"]", StringComparison.Ordinal);
+
+        if (!hasSplit)
+        {
+            Log.Debug($"[SigCipher] Candidate '{funcName}' rejected: no split");
+            return false;
+        }
+
+        // join is optional (some functions return the array and caller joins)
+        return true;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CIPHER OBJECT & OPERATIONS
+    // ═══════════════════════════════════════════════════════════════
+
     private static string? FindCipherObjectNameFromCode(string funcCode, string? dictArrayName)
     {
         var paramNames = JsFunctionExtractor.ExtractParamNames(funcCode);
         var span = funcCode.AsSpan();
 
+        // After dict resolution, cipher calls look like: zu.Rb(N, 35)
+        // So direct method call detection works
+        var directObj = FindDirectMethodCallObject(span, paramNames);
+        if (directObj is not null) return directObj;
+
+        // Fallback: dict-indexed pattern (unresoled code)
         if (dictArrayName is not null)
         {
-            // Search: identifier[dictArrayName[digits]]
             var dictTarget = string.Concat(dictArrayName, "[");
             var dictTargetSpan = dictTarget.AsSpan();
 
@@ -144,12 +322,10 @@ internal static partial class SigCipherExtractor
                 dictIdx += searchFrom;
                 searchFrom = dictIdx + dictTargetSpan.Length;
 
-                // dictArrayName must be preceded by '['
                 int beforeDict = dictIdx - 1;
                 while (beforeDict >= 0 && span[beforeDict] is ' ' or '\t') beforeDict--;
                 if (beforeDict < 0 || span[beforeDict] != '[') continue;
 
-                // Read object identifier backwards from '['
                 int pos = beforeDict - 1;
                 while (pos >= 0 && span[pos] is ' ' or '\t') pos--;
 
@@ -162,19 +338,15 @@ internal static partial class SigCipherExtractor
                 if (identLen > 0)
                 {
                     var objName = span.Slice(identStart, identLen).ToString();
-                    if (!paramNames.Contains(objName))
+                    if (!paramNames.Contains(objName) && objName != dictArrayName)
                         return objName;
                 }
             }
         }
 
-        // Fallback: find "objName.methodName(arg" pattern
-        return FindDirectMethodCallObject(span, paramNames);
+        return null;
     }
 
-    /// <summary>
-    /// Fallback: scans for "identifier.identifier(" and returns first non-param identifier.
-    /// </summary>
     private static string? FindDirectMethodCallObject(
         ReadOnlySpan<char> code, HashSet<string> paramNames)
     {
@@ -187,10 +359,8 @@ internal static partial class SigCipherExtractor
             i++;
             while (i < code.Length && (char.IsLetterOrDigit(code[i]) || code[i] is '_' or '$'))
                 i++;
-
             int identEnd = i;
 
-            // Check for '.' followed by identifier and '('
             if (i >= code.Length || code[i] != '.') continue;
 
             int afterDot = i + 1;
@@ -201,7 +371,6 @@ internal static partial class SigCipherExtractor
                    (char.IsLetterOrDigit(code[methodEnd]) || code[methodEnd] is '_' or '$'))
                 methodEnd++;
 
-            // Skip whitespace, check for '('
             int pos = methodEnd;
             while (pos < code.Length && code[pos] is ' ' or '\t') pos++;
 
@@ -218,7 +387,6 @@ internal static partial class SigCipherExtractor
                 }
             }
 
-            // Continue scanning from after the dot-access
             i = methodEnd;
         }
 
@@ -236,14 +404,11 @@ internal static partial class SigCipherExtractor
     [GeneratedRegex(@"(\w+)\s*:\s*function\s*\([^)]*\)\s*\{([^}]+)\}")]
     private static partial Regex MethodDefRegex();
 
-    [GeneratedRegex(@"\w+\s*\[\s*\w+\s*\[\s*(\d+)\s*\]\s*\]\s*\(\s*\)")]
-    private static partial Regex NoArgDictCallRegex();
+    [GeneratedRegex(@"([a-zA-Z_$][\w$]{0,3})=function\(\w+\)\{\w+=\w+\.split\(""""\)")]
+    private static partial Regex SplitJoinFunctionRegex();
 
-    [GeneratedRegex(@"\w+\s*\[\s*\w+\s*\[\s*(\d+)\s*\]\s*\]\s*\(\s*0\s*,")]
-    private static partial Regex TwoArgDictCallRegex();
-
-    [GeneratedRegex(@"^\s*\w+\s*\[\s*\w+\s*\[\s*\d+\s*\]\s*\]\s*\(\s*\)\s*;?\s*$")]
-    private static partial Regex SingleNoArgCallRegex();
+    [GeneratedRegex(@"=\s*([a-zA-Z_$][\w$]{0,5})\s*\(\s*\d+\s*,\s*decodeURIComponent\s*\(")]
+    private static partial Regex DecipherCallRegex();
 
     private static Dictionary<string, SigCipherOpType> ParseCipherMethods(
         string objCode, string[]? dictArray)
@@ -258,13 +423,18 @@ internal static partial class SigCipherExtractor
 
             SigCipherOpType? opType = null;
 
+            // After dict resolution, standard patterns work directly:
+            //   r.reverse()       → Reverse
+            //   r.splice(0, n)    → Splice  
+            //   r[0] ... % ...    → Swap
+
             if (bodySpan.Contains(".reverse()", StringComparison.Ordinal) ||
-                bodySpan.Contains("[1]()", StringComparison.Ordinal))
+                bodySpan.Contains("[\"reverse\"]()", StringComparison.Ordinal))
             {
                 opType = SigCipherOpType.Reverse;
             }
             else if (bodySpan.Contains(".splice(0,", StringComparison.Ordinal) ||
-                     bodySpan.Contains("[20](0,", StringComparison.Ordinal))
+                     bodySpan.Contains("[\"splice\"](0,", StringComparison.Ordinal))
             {
                 opType = SigCipherOpType.Splice;
             }
@@ -273,40 +443,79 @@ internal static partial class SigCipherExtractor
             {
                 opType = SigCipherOpType.Swap;
             }
-            else if (dictArray is not null)
-            {
-                var noArgMatch = NoArgDictCallRegex().Match(body);
-                if (noArgMatch.Success &&
-                    int.TryParse(noArgMatch.Groups[1].ValueSpan, out int idx) &&
-                    idx < dictArray.Length)
-                {
-                    if (dictArray[idx] == "reverse")
-                        opType = SigCipherOpType.Reverse;
-                }
 
-                var twoArgMatch = TwoArgDictCallRegex().Match(body);
-                if (twoArgMatch.Success &&
-                    int.TryParse(twoArgMatch.Groups[1].ValueSpan, out idx) &&
-                    idx < dictArray.Length)
-                {
-                    if (dictArray[idx] == "splice")
-                        opType = SigCipherOpType.Splice;
-                }
+            // Fallback for unresolved dict patterns
+            if (opType is null && dictArray is not null)
+            {
+                opType = InferOpTypeFromDictCalls(body, dictArray);
             }
 
             if (opType is null)
             {
-                if (SingleNoArgCallRegex().IsMatch(body))
+                // Structural fallback: single no-arg call → reverse
+                if (body.Trim().Length < 80 &&
+                    !bodySpan.Contains(",", StringComparison.Ordinal) &&
+                    (bodySpan.Contains("()", StringComparison.Ordinal)))
                     opType = SigCipherOpType.Reverse;
                 else if (bodySpan.Trim().Contains("(0,", StringComparison.Ordinal) &&
                          !bodySpan.Trim().Contains("[0]", StringComparison.Ordinal))
                     opType = SigCipherOpType.Splice;
             }
 
-            if (opType.HasValue) result[methodName] = opType.Value;
+            if (opType.HasValue)
+            {
+                result[methodName] = opType.Value;
+                Log.Debug($"[SigCipher] Method '{methodName}' → {opType.Value}");
+            }
+            else
+            {
+                Log.Debug($"[SigCipher] Method '{methodName}' → UNKNOWN, body: {body.Trim()}");
+            }
         }
 
         return result;
+    }
+
+    private static SigCipherOpType? InferOpTypeFromDictCalls(string body, string[] dictArray)
+    {
+        var span = body.AsSpan();
+        int pos = 0;
+
+        while (pos < span.Length)
+        {
+            int bracketIdx = span[pos..].IndexOf('[');
+            if (bracketIdx < 0) break;
+            bracketIdx += pos;
+            pos = bracketIdx + 1;
+
+            while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
+            int identStart = pos;
+            while (pos < span.Length && (char.IsLetterOrDigit(span[pos]) || span[pos] is '_' or '$'))
+                pos++;
+            if (pos == identStart) continue;
+
+            while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
+            if (pos >= span.Length || span[pos] != '[') continue;
+            pos++;
+
+            while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
+            int numStart = pos;
+            while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
+            if (pos == numStart) continue;
+
+            if (!int.TryParse(span.Slice(numStart, pos - numStart), out int idx)) continue;
+            if (idx < 0 || idx >= dictArray.Length) continue;
+
+            var resolved = dictArray[idx];
+            if (resolved == "reverse") return SigCipherOpType.Reverse;
+            if (resolved == "splice") return SigCipherOpType.Splice;
+        }
+
+        if (span.Contains("[0]", StringComparison.Ordinal) &&
+            span.Contains("%", StringComparison.Ordinal))
+            return SigCipherOpType.Swap;
+
+        return null;
     }
 
     private static List<SigCipherOperation>? ExtractOperations(
@@ -314,20 +523,20 @@ internal static partial class SigCipherExtractor
         Dictionary<string, SigCipherOpType> methodMap,
         string[]? dictArray, string? dictArrayName)
     {
+        // After dict resolution, direct calls (zu.Rb) should work
         var ops = ExtractDirectCalls(funcCode, cipherObjName, methodMap);
         if (ops.Count >= 3) return ops;
 
-        if (dictArray is null || dictArrayName is null)
-            return ops.Count > 0 ? ops : null;
+        // Fallback for unresolved dict-indexed calls
+        if (dictArray is not null && dictArrayName is not null)
+        {
+            ops = ExtractArrayCalls(funcCode, cipherObjName, dictArrayName, dictArray, methodMap);
+            if (ops.Count >= 3) return ops;
+        }
 
-        ops = ExtractArrayCalls(funcCode, cipherObjName, dictArrayName, dictArray, methodMap);
-        return ops.Count >= 3 ? ops : null;
+        return ops.Count > 0 ? ops : null;
     }
 
-    /// <summary>
-    /// Extracts direct method calls: cipherObj.methodName(arg, param)
-    /// Span-based scanning, no Regex.
-    /// </summary>
     private static List<SigCipherOperation> ExtractDirectCalls(
         string code, string cipherObjName,
         Dictionary<string, SigCipherOpType> methodMap)
@@ -345,11 +554,9 @@ internal static partial class SigCipherExtractor
             idx += searchFrom;
             searchFrom = idx + objPrefixSpan.Length;
 
-            // Word boundary before obj name
             if (idx > 0 && (char.IsLetterOrDigit(span[idx - 1]) || span[idx - 1] is '_' or '$'))
                 continue;
 
-            // Read method name
             int methodStart = idx + objPrefixSpan.Length;
             int methodEnd = methodStart;
             while (methodEnd < span.Length &&
@@ -358,15 +565,11 @@ internal static partial class SigCipherExtractor
 
             if (methodEnd == methodStart) continue;
 
-            var methodNameSpan = span[methodStart..methodEnd];
-
-            // Skip whitespace, expect '('
             int pos = methodEnd;
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
             if (pos >= span.Length || span[pos] != '(') continue;
             pos++;
 
-            // Skip first arg (identifier)
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
             while (pos < span.Length &&
                    (char.IsLetterOrDigit(span[pos]) || span[pos] is '_' or '$'))
@@ -378,14 +581,13 @@ internal static partial class SigCipherExtractor
             {
                 pos++;
                 while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
-
                 int numStart = pos;
                 while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
                 if (pos > numStart)
                     int.TryParse(span.Slice(numStart, pos - numStart), out param);
             }
 
-            var methodName = methodNameSpan.ToString();
+            var methodName = span[methodStart..methodEnd].ToString();
             if (methodMap.TryGetValue(methodName, out var opType))
                 ops.Add(new SigCipherOperation(opType, param));
         }
@@ -393,10 +595,6 @@ internal static partial class SigCipherExtractor
         return ops;
     }
 
-    /// <summary>
-    /// Extracts array-indexed calls: cipherObj[dictArray[idx]](arg, param)
-    /// Span-based scanning, no Regex.
-    /// </summary>
     private static List<SigCipherOperation> ExtractArrayCalls(
         string code, string cipherObjName, string dictArrayName,
         string[] dictArray, Dictionary<string, SigCipherOpType> methodMap)
@@ -415,14 +613,12 @@ internal static partial class SigCipherExtractor
             idx += searchFrom;
             searchFrom = idx + targetSpan.Length;
 
-            // Word boundary
             if (idx > 0 && (char.IsLetterOrDigit(span[idx - 1]) || span[idx - 1] is '_' or '$'))
                 continue;
 
             int pos = idx + targetSpan.Length;
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
 
-            // Expect dictArrayName
             if (pos + dictNameSpan.Length > span.Length) continue;
             if (!span.Slice(pos, dictNameSpan.Length).SequenceEqual(dictNameSpan)) continue;
             pos += dictNameSpan.Length;
@@ -432,14 +628,11 @@ internal static partial class SigCipherExtractor
             pos++;
 
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
-
-            // Read array index
             int numStart = pos;
             while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
             if (pos == numStart) continue;
             if (!int.TryParse(span.Slice(numStart, pos - numStart), out int arrayIdx)) continue;
 
-            // Expect ]]
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
             if (pos >= span.Length || span[pos] != ']') continue;
             pos++;
@@ -451,7 +644,6 @@ internal static partial class SigCipherExtractor
             if (pos >= span.Length || span[pos] != '(') continue;
             pos++;
 
-            // Skip first argument
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
             while (pos < span.Length &&
                    (char.IsLetterOrDigit(span[pos]) || span[pos] is '_' or '$'))
@@ -463,7 +655,6 @@ internal static partial class SigCipherExtractor
             {
                 pos++;
                 while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
-
                 int paramStart = pos;
                 while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
                 if (pos > paramStart)

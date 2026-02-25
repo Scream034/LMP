@@ -26,9 +26,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        this.PropertyChanged += MainWindow_PropertyChanged;
-        this.Deactivated += OnWindowDeactivated;
-        this.Activated += OnWindowActivated;
+        PropertyChanged += MainWindow_PropertyChanged;
+        Deactivated += OnWindowDeactivated;
+        Activated += OnWindowActivated;
     }
 
     private void InitializeComponent()
@@ -53,7 +53,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_PropertyChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property != Window.WindowStateProperty) return;
+        if (e.Property != WindowStateProperty) return;
 
         var state = (WindowState)e.NewValue!;
 
@@ -208,9 +208,9 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         CancelCleanup();
-        this.PropertyChanged -= MainWindow_PropertyChanged;
-        this.Deactivated -= OnWindowDeactivated;
-        this.Activated -= OnWindowActivated;
+        PropertyChanged -= MainWindow_PropertyChanged;
+        Deactivated -= OnWindowDeactivated;
+        Activated -= OnWindowActivated;
         base.OnClosed(e);
     }
 }
