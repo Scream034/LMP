@@ -11,42 +11,84 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0, submodules: recursive }
+        with:
+          fetch-depth: 0
+          submodules: recursive
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
           cache: true
-          cache-dependency-path: packages.lock.json
+          cache-dependency-path: "**/packages.lock.json"
 
-      - name: Build Debug
-        run: ./build.bat debug
+      # Получаем информацию о версии
+      - name: Get Git Version Info
+        id: version
+        shell: pwsh
+        run: |
+          $commitCount = git rev-list --count HEAD
+          $shortHash = git rev-parse --short=7 HEAD
+          $version = "1.0.$commitCount"
+          $fullVersion = "1.0.$commitCount+$shortHash"
+          
+          echo "VERSION=$version" >> $env:GITHUB_ENV
+          echo "FULL_VERSION=$fullVersion" >> $env:GITHUB_ENV
+          echo "COMMIT_HASH=$shortHash" >> $env:GITHUB_ENV
+          echo "COMMIT_COUNT=$commitCount" >> $env:GITHUB_ENV
 
-      - name: Build Optimized Debug
-        run: ./build.bat optimized
+      - name: Build Debug Full
+        run: ./build.bat debug nopause
 
-      - name: Publish Release
-        run: ./build.bat publish
+      - name: Build Release Full + Package
+        run: ./build.bat publish nopause
 
-      - name: Upload Artifacts
+      # Архивация Debug сборки
+      - name: Archive Debug Build
+        run: |
+          cd bin/Debug/net10.0
+          7z a -t7z -mx=9 "../../LMP-Debug-v${{ env.FULL_VERSION }}.7z" .
+          cd ../../..
+
+      - name: Rename Release Archive
+        run: Move-Item -Path "LMP-v${{ env.FULL_VERSION }}.7z" -Destination "LMP-Release-v${{ env.FULL_VERSION }}.7z" -Force
+
+      # Загрузка артефактов
+      - name: Upload Debug Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LMP-Debug
-          path: bin/Debug/net10.0/
+          name: LMP-Debug-v${{ env.FULL_VERSION }}
+          path: LMP-Debug-v${{ env.FULL_VERSION }}.7z
 
-      - name: Upload Optimized
+      - name: Upload Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LMP-Optimized-Debug
-          path: bin/Debug/net10.0/
+          name: LMP-Release-v${{ env.FULL_VERSION }}
+          path: LMP-Release-v${{ env.FULL_VERSION }}.7z
 
+      # Создание Pre-release с предупреждением
       - name: Create Pre-release
-        uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "Dev Build #${{ github.run_number }}"
+          tag_name: v${{ env.VERSION }}-dev.${{ github.run_number }}
+          name: "Dev Build #${{ github.run_number }} (v${{ env.FULL_VERSION }})"
           prerelease: true
-          files: LMP-*.7z
+          files: |
+            LMP-Debug-v${{ env.FULL_VERSION }}.7z
+            LMP-Release-v${{ env.FULL_VERSION }}.7z
+          body: |
+            **Автоматическая dev-сборка #${{ github.run_number }}**
+
+            - **Версия**: `v${{ env.FULL_VERSION }}`
+            - **Коммит**: `${{ env.COMMIT_HASH }}`
+            - **Всего коммитов**: ${{ env.COMMIT_COUNT }}
+
+            ⚠️ **Это нестабильная автоматическая сборка!**
+
+            Предназначена только для тестирования, показа друзьям и поиска багов.
+
+            Не используйте как основную версию.
+            Если найдёте проблемы — создавайте Issue.

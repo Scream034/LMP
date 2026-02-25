@@ -8,18 +8,23 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
           cache: true
-          cache-dependency-path: packages.lock.json
+          cache-dependency-path: "**/packages.lock.json"
+
+      - name: Restore
+        run: dotnet restore
 
       - name: Build Debug
-        run: ./build.bat debug
+        run: ./build.bat debug nopause
 
       - name: Build Optimized Debug
-        run: ./build.bat optimized
+        run: ./build.bat optimized nopause
