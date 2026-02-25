@@ -12,6 +12,7 @@
   "Common_Search": "Search",
   "Common_Minutes": "min",
   "Common_Files": "files",
+  "Common_OpenGitHub": "Open GitHub repository",
 
   "Window_Minimize": "Minimize",
   "Window_Maximize": "Maximize",
@@ -26,6 +27,7 @@
   "Nav_Queue": "Queue",
   "Nav_Settings": "Settings",
   "Nav_PleaseWait": "Please wait...",
+  "Nav_Notifications": "Notifications",
 
   "Filter_Placeholder": "Filter tracks...",
   "Filter_All": "All",
@@ -68,6 +70,54 @@
   "Search_NoLocalFiles": "No local files in library. Download some tracks or add local files.",
   "Search_OfflineMode": "Searching local library only",
 
+  "VolumeCurve_Linear": "Linear",
+  "VolumeCurve_Quadratic": "Quadratic (Recommended)",
+  "VolumeCurve_Logarithmic": "Logarithmic",
+  "VolumeCurve_Cubic": "Cubic",
+  "VolumeCurve_SpeedOfLight": "Speed of Light ⚡",
+  
+  "Settings_VolumeCurve": "Volume Curve",
+  "Settings_VolumeCurve_Desc": "How volume slider maps to actual loudness",
+  
+  "Settings_VolumeBoost": "Volume Boost",
+  "Settings_VolumeBoost_Tooltip": "Allow volume above 100%. When disabled, higher max volume only increases precision for fine-tuning.",
+  
+  "Settings_SmoothVolume": "Smooth Volume Changes",
+  "Settings_SmoothVolume_Tooltip": "Fade volume instead of instant changes. Prevents audio pops and clicks.",
+  
+  "Settings_AudioNormalization": "Audio Normalization",
+  "Settings_AudioNormalization_Tooltip": "Automatically balance volume levels between different tracks. May affect dynamics.",
+  
+  "Audio_ErrorSection": "🔔 Error Notifications",
+  "Audio_VolumeSection": "🔊 Volume",
+  "Audio_ProcessingSection": "⚙️ Processing",
+  "Audio_QualitySection": "🎵 Quality",
+  
+  "Settings_ErrorBehavior": "Playback Error Behavior",
+  "Settings_ErrorBehaviorDesc": "How to react when a track fails to play (stream unavailable, download error). Bot detection always shows a dialog.",
+  "Settings_ErrorBehavior_Dialog": "Show dialog and pause",
+  "Settings_ErrorBehavior_ToastAndSkip": "Show notification and skip",
+  "Settings_ErrorBehavior_Ignore": "Skip silently",
+  "Settings_PlayErrorSound": "Error Sound",
+  "Settings_PlayErrorSoundDesc": "Play a sound when a playback error occurs.",
+
+  "Settings_RememberFormat": "Remember Track Format",
+  "Settings_RememberFormatDesc": "Save preferred audio format per track",
+  
+  "Settings_AudioQualityDesc": "Preferred streaming quality when available",
+  
+  "Settings_SmoothLoading": "Smooth Loading Animations",
+  "Settings_SmoothLoadingDesc": "Show smooth skeleton loaders instead of instant content",
+  
+  "General_AutoPasteDesc": "Automatically play when YouTube URL is pasted",
+  "General_DiscordDesc": "Show currently playing track in Discord status",
+  
+  "Settings_SearchCache": "Cache Search Results",
+  "Settings_SearchCacheDesc": "Store search results for faster repeated searches",
+  "Settings_SearchCacheTtl": "Cache Duration",
+  
+  "Settings_Playback": "Playback",
+
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",
   "Settings_Network": "Network & Streaming",
@@ -99,8 +149,6 @@
 
   "Settings_Audio": "Audio",
   "Settings_AudioQuality": "Quality",
-  "Settings_AudioQualityDesc": "Preferred audio format/bitrate.",
-  "Settings_RememberFormat": "Remember format per track",
   "Settings_SearchBatchSize": "Search batch size",
   "Settings_SearchBatchSizeDesc": "Number of tracks to load when scrolling in search results",
   "Settings_UserAgentDesc": "Insert the User-Agent from your browser to prevent cookie expiration.",
@@ -259,6 +307,10 @@
   "Input_Watermark": "Enter text...",
   "Input_PasteHere": "Paste here...",
 
+  "Dialog_BotDetection_Title": "Temporary Slowdown",
+  "Dialog_BotDetection_Message": "YouTube detected unusual activity and temporarily limited playback.\n\nThis is normal after playing many tracks quickly.",
+  "Dialog_BotDetection_Hint": "Playback resumes automatically. Don't close the player.",
+
   "Sync_Action": "Import",
   "Sync_DuplicateName": "Imported",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",
@@ -310,5 +362,74 @@
   "Delete_LocalOnly": "Remove from Library",
   "Delete_LocalOnlyHint": "Keeps the playlist on YouTube",
   "Delete_Everywhere": "Delete Everywhere",
-  "Delete_EverywhereHint": "Removes from YouTube account too"
+  "Delete_EverywhereHint": "Removes from YouTube account too",
+
+  "Notification_JustNow": "Just now",
+  "Notification_MinutesAgo": "{0} min ago",
+  "Notification_HoursAgo": "{0}h ago",
+  "Notification_MarkAllRead": "Mark all as read",
+  "Notification_Clear": "Clear",
+  "Notification_NoNotifications": "No notifications",
+  "Notification_ViewDetails": "View details",
+  "Notification_HideDetails": "Hide details",
+  "Notification_CopyError": "Copy error",
+  "Notification_CopyTrackUrl": "Copy track link",
+
+  "Attempt_Success": "Success",
+  "Attempt_Failed": "Failed",
+  "Attempt_Trying": "Trying {0}...",
+
+  "Recommendation_Login": "Go to Settings → Account and sign in with YouTube cookies.",
+  "Recommendation_Login_AgeRestricted": "This video is age-restricted. Sign in via Settings → Account.",
+  "Recommendation_MembersOnly": "This content is for channel members only.",
+  "Recommendation_ChangeClient": "Try changing the YouTube Client in Settings → Network.",
+  "Recommendation_UseVPN": "This content is region-blocked. Try using a VPN or proxy.",
+  "Recommendation_Private": "This is a private video. Ask the owner to make it public.",
+  "Recommendation_Removed": "This video has been removed from YouTube.",
+  "Recommendation_Payment": "This content requires a YouTube Premium subscription.",
+  "Recommendation_LiveStream": "Live streams are not yet supported. Try again after the stream ends.",
+  "Recommendation_CheckNetwork": "Check your internet connection and try again.",
+  "Recommendation_ContactDev": "If this keeps happening, please contact the developer.",
+  "Recommendation_Login_403": "Sign in to YouTube via Settings → Account to access this content.",
+  "Recommendation_AllClientsFailed_Auth": "All clients failed. Try changing the client in Settings → Network, or contact the developer.",
+  "Notification_Resize": "Drag to resize panel",
+
+  "Error_CopyDetails": "Copy Details",
+  
+  "Error_BotDetection_Message": "YouTube rate limit active. Please wait {0}.",
+  
+  "Error_Stream_HlsForbidden": "HLS stream blocked (403). Please contact the developer.",
+  "Error_Stream_Forbidden": "Track access forbidden (403). Try another track or contact the developer.",
+  "Error_Stream_AllClientsFailed": "Could not access track through any method. Please contact the developer.",
+  "Error_Stream_RegionBlocked": "Track is not available in your region.",
+  "Error_Stream_AgeRestricted": "Track is age-restricted. Please sign in to YouTube.",
+  "Error_Stream_LiveStream": "Live streams are not supported yet.",
+  "Error_Stream_Private": "This is a private video.",
+  "Error_Stream_Removed": "Video has been removed.",
+  "Error_Stream_PaymentRequired": "This content requires a subscription.",
+  "Error_Stream_Unknown": "Track unavailable. Please contact the developer.",
+  "Error_Stream_Generic": "Could not play track. Please contact the developer.",
+  "Error_Login_Required": "This content requires signing in to YouTube. Please go to Settings → Account and add your cookies.",
+  "Error_Login_AgeRestricted": "This video is age-restricted. Please sign in to YouTube in Settings → Account.",
+  "Error_Login_Private": "This is a private video. Access requires authorization.",
+  "Error_Login_MembersOnly": "This content is available only to channel members.",
+  "Error_Playback_Title": "Playback Error",
+  "Error_StreamUnavailable_Title": "Stream Unavailable",
+  "Error_Stream_UmpFormat": "YouTube returned encrypted format. Please contact the developer.",
+  "Error_Stream_MaxRetries": "Failed to download stream after multiple attempts.",
+  "Error_Stream_Network": "Network error. Please check your connection.",
+
+  "Splash_Initializing": "Initializing...",
+  "Splash_InitAudioCache": "Initializing audio cache...",
+  "Splash_LoadingLibrary": "Loading library...",
+  "Splash_PreparingImages": "Preparing images...",
+  "Splash_ConnectingYouTube": "Connecting to YouTube...",
+  "Splash_BuildingInterface": "Building interface...",
+  "Splash_Ready": "Ready!",
+  "Splash_Commits": "{0} commits",
+  "Splash_Error": "Error: {0}",
+  
+  "Build_Version": "v{0}",
+  "Build_VersionDev": "v{0}-dev",
+  "Build_CommitsCount": "{0} commits"
 }

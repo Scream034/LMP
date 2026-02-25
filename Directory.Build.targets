@@ -1,0 +1,53 @@
+<Project>
+  <Target Name="SetGitVersionInfo" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo" Condition="Exists('.git')">
+    
+    <Exec Command="git rev-list --count HEAD" 
+          ConsoleToMSBuild="true" 
+          StandardOutputImportance="low"
+          IgnoreExitCode="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
+      <Output TaskParameter="ExitCode" PropertyName="GitExitCode" />
+    </Exec>
+    
+    <Exec Command="git rev-parse --short=7 HEAD" 
+          ConsoleToMSBuild="true" 
+          StandardOutputImportance="low"
+          IgnoreExitCode="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortHash" />
+    </Exec>
+    
+    <PropertyGroup Condition="'$(GitExitCode)' != '0' OR '$(GitCommitCount)' == ''">
+      <GitCommitCount>0</GitCommitCount>
+      <GitShortHash>local</GitShortHash>
+    </PropertyGroup>
+    
+    <!-- Убираем пробелы/переводы строк -->
+    <PropertyGroup>
+      <GitCommitCount>$([System.String]::Copy('$(GitCommitCount)').Trim())</GitCommitCount>
+      <GitShortHash>$([System.String]::Copy('$(GitShortHash)').Trim())</GitShortHash>
+    </PropertyGroup>
+    
+    <PropertyGroup>
+      <Version>1.0.$(GitCommitCount)</Version>
+      <AssemblyVersion>1.0.$(GitCommitCount).0</AssemblyVersion>
+      <FileVersion>1.0.$(GitCommitCount).0</FileVersion>
+      <InformationalVersion>1.0.$(GitCommitCount)+$(GitShortHash)</InformationalVersion>
+    </PropertyGroup>
+    
+    <Message Importance="High" Text="══════════════════════════════════════" />
+    <Message Importance="High" Text="[Git] Build #$(GitCommitCount) ($(GitShortHash))" />
+    <Message Importance="High" Text="══════════════════════════════════════" />
+  </Target>
+  
+  <Target Name="SetFallbackVersion" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo" Condition="!Exists('.git')">
+    <PropertyGroup>
+      <Version>1.0.0</Version>
+      <AssemblyVersion>1.0.0.0</AssemblyVersion>
+      <FileVersion>1.0.0.0</FileVersion>
+      <InformationalVersion>1.0.0+local</InformationalVersion>
+    </PropertyGroup>
+    <Message Importance="High" Text="[Git] No repository, using fallback version" />
+  </Target>
+</Project>

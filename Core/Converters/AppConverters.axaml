@@ -23,5 +23,6 @@
     <conv:BoolToFontWeightConverter x:Key="BoolToFontWeight" />
     <conv:BoolToIconConverter x:Key="BoolToIconConverter" />
     <conv:WindowButtonVisibilityConverter x:Key="WindowButtonVisibility" />
+    <conv:SeverityToColorConverter x:Key="SeverityToColor" />
 
 </ResourceDictionary>

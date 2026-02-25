@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="32" fill="#0F0B15"/>
+  <rect x="24" y="24" width="208" height="208" rx="24" fill="#1A1625"/>
+  
+  <!-- Play Triangle -->
+  <path d="M80 60 L176 128 L80 196 Z" fill="#8A2BE2"/>
+  
+  <!-- Speed Chevrons -->
+  <path d="M160 160 L190 190 L160 220" stroke="#8A2BE2" stroke-width="16" 
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M190 160 L220 190 L190 220" stroke="#8A2BE2" stroke-width="16" 
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

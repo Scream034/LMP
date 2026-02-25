@@ -64,15 +64,16 @@
                 </Grid>
             </Border>
 
-            <!-- Categories -->
+            <!-- Categories с использованием локального стиля -->
             <ListBox ItemsSource="{Binding Categories}"
                 SelectedItem="{Binding SelectedCategory}"
                 Background="Transparent" Margin="0,0,0,12"
                 ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                Classes="chip-list">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="8" />
+                        <StackPanel Orientation="Horizontal" Spacing="0" />
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemTemplate>
@@ -80,22 +81,11 @@
                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" />
                     </DataTemplate>
                 </ListBox.ItemTemplate>
-                <ListBox.Styles>
-                    <Style Selector="ListBoxItem">
-                        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-                        <Setter Property="Padding" Value="14,6" />
-                        <Setter Property="CornerRadius" Value="16" />
-                        <Setter Property="Cursor" Value="Hand" />
-                    </Style>
-                    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                        <Setter Property="Background" Value="{DynamicResource TextPrimaryBrush}" />
-                        <Setter Property="Foreground" Value="{DynamicResource BgPrimaryBrush}" />
-                    </Style>
-                </ListBox.Styles>
             </ListBox>
 
             <!-- TEXT FILTER ONLY -->
-            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36" Padding="8,0">
+            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36"
+                Padding="8,0">
                 <Grid ColumnDefinitions="Auto, *">
                     <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
                         Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,0,0" />

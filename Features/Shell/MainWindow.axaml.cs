@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using LMP.Core.Helpers;
 using LMP.Core.Services;
+using LMP.Core.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LMP.Features.Shell;
@@ -13,145 +14,168 @@ public partial class MainWindow : Window
     private Button? _maximizeButton;
     private Button? _closeButton;
     private Border? _dragArea;
-    private Border? _maximizeIcon;
-    private Grid? _restoreIcon;
 
     private CancellationTokenSource? _cleanupCts;
+
+    // Состояние окна
+    private volatile bool _isMinimized;
+    private DateTime _lastCleanupTime = DateTime.MinValue;
+    private const int MinCleanupIntervalMs = 30_000; // Не чаще раза в 30 секунд
 
     public MainWindow()
     {
         InitializeComponent();
 
-        // 1. Отслеживаем состояние окна (Свернуть/Развернуть)
-        this.PropertyChanged += MainWindow_PropertyChanged;
-
-        // 2. Отслеживаем потерю и получение фокуса (Alt-Tab)
-        this.Deactivated += OnWindowDeactivated;
-        this.Activated += OnWindowActivated;
+        PropertyChanged += MainWindow_PropertyChanged;
+        Deactivated += OnWindowDeactivated;
+        Activated += OnWindowActivated;
     }
 
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
 
-        // Находим элементы управления
         _minimizeButton = this.FindControl<Button>("MinimizeButton");
         _maximizeButton = this.FindControl<Button>("MaximizeButton");
         _closeButton = this.FindControl<Button>("CloseButton");
         _dragArea = this.FindControl<Border>("DragArea");
-        _maximizeIcon = this.FindControl<Border>("MaximizeIcon");
-        _restoreIcon = this.FindControl<Grid>("RestoreIcon");
 
-        // Привязываем обработчики
         _minimizeButton?.Click += (_, _) => WindowState = WindowState.Minimized;
-
         _maximizeButton?.Click += (_, _) => ToggleMaximize();
-
         _closeButton?.Click += (_, _) => Close();
 
-        // Перетаскивание окна за title bar
         var titleBar = this.FindControl<Grid>("TitleBar");
         titleBar?.PointerPressed += OnTitleBarPointerPressed;
-
-        // Двойной клик для maximize/restore
         _dragArea?.DoubleTapped += (_, _) => ToggleMaximize();
     }
 
+    //  LIFECYCLE: Minimize / Restore / Deactivate / Activate
+
     private void MainWindow_PropertyChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property == Window.WindowStateProperty)
+        if (e.Property != WindowStateProperty) return;
+
+        var state = (WindowState)e.NewValue!;
+
+        if (state == WindowState.Minimized)
         {
-            var state = (WindowState)e.NewValue!;
-            if (state == WindowState.Minimized)
-            {
-                // При явном сворачивании чистим быстро (через 200мс)
-                ScheduleCleanup(TimeSpan.FromMilliseconds(200));
-            }
-            else
-            {
-                // Если развернули - отменяем очистку (если она еще не прошла)
-                CancelCleanup();
-            }
+            _isMinimized = true;
+
+            // 1. Уведомляем ВСЕ ViewModel-и (UI-поток)
+            ViewModelBase.BroadcastSuspend();
+
+            // 2. Замедляем мониторинг памяти
+            MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(30));
+
+            // 3. Планируем глубокую очистку через 500мс
+            ScheduleCleanup(TimeSpan.FromMilliseconds(500), aggressive: true);
+        }
+        else if (_isMinimized)
+        {
+            _isMinimized = false;
+
+            // 1. Отменяем очистку (если не успела)
+            CancelCleanup();
+
+            // 2. Восстанавливаем мониторинг
+            MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(5));
+
+            // 3. Уведомляем ВСЕ ViewModel-и (UI-поток)
+            ViewModelBase.BroadcastResume();
         }
     }
-
 
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
         // Пользователь переключился на другое окно.
-        // Ждем 60 секунд. Если не вернется — чистим память.
-        // Если музыка играет, это безопасно.
-        ScheduleCleanup(TimeSpan.FromMinutes(1));
+        // Ждём 2 минуты. Если не вернётся — чистим память.
+        ScheduleCleanup(TimeSpan.FromMinutes(2), aggressive: false);
     }
 
     private void OnWindowActivated(object? sender, EventArgs e)
     {
-        // Пользователь вернулся в окно.
-        // Срочно отменяем запланированную очистку!
         CancelCleanup();
     }
 
-    private void ScheduleCleanup(TimeSpan delay)
+    //  CLEANUP: Очистка памяти
+
+    private void ScheduleCleanup(TimeSpan delay, bool aggressive)
     {
-        // Отменяем предыдущую задачу, если была
         CancelCleanup();
         _cleanupCts = new CancellationTokenSource();
-
         var token = _cleanupCts.Token;
 
-        Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
             try
             {
-                // Ждем указанное время
                 await Task.Delay(delay, token);
-
-                // Если токен отменили пока мы ждали - выходим
                 if (token.IsCancellationRequested) return;
 
-                // Запускаем очистку
-                PerformDeepCleanup();
+                // Проверяем интервал между очистками
+                var now = DateTime.UtcNow;
+                if (!aggressive && (now - _lastCleanupTime).TotalMilliseconds < MinCleanupIntervalMs)
+                    return;
+
+                _lastCleanupTime = now;
+                PerformCleanup(aggressive);
             }
-            catch (OperationCanceledException)
-            {
-                // Игнорируем отмену
-            }
+            catch (OperationCanceledException) { /* Ожидаемо */ }
         });
     }
 
-    private void PerformDeepCleanup()
+    private static void PerformCleanup(bool aggressive)
     {
-        // Логируем для отладки (потом можно убрать)
-        Log.Info("[Memory] Triggering background cleanup...");
+        Log.Info($"[Memory] Cleanup (aggressive={aggressive})");
 
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        // Тяжёлую работу — в фоновый поток
+        _ = Task.Run(() =>
         {
-            // Получаем сервисы (безопасно делать это в UI потоке или через Program.Services)
-            // Но саму тяжелую работу делаем в Task.Run
-
-            Task.Run(() =>
+            try
             {
-                // 1. Сбрасываем кэш картинок
+                // 1. Кэш картинок
                 var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
-                imageCache.ClearMemoryCache();
+                if (aggressive)
+                    imageCache.ClearMemoryCache();
+                else
+                    imageCache.EnforceLimits();
 
-                // 2. Сбрасываем кэш VM
+                // 2. Кэш VM
                 var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
                 vmFactory.CleanupCache();
 
-                // 3. Сбрасываем буферы аудио (если играет)
+                // 3. Буферы аудио
                 var audioEngine = Program.Services.GetRequiredService<AudioEngine>();
-                audioEngine.NotifyAppMinimized();
+                AudioEngine.NotifyAppMinimized();
 
-                // 4. Жесткий GC
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
-                GC.WaitForPendingFinalizers();
-                System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                // 4. Мёртвые ссылки в TrackRegistry
+                var registry = Program.Services.GetRequiredService<TrackRegistry>();
+                registry.CleanupDeadReferences();
 
-                // 5. Сброс Working Set OS
+                // 5. GC
+                if (aggressive)
+                {
+                    System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                        System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                }
+                else
+                {
+                    GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
+                }
+
+                // 6. Сброс Working Set
                 MemoryHelpers.TrimWorkingSet();
-            });
+
+                var afterMb = GC.GetTotalMemory(false) / 1024 / 1024;
+                Log.Info($"[Memory] After cleanup: {afterMb} MB");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[Memory] Cleanup error: {ex.Message}");
+            }
         });
     }
 
@@ -165,16 +189,13 @@ public partial class MainWindow : Window
         }
     }
 
+    //  WINDOW CHROME
+
     private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        // Проверяем, что это не клик по кнопкам
         if (e.Source is Button) return;
-
-        // Начинаем перетаскивание окна
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
             BeginMoveDrag(e);
-        }
     }
 
     private void ToggleMaximize()
@@ -184,21 +205,12 @@ public partial class MainWindow : Window
             : WindowState.Maximized;
     }
 
-    private void OnWindowStateChanged(WindowState state)
+    protected override void OnClosed(EventArgs e)
     {
-        // Переключаем иконки maximize/restore
-        if (_maximizeIcon != null && _restoreIcon != null)
-        {
-            var isMaximized = state == WindowState.Maximized;
-            _maximizeIcon.IsVisible = !isMaximized;
-            _restoreIcon.IsVisible = isMaximized;
-        }
-
-        // Обновляем тултип кнопки maximize
-        if (_maximizeButton != null && DataContext is MainWindowViewModel vm)
-        {
-            var key = state == WindowState.Maximized ? "Window_Restore" : "Window_Maximize";
-            ToolTip.SetTip(_maximizeButton, vm.L[key]);
-        }
+        CancelCleanup();
+        PropertyChanged -= MainWindow_PropertyChanged;
+        Deactivated -= OnWindowDeactivated;
+        Activated -= OnWindowActivated;
+        base.OnClosed(e);
     }
 }

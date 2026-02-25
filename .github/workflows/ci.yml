@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, avalonia ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: packages.lock.json
+
+      - name: Build Debug
+        run: ./build.bat debug
+
+      - name: Build Optimized Debug
+        run: ./build.bat optimized

@@ -19,12 +19,8 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     private List<string> _masterIds = [];
     private readonly Dictionary<string, TSource> _loadedSources = [];
     private readonly Dictionary<string, TViewModel> _vmCache = [];
-    private readonly ObservableCollection<TViewModel> _visibleItems = [];
-
     private CancellationTokenSource? _loadCts;
-    private int _loadedCount;
     private bool _isDisposed;
-    private string _filterQuery = string.Empty;
 
     #endregion
 
@@ -42,21 +38,21 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     public string FilterQuery
     {
-        get => _filterQuery;
+        get;
         set
         {
-            if (_filterQuery == value) return;
-            this.RaiseAndSetIfChanged(ref _filterQuery, value);
+            if (field == value) return;
+            this.RaiseAndSetIfChanged(ref field, value);
             RebuildVisibleItems();
         }
-    }
+    } = string.Empty;
 
-    public ObservableCollection<TViewModel> Items => _visibleItems;
+    public ObservableCollection<TViewModel> Items { get; } = [];
 
     protected int TotalCount => _masterIds.Count;
-    protected int LoadedCount => _loadedCount;
+    protected int LoadedCount { get; private set; }
 
-    public bool CanReorder => string.IsNullOrWhiteSpace(_filterQuery);
+    public bool CanReorder => string.IsNullOrWhiteSpace(FilterQuery);
 
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
 
@@ -102,12 +98,12 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         _masterIds = [.. allIds];
         _loadedSources.Clear();
-        _loadedCount = 0;
+        LoadedCount = 0;
 
         foreach (var vm in _vmCache.Values)
             vm.Dispose();
         _vmCache.Clear();
-        _visibleItems.Clear();
+        Items.Clear();
 
         UpdateState();
 
@@ -131,12 +127,12 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         {
             _loadedSources[GetItemId(item)] = item;
         }
-        _loadedCount = itemsList.Count;
+        LoadedCount = itemsList.Count;
 
         foreach (var vm in _vmCache.Values)
             vm.Dispose();
         _vmCache.Clear();
-        _visibleItems.Clear();
+        Items.Clear();
 
         RebuildVisibleItems();
         UpdateState();
@@ -148,7 +144,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private async Task LoadNextBatchAsync()
     {
-        if (_isDisposed || IsLoadingMore || _loadedCount >= _masterIds.Count)
+        if (_isDisposed || IsLoadingMore || LoadedCount >= _masterIds.Count)
             return;
 
         IsLoadingMore = true;
@@ -158,14 +154,14 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             var ct = _loadCts?.Token ?? CancellationToken.None;
 
             var idsToLoad = _masterIds
-                .Skip(_loadedCount)
+                .Skip(LoadedCount)
                 .Take(BatchSize)
                 .Where(id => !_loadedSources.ContainsKey(id))
                 .ToList();
 
             if (idsToLoad.Count == 0)
             {
-                _loadedCount = _masterIds.Count;
+                LoadedCount = _masterIds.Count;
                 UpdateState();
                 return;
             }
@@ -179,9 +175,9 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
                 _loadedSources[id] = item;
             }
 
-            _loadedCount += BatchSize;
-            if (_loadedCount > _masterIds.Count)
-                _loadedCount = _masterIds.Count;
+            LoadedCount += BatchSize;
+            if (LoadedCount > _masterIds.Count)
+                LoadedCount = _masterIds.Count;
 
             AppendNewItemsToVisible(loaded);
             UpdateState();
@@ -198,7 +194,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private void AppendNewItemsToVisible(IEnumerable<TSource> newItems)
     {
-        var query = _filterQuery;
+        var query = FilterQuery;
         foreach (var item in newItems)
         {
             if (!MatchesFilter(item, query)) continue;
@@ -210,28 +206,28 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             _vmCache[id] = vm;
 
             int insertIndex = FindInsertIndex(id);
-            if (insertIndex >= 0 && insertIndex <= _visibleItems.Count)
-                _visibleItems.Insert(insertIndex, vm);
+            if (insertIndex >= 0 && insertIndex <= Items.Count)
+                Items.Insert(insertIndex, vm);
             else
-                _visibleItems.Add(vm);
+                Items.Add(vm);
         }
     }
 
     private int FindInsertIndex(string itemId)
     {
         int masterIndex = _masterIds.IndexOf(itemId);
-        if (masterIndex < 0) return _visibleItems.Count;
+        if (masterIndex < 0) return Items.Count;
 
-        for (int i = 0; i < _visibleItems.Count; i++)
+        for (int i = 0; i < Items.Count; i++)
         {
-            var existingId = GetVmId(_visibleItems[i]);
+            var existingId = GetVmId(Items[i]);
             int existingMasterIndex = _masterIds.IndexOf(existingId);
 
             if (existingMasterIndex > masterIndex)
                 return i;
         }
 
-        return _visibleItems.Count;
+        return Items.Count;
     }
 
     private string GetVmId(TViewModel vm)
@@ -250,7 +246,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     protected void RebuildVisibleItems()
     {
-        var query = _filterQuery;
+        var query = FilterQuery;
         var newVisible = new List<TViewModel>();
 
         foreach (var id in _masterIds)
@@ -275,19 +271,19 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private void SyncVisibleItems(List<TViewModel> newItems)
     {
-        while (_visibleItems.Count > newItems.Count)
-            _visibleItems.RemoveAt(_visibleItems.Count - 1);
+        while (Items.Count > newItems.Count)
+            Items.RemoveAt(Items.Count - 1);
 
         for (int i = 0; i < newItems.Count; i++)
         {
-            if (i < _visibleItems.Count)
+            if (i < Items.Count)
             {
-                if (!ReferenceEquals(_visibleItems[i], newItems[i]))
-                    _visibleItems[i] = newItems[i];
+                if (!ReferenceEquals(Items[i], newItems[i]))
+                    Items[i] = newItems[i];
             }
             else
             {
-                _visibleItems.Add(newItems[i]);
+                Items.Add(newItems[i]);
             }
         }
     }
@@ -299,8 +295,8 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     public void MoveItem(int oldIndex, int newIndex)
     {
         if (oldIndex == newIndex) return;
-        if (oldIndex < 0 || oldIndex >= _visibleItems.Count) return;
-        if (newIndex < 0 || newIndex >= _visibleItems.Count) return;
+        if (oldIndex < 0 || oldIndex >= Items.Count) return;
+        if (newIndex < 0 || newIndex >= Items.Count) return;
 
         if (!CanReorder)
         {
@@ -308,7 +304,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             return;
         }
 
-        var movingVm = _visibleItems[oldIndex];
+        var movingVm = Items[oldIndex];
         var movingId = GetVmId(movingVm);
         if (string.IsNullOrEmpty(movingId)) return;
 
@@ -317,14 +313,14 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         _masterIds.RemoveAt(oldIndex);
         _masterIds.Insert(newIndex, movingId);
 
-        _visibleItems.Move(oldIndex, newIndex);
+        Items.Move(oldIndex, newIndex);
     }
 
     public async Task MoveItemAsync(int oldIndex, int newIndex)
     {
         if (oldIndex == newIndex) return;
-        if (oldIndex < 0 || oldIndex >= _visibleItems.Count) return;
-        if (newIndex < 0 || newIndex >= _visibleItems.Count) return;
+        if (oldIndex < 0 || oldIndex >= Items.Count) return;
+        if (newIndex < 0 || newIndex >= Items.Count) return;
 
         if (!CanReorder)
         {
@@ -332,7 +328,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             return;
         }
 
-        var movingVm = _visibleItems[oldIndex];
+        var movingVm = Items[oldIndex];
         var movingId = GetVmId(movingVm);
         if (string.IsNullOrEmpty(movingId)) return;
 
@@ -340,7 +336,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         _masterIds.RemoveAt(oldIndex);
         _masterIds.Insert(newIndex, movingId);
-        _visibleItems.Move(oldIndex, newIndex);
+        Items.Move(oldIndex, newIndex);
 
         try
         {
@@ -352,7 +348,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             Log.Error($"[Move] Save failed: {ex.Message}");
             _masterIds.RemoveAt(newIndex);
             _masterIds.Insert(oldIndex, movingId);
-            _visibleItems.Move(newIndex, oldIndex);
+            Items.Move(newIndex, oldIndex);
         }
     }
 
@@ -371,7 +367,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private void UpdateState()
     {
-        HasMoreItems = _loadedCount < _masterIds.Count;
+        HasMoreItems = LoadedCount < _masterIds.Count;
         ReachedEnd = !HasMoreItems && _masterIds.Count > 0;
     }
 
@@ -399,7 +395,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             CancelLoading();
 
             _vmCache.Clear();
-            _visibleItems.Clear();
+            Items.Clear();
             _loadedSources.Clear();
             _masterIds.Clear();
         }

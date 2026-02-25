@@ -11,6 +11,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using LMP.Core.Helpers;
 using System.Reactive.Disposables;
+using LMP.Core.Audio;
 
 namespace LMP.Features.Search;
 
@@ -24,13 +25,11 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     #region Fields
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
-    private readonly StreamCacheManager _streamCache;
     private readonly ImageCacheService _imageCache;
     private readonly AudioEngine _audio;
     private readonly TrackViewModelFactory _vmFactory;
 
     private string _currentQuery = "";
-    private ContentSource _currentSource = ContentSource.YouTubeMusic;
     private CancellationTokenSource? _searchCts;
     private YoutubeProvider.SearchSession? _searchSession;
     private DateTime _lastSearchTime = DateTime.MinValue;
@@ -74,15 +73,13 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         AudioEngine audio,
-        TrackViewModelFactory vmFactory,
-        StreamCacheManager streamCache)
+        TrackViewModelFactory vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
         _audio = audio;
         _vmFactory = vmFactory;
-        _streamCache = streamCache;
 
         foreach (var item in LibService.Settings.SearchHistory)
             RecentSearches.Add(item);
@@ -152,14 +149,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         }
     }
 
-    private void LogError(string source, Exception ex)
-    {
-        if (ex is OperationCanceledException) return;
-        Log.Error($"[{source}] Unhandled error: {ex.Message}");
-        ErrorMessage = SL["Search_NetworkError"];
-        IsLoading = false;
-    }
-
     /// <summary>
     /// Конвертирует ContentSource в SearchFilter для YouTube API.
     /// </summary>
@@ -217,9 +206,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
                 if (newTracks.Count > 0)
                 {
-                    // ИСПРАВЛЕНИЕ #3: Проверка наличия трека в полном кэше
-                    // ChunkCacheService (StreamCacheManager) знает, скачан ли файл полностью
-                    _streamCache.HydrateCacheStatus(newTracks);
+                    AudioSourceFactory.GlobalCache?.HydrateCacheStatus(newTracks);
 
                     if (LibService.Settings.EnableSearchCache)
                     {
@@ -303,7 +290,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
             HasResults = false;
             _currentQuery = SearchQuery.Trim();
-            _currentSource = Source;
 
             try
             {

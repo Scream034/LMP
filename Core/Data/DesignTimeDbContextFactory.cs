@@ -16,7 +16,7 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Lib
         // Use a temporary path for design-time operations
         var dbPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            G.AppId, G.File.Database);
+            G.AppId, G.FilePath.Database);
         
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         

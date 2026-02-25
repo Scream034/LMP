@@ -1,4 +1,6 @@
 ﻿using System.Reactive;
+using System.Reactive.Linq;
+using System.Windows.Input;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Services;
 using ReactiveUI;
@@ -11,7 +13,7 @@ using LMP.Features.Home;
 using LMP.Features.Library;
 using LMP.Features.Settings;
 using LMP.Features.Playlist;
-using System.Reactive.Concurrency;
+using LMP.Features.Notifications;
 using System.Runtime;
 
 namespace LMP.Features.Shell;
@@ -20,42 +22,80 @@ public class MainWindowViewModel : ViewModelBase
 {
     private readonly IServiceProvider _services;
 
+    // ═══ VERSION INFO (реактивные для смены языка) ═══
+    private bool _isVersionInfoVisible;
+    public bool IsVersionInfoVisible
+    {
+        get => _isVersionInfoVisible;
+        set => this.RaiseAndSetIfChanged(ref _isVersionInfoVisible, value);
+    }
+
+    // Статические данные (не меняются)
+    public static string VersionDisplay => G.Build.DisplayVersion;
+    public static string GitHashDisplay => G.Build.GitHash;
+
+    // Реактивное свойство для локализованного текста коммитов
+    private string _commitsDisplay = "";
+    public string CommitsDisplay
+    {
+        get => _commitsDisplay;
+        private set => this.RaiseAndSetIfChanged(ref _commitsDisplay, value);
+    }
+
+    public ICommand ToggleVersionInfoCommand { get; }
+    public ICommand OpenGitHubCommand { get; }
+
+    // ═══ NAVIGATION ═══
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
     [Reactive] public string CurrentPageName { get; private set; } = "Home";
 
-    // Блокировка навигации
     [Reactive] public bool IsNavigationLocked { get; private set; }
     [Reactive] public string NavigationLockReason { get; private set; } = "";
 
-    // Команды навигации
+    // ═══ NOTIFICATIONS ═══
+    [Reactive] public NotificationButtonViewModel NotificationButton { get; private set; }
+    [Reactive] public NotificationPanelViewModel NotificationPanel { get; private set; }
+    [Reactive] public ToastOverlayViewModel ToastOverlay { get; private set; }
+
     public ReactiveCommand<string, Unit> NavigateCommand { get; }
 
     public MainWindowViewModel(
         IServiceProvider services,
-        PlayerBarViewModel playerBar)
+        PlayerBarViewModel playerBar,
+        NotificationButtonViewModel notificationButton,
+        NotificationPanelViewModel notificationPanel,
+        ToastOverlayViewModel toastOverlay)
     {
         Log.Info("MainWindowViewModel constructor started.");
 
         _services = services;
         PlayerBar = playerBar;
+        NotificationButton = notificationButton;
+        NotificationPanel = notificationPanel;
+        ToastOverlay = toastOverlay;
 
-        var audio = services.GetRequiredService<AudioEngine>();
-        var dialog = services.GetRequiredService<IDialogService>();
+        // ═══ ИНИЦИАЛИЗАЦИЯ ТЕКСТА КОММИТОВ ═══
+        UpdateCommitsDisplay();
 
-        audio.OnCriticalError += (title, msg) =>
+        // ═══ ПОДПИСКА НА СМЕНУ ЯЗЫКА ═══
+        LocalizationService.Instance.LanguageChanged += (_, _) =>
         {
-            // Гарантируем, что диалог не заблокирует поток обработки аудио
-            RxApp.MainThreadScheduler.Schedule(async () =>
-            {
-                await dialog.ShowInfoAsync(title, msg);
-            });
+            UpdateCommitsDisplay();
+            // Уведомляем UI об изменении L
+            this.RaisePropertyChanged(nameof(L));
         };
 
-        // Навигация возможна только если не заблокирована
+        // ═══ КОМАНДА TOGGLE VERSION ═══
+        ToggleVersionInfoCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            IsVersionInfoVisible = !IsVersionInfoVisible;
+        }));
+
+        OpenGitHubCommand = CreateCommand(ReactiveCommand.Create(OpenGitHub));
+
         var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
 
-        // FIX: ThrownExceptions subscription to prevent memory leak
         NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
         {
             if (!IsNavigationLocked)
@@ -69,9 +109,14 @@ public class MainWindowViewModel : ViewModelBase
         Log.Info("MainWindowViewModel initialized.");
     }
 
-    /// <summary>
-    /// Блокирует навигацию на время выполнения операции
-    /// </summary>
+    private void UpdateCommitsDisplay()
+    {
+        var L = LocalizationService.Instance;
+        CommitsDisplay = $"({string.Format(L["Build_CommitsCount"], G.Build.CommitCount)})";
+    }
+
+    // ... остальной код без изменений (LockNavigation, Navigate, etc.)
+
     public void LockNavigation(string reason)
     {
         IsNavigationLocked = true;
@@ -79,9 +124,6 @@ public class MainWindowViewModel : ViewModelBase
         Log.Info($"[Navigation] Locked: {reason}");
     }
 
-    /// <summary>
-    /// Разблокирует навигацию
-    /// </summary>
     public void UnlockNavigation()
     {
         IsNavigationLocked = false;
@@ -89,9 +131,6 @@ public class MainWindowViewModel : ViewModelBase
         Log.Info("[Navigation] Unlocked");
     }
 
-    /// <summary>
-    /// Выполняет операцию с блокировкой навигации
-    /// </summary>
     public async Task WithNavigationLockAsync(string reason, Func<Task> operation)
     {
         LockNavigation(reason);
@@ -105,9 +144,6 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Выполняет операцию с блокировкой навигации и возвратом результата
-    /// </summary>
     public async Task<T> WithNavigationLockAsync<T>(string reason, Func<Task<T>> operation)
     {
         LockNavigation(reason);
@@ -128,11 +164,9 @@ public class MainWindowViewModel : ViewModelBase
         var sw = Stopwatch.StartNew();
         Log.Info($"Switching to page: {pageName} (Type: {pageName}ViewModel)");
 
-        // 1. Сохраняем ссылку на старую страницу
         var oldPage = CurrentPage;
         var oldPageName = CurrentPageName;
 
-        // 2. Создаём и показываем новую страницу СРАЗУ
         CurrentPage = pageName switch
         {
             "Home" => _services.GetRequiredService<HomeViewModel>(),
@@ -148,7 +182,6 @@ public class MainWindowViewModel : ViewModelBase
         sw.Stop();
         Log.Info($"Successfully switched to {pageName} in {sw.ElapsedMilliseconds}ms");
 
-        // 3. ОТЛОЖЕННО диспозим старую страницу (после завершения render pass)
         if (oldPage is IDisposable disposable)
         {
             _ = DisposePageDelayedAsync(disposable, oldPageName);
@@ -157,7 +190,6 @@ public class MainWindowViewModel : ViewModelBase
 
     private async Task DisposePageDelayedAsync(IDisposable page, string pageName)
     {
-        // Ждём 2 render frames (~32ms при 60fps) чтобы UI точно отвязался
         await Task.Delay(50);
 
         try
@@ -170,11 +202,9 @@ public class MainWindowViewModel : ViewModelBase
             Log.Warn($"[Navigation] Error disposing {pageName}: {ex.Message}");
         }
 
-        // Cleanup после dispose
         _services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
         _services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
 
-        // Компактификация только при уходе с тяжёлых страниц
         if (pageName is "Search" or "Library" or "Home")
         {
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
@@ -190,24 +220,37 @@ public class MainWindowViewModel : ViewModelBase
 
         var oldPage = CurrentPage;
 
-        // Создаём и загружаем плейлист
         _ = Task.Run(async () =>
         {
             var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
             await playlistVM.LoadPlaylistAsync(playlistId);
 
-            // Переключаемся на UI потоке
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
                 CurrentPage = playlistVM;
                 CurrentPageName = "Playlist";
             });
 
-            // Отложенный dispose
             if (oldPage is IDisposable disposable)
             {
                 await DisposePageDelayedAsync(disposable, "Previous");
             }
         });
+    }
+
+    private static void OpenGitHub()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = G.GitHubUrl,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to open GitHub: {ex.Message}");
+        }
     }
 }

@@ -7,6 +7,7 @@
     xmlns:settings="using:LMP.Features.Settings"
     xmlns:playlist="using:LMP.Features.Playlist"
     xmlns:player="using:LMP.Features.Player"
+    xmlns:notifications="using:LMP.Features.Notifications"
     xmlns:views="using:LMP.Features.Shell"
     xmlns:homeV="using:LMP.Features.Home"
     xmlns:searchV="using:LMP.Features.Search"
@@ -32,105 +33,146 @@
 
         <!-- ═══ CUSTOM TITLE BAR - SCI-FI STYLE ═══ -->
         <Grid Grid.Row="0" Height="38" Background="{DynamicResource BgSecondaryBrush}"
-              ColumnDefinitions="Auto, *, Auto" Name="TitleBar">
-            
-            <!-- Left: Sci-Fi Logo (Play + Speed Arrow) -->
-            <Button Grid.Column="0" Background="Transparent" BorderThickness="0"
-                    Padding="12,0" Margin="0" VerticalAlignment="Stretch"
+            ColumnDefinitions="Auto, *, Auto" Name="TitleBar">
+
+            <!-- Left: App Logo + Version -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+
+                <!-- Logo Button (toggle version visibility) -->
+                <Button Background="Transparent" BorderThickness="0"
+                    Padding="12,0,8,0" Margin="0" VerticalAlignment="Stretch"
                     Cursor="Hand" Name="AppLogoButton"
+                    Command="{Binding ToggleVersionInfoCommand}"
                     ToolTip.Tip="{Binding L[Common_AppName]}">
-                <Button.Styles>
-                    <Style Selector="Button:pointerover /template/ ContentPresenter">
-                        <Setter Property="Background" Value="Transparent" />
-                    </Style>
-                </Button.Styles>
-                
-                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                    <!-- Sci-Fi Icon: Play Triangle + Speed Chevrons -->
-                    <Grid Width="24" Height="24">
-                        <!-- Outer glow effect (subtle) -->
-                        <Border Width="24" Height="24" CornerRadius="4" 
+                    <Button.Styles>
+                        <Style Selector="Button:pointerover /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                    </Button.Styles>
+
+                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                        <!-- Icon -->
+                        <Grid Width="24" Height="24">
+                            <Border Width="24" Height="24" CornerRadius="4"
                                 Background="{DynamicResource AccentBrush}" Opacity="0.15" />
-                        
-                        <!-- Play Triangle -->
-                        <Path Data="M8,5 L19,12 L8,19 Z" 
-                              Fill="{DynamicResource AccentBrush}"
-                              Stretch="Uniform" Width="12" Height="12"
-                              HorizontalAlignment="Left" VerticalAlignment="Center"
-                              Margin="4,0,0,0" />
-                        
-                        <!-- Speed Chevrons (>> arrows) -->
-                        <StackPanel Orientation="Horizontal" Spacing="-2"
-                                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                    Margin="0,0,1,3">
-                            <Path Data="M0,0 L4,4 L0,8" 
-                                  Stroke="{DynamicResource AccentBrush}" 
-                                  StrokeThickness="1.5"
-                                  StrokeLineCap="Round"
-                                  Width="5" Height="8" Stretch="Uniform" />
-                            <Path Data="M0,0 L4,4 L0,8" 
-                                  Stroke="{DynamicResource AccentBrush}" 
-                                  StrokeThickness="1.5"
-                                  StrokeLineCap="Round"
-                                  Width="5" Height="8" Stretch="Uniform" />
-                        </StackPanel>
-                    </Grid>
-                    
-                    <!-- App Name - Minimalist -->
-                    <TextBlock Text="LMP" FontSize="12" FontWeight="Bold"
-                        VerticalAlignment="Center" LetterSpacing="2"
-                        Foreground="{DynamicResource TextMutedBrush}">
-                        <TextBlock.Transitions>
-                            <Transitions>
-                                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
-                            </Transitions>
-                        </TextBlock.Transitions>
-                    </TextBlock>
-                </StackPanel>
-            </Button>
+                            <Path Data="M8,5 L19,12 L8,19 Z"
+                                Fill="{DynamicResource AccentBrush}"
+                                Stretch="Uniform" Width="12" Height="12"
+                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Margin="4,0,0,0" />
+                            <StackPanel Orientation="Horizontal" Spacing="-2"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                Margin="0,0,1,3">
+                                <Path Data="M0,0 L4,4 L0,8"
+                                    Stroke="{DynamicResource AccentBrush}"
+                                    StrokeThickness="1.5" StrokeLineCap="Round"
+                                    Width="5" Height="8" Stretch="Uniform" />
+                                <Path Data="M0,0 L4,4 L0,8"
+                                    Stroke="{DynamicResource AccentBrush}"
+                                    StrokeThickness="1.5" StrokeLineCap="Round"
+                                    Width="5" Height="8" Stretch="Uniform" />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- App Name -->
+                        <TextBlock Text="LMP" FontSize="12" FontWeight="Bold"
+                            VerticalAlignment="Center" LetterSpacing="2"
+                            Foreground="{DynamicResource TextMutedBrush}" />
+                    </StackPanel>
+                </Button>
+
+                <!-- Version Info (clickable → GitHub) -->
+                <Button Background="Transparent"
+                    BorderThickness="0"
+                    Padding="0" Margin="0"
+                    VerticalAlignment="Center"
+                    IsVisible="{Binding IsVersionInfoVisible}"
+                    Cursor="Hand"
+                    Command="{Binding OpenGitHubCommand}"
+                    ToolTip.Tip="{Binding L[Common_OpenGitHub]}">
+                    <Button.Styles>
+                        <Style Selector="Button:pointerover /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                        <Style Selector="Button:pointerover StackPanel">
+                            <Setter Property="Opacity" Value="0.8" />
+                        </Style>
+                        <Style Selector="Button:pointerover TextBlock">
+                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+                        </Style>
+                    </Button.Styles>
+
+                    <StackPanel Orientation="Horizontal" Spacing="6" Opacity="0.5">
+                        <Border Width="1" Height="12"
+                            Background="{DynamicResource BgHighlightBrush}"
+                            Margin="4,0" />
+                        <TextBlock Text="{Binding VersionDisplay}"
+                            FontSize="10" FontFamily="Consolas, monospace"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding GitHashDisplay}"
+                            FontSize="10" FontFamily="Consolas, monospace"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            VerticalAlignment="Center" Opacity="0.7" />
+                        <TextBlock Text="{Binding CommitsDisplay}"
+                            FontSize="10"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            VerticalAlignment="Center" Opacity="0.5" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
 
             <!-- Center: Drag Area -->
             <Border Grid.Column="1" Background="Transparent" Name="DragArea" />
 
-            <!-- Right: Window Controls -->
+            <!-- Right: Notification Button + Window Controls -->
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="0" Margin="0,0,4,0">
-                
+
+                <!-- ═══ NOTIFICATION BUTTON ═══ -->
+                <notifications:NotificationButton DataContext="{Binding NotificationButton}"
+                    x:Name="NotificationButtonControl" />
+
+                <!-- Separator -->
+                <Border Width="1" Height="16"
+                    Background="{DynamicResource BgHighlightBrush}"
+                    Margin="4,0" VerticalAlignment="Center" />
+
                 <!-- Minimize -->
                 <Button Classes="window-btn" Name="MinimizeButton"
-                        ToolTip.Tip="{Binding L[Window_Minimize]}">
+                    ToolTip.Tip="{Binding L[Window_Minimize]}">
                     <Border Width="10" Height="1" Background="{DynamicResource TextMutedBrush}"
-                            VerticalAlignment="Center" CornerRadius="0.5" />
+                        VerticalAlignment="Center" CornerRadius="0.5" />
                 </Button>
 
                 <!-- Maximize/Restore -->
                 <Button Classes="window-btn" Name="MaximizeButton"
-                        ToolTip.Tip="{Binding L[Window_Maximize]}">
+                    ToolTip.Tip="{Binding L[Window_Maximize]}">
                     <Panel>
                         <Border Width="10" Height="10" BorderThickness="1.2" CornerRadius="1"
-                                BorderBrush="{DynamicResource TextMutedBrush}"
-                                Name="MaximizeIcon" />
+                            BorderBrush="{DynamicResource TextMutedBrush}"
+                            Name="MaximizeIcon" />
                         <Grid Name="RestoreIcon" IsVisible="False" Width="12" Height="12">
                             <Border Width="8" Height="8" BorderThickness="1.2" CornerRadius="1"
-                                    BorderBrush="{DynamicResource TextMutedBrush}"
-                                    HorizontalAlignment="Left" VerticalAlignment="Bottom" />
+                                BorderBrush="{DynamicResource TextMutedBrush}"
+                                HorizontalAlignment="Left" VerticalAlignment="Bottom" />
                             <Border Width="8" Height="8" BorderThickness="1.2" CornerRadius="1"
-                                    BorderBrush="{DynamicResource TextMutedBrush}"
-                                    Background="{DynamicResource BgSecondaryBrush}"
-                                    HorizontalAlignment="Right" VerticalAlignment="Top" />
+                                BorderBrush="{DynamicResource TextMutedBrush}"
+                                Background="{DynamicResource BgSecondaryBrush}"
+                                HorizontalAlignment="Right" VerticalAlignment="Top" />
                         </Grid>
                     </Panel>
                 </Button>
 
                 <!-- Close -->
                 <Button Classes="window-btn window-btn-close" Name="CloseButton"
-                        ToolTip.Tip="{Binding L[Window_Close]}">
+                    ToolTip.Tip="{Binding L[Window_Close]}">
                     <Grid Width="10" Height="10">
-                        <Line StartPoint="0,0" EndPoint="10,10" 
-                              Stroke="{DynamicResource TextMutedBrush}" 
-                              StrokeThickness="1.2" StrokeLineCap="Round" />
-                        <Line StartPoint="10,0" EndPoint="0,10" 
-                              Stroke="{DynamicResource TextMutedBrush}" 
-                              StrokeThickness="1.2" StrokeLineCap="Round" />
+                        <Line StartPoint="0,0" EndPoint="10,10"
+                            Stroke="{DynamicResource TextMutedBrush}"
+                            StrokeThickness="1.2" StrokeLineCap="Round" />
+                        <Line StartPoint="10,0" EndPoint="0,10"
+                            Stroke="{DynamicResource TextMutedBrush}"
+                            StrokeThickness="1.2" StrokeLineCap="Round" />
                     </Grid>
                 </Button>
             </StackPanel>
@@ -144,7 +186,7 @@
                 Padding="16,16,16,16">
                 <Panel>
                     <Grid RowDefinitions="Auto, *, Auto">
-                        
+
                         <!-- Nav Buttons -->
                         <StackPanel Grid.Row="0" Spacing="6">
                             <Button Classes="sidebar-btn"
@@ -184,15 +226,16 @@
                                 </StackPanel>
                             </Button>
 
-                            <Button Classes="sidebar-btn" 
-                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Queue'}" 
-                                Command="{Binding NavigateCommand}" CommandParameter="Queue" 
-                                IsEnabled="{Binding !IsNavigationLocked}" 
+                            <Button Classes="sidebar-btn"
+                                Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Queue'}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Queue"
+                                IsEnabled="{Binding !IsNavigationLocked}"
                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                 ToolTip.Tip="{Binding L[Nav_Queue]}">
                                 <StackPanel Orientation="Horizontal" Spacing="16">
                                     <mi:MaterialIcon Kind="PlaylistPlay" Width="24" Height="24" />
-                                    <TextBlock Text="{Binding L[Nav_Queue]}" VerticalAlignment="Center" FontSize="15" />
+                                    <TextBlock Text="{Binding L[Nav_Queue]}"
+                                        VerticalAlignment="Center" FontSize="15" />
                                 </StackPanel>
                             </Button>
 
@@ -254,7 +297,8 @@
             </Border>
 
             <!-- CONTENT AREA -->
-            <Border Grid.Column="1" Background="{DynamicResource BgPrimaryBrush}" ClipToBounds="True">
+            <Border Grid.Column="1" Background="{DynamicResource BgPrimaryBrush}"
+                ClipToBounds="True">
                 <Panel>
                     <ContentControl Content="{Binding CurrentPage}">
                         <ContentControl.ContentTemplate>
@@ -270,10 +314,12 @@
                                         <DataTemplate DataType="{x:Type libV:LibraryViewModel}">
                                             <libV:LibraryView />
                                         </DataTemplate>
-                                        <DataTemplate DataType="{x:Type settingsV:SettingsViewModel}">
+                                        <DataTemplate
+                                            DataType="{x:Type settingsV:SettingsViewModel}">
                                             <settingsV:SettingsView />
                                         </DataTemplate>
-                                        <DataTemplate DataType="{x:Type playlistV:PlaylistViewModel}">
+                                        <DataTemplate
+                                            DataType="{x:Type playlistV:PlaylistViewModel}">
                                             <playlistV:PlaylistView />
                                         </DataTemplate>
                                         <DataTemplate DataType="{x:Type playerV:QueueViewModel}">
@@ -287,6 +333,10 @@
 
                     <Border IsVisible="{Binding IsNavigationLocked}" Background="#60000000"
                         IsHitTestVisible="True" />
+
+                    <!-- ═══ TOAST OVERLAY (поверх контента) ═══ -->
+                    <notifications:ToastOverlay DataContext="{Binding ToastOverlay}"
+                        ZIndex="1000" />
                 </Panel>
             </Border>
         </Grid>
@@ -294,6 +344,17 @@
         <!-- PLAYER BAR -->
         <playerBarV:PlayerBarView Grid.Row="2" DataContext="{Binding PlayerBar}"
             IsVisible="{Binding HasTrack}" />
+
+        <!-- ═══ NOTIFICATION PANEL POPUP (поверх всего) ═══ -->
+        <Popup Grid.Row="0" Grid.RowSpan="3"
+            PlacementTarget="{Binding #NotificationButtonControl}"
+            Placement="BottomEdgeAlignedRight"
+            IsOpen="{Binding NotificationButton.IsPanelOpen, Mode=TwoWay}"
+            IsLightDismissEnabled="True"
+            HorizontalOffset="-8"
+            VerticalOffset="8">
+            <notifications:NotificationPanel DataContext="{Binding NotificationPanel}" />
+        </Popup>
 
     </Grid>
 </Window>

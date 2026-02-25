@@ -24,7 +24,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
             ?.GetPropertyOrNull("token")
             ?.GetStringOrNull();
 
-    private IEnumerable<Playlist> ParsePlaylists(JsonElement root)
+    private static IEnumerable<Playlist> ParsePlaylists(JsonElement root)
     {
         var tabs = root.GetPropertyOrNull("contents")
             ?.GetPropertyOrNull("twoColumnBrowseResultsRenderer")
@@ -104,7 +104,7 @@ internal class ChannelPlaylistsResponse(JsonElement content)
         }
     }
 
-    private IEnumerable<Playlist> ParseRichGrid(JsonElement richGrid)
+    private static IEnumerable<Playlist> ParseRichGrid(JsonElement richGrid)
     {
         var contents = richGrid.GetPropertyOrNull("contents");
         if (contents == null) yield break;

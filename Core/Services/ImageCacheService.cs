@@ -555,7 +555,7 @@ public sealed class ImageCacheService : IDisposable
     /// <summary>
     /// Конвертирует изображение в WebP с ресайзом до MaxDiskImageSize.
     /// </summary>
-    private async Task<long> ProcessAndSaveAsWebPAsync(Stream sourceStream, string diskPath, CancellationToken ct)
+    private static async Task<long> ProcessAndSaveAsWebPAsync(Stream sourceStream, string diskPath, CancellationToken ct)
     {
         return await Task.Run(() =>
         {

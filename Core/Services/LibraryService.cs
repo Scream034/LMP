@@ -28,12 +28,9 @@ public sealed class LibraryService : IAsyncDisposable
     private readonly Subject<Unit> _saveSettingsSignal = new();
     private readonly IDisposable _saveSubscription;
 
-    private AppSettings _appSettings = new();
-    public AppSettings Settings => _appSettings;
+    public AppSettings Settings { get; private set; } = new();
 
     // Fake Account cache
-    private string? _fakeAccountName;
-    private string? _fakeAccountAvatarUrl;
 
     public event Action? OnInitialized;
     public event Action? OnDataChanged;
@@ -61,7 +58,7 @@ public sealed class LibraryService : IAsyncDisposable
             .ObserveOn(RxApp.TaskpoolScheduler)
             .Subscribe(async _ =>
             {
-                try { await _settings.SetAsync("AppSettings", _appSettings); }
+                try { await _settings.SetAsync("AppSettings", Settings); }
                 catch (Exception ex) { Log.Error($"[LibraryService] Settings save failed: {ex.Message}"); }
             });
     }
@@ -79,19 +76,22 @@ public sealed class LibraryService : IAsyncDisposable
         await ctx.EnsureFtsTablesAsync(ct);
 
         // Migrate from JSON if exists
-        var jsonPath = G.File.Library;
+        var jsonPath = G.FilePath.Library;
         if (File.Exists(jsonPath))
         {
             await MigrateFromJsonAsync(jsonPath, ct);
         }
 
         // Load settings
-        _appSettings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
+        Settings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
         // ИНИЦИАЛИЗИРУЕМ СТАТИКУ
-        YoutubeClientUtils.CurrentProfile = _appSettings.YoutubeClient;
+        YoutubeClientUtils.CurrentProfile = Settings.YoutubeClient;
 
         // Hydrate cache
         await _registry.HydrateAsync(ct);
+
+        // Подписываем registry на события кэша
+        _registry.SubscribeToCacheEvents();
 
         // Ensure liked playlist
         await EnsureLikedPlaylistAsync(ct);
@@ -207,8 +207,8 @@ public sealed class LibraryService : IAsyncDisposable
             }
 
             // Step 4: Migrate settings
-            _appSettings = MapLegacySettings(legacy);
-            await _settings.SetAsync("AppSettings", _appSettings, ct);
+            Settings = MapLegacySettings(legacy);
+            await _settings.SetAsync("AppSettings", Settings, ct);
 
             // Backup old file
             var backup = path + $".migrated.{DateTime.Now:yyyyMMddHHmmss}";
@@ -274,14 +274,21 @@ public sealed class LibraryService : IAsyncDisposable
     /// Full-text search in database.
     /// </summary>
     public async Task<List<TrackInfo>> SearchTracksAsync(
-        string query, int limit = 50, int offset = 0, CancellationToken ct = default)
+     string query, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
         var tracks = await _tracks.SearchAsync(query, limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        // ОПТИМИЗАЦИЯ: Один SQL-запрос вместо N
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -303,11 +310,17 @@ public sealed class LibraryService : IAsyncDisposable
         CancellationToken ct = default)
     {
         var tracks = await _tracks.GetAllAsync(limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -320,11 +333,17 @@ public sealed class LibraryService : IAsyncDisposable
         CancellationToken ct = default)
     {
         var tracks = await _tracks.GetLocalTracksAsync(limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -349,17 +368,15 @@ public sealed class LibraryService : IAsyncDisposable
     /// Uses FTS for fast full-text search.
     /// </summary>
     public async Task<List<TrackInfo>> SearchLocalTracksAsync(
-        string query,
-        int limit = 100,
-        CancellationToken ct = default)
+     string query,
+     int limit = 100,
+     CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query))
             return await GetLocalTracksAsync(limit, 0, ct);
 
-        // Сначала получаем все локальные треки
         var allLocal = await _tracks.GetLocalTracksAsync(limit * 2, 0, ct);
 
-        // Фильтруем в памяти (для небольших коллекций это быстрее чем SQL LIKE)
         var filtered = allLocal
             .Where(t =>
                 t.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -367,9 +384,14 @@ public sealed class LibraryService : IAsyncDisposable
             .Take(limit)
             .ToList();
 
+        if (filtered.Count == 0) return filtered;
+
+        var trackIds = filtered.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in filtered)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
 
@@ -449,14 +471,20 @@ public sealed class LibraryService : IAsyncDisposable
     }
 
     public async Task<List<TrackInfo>> GetLikedTracksAsync(
-        int limit = 100, int offset = 0, CancellationToken ct = default)
+     int limit = 100, int offset = 0, CancellationToken ct = default)
     {
         var tracks = await _tracks.GetLikedAsync(limit, offset, ct);
+        if (tracks.Count == 0) return tracks;
+
+        var trackIds = tracks.Select(t => t.Id).ToList();
+        var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
+
         foreach (var t in tracks)
         {
-            t.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(t.Id, ct);
+            t.InPlaylists = playlistsMap.TryGetValue(t.Id, out var pls) ? pls : [];
             _registry.RegisterOrUpdate(t);
         }
+
         return tracks;
     }
 
@@ -542,14 +570,19 @@ public sealed class LibraryService : IAsyncDisposable
         var trackIds = await _playlists.GetTrackIdsAsync(playlistId, ct);
         var pageIds = trackIds.Skip(offset).Take(limit).ToList();
 
+        if (pageIds.Count == 0) return [];
+
+        // Preload загрузит все треки в кэш одним batch-запросом
         await _registry.PreloadAsync(pageIds, ct);
 
+        // Теперь берём из кэша синхронно
         var tracks = new List<TrackInfo>(pageIds.Count);
         foreach (var id in pageIds)
         {
-            var track = await _registry.GetOrLoadAsync(id, ct);
+            var track = _registry.TryGet(id);
             if (track != null) tracks.Add(track);
         }
+
         return tracks;
     }
 
@@ -642,13 +675,13 @@ public sealed class LibraryService : IAsyncDisposable
 
     public string DownloadPath
     {
-        get => string.IsNullOrEmpty(_appSettings.DownloadPath) ? G.Folder.Downloads : _appSettings.DownloadPath;
-        set { _appSettings.DownloadPath = value; SaveSettings(); }
+        get => string.IsNullOrEmpty(Settings.DownloadPath) ? G.Folder.Downloads : Settings.DownloadPath;
+        set { Settings.DownloadPath = value; SaveSettings(); }
     }
 
     public void UpdateSettings(Action<AppSettings> update)
     {
-        update(_appSettings);
+        update(Settings);
         SaveSettings();
     }
 
@@ -658,16 +691,16 @@ public sealed class LibraryService : IAsyncDisposable
 
     #region Fake Account
 
-    public bool HasFakeAccount => !string.IsNullOrEmpty(_appSettings.FakeAccountChannelUrl);
-    public string? FakeAccountUrl => _appSettings.FakeAccountChannelUrl;
-    public string? FakeAccountName => _fakeAccountName;
-    public string? FakeAccountAvatarUrl => _fakeAccountAvatarUrl;
+    public bool HasFakeAccount => !string.IsNullOrEmpty(Settings.FakeAccountChannelUrl);
+    public string? FakeAccountUrl => Settings.FakeAccountChannelUrl;
+    public string? FakeAccountName { get; private set; }
+    public string? FakeAccountAvatarUrl { get; private set; }
 
     public void SetFakeAccount(string url, string name, string avatar)
     {
-        _appSettings.FakeAccountChannelUrl = url;
-        _fakeAccountName = name;
-        _fakeAccountAvatarUrl = avatar;
+        Settings.FakeAccountChannelUrl = url;
+        FakeAccountName = name;
+        FakeAccountAvatarUrl = avatar;
         SaveSettings();
         OnFakeAccountChanged?.Invoke();
         OnDataChanged?.Invoke();
@@ -675,16 +708,16 @@ public sealed class LibraryService : IAsyncDisposable
 
     public void UpdateFakeAccountCache(string name, string avatar)
     {
-        _fakeAccountName = name;
-        _fakeAccountAvatarUrl = avatar;
+        FakeAccountName = name;
+        FakeAccountAvatarUrl = avatar;
         OnFakeAccountChanged?.Invoke();
     }
 
     public void ClearFakeAccount()
     {
-        _appSettings.FakeAccountChannelUrl = null;
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
+        Settings.FakeAccountChannelUrl = null;
+        FakeAccountName = null;
+        FakeAccountAvatarUrl = null;
         SaveSettings();
         OnFakeAccountChanged?.Invoke();
         OnDataChanged?.Invoke();
@@ -706,8 +739,8 @@ public sealed class LibraryService : IAsyncDisposable
     public async Task ResetAsync(CancellationToken ct = default)
     {
         _registry.Clear();
-        _fakeAccountName = null;
-        _fakeAccountAvatarUrl = null;
+        FakeAccountName = null;
+        FakeAccountAvatarUrl = null;
 
         await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
         await ctx.Database.EnsureDeletedAsync(ct);
@@ -715,7 +748,7 @@ public sealed class LibraryService : IAsyncDisposable
         await ctx.OptimizeAsync(ct);
         await ctx.EnsureFtsTablesAsync(ct);
 
-        _appSettings = new AppSettings();
+        Settings = new AppSettings();
         await EnsureLikedPlaylistAsync(ct);
         OnDataChanged?.Invoke();
     }
@@ -728,7 +761,7 @@ public sealed class LibraryService : IAsyncDisposable
 
         // Final flush
         await _registry.FlushAsync();
-        await _settings.SetAsync("AppSettings", _appSettings);
+        await _settings.SetAsync("AppSettings", Settings);
 
         GC.SuppressFinalize(this);
     }

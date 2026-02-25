@@ -1,6 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LMP.Core.Models;
-
 
 namespace LMP.Core.Youtube.Music;
 
@@ -10,7 +10,7 @@ public class MusicClient(HttpClient http)
 
     public async Task<List<TrackInfo>> GetLikedTracksAsync(CancellationToken cancellationToken = default)
     {
-        var allTracks = new List<TrackInfo>();
+        var allTracks = new List<TrackInfo>(100);
         var response = await _controller.GetBrowseAsync(browseId: "VLLM", cancellationToken: cancellationToken);
 
         ProcessShelves(response.Shelves, allTracks);
@@ -47,13 +47,12 @@ public class MusicClient(HttpClient http)
             {
                 if (item.Type == "Playlist" && !string.IsNullOrEmpty(item.Id))
                 {
-                    var bestThumb = item.Thumbnails
-                        .OrderByDescending(t => t.Resolution.Area)
-                        .FirstOrDefault()?.Url;
+                    // Без LINQ: ручной поиск лучшего thumbnail
+                    string? bestThumb = GetBestThumbnailUrl(item.Thumbnails);
 
                     result.Add(new Playlist
                     {
-                        Id = $"yt_{item.Id}",
+                        Id = string.Concat("yt_", item.Id),
                         YoutubeId = item.Id,
                         StoredName = item.Title,
                         Author = item.Author ?? "Unknown",
@@ -66,46 +65,67 @@ public class MusicClient(HttpClient http)
         return result;
     }
 
-    // Возвращаем List<MusicShelf>, которые потом обрабатывает провайдер
     public async Task<List<MusicShelf>> GetPersonalizedHomeAsync(CancellationToken cancellationToken = default)
     {
         var response = await _controller.GetBrowseAsync(browseId: "FEmusic_home", cancellationToken: cancellationToken);
         return response.Shelves;
     }
 
-    private void ProcessShelves(List<MusicShelf> shelves, List<TrackInfo> targetList)
+    private static void ProcessShelves(List<MusicShelf> shelves, List<TrackInfo> targetList)
     {
-        foreach (var shelf in shelves)
+        for (int s = 0; s < shelves.Count; s++)
         {
-            foreach (var item in shelf.Items)
+            var items = shelves[s].Items;
+            for (int i = 0; i < items.Count; i++)
             {
-                if (item.Type == "Song" && !string.IsNullOrEmpty(item.Id))
-                {
-                    var bestThumb = item.Thumbnails
-                       .OrderByDescending(t => t.Resolution.Area)
-                       .FirstOrDefault()?.Url
-                       ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
+                var item = items[i];
+                if (item.Type != "Song" || string.IsNullOrEmpty(item.Id))
+                    continue;
 
-                    targetList.Add(new TrackInfo
-                    {
-                        Id = $"yt_{item.Id}",
-                        Title = item.Title,
-                        Author = item.Author ?? item.Album ?? "Unknown",
-                        Duration = item.Duration ?? TimeSpan.Zero,
-                        ThumbnailUrl = bestThumb,
-                        IsMusic = true,
-                        IsLiked = true,
-                        Url = $"https://www.youtube.com/watch?v={item.Id}"
-                    });
-                }
+                // Без LINQ: ручной поиск лучшего thumbnail
+                string bestThumb = GetBestThumbnailUrl(item.Thumbnails)
+                    ?? string.Concat("https://i.ytimg.com/vi/", item.Id, "/mqdefault.jpg");
+
+                targetList.Add(new TrackInfo
+                {
+                    Id = string.Concat("yt_", item.Id),
+                    Title = item.Title,
+                    Author = item.Author ?? item.Album ?? "Unknown",
+                    Duration = item.Duration ?? TimeSpan.Zero,
+                    ThumbnailUrl = bestThumb,
+                    IsMusic = true,
+                    IsLiked = true,
+                    Url = string.Concat("https://www.youtube.com/watch?v=", item.Id)
+                });
             }
         }
     }
 
-    public void SetVisitorData(string visitorData)
+    /// <summary>
+    /// Поиск thumbnail с максимальным разрешением без LINQ.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string? GetBestThumbnailUrl(IReadOnlyList<Thumbnail> thumbnails)
     {
-        _controller.VisitorData = visitorData;
+        if (thumbnails.Count == 0) return null;
+
+        string? bestUrl = null;
+        int bestArea = -1;
+
+        for (int i = 0; i < thumbnails.Count; i++)
+        {
+            var area = thumbnails[i].Resolution.Area;
+            if (area > bestArea)
+            {
+                bestArea = area;
+                bestUrl = thumbnails[i].Url;
+            }
+        }
+
+        return bestUrl;
     }
+
+    public void SetVisitorData(string visitorData) => _controller.VisitorData = visitorData;
 
     public async Task LikeTrackAsync(string videoId, bool like, CancellationToken cancellationToken = default)
     {
@@ -113,9 +133,14 @@ public class MusicClient(HttpClient http)
         await _controller.SendLikeActionAsync(endpoint, videoId, cancellationToken);
     }
 
-    public async Task<JsonElement> GetAccountMenuAsync(CancellationToken cancellationToken = default) => await _controller.GetAccountMenuAsync(cancellationToken);
+    public async Task<JsonElement> GetAccountMenuAsync(CancellationToken cancellationToken = default) =>
+        await _controller.GetAccountMenuAsync(cancellationToken);
 
-    public async Task<string> CreatePlaylistAsync(string title, string description = "", List<string>? initialVideoIds = null, CancellationToken cancellationToken = default)
+    public async Task<string> CreatePlaylistAsync(
+        string title,
+        string description = "",
+        List<string>? initialVideoIds = null,
+        CancellationToken cancellationToken = default)
     {
         return await _controller.CreatePlaylistAsync(title, description, initialVideoIds, cancellationToken);
     }

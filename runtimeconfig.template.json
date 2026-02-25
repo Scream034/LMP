@@ -1,0 +1,11 @@
+{
+  "configProperties": {
+    "System.GC.HeapHardLimit": 524288000,
+    "System.GC.HeapHardLimitPercent": 75,
+    "System.GC.RetainVM": false,
+    "System.GC.Concurrent": true,
+    "System.GC.Server": false,
+    "System.Threading.ThreadPool.MinThreads": 2,
+    "System.Threading.ThreadPool.MaxThreads": 16
+  }
+}

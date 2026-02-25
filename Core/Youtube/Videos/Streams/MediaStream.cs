@@ -11,7 +11,7 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
     // we want to download the stream as fast as possible.
     // To solve this, we divide the logical stream up into multiple segments and download
     // them all separately.
-
+    
     private readonly long _segmentLength = streamInfo.IsThrottled()
         ? 9_898_989
         : streamInfo.Size.Bytes;
@@ -66,7 +66,7 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
             try
             {
                 var stream = await ResolveSegmentAsync(cancellationToken);
-                return await stream.ReadAsync(buffer, offset, count, cancellationToken);
+                return await stream.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
             }
             // Retry on connectivity issues
             catch (Exception ex)

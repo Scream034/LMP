@@ -134,7 +134,7 @@ public class MusicLibraryManager : ReactiveObject
         {
             try
             {
-                await _ytUser.DeletePlaylistAsync(playlist.YoutubeId);
+                await YoutubeUserDataService.DeletePlaylistAsync(playlist.YoutubeId);
             }
             catch (Exception ex)
             {

@@ -169,13 +169,11 @@ public partial class TrackListControl : UserControl
             static o => o.SearchingText,
             static (o, v) => o.SearchingText = v);
 
-    private string _searchingText = "Searching...";
-
     public string SearchingText
     {
-        get => _searchingText;
-        private set => SetAndRaise(SearchingTextProperty, ref _searchingText, value);
-    }
+        get;
+        private set => SetAndRaise(SearchingTextProperty, ref field, value);
+    } = "Searching...";
 
     public static readonly DirectProperty<TrackListControl, string> LoadingMoreTextProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, string>(
@@ -183,13 +181,11 @@ public partial class TrackListControl : UserControl
             static o => o.LoadingMoreText,
             static (o, v) => o.LoadingMoreText = v);
 
-    private string _loadingMoreText = "Searching for more";
-
     public string LoadingMoreText
     {
-        get => _loadingMoreText;
-        private set => SetAndRaise(LoadingMoreTextProperty, ref _loadingMoreText, value);
-    }
+        get;
+        private set => SetAndRaise(LoadingMoreTextProperty, ref field, value);
+    } = "Searching for more";
 
     public static readonly DirectProperty<TrackListControl, string> EndOfListTextProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, string>(
@@ -197,26 +193,22 @@ public partial class TrackListControl : UserControl
             static o => o.EndOfListText,
             static (o, v) => o.EndOfListText = v);
 
-    private string _endOfListText = "End of list";
-
     public string EndOfListText
     {
-        get => _endOfListText;
-        private set => SetAndRaise(EndOfListTextProperty, ref _endOfListText, value);
-    }
+        get;
+        private set => SetAndRaise(EndOfListTextProperty, ref field, value);
+    } = "End of list";
 
     public static readonly DirectProperty<TrackListControl, ScrollBarVisibility> ScrollVisibilityProperty =
         AvaloniaProperty.RegisterDirect<TrackListControl, ScrollBarVisibility>(
             nameof(ScrollVisibility),
             static o => o.ScrollVisibility);
 
-    private ScrollBarVisibility _scrollVisibility = ScrollBarVisibility.Disabled;
-
     public ScrollBarVisibility ScrollVisibility
     {
-        get => _scrollVisibility;
-        private set => SetAndRaise(ScrollVisibilityProperty, ref _scrollVisibility, value);
-    }
+        get;
+        private set => SetAndRaise(ScrollVisibilityProperty, ref field, value);
+    } = ScrollBarVisibility.Disabled;
 
     #endregion
 
@@ -568,16 +560,14 @@ public partial class TrackListControl : UserControl
 
     private sealed class DragDataTransferItem : IDataTransferItem
     {
-        private readonly IReadOnlyList<DataFormat> _formats;
-
         public int TrackIndex { get; }
         public DragDataTransferItem(int trackIndex)
         {
             TrackIndex = trackIndex;
-            _formats = [TrackIndexDataFormat];
+            Formats = [TrackIndexDataFormat];
         }
 
-        public IReadOnlyList<DataFormat> Formats => _formats;
+        public IReadOnlyList<DataFormat> Formats { get; }
 
         public object? TryGetRaw(DataFormat format)
         {
@@ -591,13 +581,11 @@ public partial class TrackListControl : UserControl
 
     private sealed class DragDataTransfer(int trackIndex) : IDataTransfer
     {
-        private readonly IReadOnlyList<DataFormat> _formats = [TrackIndexDataFormat];
-        private readonly IReadOnlyList<IDataTransferItem> _items = [new DragDataTransferItem(trackIndex)];
         private bool _disposed;
         public int TrackIndex { get; } = trackIndex;
 
-        public IReadOnlyList<DataFormat> Formats => _formats;
-        public IReadOnlyList<IDataTransferItem> Items => _items;
+        public IReadOnlyList<DataFormat> Formats { get; } = [TrackIndexDataFormat];
+        public IReadOnlyList<IDataTransferItem> Items { get; } = [new DragDataTransferItem(trackIndex)];
 
         public void Dispose()
         {
@@ -683,7 +671,7 @@ public partial class TrackListControl : UserControl
             if (child is T typedChild && (predicate == null || predicate(typedChild)))
                 return typedChild;
 
-            var result = FindDescendantOfType<T>(child, predicate);
+            var result = FindDescendantOfType(child, predicate);
             if (result != null)
                 return result;
         }

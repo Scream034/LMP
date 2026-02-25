@@ -3,6 +3,8 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Avalonia.Media;
+using LMP.Core.Audio;
+using LMP.Core.Audio.Cache;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -13,7 +15,7 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Features.Settings;
 
-public class LocalizedItem<T>(T value, string name)
+public sealed class LocalizedItem<T>(T value, string name)
 {
     public T Value { get; } = value;
     public string Name { get; } = name;
@@ -30,9 +32,9 @@ public enum ImageCachePreset
 public sealed class SettingsViewModel : ViewModelBase, IDisposable
 {
     private readonly LibraryService _library;
+    private readonly TrackRegistry _registry;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
-    private readonly StreamCacheManager _streamCache;
     private readonly ThemeManagerService _themeManager;
     private readonly CookieAuthService _auth;
     private readonly IDialogService _dialog;
@@ -41,6 +43,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private bool _isLoadingTheme;
     private bool _isUpdatingPreset;
+    private bool _isLoadingSettings;
+
+    #region Account
 
     [Reactive] public bool IsAuthenticated { get; private set; }
     [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
@@ -61,6 +66,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ? _auth.State.UserEmail
         : IsFakeAccount ? SL["Account_LimitedAccess"] : SL["Auth_Guest"];
 
+    #endregion
+
+    #region Network
+
     public ObservableCollection<LocalizedItem<InternetProfile>> InternetProfileOptions { get; } = [];
     [Reactive] public LocalizedItem<InternetProfile>? SelectedInternetProfile { get; set; }
 
@@ -74,6 +83,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public string ProxyUser { get; set; } = "";
     [Reactive] public string ProxyPass { get; set; } = "";
     [Reactive] public bool NetworkRestartRequired { get; set; }
+
+    #endregion
+
+    #region Storage
 
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
 
@@ -93,6 +106,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public double DownloadsUsagePercent { get; private set; }
     [Reactive] public bool AutoSaveToDownloads { get; set; }
 
+    #endregion
+
+    #region Theme
+
     public ObservableCollection<ThemeSettings> ThemePresets { get; } = [];
     [Reactive] public ThemeSettings? SelectedPreset { get; set; }
     [Reactive] public Color AccentColor { get; set; }
@@ -103,11 +120,33 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public Color TextSecondaryColor { get; set; }
     [Reactive] public bool HasUnsavedThemeChanges { get; set; }
 
+    #endregion
+
+    #region Audio
+
     public List<AudioQualityPreference> QualityOptions { get; } = [.. Enum.GetValues<AudioQualityPreference>()];
+
     [Reactive] public int MaxVolumeLimit { get; set; }
     [Reactive] public float TargetGainDb { get; set; }
     [Reactive] public AudioQualityPreference QualityPreference { get; set; }
     [Reactive] public bool RememberTrackFormat { get; set; }
+
+    // Настройки аудио
+    [Reactive] public bool VolumeBoostEnabled { get; set; }
+    [Reactive] public bool SmoothVolumeEnabled { get; set; }
+    [Reactive] public bool AudioNormalizationEnabled { get; set; }
+
+    public List<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
+    [Reactive] public LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
+
+    // ── Error notification settings ──
+    public List<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
+    [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
+    [Reactive] public bool PlayErrorSound { get; set; }
+
+    #endregion
+
+    #region UI & Behavior
 
     [Reactive] public bool DiscordRpcEnabled { get; set; }
     [Reactive] public bool AutoPlayOnPaste { get; set; }
@@ -118,6 +157,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
+
+    #endregion
+
+    #region Commands
 
     public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearHistoryCommand { get; }
@@ -132,11 +175,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearDownloadsCommand { get; }
 
+    #endregion
+
     public SettingsViewModel(
         LibraryService library,
+        TrackRegistry registry,
         SearchCacheService searchCache,
         ImageCacheService imageCache,
-        StreamCacheManager streamCache,
         ThemeManagerService themeManager,
         CookieAuthService auth,
         IDialogService dialog,
@@ -144,9 +189,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         YoutubeProvider youtube)
     {
         _library = library;
+        _registry = registry;
         _searchCache = searchCache;
         _imageCache = imageCache;
-        _streamCache = streamCache;
         _themeManager = themeManager;
         _auth = auth;
         _dialog = dialog;
@@ -155,7 +200,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         InitializeLists();
 
-        // FIX: ThrownExceptions subscription to prevent memory leak
+        // Commands
         LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
         LogoutCommand = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
         SetFakeAccountCommand = CreateCommand(ReactiveCommand.CreateFromTask(SetFakeAccountAsync));
@@ -169,26 +214,22 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ResetThemeCommand = CreateCommand(ReactiveCommand.Create(ResetTheme));
         ClearDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
 
+        // Client change subscription
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(async c =>
             {
-                // 1. Сохраняем в настройки
                 _library.UpdateSettings(s => s.YoutubeClient = c.Value);
-
-                // 2. Обновляем статику (чтобы VideoController и HttpHandler увидели изменения)
                 YoutubeClientUtils.CurrentProfile = c.Value;
-
-                // 3. Перезагружаем AudioEngine (чтобы обновить HttpClient внутри него)
-                await _audio.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
-
-                // 4. Сбрасываем кэш стримов, так как старые ссылки могут быть невалидны для нового клиента
+                await AudioEngine.ReinitializeWithProfileAsync(_library.Settings.InternetProfile);
                 _youtube.ClearCache();
             })
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.DownloadedTracksLimitMb)
             .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Throttle(TimeSpan.FromMilliseconds(500))
             .Subscribe(v =>
             {
@@ -199,10 +240,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         this.WhenAnyValue(x => x.AutoSaveToDownloads)
             .Skip(1)
-            .Subscribe(v =>
-            {
-                _library.UpdateSettings(s => s.Storage.AutoSaveToDownloads = v);
-            })
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v => _library.UpdateSettings(s => s.Storage.AutoSaveToDownloads = v))
             .DisposeWith(Disposables);
 
         LoadAllSettings();
@@ -216,11 +255,116 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void InitializeLists()
     {
+        RefreshThemePresets();
+        RefreshLocalizedLists();
+    }
+
+    /// <summary>
+    /// Перестраивает список пресетов: built-in + кастомный (если есть на диске).
+    /// Кастомная тема добавляется в конец списка, если не совпадает ни с одним built-in.
+    /// </summary>
+    private void RefreshThemePresets()
+    {
+        var currentSelection = SelectedPreset;
         ThemePresets.Clear();
+
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);
 
-        RefreshLocalizedLists();
+        // Если на диске сохранена кастомная тема — добавляем в список
+        var saved = _themeManager.GetCurrentTheme();
+        var isBuiltIn = ThemePresets.Any(p =>
+            string.Equals(p.AccentColor, saved.AccentColor, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.BgPrimary, saved.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.BgSecondary, saved.BgSecondary, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.AccentHover, saved.AccentHover, StringComparison.OrdinalIgnoreCase));
+
+        if (!isBuiltIn && !saved.IsBuiltIn)
+        {
+            ThemePresets.Add(saved);
+        }
+    }
+
+    private void LoadThemeColors()
+    {
+        _isLoadingTheme = true;
+        try
+        {
+            var currentTheme = _themeManager.GetCurrentTheme();
+            ApplyThemeToColorPickers(currentTheme);
+
+            // Ищем точное совпадение среди пресетов по цветам
+            var matchingPreset = ThemePresets.FirstOrDefault(p =>
+                string.Equals(p.AccentColor, currentTheme.AccentColor, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(p.BgPrimary, currentTheme.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(p.BgSecondary, currentTheme.BgSecondary, StringComparison.OrdinalIgnoreCase));
+
+            // Если не нашли по цветам — ищем по имени (кастомная тема)
+            if (matchingPreset == null)
+            {
+                matchingPreset = ThemePresets.FirstOrDefault(p =>
+                    string.Equals(p.Name, currentTheme.Name, StringComparison.OrdinalIgnoreCase));
+            }
+
+            SelectedPreset = matchingPreset ?? ThemePresets.FirstOrDefault();
+            HasUnsavedThemeChanges = false;
+        }
+        finally
+        {
+            _isLoadingTheme = false;
+        }
+    }
+
+    private void ApplyTheme()
+    {
+        static string GetRgbHex(Color c) => $"{c.R:X2}{c.G:X2}{c.B:X2}";
+
+        var theme = new ThemeSettings
+        {
+            Name = SelectedPreset?.Name ?? SL["Theme_Custom"],
+            AccentColor = AccentColor.ToString(),
+            AccentHover = SmartAccentHover(AccentColor).ToString(),
+            BgPrimary = BgPrimaryColor.ToString(),
+            BgSecondary = BgSecondaryColor.ToString(),
+            BgElevated = BgElevatedColor.ToString(),
+            BgHighlight = LightenColor(BgSecondaryColor, 0.1).ToString(),
+            BgHover = LightenColor(BgSecondaryColor, 0.2).ToString(),
+            BgSkeleton = LightenColor(BgSecondaryColor, 0.05).ToString(),
+            BgSkeletonDeep = DarkenColor(BgSecondaryColor, 0.2).ToString(),
+            BgOverlay = $"#CC{GetRgbHex(BgPrimaryColor)}",
+            TextPrimary = TextPrimaryColor.ToString(),
+            TextSecondary = TextSecondaryColor.ToString(),
+            TextMuted = DarkenColor(TextSecondaryColor, 0.3).ToString(),
+            TextDark = BgPrimaryColor.ToString()
+        };
+
+        _themeManager.SaveTheme(theme);
+        _themeManager.ApplyTheme(theme);
+        HasUnsavedThemeChanges = false;
+
+        // Обновляем список пресетов чтобы кастомная тема была видна
+        RefreshThemePresets();
+
+        // Находим только что сохранённую тему в обновлённом списке
+        _isLoadingTheme = true;
+        SelectedPreset = ThemePresets.FirstOrDefault(p =>
+            string.Equals(p.Name, theme.Name, StringComparison.OrdinalIgnoreCase))
+            ?? ThemePresets.FirstOrDefault();
+        _isLoadingTheme = false;
+    }
+
+    /// <summary>
+    /// Умный расчёт AccentHover: светлые цвета затемняем, тёмные — осветляем.
+    /// Решает проблему AMOLED (белый акцент) где LightenColor не даёт видимого эффекта.
+    /// </summary>
+    private static Color SmartAccentHover(Color accent)
+    {
+        // Perceived brightness по формуле ITU-R BT.601
+        var brightness = (0.299 * accent.R + 0.587 * accent.G + 0.114 * accent.B) / 255.0;
+
+        return brightness > 0.7
+            ? DarkenColor(accent, 0.15)    // Светлый акцент → затемняем при hover
+            : LightenColor(accent, 0.15);  // Тёмный акцент → осветляем при hover
     }
 
     private void RefreshLocalizedLists()
@@ -228,10 +372,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         var currentProfile = SelectedInternetProfile?.Value ?? _library.Settings.InternetProfile;
         InternetProfileOptions.Clear();
         foreach (var p in Enum.GetValues<InternetProfile>())
-        {
             InternetProfileOptions.Add(new LocalizedItem<InternetProfile>(p, SL[$"NetProfile_{p}"]));
-        }
-        SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == currentProfile) ?? InternetProfileOptions[1];
+        SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == currentProfile)
+                                  ?? InternetProfileOptions[1];
 
         var currentImgPreset = SelectedImageCachePreset?.Value ?? ImageCachePreset.Custom;
         ImageCachePresets.Clear();
@@ -248,15 +391,34 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ClientOptions.Add(new(YoutubeClientProfile.AndroidVR, SL["Client_AndroidVR"]));
         ClientOptions.Add(new(YoutubeClientProfile.TV, SL["Client_TV"]));
         ClientOptions.Add(new(YoutubeClientProfile.Web, SL["Client_Web"]));
+        SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == currentClient) ?? ClientOptions[0];
 
-        SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == currentClient)
-                         ?? ClientOptions[0];
+        // Volume curves
+        var currentCurve = SelectedVolumeCurve?.Value ?? _library.Settings.Audio.VolumeCurve;
+        VolumeCurveOptions.Clear();
+        VolumeCurveOptions.Add(new(VolumeCurveType.Linear, SL["VolumeCurve_Linear"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Quadratic, SL["VolumeCurve_Quadratic"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Logarithmic, SL["VolumeCurve_Logarithmic"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Cubic, SL["VolumeCurve_Cubic"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.SpeedOfLight, SL["VolumeCurve_SpeedOfLight"]));
+        SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == currentCurve)
+                              ?? VolumeCurveOptions[1];
+
+        // Error behavior options
+        var currentErrorBehavior = SelectedErrorBehavior?.Value ?? _library.Settings.Audio.CriticalErrorBehavior;
+        ErrorBehaviorOptions.Clear();
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Dialog, SL["Settings_ErrorBehavior_Dialog"]));
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.ToastAndSkip, SL["Settings_ErrorBehavior_ToastAndSkip"]));
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Ignore, SL["Settings_ErrorBehavior_Ignore"]));
+        SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == currentErrorBehavior)
+                                ?? ErrorBehaviorOptions[0];
     }
 
     private void SetupSubscriptions()
     {
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(lang =>
             {
                 LocalizationService.Instance.CurrentLanguage = lang.Code;
@@ -264,7 +426,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SelectedInternetProfile).Skip(1).WhereNotNull()
+        this.WhenAnyValue(x => x.SelectedInternetProfile)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(p =>
             {
                 _library.UpdateSettings(s => s.InternetProfile = p.Value);
@@ -272,19 +436,23 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort, x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
+        this.WhenAnyValue(x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort,
+                          x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
             .Skip(1)
-            .Subscribe(x => { NetworkRestartRequired = true; SaveNetworkSettings(); })
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(_ => { NetworkRestartRequired = true; SaveNetworkSettings(); })
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.ImageCacheLimitMb, x => x.AudioCacheLimitMb)
-            .Skip(1).Throttle(TimeSpan.FromMilliseconds(500))
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Throttle(TimeSpan.FromMilliseconds(500))
             .Subscribe(_ => SaveStorageSettings())
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.SelectedImageCachePreset)
             .Skip(1)
-            .Where(p => !_isUpdatingPreset && p != null)
+            .Where(p => !_isUpdatingPreset && !_isLoadingSettings && p != null)
             .Subscribe(p =>
             {
                 _isUpdatingPreset = true;
@@ -301,6 +469,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         this.WhenAnyValue(x => x.MaxBitmapCacheItems)
             .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(val =>
             {
                 _library.UpdateSettings(s => s.Storage.MaxBitmapCacheItems = val);
@@ -309,25 +478,24 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 if (!_isUpdatingPreset)
                 {
                     _isUpdatingPreset = true;
-                    if (val == 20) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low);
-                    else if (val == 50) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium);
-                    else if (val == 100) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High);
-                    else SelectedImageCachePreset = null;
+                    SelectedImageCachePreset = val switch
+                    {
+                        20 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low),
+                        50 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium),
+                        100 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High),
+                        _ => null
+                    };
                     _isUpdatingPreset = false;
                 }
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.ImageCacheLimitMb, x => x.AudioCacheLimitMb)
-            .Skip(1)
-            .Throttle(TimeSpan.FromMilliseconds(500))
-            .Subscribe(_ => SaveStorageSettings())
-            .DisposeWith(Disposables);
-
+        // Theme colors
         this.WhenAnyValue(
                 x => x.AccentColor, x => x.BgPrimaryColor, x => x.BgSecondaryColor,
                 x => x.BgElevatedColor, x => x.TextPrimaryColor, x => x.TextSecondaryColor)
             .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(_ =>
             {
                 if (!_isLoadingTheme)
@@ -337,18 +505,24 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         this.WhenAnyValue(x => x.SelectedPreset)
             .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(ApplyPresetToColorPickers)
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.MaxVolumeLimit).Skip(1)
+        // Audio settings
+        this.WhenAnyValue(x => x.MaxVolumeLimit)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.MaxVolumeLimit = v);
-                _audio.UpdateAudioSettings();
+                _audio.OnMaxVolumeLimitChanged(v);
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.TargetGainDb).Skip(1)
+        this.WhenAnyValue(x => x.TargetGainDb)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.TargetGainDb = v);
@@ -356,7 +530,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.QualityPreference).Skip(1)
+        this.WhenAnyValue(x => x.QualityPreference)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.QualityPreference = v);
@@ -364,31 +540,104 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.DiscordRpcEnabled).Skip(1)
+        this.WhenAnyValue(x => x.VolumeBoostEnabled)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Audio.VolumeBoostEnabled = v);
+                _audio.UpdateAudioSettings();
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.SmoothVolumeEnabled)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Audio.SmoothVolumeEnabled = v);
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.AudioNormalizationEnabled)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Audio.NormalizationEnabled = v);
+                // TODO: Включить/выключить нормализацию в AudioEngine
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.SelectedVolumeCurve)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(c =>
+            {
+                _library.UpdateSettings(s => s.Audio.VolumeCurve = c.Value);
+                _audio.UpdateAudioSettings();
+            })
+            .DisposeWith(Disposables);
+
+        // ── Error notification settings ──
+        this.WhenAnyValue(x => x.SelectedErrorBehavior)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(b =>
+            {
+                _library.UpdateSettings(s => s.Audio.CriticalErrorBehavior = b.Value);
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.PlayErrorSound)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Audio.PlayErrorSound = v);
+            })
+            .DisposeWith(Disposables);
+
+        // UI settings
+        this.WhenAnyValue(x => x.DiscordRpcEnabled)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.DiscordRpcEnabled = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.AutoPlayOnPaste).Skip(1)
+        this.WhenAnyValue(x => x.AutoPlayOnPaste)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.AutoPlayOnUrlPaste = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.EnableSmoothLoading).Skip(1)
+        this.WhenAnyValue(x => x.EnableSmoothLoading)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.EnableSmoothLoading = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.RememberTrackFormat).Skip(1)
+        this.WhenAnyValue(x => x.RememberTrackFormat)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.RememberTrackFormat = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SearchBatchSize).Skip(1)
+        this.WhenAnyValue(x => x.SearchBatchSize)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.SearchBatchSize = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.EnableSearchCache).Skip(1)
+        this.WhenAnyValue(x => x.EnableSearchCache)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v => _library.UpdateSettings(s => s.EnableSearchCache = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SearchCacheTtlMinutes).Skip(1)
+        this.WhenAnyValue(x => x.SearchCacheTtlMinutes)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.SearchCacheTtlMinutes = v);
@@ -399,52 +648,79 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private void LoadAllSettings()
     {
-        var s = _library.Settings;
+        _isLoadingSettings = true;
 
-        DownloadPath = _library.DownloadPath;
-        DiscordRpcEnabled = s.DiscordRpcEnabled;
-        AutoPlayOnPaste = s.AutoPlayOnUrlPaste;
-        SearchBatchSize = s.SearchBatchSize;
-        EnableSmoothLoading = s.EnableSmoothLoading;
-        MaxVolumeLimit = s.MaxVolumeLimit;
-        TargetGainDb = s.TargetGainDb;
-        QualityPreference = s.QualityPreference;
-        RememberTrackFormat = s.RememberTrackFormat;
-        EnableSearchCache = s.EnableSearchCache;
-        SearchCacheTtlMinutes = s.SearchCacheTtlMinutes;
-        SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
+        try
+        {
+            var s = _library.Settings;
 
-        FakeChannelInput = _library.FakeAccountUrl ?? "";
-        IsAuthenticated = _auth.IsAuthenticated;
-        RaiseAccountProperties();
+            DownloadPath = _library.DownloadPath;
+            DiscordRpcEnabled = s.DiscordRpcEnabled;
+            AutoPlayOnPaste = s.AutoPlayOnUrlPaste;
+            SearchBatchSize = s.SearchBatchSize;
+            EnableSmoothLoading = s.EnableSmoothLoading;
+            MaxVolumeLimit = s.MaxVolumeLimit;
+            TargetGainDb = s.TargetGainDb;
+            QualityPreference = s.QualityPreference;
+            RememberTrackFormat = s.RememberTrackFormat;
+            EnableSearchCache = s.EnableSearchCache;
+            SearchCacheTtlMinutes = s.SearchCacheTtlMinutes;
+            SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
 
-        var savedProfile = s.InternetProfile;
-        SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == savedProfile) ?? InternetProfileOptions[1];
+            // Audio settings
+            VolumeBoostEnabled = s.Audio.VolumeBoostEnabled;
+            SmoothVolumeEnabled = s.Audio.SmoothVolumeEnabled;
+            AudioNormalizationEnabled = s.Audio.NormalizationEnabled;
+            SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
+                                  ?? VolumeCurveOptions[1];
 
-        ProxyEnabled = s.Proxy.Enabled;
-        ProxyHost = s.Proxy.Host;
-        ProxyPort = s.Proxy.Port;
-        ProxyAuth = s.Proxy.UseAuth;
-        ProxyUser = s.Proxy.Username;
-        ProxyPass = s.Proxy.Password;
+            // Error notification settings
+            PlayErrorSound = s.Audio.PlayErrorSound;
+            SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
+                                    ?? ErrorBehaviorOptions[0];
 
-        ImageCacheLimitMb = s.Storage.ImageCacheLimitMb;
-        AudioCacheLimitMb = s.Storage.AudioCacheLimitMb;
-        DownloadedTracksLimitMb = s.Storage.DownloadedTracksLimitMb;
+            FakeChannelInput = _library.FakeAccountUrl ?? "";
+            IsAuthenticated = _auth.IsAuthenticated;
+            RaiseAccountProperties();
 
-        MaxBitmapCacheItems = s.Storage.MaxBitmapCacheItems > 0 ? s.Storage.MaxBitmapCacheItems : 40;
-        if (MaxBitmapCacheItems == 20) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low);
-        else if (MaxBitmapCacheItems == 50) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium);
-        else if (MaxBitmapCacheItems == 100) SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High);
+            var savedProfile = s.InternetProfile;
+            SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == savedProfile)
+                                      ?? InternetProfileOptions[1];
 
-        LoadThemeColors();
-    }
+            var savedClient = s.YoutubeClient;
+            SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == savedClient)
+                             ?? ClientOptions[0];
 
-    private void LoadThemeColors()
-    {
-        var theme = _themeManager.GetCurrentTheme();
-        ApplyThemeToColorPickers(theme);
-        HasUnsavedThemeChanges = false;
+            ProxyEnabled = s.Proxy.Enabled;
+            ProxyHost = s.Proxy.Host;
+            ProxyPort = s.Proxy.Port;
+            ProxyAuth = s.Proxy.UseAuth;
+            ProxyUser = s.Proxy.Username;
+            ProxyPass = s.Proxy.Password;
+
+            ImageCacheLimitMb = s.Storage.ImageCacheLimitMb;
+            AudioCacheLimitMb = s.Storage.AudioCacheLimitMb;
+            DownloadedTracksLimitMb = s.Storage.DownloadedTracksLimitMb;
+            AutoSaveToDownloads = s.Storage.AutoSaveToDownloads;
+
+            // Image cache preset
+            MaxBitmapCacheItems = s.Storage.MaxBitmapCacheItems > 0 ? s.Storage.MaxBitmapCacheItems : 40;
+            _isUpdatingPreset = true;
+            SelectedImageCachePreset = MaxBitmapCacheItems switch
+            {
+                20 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low),
+                50 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium),
+                100 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High),
+                _ => null
+            };
+            _isUpdatingPreset = false;
+
+            LoadThemeColors();
+        }
+        finally
+        {
+            _isLoadingSettings = false;
+        }
     }
 
     private void ApplyPresetToColorPickers(ThemeSettings preset)
@@ -469,34 +745,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         {
             _isLoadingTheme = false;
         }
-    }
-
-    private void ApplyTheme()
-    {
-        static string GetRgbHex(Color c) => $"{c.R:X2}{c.G:X2}{c.B:X2}";
-
-        var theme = new ThemeSettings
-        {
-            Name = SelectedPreset?.Name ?? SL["Theme_Custom"],
-            AccentColor = AccentColor.ToString(),
-            AccentHover = LightenColor(AccentColor, 0.15).ToString(),
-            BgPrimary = BgPrimaryColor.ToString(),
-            BgSecondary = BgSecondaryColor.ToString(),
-            BgElevated = BgElevatedColor.ToString(),
-            BgHighlight = LightenColor(BgSecondaryColor, 0.1).ToString(),
-            BgHover = LightenColor(BgSecondaryColor, 0.2).ToString(),
-            BgSkeleton = LightenColor(BgSecondaryColor, 0.05).ToString(),
-            BgSkeletonDeep = DarkenColor(BgSecondaryColor, 0.2).ToString(),
-            BgOverlay = $"#CC{GetRgbHex(BgPrimaryColor)}",
-            TextPrimary = TextPrimaryColor.ToString(),
-            TextSecondary = TextSecondaryColor.ToString(),
-            TextMuted = DarkenColor(TextSecondaryColor, 0.3).ToString(),
-            TextDark = BgPrimaryColor.ToString()
-        };
-
-        _themeManager.SaveTheme(theme);
-        _themeManager.ApplyTheme(theme);
-        HasUnsavedThemeChanges = false;
     }
 
     private void ResetTheme()
@@ -560,17 +808,26 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     private async Task ClearAudioCacheAsync()
     {
-        await _streamCache.ClearAllAsync();
+        var cache = AudioSourceFactory.GlobalCache;
+        if (cache != null)
+        {
+            await cache.ClearAllAsync();
+        }
+        else
+        {
+            Log.Warn($"[AudioCache] AudioCacheManager not initialized, cannot clear cache.");
+        }
         UpdateCacheStats();
     }
 
     private void UpdateCacheStats()
     {
         var (memItems, _, imgCount, imgSizeMb) = _imageCache.GetStats();
-        var (audioFileCount, audioSizeMb) = StreamCacheManager.GetStats();
-        var (downloadFileCount, downloadSizeMb) = StreamCacheManager.GetDownloadsStats();
 
-        // Показываем disk stats (как раньше) + опционально memory
+        var cache = AudioSourceFactory.GlobalCache;
+        var (audioFileCount, audioSizeMb) = cache?.GetStatsCompact() ?? (0, 0);
+        var (downloadFileCount, downloadSizeMb) = AudioCacheManager.GetDownloadsStats();
+
         ImageCacheStats = $"{imgSizeMb} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]}, RAM: {memItems})";
         AudioCacheStats = $"{audioSizeMb} MB / {AudioCacheLimitMb} MB ({audioFileCount} {SL["Common_Files"]})";
         DownloadsStats = $"{downloadSizeMb} MB / {DownloadedTracksLimitMb} MB ({downloadFileCount} {SL["Common_Files"]})";
@@ -691,14 +948,24 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (!await _dialog.ConfirmAsync(SL["Dialog_Confirm_Title"], SL["Settings_ClearDownloadsConfirm"]))
             return;
 
-        await _streamCache.ClearDownloadsAsync();
+        await AudioCacheManager.ClearDownloadsAsync();
+
+        foreach (var track in _registry.GetPinnedTracks())
+        {
+            if (track.IsDownloaded)
+            {
+                track.IsDownloaded = false;
+                track.LocalPath = null;
+            }
+        }
+
         UpdateCacheStats();
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
-        {        // FIX: Отписываемся от события локализации
+        {
             LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
         }
 

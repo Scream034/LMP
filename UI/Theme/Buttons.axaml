@@ -1,0 +1,642 @@
+<Styles xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mi="using:Material.Icons.Avalonia">
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- BASE BUTTON TEMPLATE                                                -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- ПРАВИЛО АНИМАЦИИ ЦВЕТОВ (ANTI-FLASH):                             -->
+    <!-- Никогда не анимируем от/к Transparent (#00FFFFFF)!                  -->
+    <!-- Вместо этого используем *TransparentBrush — тот же RGB, альфа=0.   -->
+    <!--                                                                     -->
+    <!-- ВАЖНО: TransparentBrush должен совпадать по RGB с ЦЕЛЕВЫМ цветом,  -->
+    <!-- а не с каким-то другим. Иначе при интерполяции на 50% появится     -->
+    <!-- видимый цвет-гибрид (мерцание).                                    -->
+    <!--                                                                     -->
+    <!-- Пример:                                                             -->
+    <!--   ✗ AccentTransparent → BgHighlight = мерцание фиолетовым          -->
+    <!--   ✓ BgHighlightTransparent → BgHighlight = плавное появление       -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="Button">
+                <Border
+                    Name="PART_Border"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="{TemplateBinding CornerRadius}"
+                    Padding="{TemplateBinding Padding}">
+                    <ContentPresenter
+                        Name="PART_ContentPresenter"
+                        Background="Transparent"
+                        Foreground="{TemplateBinding Foreground}"
+                        HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                        VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                        Content="{TemplateBinding Content}"
+                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                        RecognizesAccessKey="True" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- Hover: акцентная обводка, фон не меняется -->
+    <Style Selector="Button:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- Pressed: чуть затемняем фон для тактильного отклика -->
+    <Style Selector="Button:pressed">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+
+    <Style Selector="Button:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+
+    <!-- ═══ FLUENT OVERRIDE ═══ -->
+    <!-- Жёстко фиксируем ContentPresenter во всех состояниях,              -->
+    <!-- чтобы Fluent не мог перехватить Foreground/Background              -->
+    <Style Selector="Button /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button:disabled mi|MaterialIcon">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- WINDOW CONTROL BUTTONS                                              -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Используем BgHoverTransparentBrush вместо Transparent              -->
+    <!-- для плавного fade без белых вспышек.                               -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.window-btn">
+        <!-- Базовый фон = прозрачная версия hover-цвета (тот же RGB, A=0) -->
+        <Setter Property="Background" Value="{DynamicResource BgHoverTransparentBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="38" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.window-btn:pointerover">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.window-btn:pressed">
+        <Setter Property="Background" Value="{DynamicResource BgHoverBrush}" />
+    </Style>
+
+    <Style Selector="Button.window-btn > Panel > Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.window-btn:pointerover > Panel > Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.window-btn > Panel > Grid > Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Background" Value="{DynamicResource BgSecondaryBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.window-btn:pointerover > Panel > Grid > Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.window-btn > Grid > Line">
+        <Setter Property="Stroke" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Stroke" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.window-btn:pointerover > Grid > Line">
+        <Setter Property="Stroke" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- ═══ CLOSE BUTTON ═══ -->
+    <!-- Базовый фон = прозрачная версия красного (SystemErrorTransparentBrush). -->
+    <!-- При hover: плавно проявляется красный без белого мерцания.               -->
+    <!-- При уходе: красный плавно гаснет в прозрачный того же оттенка.          -->
+    <Style Selector="Button.window-btn-close">
+        <Setter Property="Background" Value="{DynamicResource SystemErrorTransparentBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.window-btn-close:pointerover">
+        <Setter Property="Background" Value="{DynamicResource SystemErrorBrush}" />
+    </Style>
+    <Style Selector="Button.window-btn-close:pointerover > Grid > Line">
+        <Setter Property="Stroke" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.window-btn-close:pressed">
+        <Setter Property="Background" Value="{DynamicResource SystemErrorBgBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- ACCENT BUTTON                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Стиль: акцентный фон, контрастный текст (авто: чёрный/белый).      -->
+    <!-- Hover: контрастная обводка, фон и текст НЕ меняются.               -->
+    <!--                                                                     -->
+    <!-- Border анимируется от AccentButtonTextTransparentBrush              -->
+    <!-- к AccentButtonTextBrush — плавное появление без мерцания.           -->
+    <!--                                                                     -->
+    <!-- Foreground жёстко зафиксирован через ContentPresenter override,    -->
+    <!-- чтобы Fluent не мог перехватить его при :pointerover.              -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.accent">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1.5" />
+        <Setter Property="Padding" Value="16,8" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.accent:pointerover">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.accent:pressed">
+        <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <!-- Жёсткий override Foreground на ContentPresenter — Fluent не сможет перехватить -->
+    <Style Selector="Button.accent /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.accent TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.accent:pointerover TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- PRIMARY BUTTON                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Аналогично accent, но с округлыми краями.                          -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.primary-btn">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1.5" />
+        <Setter Property="Padding" Value="24,12" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.primary-btn:pointerover">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.primary-btn:pressed">
+        <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <!-- Жёсткий override Foreground на ContentPresenter -->
+    <Style Selector="Button.primary-btn /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.primary-btn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.primary-btn:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.primary-btn TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.primary-btn:pointerover TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SIDEBAR BUTTON                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Навигационная кнопка.                                              -->
+    <!--                                                                     -->
+    <!-- ANTI-FLASH: базовый BorderBrush = BgHighlightTransparentBrush,     -->
+    <!-- потому что при hover переходим к BgHighlightBrush.                 -->
+    <!-- Тот же RGB → плавный fade без мерцания через чужой цвет.           -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.sidebar-btn">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <!-- Transparent-версия ЦЕЛЕВОГО цвета (BgHighlight), не акцента! -->
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.sidebar-btn:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.sidebar-btn:pressed">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+    </Style>
+    <!-- Active: акцентный border всегда виден, фон elevated -->
+    <Style Selector="Button.sidebar-btn.active">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.sidebar-btn.active:pointerover">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.sidebar-btn TextBlock">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.sidebar-btn ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- ICON BUTTON                                                         -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Круглая кнопка-иконка.                                             -->
+    <!-- Border: AccentTransparentBrush → AccentBrush (тот же RGB).         -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.icon-btn">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.icon-btn:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.1)" />
+    </Style>
+    <Style Selector="Button.icon-btn:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.icon-btn:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="Button.icon-btn:disabled mi|MaterialIcon">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.icon-btn mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.icon-btn:pointerover mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.icon-btn.active mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- PLAYBACK BUTTONS                                                    -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Кнопки плеера. Border: AccentTransparent → Accent (тот же RGB).    -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.playback-btn">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="CornerRadius" Value="20" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.playback-btn.active">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.playback-btn:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.1)" />
+    </Style>
+    <Style Selector="Button.playback-btn.active:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.playback-btn:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.playback-btn.disabled">
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="Button.playback-btn.disabled mi|MaterialIcon,
+                     Button.playback-btn:disabled mi|MaterialIcon">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <Style Selector="Button.playback-btn-main">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Width" Value="48" />
+        <Setter Property="Height" Value="48" />
+        <Setter Property="CornerRadius" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.playback-btn-main:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.08)" />
+    </Style>
+    <Style Selector="Button.playback-btn-main:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.95)" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- PLAY CIRCLE                                                         -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.play-circle">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="2" />
+        <Setter Property="Width" Value="56" />
+        <Setter Property="Height" Value="56" />
+        <Setter Property="CornerRadius" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.play-circle:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="RenderTransform" Value="scale(1.06)" />
+    </Style>
+    <Style Selector="Button.play-circle:pressed">
+        <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+        <Setter Property="RenderTransform" Value="scale(0.98)" />
+    </Style>
+    <Style Selector="Button.play-circle mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.play-circle /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Button.play-circle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- DELETE BUTTON                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.delete-btn">
+        <Setter Property="Background" Value="{DynamicResource SystemErrorBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border:pointerover Button.delete-btn">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.delete-btn:pointerover">
+        <Setter Property="Background" Value="{DynamicResource SystemErrorBgBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- FILTER TYPE BUTTON                                                  -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.filter-type-btn">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="4" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.filter-type-btn:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.filter-type-btn.active">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- GHOST BUTTON                                                        -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Прозрачная кнопка для action bar карточек, track row и т.д.        -->
+    <!-- Border: BgHighlightTransparent → BgHighlight (тот же RGB).         -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.ghost-btn">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="6,4" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ghost-btn:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.ghost-btn:pressed">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.ghost-btn mi|MaterialIcon">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ghost-btn:pointerover mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.ghost-btn TextBlock">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.ghost-btn ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <Style Selector="Button.ghost-btn:disabled">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
+    <Style Selector="Button.ghost-btn:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.ghost-btn:disabled mi|MaterialIcon">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+</Styles>

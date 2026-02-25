@@ -2,8 +2,7 @@ name: Dev Build
 
 on:
   push:
-    branches: [avalonia]
-    paths: ['**.cs', '**.csproj', '**.axaml', '**.xaml']
+    branches: [ main, avalonia ]
   workflow_dispatch:
 
 permissions:
@@ -12,43 +11,42 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+        with: { fetch-depth: 0, submodules: recursive }
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-          include-prerelease: true
+          cache: true
+          cache-dependency-path: packages.lock.json
 
-      - name: Build & Publish
-        run: |
-          $ver = "0.0.${{ github.run_number }}"
-          
-          dotnet publish LMP.csproj `
-            -c Release -r win-x64 --self-contained true `
-            -p:Version=$ver -p:PublishReadyToRun=true `
-            -p:DebugType=None -p:DebugSymbols=false `
-            -o ./publish
-          
-          # Cleanup
-          Remove-Item ./publish/*.xml, ./publish/*.pdb -ErrorAction SilentlyContinue
-          
-          # Archive
-          cd publish
-          7z a -t7z -mx=9 "../LMP-Build-${{ github.run_number }}.7z" .
+      - name: Build Debug
+        run: ./build.bat debug
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Build Optimized Debug
+        run: ./build.bat optimized
+
+      - name: Publish Release
+        run: ./build.bat publish
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: dev-${{ github.run_number }}
+          name: LMP-Debug
+          path: bin/Debug/net10.0/
+
+      - name: Upload Optimized
+        uses: actions/upload-artifact@v4
+        with:
+          name: LMP-Optimized-Debug
+          path: bin/Debug/net10.0/
+
+      - name: Create Pre-release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.${{ github.run_number }}
           name: "Dev Build #${{ github.run_number }}"
           prerelease: true
-          files: ./*.7z
-          body: |
-            **Branch:** `${{ github.ref_name }}`
-            **Commit:** `${{ github.sha }}`
-            
-            Extract and run `LMP.exe`
+          files: LMP-*.7z

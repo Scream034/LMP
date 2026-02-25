@@ -1,6 +1,7 @@
 ﻿using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using LMP.Core.Audio;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -13,24 +14,23 @@ public sealed class TrackItemViewModel : ViewModelBase
 {
     #region Fields
 
+    private readonly LibraryService _library;
     private readonly AudioEngine _audio;
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
-    private readonly StreamCacheManager _cacheManager;
 
     private readonly ObservableAsPropertyHelper<bool> _isLiked;
     private readonly ObservableAsPropertyHelper<bool> _isDownloaded;
     private readonly ObservableAsPropertyHelper<bool> _isCached;
 
     private Action<TrackInfo>? _onPlay;
-    private bool _isDisposed;
 
     #endregion
 
     #region Properties - Core
 
     public TrackInfo Track { get; }
-    public bool IsDisposed => _isDisposed;
+    public bool IsDisposed { get; private set; }
 
     public string Id => Track.Id;
     public string Title => Track.Title;
@@ -114,14 +114,14 @@ public sealed class TrackItemViewModel : ViewModelBase
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
-        StreamCacheManager cacheManager,
+        LibraryService library,
         Action<TrackInfo>? onPlay = null)
     {
         Track = track;
         _audio = audio;
         _manager = manager;
         _downloads = downloads;
-        _cacheManager = cacheManager;
+        _library = library;
         _onPlay = onPlay;
 
         // ObservableAsPropertyHelper - используем Disposables из ViewModelBase
@@ -232,14 +232,37 @@ public sealed class TrackItemViewModel : ViewModelBase
 
         if (Track.IsCached)
         {
-            await _cacheManager.ExportTrackToDownloadsAsync(Track.Id);
+            var cache = AudioSourceFactory.GlobalCache;
+            if (cache == null)
+            {
+                Log.Warn("[TrackItem] AudioCache not initialized");
+                return;
+            }
+
+            bool success = await cache.ExportTrackToDownloadsAsync(
+                Track.Id,
+                async (trackId) => await _library.GetTrackAsync(trackId),
+                async (t) => await _library.AddOrUpdateTrackAsync(t));
+
+            if (success)
+            {
+                // Обновляем UI
+                var updated = await _library.GetTrackAsync(Track.Id);
+                if (updated != null)
+                {
+                    Track.LocalPath = updated.LocalPath;
+                    Track.IsDownloaded = updated.IsDownloaded;
+                    this.RaisePropertyChanged(nameof(Track));
+                    this.RaisePropertyChanged(nameof(IsDownloaded));
+                    this.RaisePropertyChanged(nameof(DownloadStatusText));
+                }
+            }
         }
         else
         {
             _downloads.StartDownload(Track);
         }
     }
-
     #endregion
 
     #region Methods
@@ -265,8 +288,8 @@ public sealed class TrackItemViewModel : ViewModelBase
 
     protected override void Dispose(bool disposing)
     {
-        if (_isDisposed) return;
-        
+        if (IsDisposed) return;
+
         if (disposing)
         {
             // Log.Debug($"[TrackVM] Disposing {Id} ({Title})");
@@ -278,9 +301,9 @@ public sealed class TrackItemViewModel : ViewModelBase
 
             MemoryDiagnostics.UntrackInstance("TrackVM.Created");
         }
-        
+
         base.Dispose(disposing);  // Это вызовет Disposables.Dispose()
-        _isDisposed = true;
+        IsDisposed = true;
     }
 
     #endregion

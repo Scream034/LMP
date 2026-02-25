@@ -40,7 +40,7 @@ internal partial class VideoWatchPage(string rawContent)
     }
 
     // То же самое для дизлайков (обычно 0 или скрыты)
-    public long? DislikeCount => 0;
+    public static long? DislikeCount => 0;
 
     public PlayerResponse? PlayerResponse
     {

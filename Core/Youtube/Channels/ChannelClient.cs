@@ -14,7 +14,7 @@ public partial class ChannelClient(HttpClient http)
 {
     private readonly ChannelController _controller = new(http);
 
-    private Channel Get(ChannelPage channelPage)
+    private static Channel Get(ChannelPage channelPage)
     {
         var channelId =
             channelPage.Id

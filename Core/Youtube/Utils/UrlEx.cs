@@ -15,11 +15,9 @@ internal static class UrlEx
         var queryIndex = url.IndexOf('?');
         var startIndex = queryIndex >= 0 ? queryIndex + 1 : 0;
 
-        if (queryIndex < 0 && url.Contains("http", StringComparison.OrdinalIgnoreCase))
-        {
-            // Это полный URL без параметров запроса
-            yield break;
-        }
+        // Убираем проверку на "http" без "?"
+        // signatureCipher — это query string БЕЗ "?", но содержит "url=https://..."
+        // Поэтому просто парсим с начала если нет "?"
 
         var currentIndex = startIndex;
         while (currentIndex < url.Length)
@@ -99,6 +97,35 @@ internal static class UrlEx
         sb.Append(Uri.EscapeDataString(key));
         sb.Append('=');
         sb.Append(Uri.EscapeDataString(value));
+
+        return sb.ToString();
+    }
+
+    public static string RemoveQueryParameter(string url, string key)
+    {
+        var queryIndex = url.IndexOf('?');
+        if (queryIndex < 0) return url;
+
+        var baseUrl = url[..queryIndex];
+        var query = url[(queryIndex + 1)..];
+
+        var parts = query.Split('&');
+        var sb = new StringBuilder(url.Length);
+        sb.Append(baseUrl);
+
+        var first = true;
+        foreach (var part in parts)
+        {
+            var eqIndex = part.IndexOf('=');
+            var paramName = eqIndex >= 0 ? part[..eqIndex] : part;
+
+            if (string.Equals(paramName, key, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            sb.Append(first ? '?' : '&');
+            sb.Append(part);
+            first = false;
+        }
 
         return sb.ToString();
     }

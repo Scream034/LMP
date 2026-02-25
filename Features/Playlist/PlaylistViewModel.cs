@@ -1,4 +1,5 @@
 ﻿using Avalonia.Controls;
+using LMP.Core.Audio;
 using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
@@ -16,7 +17,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 {
     #region Fields
 
-    private readonly StreamCacheManager _cacheManager;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
@@ -37,6 +37,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     // Кэш всех треков для избежания повторных загрузок
     private List<TrackInfo>? _allTracksCache;
     private bool _allTracksCacheValid;
+
+    // LIFECYCLE: Флаг для пропуска UI-обновлений когда окно свёрнуто
+    private volatile bool _isSuspended;
 
     #endregion
 
@@ -98,14 +101,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     #region Constructor
 
     public PlaylistViewModel(
-        StreamCacheManager cacheManager,
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
         IDialogService dialog,
         TrackViewModelFactory vmFactory)
     {
-        _cacheManager = cacheManager;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
@@ -119,9 +120,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         _headerHeight = new GridLength(LibService.Settings.PlaylistHeaderHeight);
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
-
-        // FIX: ThrownExceptions subscription to prevent memory leak
-        // Используем CreateCommand из ReorderableViewModel
 
         PlayAllCommand = CreateCommand(ReactiveCommand.CreateFromTask(PlayAllAsync, hasTracks));
 
@@ -176,6 +174,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             })
             .DisposeWith(Disposables);
 
+        // ИЗМЕНЕНО: Добавлена проверка _isSuspended для пропуска UI-обновлений
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
@@ -183,6 +182,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
+                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
+                if (_isSuspended) return;
+
                 if ((DateTime.Now - _lastMoveTime).TotalMilliseconds < MoveDebounceMs)
                 {
                     Log.Debug("[Playlist] Ignoring OnDataChanged (recent move)");
@@ -197,21 +199,64 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                 }
             });
 
+        // ИЗМЕНЕНО: Добавлена проверка _isSuspended
         _audioStateSub = Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
             h => (p, u) => h((p, u)),
             h => _audio.OnPlaybackStateChanged += h,
             h => _audio.OnPlaybackStateChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(async _ => await CheckPlaybackStateAsync());
+            .Subscribe(async _ =>
+            {
+                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
+                if (_isSuspended) return;
 
+                await CheckPlaybackStateAsync();
+            });
+
+        // ИЗМЕНЕНО: Добавлена проверка _isSuspended
         _trackChangeSub = Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
             h => _audio.OnTrackChanged += h,
             h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(async _ => await CheckPlaybackStateAsync());
+            .Subscribe(async _ =>
+            {
+                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
+                if (_isSuspended) return;
+
+                await CheckPlaybackStateAsync();
+            });
     }
 
     #endregion
+
+    // LIFECYCLE IMPLEMENTATION
+
+    /// <summary>
+    /// Окно свёрнуто — пропускаем UI-обновления от событий.
+    /// Музыка продолжает играть, но UI не обновляется.
+    /// </summary>
+    protected override void OnSuspend()
+    {
+        _isSuspended = true;
+    }
+
+    /// <summary>
+    /// Окно развёрнуто — синхронизируем UI с актуальным состоянием.
+    /// </summary>
+    protected override void OnResume()
+    {
+        _isSuspended = false;
+
+        // Синхронизируем состояние воспроизведения (трек мог смениться)
+        _ = CheckPlaybackStateAsync();
+
+        // Инвалидируем кэш — данные могли измениться
+        InvalidateAllTracksCache();
+
+        // Обновляем UI-свойства
+        this.RaisePropertyChanged(nameof(FormattedTrackCount));
+    }
+
 
     #region Abstract Implementation
 
@@ -219,7 +264,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     protected override TrackItemViewModel CreateViewModel(TrackInfo item)
     {
-        // Фабрика сама использует TrackRegistry!
         var vm = _vmFactory.GetOrCreate(item, PlayFromPlaylistAsync);
         vm.SourceContextId = _currentPlaylistId;
         vm.IsPlaylistContext = CanEdit;
@@ -238,14 +282,13 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         return vm;
     }
 
-    // Используем общий хелпер для DRY
     protected override bool MatchesFilter(TrackInfo item, string query)
         => TrackFilters.MatchesTitleOrAuthor(item, query);
 
     protected override async Task<List<TrackInfo>> LoadItemsByIdsAsync(
         IEnumerable<string> ids, CancellationToken ct)
     {
-        var idsList = ids.ToList(); // Enumerate once
+        var idsList = ids.ToList();
         return await LibService.GetPlaylistTracksAsync(
             _currentPlaylistId,
             limit: idsList.Count,
@@ -264,9 +307,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #region All Tracks Helper (DRY)
 
-    /// <summary>
-    /// Загружает все треки плейлиста (с кэшированием).
-    /// </summary>
     private async Task<List<TrackInfo>> GetAllTracksAsync()
     {
         if (_allTracksCacheValid && _allTracksCache != null)
@@ -329,23 +369,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         try
         {
             var tracks = GetLoadedItemsSnapshot();
-            await Task.Run(() =>
-            {
-                foreach (var track in tracks)
-                {
-                    if (!track.IsDownloaded && !track.IsCached)
-                    {
-                        if (_cacheManager.IsFullyCached(track.Id))
-                        {
-                            var meta = StreamCacheManager.TryGetMetadata(track.Id);
-                            if (meta != null)
-                                track.MarkAsCached(meta.Container, meta.Bitrate);
-                            else
-                                track.IsCached = true;
-                        }
-                    }
-                }
-            });
+            var audioCache = AudioSourceFactory.GlobalCache;
+            if (audioCache == null) return;
+
+            await Task.Run(() => audioCache.HydrateCacheStatus(tracks));
         }
         catch (Exception ex)
         {
@@ -502,7 +529,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             InvalidateAllTracksCache();
         }
 
-        base.Dispose(disposing);  // Вызовет ReorderableViewModel.Dispose(bool), который очистит _vmCache
+        base.Dispose(disposing);
     }
 
     #endregion

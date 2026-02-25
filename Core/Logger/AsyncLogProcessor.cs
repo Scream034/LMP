@@ -1,7 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 
-namespace LMP.Logger;
+namespace LMP.Core.Logger;
 
 public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
 {
@@ -99,7 +99,7 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
 
     // --- Метод для красивого цветного вывода ---
 #if DEBUG
-    private void WriteToConsole(LogMessage log, string formattedLine)
+    private static void WriteToConsole(LogMessage log, string formattedLine)
     {
         // Меняем цвет в зависимости от уровня
         var originalColor = Console.ForegroundColor;
@@ -123,18 +123,12 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
     }
 #endif
 
-    private string FormatLog(LogMessage log)
+    private static string FormatLog(LogMessage log)
     {
         // Оптимизированное форматирование
         var sb = new StringBuilder();
         sb.Append('[').Append(log.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff")).Append("] ");
         sb.Append('[').Append(GetLevelString(log.Level)).Append("] ");
-
-        // Если добавил имя сборки (проекта) в LogMessage, раскомментируй:
-        // sb.Append('{').Append(log.AssemblyName).Append("} "); 
-
-        if (log.Category is not null)
-            sb.Append('[').Append(log.Category).Append("] ");
 
         sb.Append(log.Message);
 

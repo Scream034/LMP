@@ -12,56 +12,68 @@ namespace LMP.Core.Services;
 public sealed class MemoryDiagnostics : IDisposable
 {
     #region Singleton
-    
-    private static MemoryDiagnostics? _instance;
-    public static MemoryDiagnostics Instance => _instance ??= new MemoryDiagnostics();
-    
+
+    public static MemoryDiagnostics Instance => field ??= new MemoryDiagnostics();
+
     #endregion
 
     #region Fields
-    
+
     private readonly ConcurrentDictionary<string, long> _counters = new();
     private readonly ConcurrentDictionary<string, int> _instanceCounts = new();
     private readonly Timer _monitorTimer;
-    
-    private MemoryStats _lastStats = new();
     private bool _disposed;
-    
+
     #endregion
 
     #region Events
-    
+
     public event Action<MemoryStats>? OnStatsUpdated;
     public event Action<string>? OnMemoryWarning;
-    
+
     #endregion
 
     #region Properties
-    
-    public MemoryStats CurrentStats => _lastStats;
-    
+
+    public MemoryStats CurrentStats { get; private set; } = new();
+
     /// <summary>Порог предупреждения (MB)</summary>
-    public long WarningThresholdMb { get; set; } = 350;
-    
+    public long WarningThresholdMb { get; set; } = 330;
+
     /// <summary>Критический порог (MB)</summary>
-    public long CriticalThresholdMb { get; set; } = 450;
-    
+    public long CriticalThresholdMb { get; set; } = 440;
+
     /// <summary>Автоматическая очистка при критическом пороге</summary>
     public bool AutoCleanupEnabled { get; set; } = true;
-    
+
     #endregion
 
     #region Constructor
-    
+
     private MemoryDiagnostics()
     {
         _monitorTimer = new Timer(UpdateStats, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
     }
-    
+
     #endregion
 
     #region Tracking Methods
-    
+
+    /// <summary>
+    /// Изменяет частоту мониторинга.
+    /// При сворачивании — реже (30с), при разворачивании — чаще (5с).
+    /// </summary>
+    public void SetMonitoringInterval(TimeSpan interval)
+    {
+        if (_disposed) return;
+        try
+        {
+            _monitorTimer.Change(interval, interval);
+            Log.Debug($"[MemoryDiag] Monitoring interval: {interval.TotalSeconds}s");
+        }
+        catch (ObjectDisposedException) { }
+    }
+
     /// <summary>
     /// Увеличивает счётчик байтов для категории.
     /// </summary>
@@ -117,28 +129,28 @@ public sealed class MemoryDiagnostics : IDisposable
     {
         return Instance._instanceCounts.GetValueOrDefault(category, 0);
     }
-    
+
     #endregion
 
     #region Monitoring
-    
+
     private void UpdateStats(object? state)
     {
         if (_disposed) return;
-        
+
         try
         {
             var process = Process.GetCurrentProcess();
             var gcInfo = GC.GetGCMemoryInfo();
 
-            _lastStats = new MemoryStats
+            CurrentStats = new MemoryStats
             {
                 WorkingSetMb = process.WorkingSet64 / (1024 * 1024),
                 PrivateMemoryMb = process.PrivateMemorySize64 / (1024 * 1024),
                 GcTotalMemoryMb = GC.GetTotalMemory(false) / (1024 * 1024),
                 GcHeapSizeMb = gcInfo.HeapSizeBytes / (1024 * 1024),
-                LohSizeMb = gcInfo.GenerationInfo.Length > 3 
-                    ? gcInfo.GenerationInfo[3].SizeAfterBytes / (1024 * 1024) 
+                LohSizeMb = gcInfo.GenerationInfo.Length > 3
+                    ? gcInfo.GenerationInfo[3].SizeAfterBytes / (1024 * 1024)
                     : 0,
                 Gen0Collections = GC.CollectionCount(0),
                 Gen1Collections = GC.CollectionCount(1),
@@ -146,23 +158,23 @@ public sealed class MemoryDiagnostics : IDisposable
                 TrackedCategories = GetTrackedSummary()
             };
 
-            OnStatsUpdated?.Invoke(_lastStats);
+            OnStatsUpdated?.Invoke(CurrentStats);
 
             // Проверяем пороги
-            if (_lastStats.WorkingSetMb > CriticalThresholdMb)
+            if (CurrentStats.WorkingSetMb > CriticalThresholdMb)
             {
-                var msg = $"CRITICAL: Memory {_lastStats.WorkingSetMb}MB > {CriticalThresholdMb}MB!";
+                var msg = $"CRITICAL: Memory {CurrentStats.WorkingSetMb}MB > {CriticalThresholdMb}MB!";
                 OnMemoryWarning?.Invoke(msg);
                 Log.Warn(msg);
-                
+
                 if (AutoCleanupEnabled)
                 {
                     ForceCleanup();
                 }
             }
-            else if (_lastStats.WorkingSetMb > WarningThresholdMb)
+            else if (CurrentStats.WorkingSetMb > WarningThresholdMb)
             {
-                var msg = $"WARNING: Memory {_lastStats.WorkingSetMb}MB > {WarningThresholdMb}MB";
+                var msg = $"WARNING: Memory {CurrentStats.WorkingSetMb}MB > {WarningThresholdMb}MB";
                 OnMemoryWarning?.Invoke(msg);
             }
         }
@@ -176,11 +188,11 @@ public sealed class MemoryDiagnostics : IDisposable
     {
         return _counters.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
     }
-    
+
     #endregion
 
     #region Reporting
-    
+
     /// <summary>
     /// Генерирует полный отчёт о памяти.
     /// </summary>
@@ -189,7 +201,7 @@ public sealed class MemoryDiagnostics : IDisposable
         var process = Process.GetCurrentProcess();
         var gcInfo = GC.GetGCMemoryInfo();
         var sb = new StringBuilder();
-        
+
         sb.AppendLine("╔══════════════════════════════════════════════════════════╗");
         sb.AppendLine("║              MEMORY DIAGNOSTICS REPORT                   ║");
         sb.AppendLine("╠══════════════════════════════════════════════════════════╣");
@@ -197,12 +209,12 @@ public sealed class MemoryDiagnostics : IDisposable
         sb.AppendLine($"║ Private Memory:   {process.PrivateMemorySize64 / 1024 / 1024,6} MB                          ║");
         sb.AppendLine($"║ GC Total:         {GC.GetTotalMemory(false) / 1024 / 1024,6} MB                          ║");
         sb.AppendLine($"║ GC Heap Size:     {gcInfo.HeapSizeBytes / 1024 / 1024,6} MB                          ║");
-        
+
         if (gcInfo.GenerationInfo.Length > 3)
         {
             sb.AppendLine($"║ LOH Size:         {gcInfo.GenerationInfo[3].SizeAfterBytes / 1024 / 1024,6} MB                          ║");
         }
-        
+
         sb.AppendLine($"║ Memory Load:      {gcInfo.MemoryLoadBytes / 1024 / 1024,6} MB                          ║");
         sb.AppendLine($"║ High Threshold:   {gcInfo.HighMemoryLoadThresholdBytes / 1024 / 1024,6} MB                          ║");
         sb.AppendLine("╠══════════════════════════════════════════════════════════╣");
@@ -220,11 +232,11 @@ public sealed class MemoryDiagnostics : IDisposable
         {
             var valueMb = kvp.Value / 1024.0 / 1024.0;
             var valueKb = kvp.Value / 1024.0;
-            
-            string formatted = valueMb >= 1 
-                ? $"{valueMb:F1} MB" 
+
+            string formatted = valueMb >= 1
+                ? $"{valueMb:F1} MB"
                 : $"{valueKb:F0} KB";
-                
+
             sb.AppendLine($"║  {kvp.Key,-30} {formatted,12}          ║");
         }
 
@@ -233,7 +245,7 @@ public sealed class MemoryDiagnostics : IDisposable
             sb.AppendLine("╠──────────────────────────────────────────────────────────╣");
             sb.AppendLine("║                 INSTANCE COUNTS                          ║");
             sb.AppendLine("╠──────────────────────────────────────────────────────────╣");
-            
+
             foreach (var kvp in _instanceCounts.Where(kvp => kvp.Value > 0).OrderByDescending(kvp => kvp.Value))
             {
                 sb.AppendLine($"║  {kvp.Key,-30} {kvp.Value,12}          ║");
@@ -249,7 +261,7 @@ public sealed class MemoryDiagnostics : IDisposable
     /// </summary>
     public string GetShortStatus()
     {
-        return $"RAM: {_lastStats.WorkingSetMb}MB | GC: {_lastStats.GcTotalMemoryMb}MB | Gen0/1/2: {_lastStats.Gen0Collections}/{_lastStats.Gen1Collections}/{_lastStats.Gen2Collections}";
+        return $"RAM: {CurrentStats.WorkingSetMb}MB | GC: {CurrentStats.GcTotalMemoryMb}MB | Gen0/1/2: {CurrentStats.Gen0Collections}/{CurrentStats.Gen1Collections}/{CurrentStats.Gen2Collections}";
     }
 
     /// <summary>
@@ -259,31 +271,31 @@ public sealed class MemoryDiagnostics : IDisposable
     {
         Log.Info(Instance.GetFullReport());
     }
-    
+
     #endregion
 
     #region Cleanup
-    
+
     /// <summary>
     /// Принудительная очистка памяти.
     /// </summary>
     public static void ForceCleanup()
     {
         Log.Info("[MemoryDiagnostics] Forcing memory cleanup...");
-        
+
         var before = GC.GetTotalMemory(false);
-        
+
         // Компактификация LOH
         GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-        
+
         // Агрессивная сборка мусора
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-        
+
         var after = GC.GetTotalMemory(true);
         var freed = (before - after) / 1024 / 1024;
-        
+
         Log.Info($"[MemoryDiagnostics] Cleanup complete. Freed ~{freed}MB. Current: {after / 1024 / 1024}MB");
     }
 
@@ -294,21 +306,21 @@ public sealed class MemoryDiagnostics : IDisposable
     {
         GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
     }
-    
+
     #endregion
 
     #region IDisposable
-    
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        
+
         _monitorTimer.Dispose();
         _counters.Clear();
         _instanceCounts.Clear();
     }
-    
+
     #endregion
 }
 

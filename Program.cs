@@ -14,6 +14,13 @@ using Microsoft.EntityFrameworkCore;
 using Avalonia;
 using AsyncImageLoader;
 using LMP.UI.Dialogs;
+using LMP.Core.Audio.Cache;
+using LMP.Core.Youtube.Bridge.NToken;
+using LMP.Core.Audio.Http;
+using LMP.Core.Youtube.Bridge.SigCipher;
+using LMP.Core.Youtube.Bridge.Common;
+using LMP.Features.Notifications;
+using LMP.Core.Models;
 
 namespace LMP;
 
@@ -29,17 +36,25 @@ class Program
 
         try
         {
-            Console.WriteLine("Logger initializing...");
+            // ═══ ЭТАП 1: Логгер (мгновенно) ═══
             Log.Initialize();
+            Log.Info($"{G.AppId} starting...");
 
-            Log.Info($"{G.AppId} starting...!");
-
+            // ═══ ЭТАП 2: Создать папки ═══
             G.Folder.Create();
 
+            // ═══ ЭТАП 3: Bootstrap настройки (быстро, без БД) ═══
+            BootstrapSettings.Initialize();
+
+            // ═══ ЭТАП 4: DI контейнер ═══
             var services = new ServiceCollection();
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
+            // ═══ ЭТАП 5: Eager services ═══
+            InitializeEagerServices();
+
+            // ═══ ЭТАП 6: Avalonia ═══
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
@@ -52,17 +67,47 @@ class Program
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
+#if DEBUG
             .LogToTrace()
+#endif
             .UseReactiveUI();
+
+    private static void InitializeEagerServices()
+    {
+        try
+        {
+            var orchestrator = Services.GetRequiredService<PlaybackErrorOrchestrator>();
+            Log.Info("[Startup] PlaybackErrorOrchestrator ready");
+
+            var notifications = Services.GetRequiredService<NotificationService>();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await notifications.InitializeAsync();
+                    Log.Info("[Startup] NotificationService history loaded");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[Startup] NotificationService.InitializeAsync failed: {ex.Message}");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Startup] Eager service initialization failed: {ex.Message}");
+        }
+    }
 
     private static void ConfigureServices(IServiceCollection services)
     {
         Log.Info("Configuring services...");
 
-        // === Database ===
-        // Configure DbContext with connection string here, not in DbContext
-        var dbPath = G.File.Database;
+        // === Bootstrap Settings (уже загружены) ===
+        services.AddSingleton(_ => BootstrapSettings.Current);
 
+        // === Database ===
+        var dbPath = G.FilePath.Database;
         services.AddDbContextFactory<LibraryDbContext>(options =>
         {
             options.UseSqlite($"Data Source={dbPath};Cache=Shared");
@@ -77,6 +122,7 @@ class Program
         services.AddSingleton<ITrackRepository, TrackRepository>();
         services.AddSingleton<IPlaylistRepository, PlaylistRepository>();
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
+        services.AddSingleton<INotificationRepository, NotificationRepository>();
 
         // === Core Services ===
         services.AddSingleton(sp =>
@@ -86,7 +132,6 @@ class Program
             return new TrackRegistry(trackRepo, playlistRepo);
         });
 
-        // Для обложек треков (маленькие)
         services.AddSingleton<IAsyncImageLoader>(sp =>
             new CachedImageLoader(sp.GetRequiredService<ImageCacheService>(), ImageQuality.Low));
 
@@ -99,14 +144,27 @@ class Program
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
 
+        services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));
+        services.AddSingleton<SigCipherDecryptor>();
+        services.AddSingleton<NTokenDecryptor>();
+
         // === Caching ===
-        services.AddSingleton<StreamCacheManager>();
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
 
-        // === Audio & Downloads ===
+        // === Audio & Downloads ====
+        services.AddSingleton<AudioCacheManager>();
         services.AddSingleton<AudioEngine>();
         services.AddSingleton<DownloadService>();
+
+        // === NOTIFICATION SYSTEM ===
+        services.AddSingleton<NotificationService>();
+        services.AddTransient<NotificationButtonViewModel>();
+        services.AddTransient<NotificationPanelViewModel>();
+        services.AddTransient<ToastOverlayViewModel>();
+
+        // === ERROR ORCHESTRATOR ===
+        services.AddSingleton<PlaybackErrorOrchestrator>();
 
         // === ViewModels ===
         services.AddTransient<HomeViewModel>();
@@ -122,6 +180,6 @@ class Program
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<PlayerBarViewModel>();
 
-        Log.Info("Services registered successfully.");
+        Log.Info("Services registered.");
     }
 }

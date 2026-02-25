@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Bridge.Cipher;
+using LMP.Core.Youtube.Bridge.NToken;
+using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
@@ -8,57 +10,137 @@ using LMP.Core.Youtube.Videos.ClosedCaptions;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 
-public class StreamClient(HttpClient http)
+public class StreamClient
 {
-    private readonly StreamController _controller = new(http);
+    private readonly StreamController _controller;
+    private readonly HttpClient _http;
+    private readonly NTokenDecryptor _nTokenDecryptor;
+    private readonly SigCipherDecryptor _sigCipherDecryptor;
     private CipherManifest? _cipherManifest;
+    
+    /// <summary>
+    /// Callback для проверки авторизации.
+    /// Устанавливается при создании клиента.
+    /// </summary>
+    private readonly Func<bool>? _isAuthenticatedCheck;
 
+    public StreamClient(HttpClient http, NTokenDecryptor nTokenDecryptor, SigCipherDecryptor sigCipherDecryptor, 
+        Func<bool>? isAuthenticatedCheck = null)
+    {
+        _http = http;
+        _controller = new StreamController(http);
+        _nTokenDecryptor = nTokenDecryptor;
+        _sigCipherDecryptor = sigCipherDecryptor;
+        _isAuthenticatedCheck = isAuthenticatedCheck;
+    }
+
+    /// <summary>
+    /// Резолвит старый CipherManifest — нужен только для SignatureTimestamp.
+    /// Сама дешифровка sig идёт через SigCipherDecryptor.
+    /// </summary>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
     {
-        if (_cipherManifest is not null) return _cipherManifest;
-        var playerSource = await _controller.GetPlayerSourceAsync(cancellationToken);
-        return _cipherManifest = playerSource.CipherManifest
-            ?? throw new YoutubeExplodeException("Failed to extract cipher manifest.");
+        if (_cipherManifest is not null)
+            return _cipherManifest;
+
+        try
+        {
+            var playerSource = await _controller.GetPlayerSourceAsync(cancellationToken);
+            _cipherManifest = playerSource.CipherManifest;
+
+            if (_cipherManifest is null)
+            {
+                Log.Debug("[StreamClient] CipherManifest not available (expected with new YouTube format)");
+                _cipherManifest = new CipherManifest("", []);
+            }
+
+            return _cipherManifest;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[StreamClient] CipherManifest resolution failed: {ex.Message}");
+            _cipherManifest = new CipherManifest("", []);
+            return _cipherManifest;
+        }
     }
 
     private async IAsyncEnumerable<IStreamInfo> GetAudioStreamInfosAsync(
-         IEnumerable<IStreamData> streamDatas,
-         [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        IEnumerable<IStreamData> streamDatas,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var streamData in streamDatas)
         {
             var itag = streamData.Itag;
             if (itag is null) continue;
 
-            // ВАЖНО: Opus (WebM) часто идет как "adaptive" поток.
-            // Пропускаем видео, но берем аудио.
+            var mimeType = streamData.MimeType;
+            if (string.IsNullOrEmpty(mimeType) ||
+                !mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+                continue;
 
-            // 1. Если это явное видео (есть видео кодек) - пропускаем
-            if (!string.IsNullOrWhiteSpace(streamData.VideoCodec)) continue;
-
-            // 2. Если нет аудио кодека - пропускаем (битый поток)
-            // Примечание: иногда audioCodec пустой, но MimeType содержит "audio/". 
-            // YoutubeExplode обычно парсит это в AudioCodec. 
-            if (string.IsNullOrWhiteSpace(streamData.AudioCodec)) continue;
+            var audioCodec = streamData.AudioCodec;
+            if (string.IsNullOrWhiteSpace(audioCodec)) continue;
 
             var url = streamData.Url;
             if (string.IsNullOrWhiteSpace(url)) continue;
 
-            // Расшифровка сигнатуры
+            // ════════════════════════════════════════════════════════
+            // SIGNATURE DECRYPTION
+            // ════════════════════════════════════════════════════════
             if (!string.IsNullOrWhiteSpace(streamData.Signature))
             {
-                var cipherManifest = await ResolveCipherManifestAsync(cancellationToken);
-                url = UrlEx.SetQueryParameter(
-                    url,
-                    streamData.SignatureParameter ?? "sig",
-                    cipherManifest.Decipher(streamData.Signature)
-                );
+                Log.Debug($"[StreamClient] itag={itag} needs signature decryption " +
+                          $"(sig length={streamData.Signature.Length})");
+
+                try
+                {
+                    var decryptedSig = await _sigCipherDecryptor.DecipherAsync(
+                        streamData.Signature,
+                        cancellationToken
+                    );
+
+                    var sigParam = streamData.SignatureParameter ?? "sig";
+                    url = $"{url}&{sigParam}={Uri.EscapeDataString(decryptedSig)}";
+
+                    Log.Debug($"[StreamClient] itag={itag} sig decrypted OK");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[StreamClient] itag={itag} sig decryption failed: {ex.Message}");
+                    continue;
+                }
             }
 
+            // ════════════════════════════════════════════════════════
+            // N-TOKEN DECRYPTION
+            // ════════════════════════════════════════════════════════
+            var nToken = UrlEx.TryGetQueryParameterValue(url, "n");
+            if (!string.IsNullOrEmpty(nToken))
+            {
+                try
+                {
+                    var decryptedN = await _nTokenDecryptor.DecryptAsync(nToken, cancellationToken);
+                    url = UrlEx.SetQueryParameter(url, "n", decryptedN);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[StreamClient] itag={itag} n-token failed: {ex.Message}");
+                }
+            }
+
+            // ════════════════════════════════════════════════════════
+            // Cleanup YouTube internal parameters
+            // ════════════════════════════════════════════════════════
+            url = UrlEx.RemoveQueryParameter(url, "ump");
+            url = UrlEx.RemoveQueryParameter(url, "alr");
+            url = UrlEx.RemoveQueryParameter(url, "srfvp");
+            url = UrlEx.RemoveQueryParameter(url, "rbuf");
+            url = UrlEx.RemoveQueryParameter(url, "pot");
+
+            // ════════════════════════════════════════════════════════
+            // Validation & yield
+            // ════════════════════════════════════════════════════════
             var contentLength = streamData.ContentLength ?? 0;
-            // Opus потоки иногда не имеют ContentLength в заголовке до запроса, 
-            // но в манифесте он обычно есть. Если 0 - это подозрительно, но можно попробовать пропустить проверку
-            // если трек критически важен. Но обычно 0 = ошибка.
             if (contentLength == 0) continue;
 
             var container = streamData.Container?.Pipe(static s => new Container(s));
@@ -70,60 +152,73 @@ public class StreamClient(HttpClient http)
             Language? audioLanguage = null;
             if (!string.IsNullOrWhiteSpace(streamData.AudioLanguageCode))
             {
-                audioLanguage = new Language(streamData.AudioLanguageCode, streamData.AudioLanguageName ?? "");
+                audioLanguage = new Language(
+                    streamData.AudioLanguageCode,
+                    streamData.AudioLanguageName ?? ""
+                );
             }
 
             yield return new AudioOnlyStreamInfo(
+                itag.Value,
                 url,
                 container.Value,
                 new FileSize(contentLength),
                 bitrate.Value,
-                streamData.AudioCodec,
+                audioCodec,
                 audioLanguage,
                 streamData.IsAudioLanguageDefault
             );
         }
     }
 
-    // Основной метод получения манифеста
     public async ValueTask<StreamManifest> GetManifestAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        // 1. Получаем PlayerResponse
         PlayerResponse playerResponse;
+        bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
+
         try
         {
-            playerResponse = await _controller.GetPlayerResponseAsync(videoId, cancellationToken);
+            (playerResponse, _) = await _controller.GetPlayerResponseWithFallbackAsync(
+                videoId, cancellationToken, isAuthenticated: isAuth);
         }
         catch (VideoUnplayableException)
         {
-            // Fallback with cipher logic (simplified)
             var cipherManifest = await ResolveCipherManifestAsync(cancellationToken);
-            playerResponse = await _controller.GetPlayerResponseAsync(videoId, cipherManifest.SignatureTimestamp, cancellationToken);
+            playerResponse = await _controller.GetPlayerResponseAsync(
+                videoId,
+                cipherManifest.SignatureTimestamp,
+                cancellationToken
+            );
         }
 
-        if (playerResponse.Streams.Count() == 0)
-            throw new VideoUnplayableException($"No streams for {videoId}");
+        if (!playerResponse.IsPlayable)
+            throw new VideoUnplayableException(
+                $"Video {videoId} is not playable: {playerResponse.PlayabilityError}");
 
         var streams = new List<IStreamInfo>();
-
-        // 2. Извлекаем ТОЛЬКО аудио
-        await foreach (var stream in GetAudioStreamInfosAsync(playerResponse.Streams, cancellationToken))
+        await foreach (var stream in GetAudioStreamInfosAsync(
+            playerResponse.Streams, cancellationToken))
         {
             streams.Add(stream);
         }
 
-        // DASH нам не нужен для аудио в 99% случаев, YouTube отдает opus/aac в adaptiveFormats
+        if (streams.Count == 0)
+            throw new VideoUnplayableException($"No audio streams available for {videoId}");
 
         return new StreamManifest(streams);
     }
 
-    // Методы DownloadAsync и GetAsync оставляем как есть или делегируем
-    public async ValueTask DownloadAsync(IStreamInfo streamInfo, string filePath, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
+    public async ValueTask DownloadAsync(
+        IStreamInfo streamInfo,
+        string filePath,
+        IProgress<double>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         using var destination = File.Create(filePath);
-        using var input = new MediaStream(http, streamInfo);
+        using var input = new MediaStream(_http, streamInfo);
+
         await input.InitializeAsync(cancellationToken);
         await input.CopyToAsync(destination, progress, cancellationToken);
     }

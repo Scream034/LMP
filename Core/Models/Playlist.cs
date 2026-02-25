@@ -41,7 +41,7 @@ public class Playlist : IBatchItem, ISearchResult
 
     public string? ThumbnailUrl { get; set; }
     public string? Author { get; set; }
-    public string? Description { get; set; } // Добавлено поле описания из YouTube
+    public string? Description { get; set; }
 
     public PlaylistSyncMode SyncMode { get; set; } = PlaylistSyncMode.LocalOnly;
     public string? YoutubeId { get; set; }
