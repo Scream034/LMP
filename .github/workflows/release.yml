@@ -7,14 +7,20 @@ on:
 jobs:
   publish:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: '10.0.x', cache: true, cache-dependency-path: packages.lock.json }
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: "**/packages.lock.json"
 
-      - run: ./build.bat publish
+      - name: Publish Release
+        run: ./build.bat publish nopause
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
