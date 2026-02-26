@@ -30,10 +30,11 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 set BASE_VERSION=1.0.!COMMIT_COUNT!
-set FULL_VERSION=!BASE_VERSION!+!GIT_HASH!
+set FULL_VERSION=!BASE_VERSION!-!GIT_HASH!     :: Изменено: + → -
 
 echo Mode: %MODE%
 echo Version: !BASE_VERSION!  (Hash: !GIT_HASH!)
+echo Full Version: !FULL_VERSION!
 echo.
 
 if /i "%MODE%"=="clean" goto :CLEAN
@@ -54,7 +55,9 @@ goto :SUCCESS
 
 :DEBUG
 echo Building Debug...
-dotnet build LMP.csproj -c Debug -p:Version=!BASE_VERSION! -p:InformationalVersion=!FULL_VERSION!
+dotnet build LMP.csproj -c Debug ^
+    -p:Version=!BASE_VERSION! ^
+    -p:InformationalVersion=!FULL_VERSION!
 goto :CHECK
 
 :OPTIMIZED

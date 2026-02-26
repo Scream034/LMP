@@ -32,26 +32,25 @@ jobs:
           $commitCount = git rev-list --count HEAD
           $shortHash = git rev-parse --short=7 HEAD
           $version = "1.0.$commitCount"
-          $fullVersion = "1.0.$commitCount+$shortHash"
+          $fullVersion = "1.0.$commitCount-${shortHash}"   # Изменено + на - (лучше для файлов)
           
           echo "VERSION=$version" >> $env:GITHUB_ENV
           echo "FULL_VERSION=$fullVersion" >> $env:GITHUB_ENV
           echo "COMMIT_HASH=$shortHash" >> $env:GITHUB_ENV
           echo "COMMIT_COUNT=$commitCount" >> $env:GITHUB_ENV
 
-      # === Установка 7-Zip (максимально надёжно) ===
+      # === Установка 7-Zip ===
       - name: Setup 7-Zip
         uses: milliewalky/setup-7-zip@v2
 
-      # === Сборка Debug ===
+      # === Сборка ===
       - name: Build Debug Full
         run: ./build.bat debug nopause
 
-      # === Сборка Release (publish) ===
-      - name: Build Release Full
+      - name: Build Release Full (Publish)
         run: ./build.bat publish nopause
 
-      # === Архивация Debug ===
+      # === Архивация ===
       - name: Archive Debug Build
         shell: pwsh
         run: |
@@ -60,26 +59,17 @@ jobs:
             exit 1
           }
           7z a -t7z -mx=9 "LMP-Debug-v${{ env.FULL_VERSION }}.7z" "bin/Debug/net10.0/*"
-          if (-not (Test-Path "LMP-Debug-v${{ env.FULL_VERSION }}.7z")) {
-            Write-Error "Failed to create Debug 7z archive!"
-            exit 1
-          }
 
-      # === Архивация Release ===
       - name: Archive Release Build
         shell: pwsh
         run: |
           if (-not (Test-Path "publish")) {
-            Write-Error "Publish folder not found! Publish step failed."
+            Write-Error "Publish folder not found!"
             exit 1
           }
           7z a -t7z -mx=9 "LMP-Release-v${{ env.FULL_VERSION }}.7z" "publish/*"
-          if (-not (Test-Path "LMP-Release-v${{ env.FULL_VERSION }}.7z")) {
-            Write-Error "Failed to create Release 7z archive!"
-            exit 1
-          }
 
-      # === Загрузка артефактов ===
+      # === Загрузка артефактов (для удобства в Actions) ===
       - name: Upload Debug Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -92,14 +82,28 @@ jobs:
           name: LMP-Release-v${{ env.FULL_VERSION }}
           path: LMP-Release-v${{ env.FULL_VERSION }}.7z
 
-      # === Создание Pre-release ===
-      - name: Create Pre-release
+      # === Удаляем старые файлы из dev-релизa (чтобы не было дублей) ===
+      - name: Delete Old Dev Release Assets
+        if: github.ref == 'refs/heads/main'
+        uses: mknejp/delete-release-assets@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: dev
+          assets: |
+            LMP-Debug-*.7z
+            LMP-Release-*.7z
+          fail-if-no-release: false
+
+      # === Создание / Обновление Dev Pre-release (фиксированный тег) ===
+      - name: Create/Update Dev Pre-release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}-dev.${{ github.run_number }}
-          name: "Dev Build #${{ github.run_number }} (v${{ env.FULL_VERSION }})"
+          tag_name: dev
+          name: "Latest Dev Build (v${{ env.FULL_VERSION }})"
           prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
           files: |
             LMP-Debug-v${{ env.FULL_VERSION }}.7z
             LMP-Release-v${{ env.FULL_VERSION }}.7z
@@ -109,5 +113,10 @@ jobs:
             - **Версия**: `v${{ env.FULL_VERSION }}`
             - **Коммит**: `${{ env.COMMIT_HASH }}`
             - **Всего коммитов**: ${{ env.COMMIT_COUNT }}
+            - **Дата сборки**: ${{ github.event.head_commit.timestamp }}
 
-            ⚠️ **Только для тестирования, не является стабильной сборкой!**
+            ⚠️ **Это тестовая сборка. Не используйте в продакшене!**
+
+            Скачать:
+            - [LMP-Release-v${{ env.FULL_VERSION }}.7z](https://github.com/${{ github.repository }}/releases/download/dev/LMP-Release-v${{ env.FULL_VERSION }}.7z) (рекомендуется)
+            - [LMP-Debug-v${{ env.FULL_VERSION }}.7z](https://github.com/${{ github.repository }}/releases/download/dev/LMP-Debug-v${{ env.FULL_VERSION }}.7z)

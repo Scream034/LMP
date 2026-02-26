@@ -19,21 +19,31 @@ jobs:
           cache: true
           cache-dependency-path: "**/packages.lock.json"
 
-      # Установка 7-Zip
+      # === Установка 7-Zip ===
       - name: Setup 7-Zip
         uses: milliewalky/setup-7-zip@v2
 
-      # Получаем версию из тега релиза
+      # === Получаем версию из тега релиза ===
       - name: Get Version from Tag
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME
-          echo "FULL_VERSION=$tag" >> $env:GITHUB_ENV
+          # Убираем префикс 'v', если он есть
+          $cleanVersion = $tag -replace '^v', ''
+          
+          echo "TAG=$tag" >> $env:GITHUB_ENV
+          echo "VERSION=$cleanVersion" >> $env:GITHUB_ENV
+          echo "FULL_VERSION=v$cleanVersion" >> $env:GITHUB_ENV   # Для красивого имени файла
 
+          Write-Host "Tag: $tag"
+          Write-Host "Clean version: $cleanVersion"
+          Write-Host "Full version for filename: v$cleanVersion"
+
+      # === Сборка Release (Publish) ===
       - name: Build Release Publish
         run: ./build.bat publish nopause
 
-      # Архивация Release
+      # === Архивация ===
       - name: Archive Release
         shell: pwsh
         run: |
@@ -42,15 +52,18 @@ jobs:
             exit 1
           }
           
-          7z a -t7z -mx=9 "LMP-v${{ env.FULL_VERSION }}.7z" "publish/*"
+          $archiveName = "LMP-${{ env.FULL_VERSION }}.7z"
+          7z a -t7z -mx=9 $archiveName "publish/*"
           
-          if (-not (Test-Path "LMP-v${{ env.FULL_VERSION }}.7z")) {
+          if (-not (Test-Path $archiveName)) {
             Write-Error "Failed to create 7z archive!"
             exit 1
           }
+          
+          echo "Archive created: $archiveName"
 
-      # Прикрепляем архив к созданному релизу
+      # === Прикрепляем архив к релизу ===
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: LMP-v${{ env.FULL_VERSION }}.7z
+          files: LMP-${{ env.FULL_VERSION }}.7z
