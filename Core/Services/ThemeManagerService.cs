@@ -196,9 +196,6 @@ public sealed class ThemeManagerService
     /// Применяет переопределения для Fluent темы Avalonia.
     /// Необходимо для корректной работы стандартных контролов (CheckBox, ToggleSwitch, 
     /// ComboBox, Slider, диалоговые окна и т.д.) с кастомными цветами темы.
-    /// 
-    /// ВАЖНО: AccentButton* ресурсы используют accentButtonText для foreground,
-    /// что гарантирует контрастность на ЛЮБОЙ теме (включая AMOLED с белым акцентом).
     /// </summary>
     private static void ApplyFluentOverrides(IResourceDictionary resources, ThemeSettings theme)
     {
@@ -214,8 +211,8 @@ public sealed class ThemeManagerService
         _ = TryParseColor(theme.BgHover, out var bgHover);
         _ = TryParseColor(theme.TextMuted, out var textMuted);
 
-        // Контрастный текст для акцентных элементов
         var accentButtonText = GetContrastingTextColor(accent);
+        var transparent = Colors.Transparent;
 
         // ═══ SYSTEM ACCENT COLORS ═══
         resources["SystemAccentColor"] = accent;
@@ -226,7 +223,7 @@ public sealed class ThemeManagerService
         resources["SystemAccentColorLight2"] = accentHover;
         resources["SystemAccentColorLight3"] = accentHover;
 
-        // ═══ TEXT ON ACCENT (для CheckBox, ToggleSwitch, диалоговых кнопок) ═══
+        // ═══ TEXT ON ACCENT ═══
         resources["TextOnAccentFillColorPrimary"] = accentButtonText;
         resources["TextOnAccentFillColorSecondary"] = accentButtonText;
         resources["TextOnAccentFillColorDisabled"] = textSecondary;
@@ -237,6 +234,7 @@ public sealed class ThemeManagerService
         resources["TextFillColorSecondary"] = textSecondary;
         resources["TextFillColorTertiary"] = textSecondary;
         resources["TextFillColorDisabled"] = textSecondary;
+        resources["TextFillColorInverse"] = textDark;  // Инвертированный текст
 
         // ═══ CONTROL BACKGROUNDS ═══
         resources["ControlFillColorDefault"] = bgElevated;
@@ -251,19 +249,18 @@ public sealed class ThemeManagerService
         resources["ControlStrongStrokeColorDisabled"] = bgHighlight;
 
         // ═══ SUBTLE FILLS ═══
-        resources["SubtleFillColorTransparent"] = Colors.Transparent;
+        resources["SubtleFillColorTransparent"] = transparent;
         resources["SubtleFillColorSecondary"] = bgHover;
         resources["SubtleFillColorTertiary"] = bgHighlight;
-        resources["SubtleFillColorDisabled"] = Colors.Transparent;
+        resources["SubtleFillColorDisabled"] = transparent;
 
-        // ═══ ACCENT FILLS — для системных контролов ═══
+        // ═══ ACCENT FILLS ═══
         resources["AccentFillColorDefaultBrush"] = new SolidColorBrush(accent);
         resources["AccentFillColorSecondary"] = accentHover;
         resources["AccentFillColorTertiary"] = accent;
         resources["AccentFillColorDisabled"] = bgHighlight;
 
-        // ═══ ACCENT BUTTON — для системных диалогов (ContentDialog) ═══
-        // Foreground ВСЕГДА = accentButtonText, даже при PointerOver и Pressed
+        // ═══ ACCENT BUTTON ═══
         resources["AccentButtonBackground"] = accent;
         resources["AccentButtonBackgroundPointerOver"] = accent;
         resources["AccentButtonBackgroundPressed"] = accentHover;
@@ -274,84 +271,72 @@ public sealed class ThemeManagerService
         resources["AccentButtonForegroundPressed"] = accentButtonText;
         resources["AccentButtonForegroundDisabled"] = textSecondary;
 
-        resources["AccentButtonBorderBrush"] = Colors.Transparent;
+        resources["AccentButtonBorderBrush"] = transparent;
         resources["AccentButtonBorderBrushPointerOver"] = accentButtonText;
-        resources["AccentButtonBorderBrushPressed"] = Colors.Transparent;
-        resources["AccentButtonBorderBrushDisabled"] = Colors.Transparent;
+        resources["AccentButtonBorderBrushPressed"] = transparent;
+        resources["AccentButtonBorderBrushDisabled"] = transparent;
 
         // ═══ CHECKBOX ═══
-        resources["CheckGlyphForeground"] = accentButtonText;
-        resources["CheckGlyphForegroundChecked"] = accentButtonText;
-        resources["CheckGlyphForegroundCheckedPointerOver"] = accentButtonText;
-        resources["CheckGlyphForegroundCheckedPressed"] = accentButtonText;
-        resources["CheckGlyphForegroundCheckedDisabled"] = textSecondary;
-        resources["CheckGlyphForegroundIndeterminate"] = accentButtonText;
+        resources["CheckBoxCheckBackgroundFillUnchecked"] = bgElevated;
+        resources["CheckBoxCheckBackgroundFillUncheckedPointerOver"] = bgElevated;
+        resources["CheckBoxCheckBackgroundFillUncheckedPressed"] = bgElevated;
+        resources["CheckBoxCheckBackgroundFillUncheckedDisabled"] = bgHighlight;
+        resources["CheckBoxCheckBackgroundFillChecked"] = accent;
+        resources["CheckBoxCheckBackgroundFillCheckedPointerOver"] = accent;
+        resources["CheckBoxCheckBackgroundFillCheckedPressed"] = accentHover;
+        resources["CheckBoxCheckBackgroundFillCheckedDisabled"] = bgHighlight;
 
-        // ═══ TOGGLESWITCH: убираем ВСЕ возможные фоны ═══
-        // Основные контейнеры
-        resources["ToggleSwitchContainerBackground"] = Colors.Transparent;
-        resources["ToggleSwitchContainerBackgroundPointerOver"] = Colors.Transparent;
-        resources["ToggleSwitchContainerBackgroundPressed"] = Colors.Transparent;
-        resources["ToggleSwitchContainerBackgroundDisabled"] = Colors.Transparent;
+        resources["CheckBoxCheckBackgroundStrokeUnchecked"] = bgHighlight;
+        resources["CheckBoxCheckBackgroundStrokeUncheckedPointerOver"] = accent;
+        resources["CheckBoxCheckBackgroundStrokeUncheckedPressed"] = accent;
+        resources["CheckBoxCheckBackgroundStrokeUncheckedDisabled"] = bgHighlight;
+        resources["CheckBoxCheckBackgroundStrokeChecked"] = accent;
+        resources["CheckBoxCheckBackgroundStrokeCheckedPointerOver"] = accentHover;
+        resources["CheckBoxCheckBackgroundStrokeCheckedPressed"] = accent;
+        resources["CheckBoxCheckBackgroundStrokeCheckedDisabled"] = bgHighlight;
 
-        // Content Grid
-        resources["ToggleSwitchContentGridBackground"] = Colors.Transparent;
-        resources["ToggleSwitchContentGridBackgroundPointerOver"] = Colors.Transparent;
-        resources["ToggleSwitchContentGridBackgroundPressed"] = Colors.Transparent;
-        resources["ToggleSwitchContentGridBackgroundDisabled"] = Colors.Transparent;
+        resources["CheckBoxCheckGlyphForegroundUnchecked"] = transparent;
+        resources["CheckBoxCheckGlyphForegroundUncheckedPointerOver"] = transparent;
+        resources["CheckBoxCheckGlyphForegroundUncheckedPressed"] = transparent;
+        resources["CheckBoxCheckGlyphForegroundUncheckedDisabled"] = transparent;
+        resources["CheckBoxCheckGlyphForegroundChecked"] = accentButtonText;
+        resources["CheckBoxCheckGlyphForegroundCheckedPointerOver"] = accentButtonText;
+        resources["CheckBoxCheckGlyphForegroundCheckedPressed"] = accentButtonText;
+        resources["CheckBoxCheckGlyphForegroundCheckedDisabled"] = textSecondary;
 
-        // Track background (область между knob)
-        resources["ToggleSwitchTrackBackground"] = Colors.Transparent;
-        resources["ToggleSwitchTrackBackgroundPointerOver"] = Colors.Transparent;
-        resources["ToggleSwitchTrackBackgroundPressed"] = Colors.Transparent;
-        resources["ToggleSwitchTrackBackgroundDisabled"] = Colors.Transparent;
+        // ═══ TOGGLESWITCH ═══
+        resources["ToggleSwitchContainerBackground"] = transparent;
+        resources["ToggleSwitchContainerBackgroundPointerOver"] = transparent;
 
-        // Knob background (под самой ручкой)
-        resources["ToggleSwitchKnobBackground"] = Colors.Transparent;
-        resources["ToggleSwitchKnobBackgroundPointerOver"] = Colors.Transparent;
-        resources["ToggleSwitchKnobBackgroundPressed"] = Colors.Transparent;
-        resources["ToggleSwitchKnobBackgroundDisabled"] = Colors.Transparent;
-
-        // Pill (переключатель) — OFF state
         resources["ToggleSwitchFillOff"] = bgHighlight;
         resources["ToggleSwitchFillOffPointerOver"] = bgHighlight;
         resources["ToggleSwitchFillOffPressed"] = bgHighlight;
         resources["ToggleSwitchFillOffDisabled"] = bgHighlight;
 
-        // Pill — ON state
         resources["ToggleSwitchFillOn"] = accent;
         resources["ToggleSwitchFillOnPointerOver"] = accent;
-        resources["ToggleSwitchFillOnPressed"] = accent;
+        resources["ToggleSwitchFillOnPressed"] = accentHover;
         resources["ToggleSwitchFillOnDisabled"] = bgHighlight;
 
-        // Border stroke — OFF
         resources["ToggleSwitchStrokeOff"] = bgHighlight;
         resources["ToggleSwitchStrokeOffPointerOver"] = accent;
         resources["ToggleSwitchStrokeOffPressed"] = accent;
         resources["ToggleSwitchStrokeOffDisabled"] = bgHighlight;
 
-        // Border stroke — ON
         resources["ToggleSwitchStrokeOn"] = accent;
         resources["ToggleSwitchStrokeOnPointerOver"] = accentHover;
         resources["ToggleSwitchStrokeOnPressed"] = accent;
         resources["ToggleSwitchStrokeOnDisabled"] = bgHighlight;
 
-        // Knob fill (сама ручка)
         resources["ToggleSwitchKnobFillOff"] = textSecondary;
         resources["ToggleSwitchKnobFillOffPointerOver"] = textPrimary;
-        resources["ToggleSwitchKnobFillOffPressed"] = textSecondary;
-        resources["ToggleSwitchKnobFillOffDisabled"] = textSecondary;
+        resources["ToggleSwitchKnobFillOffPressed"] = textPrimary;
+        resources["ToggleSwitchKnobFillOffDisabled"] = textMuted;
 
         resources["ToggleSwitchKnobFillOn"] = accentButtonText;
         resources["ToggleSwitchKnobFillOnPointerOver"] = accentButtonText;
         resources["ToggleSwitchKnobFillOnPressed"] = accentButtonText;
-        resources["ToggleSwitchKnobFillOnDisabled"] = textSecondary;
-
-        // Header и дополнительные элементы
-        resources["ToggleSwitchHeaderForeground"] = textPrimary;
-        resources["ToggleSwitchHeaderForegroundDisabled"] = textSecondary;
-        resources["ToggleSwitchOnContentForeground"] = textPrimary;
-        resources["ToggleSwitchOffContentForeground"] = textPrimary;
+        resources["ToggleSwitchKnobFillOnDisabled"] = textMuted;
 
         // ═══ SLIDER ═══
         resources["SliderTrackFill"] = bgHighlight;
@@ -371,9 +356,14 @@ public sealed class ThemeManagerService
 
         // ═══ COMBOBOX ═══
         resources["ComboBoxBackground"] = bgElevated;
-        resources["ComboBoxBackgroundPointerOver"] = bgHover;
-        resources["ComboBoxBackgroundPressed"] = bgHighlight;
+        resources["ComboBoxBackgroundPointerOver"] = bgElevated;
+        resources["ComboBoxBackgroundPressed"] = bgElevated;
         resources["ComboBoxBackgroundDisabled"] = bgHighlight;
+
+        resources["ComboBoxBorderBrush"] = bgHighlight;
+        resources["ComboBoxBorderBrushPointerOver"] = accent;
+        resources["ComboBoxBorderBrushPressed"] = accent;
+        resources["ComboBoxBorderBrushDisabled"] = bgHighlight;
 
         resources["ComboBoxForeground"] = textPrimary;
         resources["ComboBoxForegroundPointerOver"] = textPrimary;
@@ -383,26 +373,79 @@ public sealed class ThemeManagerService
         resources["ComboBoxDropDownBackground"] = bgElevated;
         resources["ComboBoxDropDownBorderBrush"] = bgHighlight;
 
-        resources["ComboBoxItemForeground"] = textPrimary;
-        resources["ComboBoxItemForegroundPointerOver"] = textPrimary;
-        resources["ComboBoxItemForegroundPressed"] = textPrimary;
-        resources["ComboBoxItemForegroundDisabled"] = textSecondary;
-
-        resources["ComboBoxItemForegroundSelected"] = accentButtonText;
-        resources["ComboBoxItemForegroundSelectedPointerOver"] = accentButtonText;
-        resources["ComboBoxItemForegroundSelectedPressed"] = accentButtonText;
-        resources["ComboBoxItemForegroundSelectedDisabled"] = textSecondary;
-
+        resources["ComboBoxItemBackground"] = transparent;
+        resources["ComboBoxItemBackgroundPointerOver"] = transparent;
+        resources["ComboBoxItemBackgroundPressed"] = transparent;
+        resources["ComboBoxItemBackgroundDisabled"] = transparent;
         resources["ComboBoxItemBackgroundSelected"] = accent;
         resources["ComboBoxItemBackgroundSelectedPointerOver"] = accentHover;
         resources["ComboBoxItemBackgroundSelectedPressed"] = accent;
 
+        resources["ComboBoxItemForeground"] = textPrimary;
+        resources["ComboBoxItemForegroundPointerOver"] = textPrimary;
+        resources["ComboBoxItemForegroundPressed"] = textPrimary;
+        resources["ComboBoxItemForegroundDisabled"] = textSecondary;
+        resources["ComboBoxItemForegroundSelected"] = accentButtonText;
+        resources["ComboBoxItemForegroundSelectedPointerOver"] = accentButtonText;
+        resources["ComboBoxItemForegroundSelectedPressed"] = accentButtonText;
+
         // ═══ LISTBOX ═══
-        resources["ListBoxItemForeground"] = textPrimary;
-        resources["ListBoxItemForegroundSelected"] = accentButtonText;
-        resources["ListBoxItemForegroundSelectedPointerOver"] = accentButtonText;
+        resources["ListBoxBackground"] = transparent;
+        resources["ListBoxBorderBrush"] = transparent;
+
+        resources["ListBoxItemBackground"] = transparent;
+        resources["ListBoxItemBackgroundPointerOver"] = transparent;
+        resources["ListBoxItemBackgroundPressed"] = transparent;
+        resources["ListBoxItemBackgroundDisabled"] = transparent;
         resources["ListBoxItemBackgroundSelected"] = accent;
         resources["ListBoxItemBackgroundSelectedPointerOver"] = accentHover;
+        resources["ListBoxItemBackgroundSelectedPressed"] = accent;
+        resources["ListBoxItemBackgroundSelectedDisabled"] = bgHighlight;
+
+        resources["ListBoxItemForeground"] = textPrimary;
+        resources["ListBoxItemForegroundPointerOver"] = textPrimary;
+        resources["ListBoxItemForegroundPressed"] = textPrimary;
+        resources["ListBoxItemForegroundDisabled"] = textSecondary;
+        resources["ListBoxItemForegroundSelected"] = accentButtonText;
+        resources["ListBoxItemForegroundSelectedPointerOver"] = accentButtonText;
+        resources["ListBoxItemForegroundSelectedPressed"] = accentButtonText;
+        resources["ListBoxItemForegroundSelectedDisabled"] = textSecondary;
+
+        // ═══ RADIOBUTTON ═══
+        resources["RadioButtonBackground"] = transparent;
+        resources["RadioButtonBackgroundPointerOver"] = transparent;
+        resources["RadioButtonBackgroundPressed"] = transparent;
+        resources["RadioButtonBackgroundDisabled"] = transparent;
+
+        resources["RadioButtonForeground"] = textPrimary;
+        resources["RadioButtonForegroundPointerOver"] = textPrimary;
+        resources["RadioButtonForegroundPressed"] = textPrimary;
+        resources["RadioButtonForegroundDisabled"] = textSecondary;
+
+        resources["RadioButtonOuterEllipseFill"] = bgElevated;
+        resources["RadioButtonOuterEllipseFillPointerOver"] = bgElevated;
+        resources["RadioButtonOuterEllipseFillPressed"] = bgElevated;
+        resources["RadioButtonOuterEllipseFillDisabled"] = bgHighlight;
+
+        resources["RadioButtonOuterEllipseStroke"] = bgHighlight;
+        resources["RadioButtonOuterEllipseStrokePointerOver"] = accent;
+        resources["RadioButtonOuterEllipseStrokePressed"] = accent;
+        resources["RadioButtonOuterEllipseStrokeDisabled"] = bgHighlight;
+
+        resources["RadioButtonOuterEllipseCheckedFill"] = bgElevated;
+        resources["RadioButtonOuterEllipseCheckedFillPointerOver"] = bgElevated;
+        resources["RadioButtonOuterEllipseCheckedFillPressed"] = bgElevated;
+        resources["RadioButtonOuterEllipseCheckedFillDisabled"] = bgHighlight;
+
+        resources["RadioButtonOuterEllipseCheckedStroke"] = accent;
+        resources["RadioButtonOuterEllipseCheckedStrokePointerOver"] = accentHover;
+        resources["RadioButtonOuterEllipseCheckedStrokePressed"] = accent;
+        resources["RadioButtonOuterEllipseCheckedStrokeDisabled"] = bgHighlight;
+
+        resources["RadioButtonCheckGlyphFill"] = accent;
+        resources["RadioButtonCheckGlyphFillPointerOver"] = accentHover;
+        resources["RadioButtonCheckGlyphFillPressed"] = accent;
+        resources["RadioButtonCheckGlyphFillDisabled"] = textMuted;
 
         // ═══ BACKGROUNDS ═══
         resources["SolidBackgroundFillColorBase"] = bgPrimary;
@@ -427,13 +470,12 @@ public sealed class ThemeManagerService
         // ═══ MENU ═══
         resources["MenuFlyoutPresenterBackground"] = bgElevated;
         resources["MenuFlyoutPresenterBorderBrush"] = new SolidColorBrush(bgHighlight);
-        resources["MenuFlyoutItemBackground"] = Colors.Transparent;
+        resources["MenuFlyoutItemBackground"] = transparent;
         resources["MenuFlyoutItemBackgroundPointerOver"] = bgHighlight;
         resources["MenuFlyoutItemForeground"] = textPrimary;
         resources["MenuFlyoutItemForegroundPointerOver"] = textPrimary;
 
-        // ═══ BUTTON — обычные кнопки ═══
-        // Foreground фиксируется для всех состояний = textPrimary
+        // ═══ BUTTON ═══
         resources["ButtonBackground"] = bgElevated;
         resources["ButtonBackgroundPointerOver"] = bgElevated;
         resources["ButtonBackgroundPressed"] = bgHighlight;
@@ -455,87 +497,19 @@ public sealed class ThemeManagerService
         resources["ContentDialogBorderBrush"] = bgHighlight;
         resources["ContentDialogForeground"] = textPrimary;
 
-        // ═══ ANTI-FLASH: Fluent hover → border вместо фона ═══
+        // ═══ INFOBADGE / NOTIFICATIONS ═══
+        // textDark используется на светлых фонах (warning, info badges)
+        resources["InfoBadgeForeground"] = textDark;
+        resources["InfoBarErrorSeverityIconBackground"] = textDark;
+        resources["InfoBarWarningSeverityIconBackground"] = textDark;
+        resources["InfoBarSuccessSeverityIconBackground"] = textDark;
+        resources["InfoBarInformationalSeverityIconBackground"] = textDark;
 
-        // ComboBox: hover = border, не фон
-        resources["ComboBoxBackgroundPointerOver"] = bgElevated;
-        resources["ComboBoxBackgroundPressed"] = bgElevated;
-        resources["ComboBoxBorderBrushPointerOver"] = accent;
-
-        // ComboBoxItem: border прозрачный по умолчанию, виден при hover
-        var bgHighlightTransparent = new Color(0, bgHighlight.R, bgHighlight.G, bgHighlight.B);
-        resources["ComboBoxItemBackgroundPointerOver"] = Colors.Transparent;
-        resources["ComboBoxItemBackgroundPressed"] = Colors.Transparent;
-        resources["ComboBoxItemBorderBrush"] = bgHighlightTransparent;
-        resources["ComboBoxItemBorderBrushPointerOver"] = bgHighlight;
-        resources["ComboBoxItemBorderBrushPressed"] = bgHighlight;
-        resources["ComboBoxItemBorderBrushSelected"] = accent;
-        resources["ComboBoxItemBorderBrushSelectedPointerOver"] = accentHover;
-
-        // CheckBox: hover фон не меняется, border = акцент
-        resources["CheckBoxCheckBackgroundFillUnchecked"] = bgElevated;
-        resources["CheckBoxCheckBackgroundFillUncheckedPointerOver"] = bgElevated;
-        resources["CheckBoxCheckBackgroundFillUncheckedPressed"] = bgElevated;
-        resources["CheckBoxCheckBackgroundFillChecked"] = accent;
-        resources["CheckBoxCheckBackgroundFillCheckedPointerOver"] = accent;
-        resources["CheckBoxCheckBackgroundFillCheckedPressed"] = accent;
-
-        resources["CheckBoxCheckBackgroundStrokeUnchecked"] = bgHighlight;
-        resources["CheckBoxCheckBackgroundStrokeUncheckedPointerOver"] = accent;
-        resources["CheckBoxCheckBackgroundStrokeUncheckedPressed"] = accent;
-        resources["CheckBoxCheckBackgroundStrokeChecked"] = accent;
-        resources["CheckBoxCheckBackgroundStrokeCheckedPointerOver"] = accentHover;
-        resources["CheckBoxCheckBackgroundStrokeCheckedPressed"] = accent;
-
-        // RadioButton: контейнер без фона
-        resources["RadioButtonBackground"] = Colors.Transparent;
-        resources["RadioButtonBackgroundPointerOver"] = Colors.Transparent;
-        resources["RadioButtonBackgroundPressed"] = Colors.Transparent;
-        resources["RadioButtonBackgroundDisabled"] = Colors.Transparent;
-
-        // RadioButton: hover фон эллипса не меняется
-        resources["RadioButtonOuterEllipseFill"] = bgElevated;
-        resources["RadioButtonOuterEllipseFillPointerOver"] = bgElevated;
-        resources["RadioButtonOuterEllipseFillPressed"] = bgElevated;
-        resources["RadioButtonOuterEllipseStroke"] = bgHighlight;
-        resources["RadioButtonOuterEllipseStrokePointerOver"] = accent;
-        resources["RadioButtonOuterEllipseStrokePressed"] = accent;
-
-        resources["RadioButtonOuterEllipseCheckedFill"] = bgElevated;
-        resources["RadioButtonOuterEllipseCheckedFillPointerOver"] = bgElevated;
-        resources["RadioButtonOuterEllipseCheckedFillPressed"] = bgElevated;
-        resources["RadioButtonOuterEllipseCheckedStroke"] = accent;
-        resources["RadioButtonOuterEllipseCheckedStrokePointerOver"] = accentHover;
-        resources["RadioButtonOuterEllipseCheckedStrokePressed"] = accent;
-
-        // ToggleSwitch: hover = border, не фон
-        resources["ToggleSwitchContainerBackground"] = bgHighlight;
-        resources["ToggleSwitchContainerBackgroundPointerOver"] = bgHighlight;
-        resources["ToggleSwitchContainerBackgroundPressed"] = bgHighlight;
-
-        // ListBoxItem: hover = border, не фон
-        resources["ListBoxItemBackgroundPointerOver"] = Colors.Transparent;
-        resources["ListBoxItemBackgroundPressed"] = Colors.Transparent;
-        resources["ListBoxItemBackgroundSelected"] = accent;
-        resources["ListBoxItemBackgroundSelectedPointerOver"] = accent;
-        resources["ListBoxItemBackgroundSelectedPressed"] = accent;
-        resources["ListBoxItemBorderBrush"] = bgHighlightTransparent;
-        resources["ListBoxItemBorderBrushPointerOver"] = bgHighlight;
-
-        // Slider thumb
-        resources["SliderThumbBackground"] = textPrimary;
-        resources["SliderThumbBackgroundPointerOver"] = accent;
-        resources["SliderThumbBackgroundPressed"] = accentHover;
-
-        // MenuItem: hover = border
-        resources["MenuFlyoutItemBackgroundPointerOver"] = Colors.Transparent;
-        resources["MenuFlyoutItemBackgroundPressed"] = Colors.Transparent;
-
-        // FOCUS VISUAL
+        // ═══ FOCUS VISUAL ═══
+        resources["FocusVisualPrimaryBrush"] = new SolidColorBrush(accent);
+        resources["FocusVisualSecondaryBrush"] = new SolidColorBrush(transparent);
         resources["SystemControlFocusVisualPrimaryBrush"] = new SolidColorBrush(accent) { Opacity = 0.85 };
-        resources["SystemControlFocusVisualSecondaryBrush"] = new SolidColorBrush(Colors.Transparent);
-        resources["SystemControlFocusVisualPrimaryThickness"] = new Thickness(2);
-        resources["SystemControlFocusVisualSecondaryThickness"] = new Thickness(0);
+        resources["SystemControlFocusVisualSecondaryBrush"] = new SolidColorBrush(transparent);
     }
 
     /// <summary>
