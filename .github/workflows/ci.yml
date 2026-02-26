@@ -21,7 +21,7 @@ jobs:
           cache-dependency-path: "**/packages.lock.json"
 
       - name: Restore dependencies
-        run: dotnet restore --force-evaluate
+        run: dotnet restore
 
       - name: Build Debug
         run: ./build.bat debug nopause
