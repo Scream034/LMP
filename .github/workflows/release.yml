@@ -19,10 +19,38 @@ jobs:
           cache: true
           cache-dependency-path: "**/packages.lock.json"
 
-      - name: Publish Release
+      # Установка 7-Zip
+      - name: Setup 7-Zip
+        uses: milliewalky/setup-7-zip@v2
+
+      # Получаем версию из тега релиза
+      - name: Get Version from Tag
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          echo "FULL_VERSION=$tag" >> $env:GITHUB_ENV
+
+      - name: Build Release Publish
         run: ./build.bat publish nopause
 
+      # Архивация Release
+      - name: Archive Release
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "publish")) {
+            Write-Error "Publish folder not found! Build failed."
+            exit 1
+          }
+          
+          7z a -t7z -mx=9 "LMP-v${{ env.FULL_VERSION }}.7z" "publish/*"
+          
+          if (-not (Test-Path "LMP-v${{ env.FULL_VERSION }}.7z")) {
+            Write-Error "Failed to create 7z archive!"
+            exit 1
+          }
+
+      # Прикрепляем архив к созданному релизу
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: LMP-*.7z
+          files: LMP-v${{ env.FULL_VERSION }}.7z

@@ -76,6 +76,7 @@ goto :CHECK
 
 :PUBLISH
 echo Publishing self-contained Release...
+
 if exist "publish" rmdir /s /q "publish"
 
 dotnet publish LMP.csproj -c Release -r win-x64 --self-contained true ^
@@ -88,16 +89,17 @@ dotnet publish LMP.csproj -c Release -r win-x64 --self-contained true ^
     -p:DebugSymbols=false ^
     -o "./publish"
 
-if %ERRORLEVEL% NEQ 0 goto :FAIL
+if %ERRORLEVEL% NEQ 0 (
+    echo ✗ dotnet publish failed!
+    goto :FAIL
+)
 
+:: Удаляем мусор
 del /q "publish\*.xml" 2>nul
 del /q "publish\*.pdb" 2>nul
 del /q "publish\*.config" 2>nul
 
-cd publish
-7z a -t7z -mx=9 "../LMP-v!FULL_VERSION!.7z" .
-cd ..
-echo ✓ Publish + Archive done: LMP-v!FULL_VERSION!.7z
+echo ✓ Publish completed successfully into ./publish folder
 goto :END
 
 :CLEAN
