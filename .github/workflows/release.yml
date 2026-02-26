@@ -19,25 +19,23 @@ jobs:
           cache: true
           cache-dependency-path: "**/packages.lock.json"
 
-      # === Установка 7-Zip ===
+      # === 7-Zip ===
       - name: Setup 7-Zip
         uses: milliewalky/setup-7-zip@v2
 
-      # === Получаем версию из тега релиза ===
-      - name: Get Version from Tag
+      # === Версия (по количеству коммитов) ===
+      - name: Get Git Version Info
+        id: version
         shell: pwsh
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          # Убираем префикс 'v', если он есть
-          $cleanVersion = $tag -replace '^v', ''
+          $commitCount = git rev-list --count HEAD
+          $shortHash = git rev-parse --short=7 HEAD
+          $fullVersion = "${commitCount}-${shortHash}"
           
-          echo "TAG=$tag" >> $env:GITHUB_ENV
-          echo "VERSION=$cleanVersion" >> $env:GITHUB_ENV
-          echo "FULL_VERSION=v$cleanVersion" >> $env:GITHUB_ENV   # Для красивого имени файла
+          echo "VERSION=$commitCount" >> $env:GITHUB_ENV
+          echo "FULL_VERSION=$fullVersion" >> $env:GITHUB_ENV
 
-          Write-Host "Tag: $tag"
-          Write-Host "Clean version: $cleanVersion"
-          Write-Host "Full version for filename: v$cleanVersion"
+          Write-Host "Version: v$fullVersion"
 
       # === Сборка Release (Publish) ===
       - name: Build Release Publish
@@ -52,18 +50,13 @@ jobs:
             exit 1
           }
           
-          $archiveName = "LMP-${{ env.FULL_VERSION }}.7z"
+          $archiveName = "LMP-v${{ env.FULL_VERSION }}.7z"
           7z a -t7z -mx=9 $archiveName "publish/*"
           
-          if (-not (Test-Path $archiveName)) {
-            Write-Error "Failed to create 7z archive!"
-            exit 1
-          }
-          
-          echo "Archive created: $archiveName"
+          Write-Host "Created: $archiveName"
 
       # === Прикрепляем архив к релизу ===
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: LMP-${{ env.FULL_VERSION }}.7z
+          files: LMP-v${{ env.FULL_VERSION }}.7z

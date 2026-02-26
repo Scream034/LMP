@@ -13,44 +13,29 @@ echo.
 set MODE=%1
 set PAUSE=1
 
+:: Если передан второй параметр nopause — не ставим паузу в конце
 if /i "%2"=="nopause" set PAUSE=0
 if /i "%MODE%"=="" set MODE=debug
 
-:: === Git версия (надёжный способ) ===
-set COMMIT_COUNT=0
-set GIT_HASH=local
-
+:: Git версия
 where git >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    :: Используем временные файлы — это надёжнее for /f на разных системах
-    git rev-list --count HEAD > "%TEMP%\git_count.txt" 2>nul
-    if exist "%TEMP%\git_count.txt" (
-        set /p COMMIT_COUNT=<"%TEMP%\git_count.txt"
-        del "%TEMP%\git_count.txt" 2>nul
-    )
-    
-    git rev-parse --short=7 HEAD > "%TEMP%\git_hash.txt" 2>nul
-    if exist "%TEMP%\git_hash.txt" (
-        set /p GIT_HASH=<"%TEMP%\git_hash.txt"
-        del "%TEMP%\git_hash.txt" 2>nul
-    )
+if %ERRORLEVEL% NEQ 0 (
+    set COMMIT_COUNT=0
+    set GIT_HASH=local
+) else (
+    for /f %%i in ('git rev-list --count HEAD 2^>nul') do set COMMIT_COUNT=%%i
+    for /f %%i in ('git rev-parse --short=7 HEAD 2^>nul') do set GIT_HASH=%%i
+    if "!COMMIT_COUNT!"=="" set COMMIT_COUNT=0
+    if "!GIT_HASH!"=="" set GIT_HASH=local
 )
 
-:: Убираем пробелы и переводы строк
-set COMMIT_COUNT=%COMMIT_COUNT: =%
-set GIT_HASH=%GIT_HASH: =%
-
-:: Проверяем, что значения корректны
-if "!COMMIT_COUNT!"=="" set COMMIT_COUNT=0
-if "!GIT_HASH!"=="" set GIT_HASH=local
-
-set BASE_VERSION=1.0.!COMMIT_COUNT!
-:: ВАЖНО: используем точку вместо + (безопасно для командной строки)
-set FULL_VERSION=!BASE_VERSION!.!GIT_HASH!
+:: Версия без 1.0. — просто номер коммита
+set VERSION=!COMMIT_COUNT!
+set FULL_VERSION=!COMMIT_COUNT!-!GIT_HASH!
 
 echo Mode: %MODE%
-echo Version: !BASE_VERSION!
-echo Full Version: !FULL_VERSION!
+echo Version: v!VERSION!
+echo Full Version: v!FULL_VERSION!
 echo.
 
 if /i "%MODE%"=="clean" goto :CLEAN
@@ -71,17 +56,26 @@ goto :SUCCESS
 
 :DEBUG
 echo Building Debug...
-dotnet build LMP.csproj -c Debug "-p:Version=!BASE_VERSION!" "-p:InformationalVersion=!FULL_VERSION!"
+dotnet build LMP.csproj -c Debug ^
+    -p:Version=!VERSION! ^
+    -p:InformationalVersion=!FULL_VERSION!
 goto :CHECK
 
 :OPTIMIZED
 echo Building Optimized Debug...
-dotnet build LMP.csproj -c Debug "-p:Version=!BASE_VERSION!" "-p:InformationalVersion=!FULL_VERSION!-opt" -p:Optimize=true -p:DebugType=embedded
+dotnet build LMP.csproj -c Debug ^
+    -p:Version=!VERSION! ^
+    -p:InformationalVersion=!FULL_VERSION!-opt ^
+    -p:Optimize=true ^
+    -p:DebugType=embedded
 goto :CHECK
 
 :RELEASE
 echo Building Release...
-dotnet build LMP.csproj -c Release "-p:Version=!BASE_VERSION!" -p:DebugType=None -p:DebugSymbols=false
+dotnet build LMP.csproj -c Release ^
+    -p:Version=!VERSION! ^
+    -p:DebugType=None ^
+    -p:DebugSymbols=false
 goto :CHECK
 
 :PUBLISH
@@ -90,7 +84,7 @@ echo Publishing self-contained Release...
 if exist "publish" rmdir /s /q "publish"
 
 dotnet publish LMP.csproj -c Release -r win-x64 --self-contained true ^
-    "-p:Version=!BASE_VERSION!" ^
+    -p:Version=!VERSION! ^
     -p:PublishSingleFile=true ^
     -p:PublishReadyToRun=true ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
@@ -126,12 +120,12 @@ if %ERRORLEVEL% NEQ 0 goto :FAIL
 
 :SUCCESS
 echo.
-echo ✓ Build successful!
+echo ✓ Build successful
 goto :END
 
 :FAIL
 echo.
-echo ✗ Build failed
+echo ✗ Build failed!
 exit /b 1
 
 :END
