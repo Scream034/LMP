@@ -115,8 +115,6 @@ public class MainWindowViewModel : ViewModelBase
         CommitsDisplay = $"({string.Format(L["Build_CommitsCount"], G.Build.CommitCount)})";
     }
 
-    // ... остальной код без изменений (LockNavigation, Navigate, etc.)
-
     public void LockNavigation(string reason)
     {
         IsNavigationLocked = true;

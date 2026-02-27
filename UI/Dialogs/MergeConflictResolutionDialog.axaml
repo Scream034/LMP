@@ -18,7 +18,7 @@
             <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,16">
                 <Button Content="Пропустить все" Command="{Binding SetAllSkipCommand}"/>
                 <Button Content="Дублировать все" Command="{Binding SetAllDuplicateCommand}"/>
-                <Button Content="Объединить все" Command="{Binding SetAllMergeCommand}" Classes="accent"/>
+                <Button Content="Объединить все" Command="{Binding SetAllMergeCommand}" Classes="accent accent-base"/>
             </StackPanel>
 
             <ScrollViewer Grid.Row="2">
@@ -45,7 +45,7 @@
             </ScrollViewer>
 
             <Button Grid.Row="3" Content="Применить" Command="{Binding ConfirmCommand}" 
-                    Classes="accent" HorizontalAlignment="Right" Margin="0,16,0,0"/>
+                    Classes="accent accent-base" HorizontalAlignment="Right" Margin="0,16,0,0"/>
         </Grid>
     </Border>
 </Window>

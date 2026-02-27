@@ -17,10 +17,9 @@ public partial class MainWindow : Window
 
     private CancellationTokenSource? _cleanupCts;
 
-    // Состояние окна
     private volatile bool _isMinimized;
     private DateTime _lastCleanupTime = DateTime.MinValue;
-    private const int MinCleanupIntervalMs = 30_000; // Не чаще раза в 30 секунд
+    private const int MinCleanupIntervalMs = 30_000;
 
     public MainWindow()
     {
@@ -49,8 +48,6 @@ public partial class MainWindow : Window
         _dragArea?.DoubleTapped += (_, _) => ToggleMaximize();
     }
 
-    //  LIFECYCLE: Minimize / Restore / Deactivate / Activate
-
     private void MainWindow_PropertyChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
     {
         if (e.Property != WindowStateProperty) return;
@@ -61,35 +58,30 @@ public partial class MainWindow : Window
         {
             _isMinimized = true;
 
-            // 1. Уведомляем ВСЕ ViewModel-и (UI-поток)
+            // Уведомляем ВСЕ ViewModel-и об остановке UI
             ViewModelBase.BroadcastSuspend();
 
-            // 2. Замедляем мониторинг памяти
+            // Замедляем мониторинг памяти
             MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(30));
 
-            // 3. Планируем глубокую очистку через 500мс
-            ScheduleCleanup(TimeSpan.FromMilliseconds(500), aggressive: true);
+            // Запускаем мягкую очистку (без остановки фоновой загрузки!)
+            ScheduleCleanup(TimeSpan.FromSeconds(2));
         }
         else if (_isMinimized)
         {
             _isMinimized = false;
 
-            // 1. Отменяем очистку (если не успела)
             CancelCleanup();
 
-            // 2. Восстанавливаем мониторинг
             MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(5));
 
-            // 3. Уведомляем ВСЕ ViewModel-и (UI-поток)
             ViewModelBase.BroadcastResume();
         }
     }
 
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
-        // Пользователь переключился на другое окно.
-        // Ждём 2 минуты. Если не вернётся — чистим память.
-        ScheduleCleanup(TimeSpan.FromMinutes(2), aggressive: false);
+        ScheduleCleanup(TimeSpan.FromMinutes(2));
     }
 
     private void OnWindowActivated(object? sender, EventArgs e)
@@ -97,9 +89,7 @@ public partial class MainWindow : Window
         CancelCleanup();
     }
 
-    //  CLEANUP: Очистка памяти
-
-    private void ScheduleCleanup(TimeSpan delay, bool aggressive)
+    private void ScheduleCleanup(TimeSpan delay)
     {
         CancelCleanup();
         _cleanupCts = new CancellationTokenSource();
@@ -112,61 +102,40 @@ public partial class MainWindow : Window
                 await Task.Delay(delay, token);
                 if (token.IsCancellationRequested) return;
 
-                // Проверяем интервал между очистками
                 var now = DateTime.UtcNow;
-                if (!aggressive && (now - _lastCleanupTime).TotalMilliseconds < MinCleanupIntervalMs)
+                if ((now - _lastCleanupTime).TotalMilliseconds < MinCleanupIntervalMs)
                     return;
 
                 _lastCleanupTime = now;
-                PerformCleanup(aggressive);
+                PerformCleanup();
             }
-            catch (OperationCanceledException) { /* Ожидаемо */ }
+            catch (OperationCanceledException) { }
         });
     }
 
-    private static void PerformCleanup(bool aggressive)
+    private static void PerformCleanup()
     {
-        Log.Info($"[Memory] Cleanup (aggressive={aggressive})");
+        Log.Info($"[Memory] Cleanup");
 
-        // Тяжёлую работу — в фоновый поток
         _ = Task.Run(() =>
         {
             try
             {
-                // 1. Кэш картинок
                 var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
-                if (aggressive)
-                    imageCache.ClearMemoryCache();
-                else
-                    imageCache.EnforceLimits();
+                imageCache.ClearMemoryCache();
 
-                // 2. Кэш VM
                 var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
                 vmFactory.CleanupCache();
 
-                // 3. Буферы аудио
-                var audioEngine = Program.Services.GetRequiredService<AudioEngine>();
-                AudioEngine.NotifyAppMinimized();
-
-                // 4. Мёртвые ссылки в TrackRegistry
                 var registry = Program.Services.GetRequiredService<TrackRegistry>();
                 registry.CleanupDeadReferences();
 
-                // 5. GC
-                if (aggressive)
-                {
-                    System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                        System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-                    GC.WaitForPendingFinalizers();
-                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-                }
-                else
-                {
-                    GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
-                }
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
 
-                // 6. Сброс Working Set
                 MemoryHelpers.TrimWorkingSet();
 
                 var afterMb = GC.GetTotalMemory(false) / 1024 / 1024;
@@ -188,8 +157,6 @@ public partial class MainWindow : Window
             _cleanupCts = null;
         }
     }
-
-    //  WINDOW CHROME
 
     private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {

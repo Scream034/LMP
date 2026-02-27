@@ -47,7 +47,6 @@ public partial class App : Application
             _splash.Show();
 
             // ═══ КРИТИЧНО: Даём UI-потоку отрисовать splash ═══
-            // Используем BeginInvoke чтобы вернуть управление event loop
             Dispatcher.UIThread.Post(() =>
             {
                 _ = InitializeAppAsync(desktop);
@@ -89,31 +88,18 @@ public partial class App : Application
             _splash?.SetProgress(45);
 
             // ═══ СИНХРОНИЗАЦИЯ ЯЗЫКА ═══
-            // Bootstrap = источник правды при старте.
-            // Если в БД другой язык И это НЕ дефолтный "en" — пользователь менял язык.
-            // Если в БД "en", а bootstrap другой — это первый запуск, сохраняем bootstrap в БД.
             var savedLang = library.Settings.LanguageCode;
             var currentLang = L.CurrentLanguageCode;
 
             if (!string.IsNullOrEmpty(savedLang) && savedLang != currentLang)
             {
-                // В БД есть ЯВНО сохранённый язык, отличный от текущего.
-                // Нужно понять: это пользователь менял или дефолт?
-                // 
-                // Если savedLang == "en" и currentLang != "en":
-                //   → Первый запуск, БД имеет дефолт, bootstrap определил правильный — сохраняем в БД
-                // Если savedLang != "en" и savedLang != currentLang:
-                //   → Пользователь менял язык, но bootstrap отстал — обновляем bootstrap
-
                 if (savedLang == "en" && currentLang != "en")
                 {
-                    // Первый запуск: bootstrap определил язык, БД пустая → пишем в БД
                     Log.Info($"First run: saving auto-detected '{currentLang}' to DB (was default 'en')");
                     library.Settings.LanguageCode = currentLang;
                 }
                 else if (savedLang != "en")
                 {
-                    // Пользователь ранее сменил язык в настройках → применяем из БД
                     Log.Info($"Applying saved language from DB: {savedLang}");
                     L.CurrentLanguage = savedLang;
                 }

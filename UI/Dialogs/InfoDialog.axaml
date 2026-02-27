@@ -40,7 +40,7 @@
                 Command="{Binding CloseCommand}"
                 HorizontalAlignment="Right"
                 MinWidth="80"
-                Classes="accent" />
+                Classes="accent accent-base" />
         </StackPanel>
     </Border>
 </Window>

@@ -28,7 +28,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int PositionUpdateThrottleMs = 50;
     private const int BufferUpdateIntervalMs = 300;
     private const int TrackResetMinDurationMs = 300;
-    private const int SeekSettleDelayMs = 200;
     private const int FallbackPositionIntervalMs = 500;
 
     #endregion
@@ -47,7 +46,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private readonly Subject<Unit> _prevSubject = new();
 
     private bool _isSeeking;
-    private bool _justFinishedSeeking;
     private bool _isInitialized;
     private volatile bool _isSuspended;
 
@@ -59,27 +57,23 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     /// <summary>
     /// Монотонный счётчик сессий track reset.
-    /// Каждый BeginTrackReset увеличивает — EndTrackReset проверяет совпадение.
     /// </summary>
     private int _trackResetSession;
 
     /// <summary>
-    /// Время начала текущего reset — для минимальной длительности.
+    /// Время начала текущего reset.
     /// </summary>
     private DateTime _trackResetStartTime;
 
     /// <summary>
     /// ID трека, для которого ожидается первый StreamInfo.
-    /// Пока StreamInfo не пришёл — EndTrackReset не вызывается из buffer events.
     /// </summary>
     private string? _pendingStreamInfoTrackId;
 
     /// <summary>
-    /// ID текущего трека, для которого принимаем PositionChanged.
-    /// Все position events с другим trackId игнорируются.
-    /// Устанавливается в HandleTrackChanged, проверяется в position observable.
+    /// Целевая позиция seek — блокирует обновление позиции от AudioEngine.
     /// </summary>
-    private string? _activeTrackId;
+    private double _seekTargetSeconds = -1;
 
     #endregion
 
@@ -344,26 +338,17 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
-                h => _audio.OnSeekCompleted += h,
-                h => _audio.OnSeekCompleted -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                if (!_isSuspended)
-                    ForceUpdateBufferProgress();
-            })
-            .DisposeWith(Disposables);
-
-        // Position — фильтруем по activeTrackId кроме стандартных фильтров
-        Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnPositionChanged += h,
                 h => _audio.OnPositionChanged -= h)
-            .Where(_ => !_isSuspended && !_isSeeking && !_justFinishedSeeking && !IsTrackResetting)
+            .Where(_ => !_isSuspended && !_isSeeking && !IsTrackResetting)
             .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(pos =>
             {
-                if (_isSeeking || _justFinishedSeeking || _isSuspended || IsTrackResetting) return;
+                if (_isSeeking || _isSuspended || IsTrackResetting) return;
+
+                // Жёсткая блокировка: ждём SeekCompleted
+                if (_seekTargetSeconds >= 0) return;
 
                 Position = pos;
                 PositionSeconds = pos.TotalSeconds;
@@ -371,6 +356,27 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
                 if (IsSeekBusy && !IsLoading)
                     IsSeekBusy = false;
+            })
+            .DisposeWith(Disposables);
+
+        Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
+                h => _audio.OnSeekCompleted += h,
+                h => _audio.OnSeekCompleted -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(pos =>
+            {
+                // Разблокируем позицию
+                _seekTargetSeconds = -1;
+
+                if (!_isSuspended)
+                {
+                    PositionSeconds = pos.TotalSeconds;
+                    Position = pos;
+                    ForceUpdateBufferProgress();
+                }
+
+                // Снимаем busy — View проверит pending seek
+                IsSeekBusy = false;
             })
             .DisposeWith(Disposables);
 
@@ -390,7 +396,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(HandleTrackChanged)
             .DisposeWith(Disposables);
 
-        // StreamInfo — НЕ обновляем Duration в suspended
+        // StreamInfo
         Observable.FromEvent<Action<AudioStreamInfo>, AudioStreamInfo>(
                 h => _audio.OnStreamInfoChanged += h,
                 h => _audio.OnStreamInfoChanged -= h)
@@ -398,7 +404,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(UpdateStreamInfo)
             .DisposeWith(Disposables);
 
-        // Buffer — полностью игнорируем в suspended
+        // Buffer
         Observable.FromEvent<Action<BufferState>, BufferState>(
                 h => _audio.OnBufferStateChanged += h,
                 h => _audio.OnBufferStateChanged -= h)
@@ -607,9 +613,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void HandleBufferStateChanged(BufferState state)
     {
-        // Во время reset — ПОЛНОСТЬЮ ИГНОРИРУЕМ буферные данные.
-        // EndTrackReset будет вызван ТОЛЬКО из UpdateStreamInfo когда придёт
-        // валидный StreamInfo для НОВОГО трека.
         if (IsTrackResetting)
             return;
 
@@ -684,7 +687,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         IsTrackResetting = true;
 
-        // Полный сброс ВСЕХ визуальных данных — прямо сейчас
         BufferProgressPercent = 0;
         BufferedRanges = [];
         IsFullyBuffered = false;
@@ -698,20 +700,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Log.Debug($"[PlayerBar] BeginTrackReset: session={session}");
     }
 
-    /// <summary>
-    /// Завершает reset. Вызывается ТОЛЬКО из UpdateStreamInfo когда приходит
-    /// валидный StreamInfo для нового трека.
-    /// Гарантирует минимальную длительность reset для плавности визуала.
-    /// </summary>
     private async void EndTrackReset(int session)
     {
-        // Гарантируем минимальную длительность reset-а
         var elapsed = DateTime.UtcNow - _trackResetStartTime;
         int remaining = TrackResetMinDurationMs - (int)elapsed.TotalMilliseconds;
         if (remaining > 0)
             await Task.Delay(remaining);
 
-        // Проверяем что за время ожидания не начался новый reset
         int currentSession = Volatile.Read(ref _trackResetSession);
         if (currentSession != session)
         {
@@ -786,9 +781,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void HandleTrackChanged(TrackInfo? track)
     {
-        // Обновляем activeTrackId — position events от старого трека будут игнорироваться
-        _activeTrackId = track?.Id;
-
         CurrentTrack = track;
         HasTrack = track != null;
 
@@ -804,7 +796,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         {
             _pendingStreamInfoTrackId = track.Id;
 
-            // Начинаем визуальный reset — сбрасывает позицию, буферы, etc.
             BeginTrackReset();
 
             Duration = track.Duration;
@@ -892,7 +883,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         {
             StreamInfo = info.FormatDisplay;
 
-            // Обновляем Duration только если НЕ suspended
             if (!_isSuspended)
             {
                 Duration = TimeSpan.FromMilliseconds(info.DurationMs);
@@ -906,15 +896,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
                              (int)f.Bitrate == info.Bitrate;
             }
 
-            // StreamInfo пришёл — это ЕДИНСТВЕННОЕ место где EndTrackReset вызывается.
-            // Проверяем что это StreamInfo для текущего трека.
             if (IsTrackResetting)
             {
                 bool isForCurrentTrack = !string.IsNullOrEmpty(info.TrackId) &&
                                          CurrentTrack.Id == info.TrackId;
 
-                // Если TrackId в StreamInfo не заполнен — проверяем что
-                // _pendingStreamInfoTrackId совпадает с текущим треком
                 if (!isForCurrentTrack && string.IsNullOrEmpty(info.TrackId))
                     isForCurrentTrack = _pendingStreamInfoTrackId == CurrentTrack.Id;
 
@@ -965,7 +951,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void FallbackPositionUpdate()
     {
-        if (!HasTrack || _isSeeking || _justFinishedSeeking || _isSuspended || IsTrackResetting)
+        if (!HasTrack || _isSeeking || _isSuspended || IsTrackResetting)
             return;
 
         var realDur = _audio.TotalDuration;
@@ -976,7 +962,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(DurationTooltip));
         }
 
-        if (IsPlaying)
+        // Если ждём SeekCompleted — не трогаем позицию
+        if (IsPlaying && _seekTargetSeconds < 0)
         {
             var pos = _audio.CurrentPosition;
             Position = pos;
@@ -991,7 +978,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public void StartSeek()
     {
         _isSeeking = true;
-        _justFinishedSeeking = false;
     }
 
     public void UpdateSeekPosition(double seconds)
@@ -1004,6 +990,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(DurationTooltip));
     }
 
+    /// <summary>
+    /// Завершает drag и отправляет seek в AudioEngine с cooldown.
+    /// </summary>
     public async void EndSeek()
     {
         if (!HasTrack)
@@ -1014,19 +1003,27 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         double target = PositionSeconds;
         _isSeeking = false;
-        _justFinishedSeeking = true;
 
-        _audio.SeekDebounced(TimeSpan.FromSeconds(target));
+        _seekTargetSeconds = target;
+        PositionSeconds = target;
+        Position = TimeSpan.FromSeconds(target);
 
-        await Task.Delay(SeekSettleDelayMs);
+        await _audio.SeekAsync(TimeSpan.FromSeconds(target));
         ForceUpdateBufferProgress();
-        _justFinishedSeeking = false;
     }
 
+    /// <summary>
+    /// Отменяет seek полностью — и drag state, и блокировку позиции.
+    /// Ползунок возвращается на реальную текущую позицию.
+    /// </summary>
     public void CancelSeek()
     {
         _isSeeking = false;
-        _justFinishedSeeking = false;
+        _seekTargetSeconds = -1;
+
+        var realPos = _audio.CurrentPosition;
+        Position = realPos;
+        PositionSeconds = realPos.TotalSeconds;
     }
 
     public void OnVolumeChangeComplete()
@@ -1077,12 +1074,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
             foreach (var f in formats)
             {
-                // Проверяем наличие в кэше
                 f.IsDownloaded = cachedFormats.Any(cached =>
                     string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
-                    Math.Abs((int)f.Bitrate - cached.Bitrate) <= 10); // ±10 kbps tolerance
+                    Math.Abs((int)f.Bitrate - cached.Bitrate) <= 10);
 
-                // Проверяем активность (текущее воспроизведение)
                 f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
                              Math.Abs((int)f.Bitrate - currentBitrate) <= 10;
 
@@ -1203,7 +1198,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _fallbackPositionTimer.Start();
         _speedUpdateTimer.Start();
 
-        // Подхватываем Duration которая могла прийти в suspended
         var realDur = _audio.TotalDuration;
         if (realDur.TotalSeconds > 0)
         {

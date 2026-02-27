@@ -1,0 +1,203 @@
+<Styles xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mi="using:Material.Icons.Avalonia">
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- PLAYER BAR STYLES — ДОПОЛНЕНИЯ к глобальным стилям                 -->
+    <!-- ПОРЯДОК ЗАГРУЗКИ ВАЖЕН: этот файл должен быть ПОСЛЕ                -->
+    <!-- AppComponents.axaml в Theme.axaml                                  -->
+    <!--                                                                     -->
+    <!-- Кнопки PlayerBar используют глобальные классы:                     -->
+    <!--   playback-btn, playback-btn-main, icon-btn, sidebar-btn           -->
+    <!--                                                                     -->
+    <!-- Этот файл содержит ТОЛЬКО:                                         -->
+    <!-- 1. Специфичные состояния (.popup-open, heart-icon)                 -->
+    <!-- 2. Seek slider стили (полностью уникальные)                        -->
+    <!-- 3. Volume slider стили (переопределяют AppComponents Duration)     -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- ═══ POPUP-OPEN STATE ═══ -->
+    <!-- Применяется к icon-btn когда открыт popup (volume, format) -->
+    <Style Selector="Button.icon-btn.popup-open">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- Format button popup state (sidebar-btn вариант) -->
+    <Style Selector="Button.format-btn.popup-open">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- ═══ HEART ICON ANIMATION ═══ -->
+    <Style Selector="Button.icon-btn mi|MaterialIcon.heart-icon">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2"
+                    Easing="BackEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.icon-btn:pressed mi|MaterialIcon.heart-icon">
+        <Setter Property="RenderTransform" Value="scale(1.25)" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SEEK SLIDER                                                         -->
+    <!-- Полностью уникальные стили для seek bar.                           -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- Track container hover (расширение при наведении) -->
+    <Style Selector="Grid.track-container">
+        <Setter Property="RenderTransform" Value="scaleY(1)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Grid.seek-container:pointerover Grid.track-container">
+        <Setter Property="RenderTransform" Value="scaleY(1.5)" />
+    </Style>
+    <Style Selector="Grid.seek-container.dragging Grid.track-container">
+        <Setter Property="RenderTransform" Value="scaleY(1.5)" />
+    </Style>
+
+    <!-- Seek thumb: скрыт по умолчанию, виден при hover/drag -->
+    <Style Selector="Grid.seek-container Ellipse.slider-thumb">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Grid.seek-container:pointerover Ellipse.slider-thumb">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Grid.seek-container.dragging Ellipse.slider-thumb">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <!-- Мгновенное скрытие при сбросе трека -->
+    <Style Selector="Ellipse.slider-thumb.hidden">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
+    </Style>
+
+    <!-- Seek cursor (вертикальная линия при наведении) -->
+    <Style Selector="Border.seek-cursor">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Grid.seek-container:pointerover Border.seek-cursor">
+        <Setter Property="Opacity" Value="0.6" />
+    </Style>
+    <Style Selector="Border.seek-cursor.hidden">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
+    </Style>
+
+    <!-- Preview fill (подсветка области при наведении) -->
+    <Style Selector="Border.slider-preview">
+        <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="Border.slider-preview.active">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- Progress bar: мгновенное скрытие при сбросе -->
+    <Style Selector="Border.progress-bar">
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
+    </Style>
+    <Style Selector="Border.progress-bar.hidden">
+        <Setter Property="Width" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
+    </Style>
+
+    <!-- Playing glow (пульсирующее свечение при воспроизведении) -->
+    <Style Selector="Border.playing-glow">
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <Style Selector="Border.playing-glow.active">
+        <Style.Animations>
+            <Animation IterationCount="Infinite" Duration="0:0:1.5">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0.3" />
+                </KeyFrame>
+                <KeyFrame Cue="50%">
+                    <Setter Property="Opacity" Value="0.7" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.3" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Border.playing-glow.suspended">
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+
+    <Style Selector="Ellipse.vol-thumb">
+        <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Fill" Duration="0:0:0.15" />
+                <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Ellipse.vol-thumb:pointerover">
+        <Setter Property="RenderTransform" Value="scale(1.1)" />
+        <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Ellipse.vol-thumb.dragging">
+        <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Ellipse.vol-thumb.boosted">
+        <Setter Property="Fill" Value="{DynamicResource SystemWarnOrangeBrush}" />
+    </Style>
+
+    <Style Selector="Border.vol-track">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="CornerRadius" Value="2" />
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
+
+    <Style Selector="Border.vol-fill">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="CornerRadius" Value="2" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Height" Duration="0:0:0.06" Easing="CubicEaseOut" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.vol-fill.dragging">
+        <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Border.vol-fill.boosted">
+        <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
+    </Style>
+
+</Styles>

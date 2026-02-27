@@ -84,17 +84,9 @@
             </ListBox>
 
             <!-- TEXT FILTER ONLY -->
-            <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36"
-                Padding="8,0">
-                <Grid ColumnDefinitions="Auto, *">
-                    <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
-                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,0,0" />
-
-                    <TextBox Grid.Column="1" Classes="filter-ghost"
-                        Text="{Binding FilterQuery}"
-                        Watermark="{Binding L[Search_Placeholder]}" />
-                </Grid>
-            </Border>
+            <controls:FilterBar
+                FilterText="{Binding FilterQuery}"
+                Watermark="{Binding L[Search_Placeholder]}" />
         </StackPanel>
 
         <!-- MAIN CONTENT -->

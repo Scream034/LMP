@@ -98,12 +98,12 @@
     <!-- RADIOBUTTON                                                         -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
 
-    <Style Selector="RadioButton:not(.chip)">
+    <Style Selector="RadioButton:not(.chip):not(.source-tab)">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Cursor" Value="Hand" />
     </Style>
-    <Style Selector="RadioButton:not(.chip) /template/ Ellipse#OuterEllipse">
+    <Style Selector="RadioButton:not(.chip):not(.source-tab) /template/ Ellipse#OuterEllipse">
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Stroke" Duration="0:0:0.15" />
@@ -111,7 +111,7 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="RadioButton:not(.chip) /template/ Ellipse#CheckGlyph">
+    <Style Selector="RadioButton:not(.chip):not(.source-tab) /template/ Ellipse#CheckGlyph">
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Fill" Duration="0:0:0.15" />
@@ -132,7 +132,11 @@
         <Setter Property="Padding" Value="12,8" />
         <Setter Property="Cursor" Value="Hand" />
     </Style>
+
+    <!-- Template-level -->
     <Style Selector="ComboBox /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
@@ -140,10 +144,19 @@
         </Setter>
     </Style>
     <Style Selector="ComboBox:pointerover /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="ComboBox:focus /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ComboBox:focus:pointerover /template/ Border#Background">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ComboBox:disabled">
+        <Setter Property="Opacity" Value="0.5" />
     </Style>
 
     <!-- ComboBoxItem: кастомный шаблон с border при hover -->
@@ -180,12 +193,10 @@
         </Setter>
     </Style>
 
-    <!-- Hover: border появляется -->
     <Style Selector="ComboBoxItem:pointerover /template/ Border#ItemBorder">
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
 
-    <!-- Selected: акцентный фон и border -->
     <Style Selector="ComboBoxItem:selected">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
@@ -194,7 +205,6 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- Selected + Hover: border ярче -->
     <Style Selector="ComboBoxItem:selected:pointerover /template/ Border#ItemBorder">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
@@ -208,7 +218,6 @@
         <Setter Property="OnContent" Value="" />
         <Setter Property="OffContent" Value="" />
     </Style>
-    <!-- Анимации для pill -->
     <Style Selector="ToggleSwitch /template/ Border#OuterBorder">
         <Setter Property="Transitions">
             <Transitions>
@@ -217,7 +226,6 @@
             </Transitions>
         </Setter>
     </Style>
-    <!-- Анимации для knob -->
     <Style Selector="ToggleSwitch /template/ Grid#SwitchKnob">
         <Setter Property="Transitions">
             <Transitions>
@@ -267,33 +275,78 @@
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- TEXTBOX                                                             -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Fluent тема рисует фон через Border#PART_BorderElement внутри      -->
+    <!-- шаблона. Мы ОБЯЗАНЫ бить по этому элементу напрямую, иначе          -->
+    <!-- Fluent перехватит Background/BorderBrush в :pointerover и :focus.  -->
+    <!--                                                                     -->
+    <!-- ПРАВИЛО: фон НЕ меняется при hover/focus. Только BorderBrush.      -->
+    <!-- Затемнение (Opacity) только в :disabled.                           -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- === ОБЫЧНЫЙ TEXTBOX === -->
 
     <Style Selector="TextBox:not(.search-box):not(.filter-ghost)">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Cursor" Value="IBeam" />
     </Style>
+
+    <!-- Template-level: базовое состояние -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost) /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
     </Style>
+
+    <!-- Hover: ТОЛЬКО border меняется, фон НЕ трогаем -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost):pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
     </Style>
+
+    <!-- Focus: border акцентный и толще, фон НЕ трогаем -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost):focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderThickness" Value="2" />
     </Style>
+
+    <!-- Focus + Hover -->
+    <Style
+        Selector="TextBox:not(.search-box):not(.filter-ghost):focus:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="2" />
+    </Style>
+
+    <!-- Disabled -->
+    <Style Selector="TextBox:not(.search-box):not(.filter-ghost):disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style
+        Selector="TextBox:not(.search-box):not(.filter-ghost):disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+    </Style>
+
+    <!-- === SEARCH BOX === -->
 
     <Style Selector="TextBox.search-box">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -303,20 +356,43 @@
         <Setter Property="CornerRadius" Value="20" />
         <Setter Property="Padding" Value="40,10,16,10" />
         <Setter Property="FontSize" Value="14" />
+        <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Cursor" Value="IBeam" />
+    </Style>
+
+    <!-- Template-level для search-box -->
+    <Style Selector="TextBox.search-box /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="20" />
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="TextBox.search-box:pointerover">
+    <Style Selector="TextBox.search-box:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
     </Style>
-    <Style Selector="TextBox.search-box:focus">
+    <Style Selector="TextBox.search-box:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderThickness" Value="2" />
-        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
+    <Style Selector="TextBox.search-box:focus:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="TextBox.search-box:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- === FILTER GHOST (прозрачный, внутри FilterBar) === -->
 
     <Style Selector="TextBox.filter-ghost">
         <Setter Property="Background" Value="Transparent" />
@@ -329,6 +405,22 @@
         <Setter Property="CaretBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Cursor" Value="IBeam" />
+    </Style>
+    <!-- Жёстко фиксируем template для filter-ghost -->
+    <Style Selector="TextBox.filter-ghost /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="TextBox.filter-ghost:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="TextBox.filter-ghost:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="BorderBrush" Value="Transparent" />
     </Style>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -434,19 +526,6 @@
                 <BrushTransition Property="Foreground" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
-    </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- TOOLTIP                                                             -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
-    <Style Selector="ToolTip">
-        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="4" />
-        <Setter Property="Padding" Value="8,4" />
     </Style>
 
     <!-- Убираем обводку фокуса -->

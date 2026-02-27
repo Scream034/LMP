@@ -10,42 +10,6 @@
     x:CompileBindings="True"
     x:Name="SearchRoot">
 
-    <UserControl.Styles>
-        <Style Selector="Button.chip">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="16" />
-            <Setter Property="Padding" Value="12,4" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Height" Value="28" />
-        </Style>
-        <Style Selector="Button.chip:pointerover">
-            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        </Style>
-
-        <!-- Source selector -->
-        <Style Selector="RadioButton.source-tab">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="Padding" Value="16,10" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="CornerRadius" Value="8,8,0,0" />
-        </Style>
-        <Style Selector="RadioButton.source-tab:pointerover">
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        </Style>
-        <Style Selector="RadioButton.source-tab:checked">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
-        </Style>
-    </UserControl.Styles>
-
     <Grid RowDefinitions="Auto, *">
         <!-- HEADER -->
         <StackPanel Grid.Row="0" Margin="24,24,24,8">
@@ -180,17 +144,14 @@
             </Border>
 
             <!-- Local text filter -->
-            <Border Margin="0,16,0,0" IsVisible="{Binding HasResults}"
-                Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36"
-                MaxWidth="600" HorizontalAlignment="Left">
-                <Grid ColumnDefinitions="Auto, *" Width="400">
-                    <mi:MaterialIcon Kind="FilterVariant" Width="16" Height="16"
-                        Foreground="{DynamicResource TextSecondaryBrush}" Margin="10,0,4,0" />
-
-                    <TextBox Grid.Column="1" Classes="filter-ghost" Text="{Binding FilterQuery}"
-                        Watermark="{Binding L[Search_LocalFilterTitle]}" />
-                </Grid>
-            </Border>
+            <controls:FilterBar
+                Margin="0,16,0,0"
+                IsVisible="{Binding HasResults}"
+                MaxWidth="600"
+                HorizontalAlignment="Left"
+                FilterText="{Binding FilterQuery}"
+                Watermark="{Binding L[Search_LocalFilterTitle]}"
+                IconKind="FilterVariant" />
         </StackPanel>
 
         <!-- LIST -->

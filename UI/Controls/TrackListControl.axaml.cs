@@ -5,7 +5,6 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using LMP.Core.Services;
@@ -635,11 +634,6 @@ public partial class TrackListControl : UserControl
     #endregion
 
     #region Private Methods
-
-    private void InitializeComponent()
-    {
-        AvaloniaXamlLoader.Load(this);
-    }
 
     private void UpdateLocalizedTexts()
     {

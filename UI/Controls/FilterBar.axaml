@@ -1,20 +1,26 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="using:LMP.Core.ViewModels"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             x:Class="LMP.UI.Controls.FilterBar"
-             x:Name="Root"
-             x:DataType="vm:IFilterable" 
-             x:CompileBindings="True">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    xmlns:local="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Controls.FilterBar"
+    x:Name="Root"
+    x:DataType="local:FilterBar"
+    x:CompileBindings="True">
 
-    <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="8" Height="36" Padding="8,0">
-        <Grid ColumnDefinitions="Auto, *">
-            <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
-                Foreground="{DynamicResource TextSecondaryBrush}" Margin="4,0,8,0" />
+    <TextBox Text="{Binding FilterText, ElementName=Root, Mode=TwoWay}"
+        Watermark="{Binding Watermark, ElementName=Root}"
+        Height="{Binding BarHeight, ElementName=Root}"
+        CornerRadius="{Binding BarCornerRadius, ElementName=Root}"
+        FontSize="{Binding TextFontSize, ElementName=Root}"
+        VerticalContentAlignment="Center"
+        Padding="6,0,12,0">
+        <TextBox.InnerLeftContent>
+            <mi:MaterialIcon Kind="{Binding IconKind, ElementName=Root}"
+                Width="{Binding IconSize, ElementName=Root}"
+                Height="{Binding IconSize, ElementName=Root}"
+                Foreground="{DynamicResource TextSecondaryBrush}"
+                Margin="12,0,8,0" />
+        </TextBox.InnerLeftContent>
+    </TextBox>
 
-            <TextBox Grid.Column="1" Classes="filter-ghost"
-                Text="{Binding FilterQuery, Mode=TwoWay}"
-                Watermark="{Binding L[Filter_Placeholder], FallbackValue='Filter...'}" />
-        </Grid>
-    </Border>
 </UserControl>

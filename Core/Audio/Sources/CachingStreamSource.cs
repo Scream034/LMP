@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
-using static LMP.Core.Audio.AudioConstants;
+using LMP.Core.Models;
 
 namespace LMP.Core.Audio.Sources;
 
@@ -11,23 +11,17 @@ namespace LMP.Core.Audio.Sources;
 /// 
 /// <para><b>Архитектура:</b></para>
 /// <list type="bullet">
-///   <item>Данные загружаются чанками фиксированного размера (<see cref="ChunkSize"/>)</item>
+///   <item>Данные загружаются чанками размера <see cref="_config"/>.<see cref="StreamingConfig.ChunkSizeBytes"/></item>
 ///   <item>Чанки кэшируются в RAM (<see cref="_ramChunks"/>) и на диск (<see cref="_cacheManager"/>)</item>
 ///   <item>Фоновый preload loop обеспечивает опережающую загрузку</item>
-///   <item>Seek реализован через epoch-based cancellation — все загрузки старой эпохи тихо умирают</item>
-/// </list>
-/// 
-/// <para><b>Потокобезопасность:</b></para>
-/// <list type="bullet">
-///   <item>Публичные методы потокобезопасны</item>
-///   <item><see cref="ReadAtAsync"/> может вызываться конкурентно из decoder loop</item>
-///   <item>Seek отменяет текущие загрузки через epoch mechanism, не ломая decoder</item>
+///   <item>Seek реализован через epoch-based cancellation</item>
+///   <item>Suspend/Resume приостанавливает фоновую загрузку при сворачивании окна</item>
 /// </list>
 /// 
 /// <para><b>Partial class structure:</b></para>
 /// <list type="bullet">
-///   <item><c>CachingStreamSource.cs</c> — ядро: поля, init, read frames, dispose</item>
-///   <item><c>CachingStreamSource.Chunks.cs</c> — загрузка и управление чанками</item>
+///   <item><c>CachingStreamSource.cs</c> — ядро: поля, init, read frames, suspend/resume, dispose</item>
+///   <item><c>CachingStreamSource.Chunks.cs</c> — загрузка чанков с retry и circuit breaker</item>
 ///   <item><c>CachingStreamSource.Seeking.cs</c> — seek с epoch-based cancellation</item>
 ///   <item><c>CachingStreamSource.Preload.cs</c> — фоновая загрузка и буферизация</item>
 ///   <item><c>CachingStreamSource.ReadStream.cs</c> — Stream-обёртка для парсеров</item>
@@ -37,6 +31,9 @@ public sealed partial class CachingStreamSource : IAudioSource
 {
     #region Fields
 
+    // ── Configuration ──
+    private readonly StreamingConfig _config;
+
     // ── Identity ──
     private readonly string _cacheKey;
     private readonly string _trackId;
@@ -44,6 +41,10 @@ public sealed partial class CachingStreamSource : IAudioSource
     private readonly long _contentLength;
     private readonly AudioFormat _format;
     private readonly int _bitrate;
+
+    // ── Derived from config ──
+    private readonly int _chunkSize;
+    private readonly int _totalChunks;
 
     // ── Dependencies ──
     private readonly HttpClient _httpClient;
@@ -58,14 +59,9 @@ public sealed partial class CachingStreamSource : IAudioSource
     // ── Chunk storage ──
     private readonly ConcurrentDictionary<int, byte[]> _ramChunks = new();
     private readonly ConcurrentDictionary<int, Task> _activeDownloads = new();
-    private readonly SemaphoreSlim _downloadSlots = new(MaxConcurrentDownloads);
+    private readonly SemaphoreSlim _downloadSlots;
 
     // ── Epoch-based cancellation ──
-    // 
-    // При каждом Seek инкрементируется _downloadEpoch и пересоздаётся _downloadCts.
-    // Все загрузки привязаны к текущей эпохе — при смене эпохи старые тихо умирают.
-    // Это заменяет проблемный _seekCts, который не был связан с preload loop.
-    //
     private volatile int _downloadEpoch;
     private CancellationTokenSource? _downloadCts;
     private readonly Lock _epochLock = new();
@@ -84,6 +80,12 @@ public sealed partial class CachingStreamSource : IAudioSource
     private volatile bool _initialized;
     private volatile bool _disposed;
     private volatile bool _isOfflineMode;
+
+    /// <summary>
+    /// ManualResetEventSlim для блокировки preload loop при suspend.
+    /// Set = работаем, Reset = приостановлены.
+    /// </summary>
+    private readonly ManualResetEventSlim _suspendGate = new(true);
 
     #endregion
 
@@ -120,7 +122,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     public bool IsOfflineMode => _isOfflineMode;
 
     /// <summary>Объём скачанных данных в байтах.</summary>
-    public long DownloadedBytes => (_cacheEntry?.DownloadedChunks ?? 0) * (long)ChunkSize;
+    public long DownloadedBytes => (_cacheEntry?.DownloadedChunks ?? 0) * (long)_chunkSize;
 
     /// <summary>Битрейт (kbps).</summary>
     public int Bitrate => _cacheEntry?.Bitrate ?? _bitrate;
@@ -132,16 +134,6 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <summary>
     /// Создаёт источник с кэширующим HTTP-стримингом.
     /// </summary>
-    /// <param name="cacheKey">Уникальный ключ кэша (trackId + format + bitrate).</param>
-    /// <param name="trackId">ID трека.</param>
-    /// <param name="url">URL потока (может протухнуть → <paramref name="urlRefresher"/>).</param>
-    /// <param name="contentLength">Размер файла в байтах (из Content-Length / clen).</param>
-    /// <param name="format">Контейнерный формат (WebM, MP4, Ogg).</param>
-    /// <param name="codec">Аудиокодек (Opus, AAC).</param>
-    /// <param name="bitrate">Битрейт в kbps.</param>
-    /// <param name="httpClient">HTTP клиент для загрузки.</param>
-    /// <param name="cacheManager">Менеджер дискового кэша.</param>
-    /// <param name="urlRefresher">Callback для обновления протухшего URL (403).</param>
     public CachingStreamSource(
         string cacheKey,
         string trackId,
@@ -152,8 +144,10 @@ public sealed partial class CachingStreamSource : IAudioSource
         int bitrate,
         HttpClient httpClient,
         AudioCacheManager cacheManager,
+        StreamingConfig config,
         Func<CancellationToken, Task<string?>>? urlRefresher = null)
     {
+        _config = config;
         _cacheKey = cacheKey;
         _trackId = trackId;
         _url = url;
@@ -165,6 +159,11 @@ public sealed partial class CachingStreamSource : IAudioSource
         _cacheManager = cacheManager;
         _urlRefresher = urlRefresher;
         Codec = codec;
+
+        // Derived
+        _chunkSize = config.ChunkSizeBytes;
+        _totalChunks = (int)Math.Ceiling((double)contentLength / _chunkSize);
+        _downloadSlots = new SemaphoreSlim(config.MaxConcurrentDownloads);
     }
 
     #endregion
@@ -179,7 +178,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         try
         {
-            // Полный кэш — работаем офлайн
+            // Полный кэш — офлайн
             if (_cacheManager.IsFullyCached(_cacheKey))
             {
                 Log.Info($"[CachingSource] Using fully cached: {_cacheKey}");
@@ -192,7 +191,7 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _cacheKey, _trackId, _url, _contentLength, _format,
                 AudioSourceFactory.GetCodecForFormat(_format),
                 _bitrate,
-                chunkSize: ChunkSize);
+                chunkSize: _chunkSize);
 
             if (_cacheEntry.DownloadedChunks > 0)
             {
@@ -200,21 +199,19 @@ public sealed partial class CachingStreamSource : IAudioSource
                          $"{_cacheEntry.DownloadedChunks}/{_cacheEntry.TotalChunks} chunks");
             }
 
-            // Создаём lifetime CTS и первую эпоху загрузки
             _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             InitializeFirstEpoch();
 
-            // Загружаем начальные чанки для парсинга заголовков
+            // Начальные чанки для парсинга
             await LoadInitialChunksAsync(_lifetimeCts.Token);
 
-            // Создаём стрим-обёртку и парсер
+            // Парсер
             _readStream = new AsyncCachingReadStream(this);
             _parser = CreateParser(_readStream);
 
             if (!await _parser.ParseHeadersAsync(ct))
                 throw new InvalidOperationException("Failed to parse container headers");
 
-            // Обновляем метаданные
             Codec = _parser.Codec;
             _cacheEntry.Codec = Codec;
             _cacheEntry.DurationMs = _parser.DurationMs;
@@ -222,7 +219,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             _initialized = true;
 
-            // Запускаем фоновый preload
+            // Фоновый preload
             _preloadTask = Task.Run(
                 () => PreloadLoopAsync(_lifetimeCts.Token), _lifetimeCts.Token);
 
@@ -238,15 +235,11 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
     }
 
-    /// <summary>
-    /// Инициализация из полного дискового кэша (офлайн-режим).
-    /// </summary>
     private async Task<bool> InitializeFromCacheAsync(CancellationToken ct)
     {
         var stream = _cacheManager.OpenCachedStream(_cacheKey);
         if (stream == null)
         {
-            // Кэш повреждён — переключаемся на онлайн
             _isOfflineMode = false;
             return await InitializeAsync(ct);
         }
@@ -263,9 +256,6 @@ public sealed partial class CachingStreamSource : IAudioSource
         return true;
     }
 
-    /// <summary>
-    /// Создаёт парсер контейнера по формату.
-    /// </summary>
     private IContainerParser CreateParser(Stream stream) => _format switch
     {
         AudioFormat.WebM or AudioFormat.Ogg => new WebMContainerParser(stream),
@@ -273,9 +263,6 @@ public sealed partial class CachingStreamSource : IAudioSource
         _ => throw new NotSupportedException($"Format not supported: {_format}")
     };
 
-    /// <summary>
-    /// Создаёт первую эпоху загрузки, связанную с lifetime CTS.
-    /// </summary>
     private void InitializeFirstEpoch()
     {
         lock (_epochLock)
@@ -287,14 +274,11 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
     }
 
-    /// <summary>
-    /// Загружает начальные чанки для парсинга заголовков контейнера.
-    /// </summary>
     private async Task LoadInitialChunksAsync(CancellationToken ct)
     {
         if (_cacheEntry == null) return;
 
-        int count = Math.Min(InitialChunksToLoad, _cacheEntry.TotalChunks);
+        int count = Math.Min(_config.InitialChunksToLoad, _cacheEntry.TotalChunks);
         var tasks = new Task[count];
 
         for (int i = 0; i < count; i++)
@@ -331,19 +315,15 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
         catch (IOException) when (!_disposed && !_isOfflineMode)
         {
-            // Сетевой сбой — пробуем дозагрузить текущий чанк и повторить
             await EnsureChunkAsync(_currentChunk, ct);
             return await ReadFrameAsync(ct);
         }
     }
 
-    /// <summary>
-    /// Обновляет номер текущего чанка по позиции стрима.
-    /// </summary>
     private void UpdateCurrentChunk()
     {
         if (!_isOfflineMode && _readStream != null)
-            _currentChunk = (int)(_readStream.Position / ChunkSize);
+            _currentChunk = (int)(_readStream.Position / _chunkSize);
     }
 
     #endregion
@@ -351,53 +331,69 @@ public sealed partial class CachingStreamSource : IAudioSource
     #region Epoch-Based Cancellation
 
     /// <summary>
-    /// Отменяет все загрузки текущей эпохи и создаёт новую.
-    /// Вызывается при каждом Seek.
+    /// Отменяет все загрузки текущей эпохи, создаёт новую.
     /// </summary>
-    /// <returns>CancellationToken новой эпохи для запуска новых загрузок.</returns>
-    /// <remarks>
-    /// <para>Механизм работы:</para>
-    /// <list type="number">
-    ///   <item>Создаём новый CTS, связанный с lifetime</item>
-    ///   <item>Инкрементируем epoch</item>
-    ///   <item>Отменяем и dispose'им старый CTS</item>
-    /// </list>
-    /// <para>
-    /// Порядок важен: новый CTS создаётся ДО отмены старого,
-    /// чтобы <see cref="CurrentDownloadToken"/> никогда не возвращал отменённый токен.
-    /// </para>
-    /// </remarks>
     private CancellationToken ResetDownloadEpoch()
     {
         lock (_epochLock)
         {
             var oldCts = _downloadCts;
 
-            // Новый CTS, связанный с lifetime
             _downloadCts = _lifetimeCts != null
                 ? CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token)
                 : new CancellationTokenSource();
 
             Interlocked.Increment(ref _downloadEpoch);
 
-            // Отменяем и dispose'им старый ПОСЛЕ создания нового
-            try { oldCts?.Cancel(); }
-            catch (ObjectDisposedException) { }
+            if (oldCts != null)
+            {
+                // Запускаем мягкую отмену.
+                // НЕ вызываем Cancel() сразу. Даем HttpClient 50мс чтобы завершить
+                // текущее чтение, а затем вызываем Cancel.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // 1. Сначала отменяем через CancelAfter, чтобы внутренний таймер
+                        // HttpClient мог аккуратно завершить сокеты.
+                        oldCts.CancelAfter(50);
 
-            try { oldCts?.Dispose(); }
-            catch (ObjectDisposedException) { }
+                        // 2. Ждем, чтобы HTTP запросы реально упали с TaskCanceledException
+                        await Task.Delay(200);
+                    }
+                    catch { }
+                    finally
+                    {
+                        try { oldCts.Dispose(); } catch { }
+                    }
+                });
+            }
 
             return _downloadCts.Token;
         }
     }
 
     /// <summary>
-    /// Возвращает CancellationToken текущей эпохи загрузки.
+    /// Graceful отмена CTS: сначала CancelAfter с коротким таймаутом,
+    /// затем dispose. Предотвращает crash в SslStream при обрыве TLS фрейма.
     /// </summary>
-    /// <remarks>
-    /// Используется фоновыми загрузками для привязки к текущей эпохе.
-    /// При смене эпохи (seek) все загрузки с токеном старой эпохи получат отмену.
-    /// </remarks>
+    private static async Task GracefulCancelAsync(CancellationTokenSource cts)
+    {
+        try
+        {
+            // Даём 50мс на завершение текущего TLS фрейма
+            cts.CancelAfter(TimeSpan.FromMilliseconds(50));
+
+            // Ждём чтобы Cancel успел пройти
+            await Task.Delay(60);
+        }
+        catch (ObjectDisposedException) { }
+
+        try { cts.Dispose(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>CancellationToken текущей эпохи загрузки.</summary>
     private CancellationToken CurrentDownloadToken
     {
         get
@@ -419,7 +415,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         int current = Volatile.Read(ref _currentChunk);
 
         foreach (int idx in _ramChunks.Keys
-                     .Where(i => Math.Abs(i - current) > RamEvictionDistance)
+                     .Where(i => Math.Abs(i - current) > _config.RamEvictionDistance)
                      .ToList())
         {
             _ramChunks.TryRemove(idx, out _);
@@ -442,22 +438,20 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
 
-        // Отменяем все эпохи
+        // Разблокируем suspend gate чтобы preload loop мог завершиться
+        _suspendGate.Set();
+
         lock (_epochLock)
         {
             try { _downloadCts?.Cancel(); }
             catch (ObjectDisposedException) { }
-
             try { _downloadCts?.Dispose(); }
             catch (ObjectDisposedException) { }
-
             _downloadCts = null;
         }
 
-        // Отменяем lifetime
         try { _lifetimeCts?.Cancel(); }
         catch (ObjectDisposedException) { }
-
         try { _lifetimeCts?.Dispose(); }
         catch (ObjectDisposedException) { }
 
@@ -465,6 +459,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         _readStream?.Dispose();
         _ramChunks.Clear();
         _downloadSlots.Dispose();
+        _suspendGate.Dispose();
     }
 
     /// <inheritdoc/>
@@ -473,27 +468,25 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
 
-        // Отменяем все эпохи
+        // Разблокируем suspend gate чтобы preload loop мог завершиться
+        _suspendGate.Set();
+
         lock (_epochLock)
         {
             try { _downloadCts?.Cancel(); }
             catch (ObjectDisposedException) { }
-
             try { _downloadCts?.Dispose(); }
             catch (ObjectDisposedException) { }
-
             _downloadCts = null;
         }
 
-        // Отменяем lifetime
         try { _lifetimeCts?.Cancel(); }
         catch (ObjectDisposedException) { }
 
-        // Ждём preload loop
         if (_preloadTask != null)
         {
             try { await _preloadTask.WaitAsync(TimeSpan.FromSeconds(1)); }
-            catch { /* Timeout or cancelled — OK */ }
+            catch { }
         }
 
         try { _lifetimeCts?.Dispose(); }
@@ -506,6 +499,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         _readStream?.Dispose();
         _ramChunks.Clear();
         _downloadSlots.Dispose();
+        _suspendGate.Dispose();
     }
 
     #endregion

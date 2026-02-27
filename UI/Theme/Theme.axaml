@@ -2,9 +2,12 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ПОДКЛЮЧАЕМ РАЗДЕЛЕННЫЕ ТЕМЫ -->
+    <StyleInclude Source="avares://LMP/UI/Theme/Typography.axaml" />
     <StyleInclude Source="avares://LMP/UI/Theme/Buttons.axaml" />
     <StyleInclude Source="avares://LMP/UI/Theme/Controls.axaml" />
     <StyleInclude Source="avares://LMP/UI/Theme/AppComponents.axaml" />
+    <!-- PlayerBarStyles ПОСЛЕ AppComponents — переопределяет vol-* стили -->
+    <StyleInclude Source="avares://LMP/UI/Theme/PlayerBarStyles.axaml" />
 
     <Style>
         <Style.Resources>

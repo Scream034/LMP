@@ -20,7 +20,7 @@
             <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12" Margin="0,24,0,0">
                 <Button Content="{Binding L[Conflict_Skip]}" Command="{Binding SkipCommand}" Background="Transparent"/>
                 <Button Content="{Binding L[Conflict_Duplicate]}" Command="{Binding DuplicateCommand}" />
-                <Button Content="{Binding L[Conflict_Merge]}" Command="{Binding MergeCommand}" Classes="accent"/>
+                <Button Content="{Binding L[Conflict_Merge]}" Command="{Binding MergeCommand}" Classes="accent accent-base"/>
             </StackPanel>
         </Grid>
     </Border>

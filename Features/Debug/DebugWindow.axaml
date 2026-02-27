@@ -14,7 +14,7 @@
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <TextBlock Text="Search Term:" VerticalAlignment="Center" />
                 <TextBox Text="{Binding SearchQuery}" Width="200" VerticalAlignment="Center" />
-                <Button Content="Clear Log" Command="{Binding ClearLogCommand}" Classes="accent" />
+                <Button Content="Clear Log" Command="{Binding ClearLogCommand}" Classes="accent accent-base" />
                 <ProgressBar IsIndeterminate="True" Width="100" IsVisible="{Binding IsBusy}" />
             </StackPanel>
         </Border>

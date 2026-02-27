@@ -40,7 +40,7 @@
 
             <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12" Margin="0,16,0,0">
                 <Button Content="{Binding L[Common_Cancel]}" Command="{Binding CancelCommand}" Background="Transparent"/>
-                <Button Content="{Binding L[Sync_Action]}" Command="{Binding SyncCommand}" Classes="accent"/>
+                <Button Content="{Binding L[Sync_Action]}" Command="{Binding SyncCommand}" Classes="accent accent-base"/>
             </StackPanel>
         </Grid>
     </Border>

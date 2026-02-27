@@ -180,6 +180,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _youtube = youtube;
         _library = library;
 
+        ApplyStreamingProfile();
+
         _player = new AudioPlayer(new AudioPlayerOptions
         {
             UrlRefreshCallback = RefreshUrlCallbackAsync,
@@ -232,6 +234,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             : 60;
 
         ApplyVolume(instant: true);
+    }
+
+    private void ApplyStreamingProfile()
+    {
+        var profile = _library.Settings.InternetProfile;
+        AudioSourceFactory.ApplyInternetProfile(profile);
+        Log.Info($"[AudioEngine] Streaming profile: {profile}");
     }
 
     #endregion
@@ -1174,13 +1183,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public static Task ReinitializeWithProfileAsync(InternetProfile profile)
     {
+        AudioSourceFactory.ApplyInternetProfile(profile);
         Log.Info($"[AudioEngine] Profile switched to {profile}");
         return Task.CompletedTask;
-    }
-
-    public static void NotifyAppMinimized()
-    {
-        GC.Collect(1, GCCollectionMode.Optimized, false);
     }
 
     #endregion

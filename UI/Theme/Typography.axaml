@@ -1,0 +1,115 @@
+<Styles xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- TYPOGRAPHY                                                          -->
+    <!-- Глобальные текстовые стили для заголовков, меток, описаний.         -->
+    <!-- Источник: SettingsView локальные стили → вынесены для переиспользования -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- Заголовок страницы -->
+    <Style Selector="TextBlock.h1">
+        <Setter Property="FontSize" Value="24" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="Margin" Value="0,0,0,20" />
+    </Style>
+
+    <!-- Заголовок секции -->
+    <Style Selector="TextBlock.h2">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Margin" Value="0,32,0,12" />
+    </Style>
+
+    <!-- Метка настройки / поля -->
+    <Style Selector="TextBlock.label">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- Описание / подсказка -->
+    <Style Selector="TextBlock.desc">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Margin" Value="0,4,0,0" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- Моноширинное значение (слайдеры, числовые поля) -->
+    <Style Selector="TextBlock.value-label">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontFamily" Value="Consolas, monospace" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="Width" Value="60" />
+        <Setter Property="TextAlignment" Value="Right" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- CARDS                                                               -->
+    <!-- Фоновый контейнер для группировки настроек/контента.               -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{DynamicResource BgSecondaryBrush}" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="24" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- COLOR ROW                                                           -->
+    <!-- Строка выбора цвета в настройках темы.                             -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Grid.color-row">
+        <Setter Property="Margin" Value="0,0,0,16" />
+    </Style>
+    <Style Selector="Grid.color-row TextBlock.color-name">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Grid.color-row TextBlock.color-hint">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Margin" Value="0,2,0,0" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- FEATURE BADGE                                                       -->
+    <!-- Маленький бейдж рядом с названием фичи (BOOST, BETA и т.д.)       -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Border.feature-badge">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="6,2" />
+        <Setter Property="Margin" Value="8,0,0,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.feature-badge TextBlock">
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
+    </Style>
+    <Style Selector="Border.feature-badge.experimental">
+        <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SECTION SEPARATOR                                                   -->
+    <!-- Стандартный разделитель внутри card.                                -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Separator.card-separator">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Margin" Value="0,0" />
+    </Style>
+
+</Styles>

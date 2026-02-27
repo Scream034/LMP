@@ -53,14 +53,10 @@
                 </Grid>
 
                 <!-- TEXT FILTER ONLY -->
-                <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="6" Height="32">
-                    <Grid ColumnDefinitions="Auto, *">
-                        <mi:MaterialIcon Kind="Magnify" Width="14" Height="14"
-                            Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,0,0,0" />
-                        <TextBox Grid.Column="1" Classes="filter-ghost" Text="{Binding FilterQuery}"
-                            Watermark="{Binding L[Search_LocalFilterTitle]}" FontSize="12" />
-                    </Grid>
-                </Border>
+                <controls:FilterBar
+                    FilterText="{Binding FilterQuery}"
+                    Watermark="{Binding L[Search_LocalFilterTitle]}"
+                    Compact="True" />
             </StackPanel>
 
             <!-- List -->

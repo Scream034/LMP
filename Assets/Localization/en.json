@@ -269,6 +269,10 @@
   "Player_VolumeLevel": "Volume: {0}% / {1}%",
   "Player_Loading_Duration": "Loading duration...",
 
+  "Seek_CancelHint": "ESC or Right Click to cancel",
+  "Seek_Cancelled": "Seek cancelled",
+  "Seek_WaitHint": "Waiting for completion...",
+
   "Track_Like": "Add to Liked",
   "Track_Unlike": "Remove from Liked",
   "Track_Added": "Added to Liked",

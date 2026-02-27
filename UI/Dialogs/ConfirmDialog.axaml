@@ -38,7 +38,7 @@
                 <Button Content="{Binding ConfirmText}"
                     Command="{Binding ConfirmCommand}"
                     MinWidth="80"
-                    Classes="accent" />
+                    Classes="accent accent-base" />
             </StackPanel>
         </Grid>
     </Border>

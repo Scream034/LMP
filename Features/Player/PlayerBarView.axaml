@@ -10,335 +10,7 @@
     Focusable="True"
     UseLayoutRounding="True">
 
-    <UserControl.Styles>
-        <!--  PLAYER BUTTONS  -->
-        <Style Selector="Button.pb-btn">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
-            <Setter Property="BorderThickness" Value="1.5" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="ToolTip.Placement" Value="Top" />
-            <Setter Property="ToolTip.VerticalOffset" Value="-6" />
-            <Setter Property="Template">
-                <ControlTemplate TargetType="Button">
-                    <Border
-                        Padding="{TemplateBinding Padding}"
-                        Background="{TemplateBinding Background}"
-                        BorderBrush="{TemplateBinding BorderBrush}"
-                        BorderThickness="{TemplateBinding BorderThickness}"
-                        CornerRadius="{TemplateBinding CornerRadius}">
-                        <ContentPresenter
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Content="{TemplateBinding Content}" />
-                    </Border>
-                </ControlTemplate>
-            </Setter>
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.15" />
-                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
-                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1"
-                        Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <!-- FIX: .active ПЕРЕД :pointerover -->
-        <Style Selector="Button.pb-btn.active">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-        </Style>
-        <Style Selector="Button.pb-btn:pointerover">
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
-        </Style>
-        <!-- FIX: Самый специфичный селектор -->
-        <Style Selector="Button.pb-btn.active:pointerover">
-            <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-        <Style Selector="Button.pb-btn:pressed">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="RenderTransform" Value="scale(0.96)" />
-        </Style>
-
-        <!--  MAIN PLAY BUTTON  -->
-        <Style Selector="Button.pb-main">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
-            <Setter Property="BorderThickness" Value="2" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="ToolTip.Placement" Value="Top" />
-            <Setter Property="ToolTip.VerticalOffset" Value="-6" />
-            <Setter Property="Template">
-                <ControlTemplate TargetType="Button">
-                    <Border
-                        Padding="{TemplateBinding Padding}"
-                        Background="{TemplateBinding Background}"
-                        BorderBrush="{TemplateBinding BorderBrush}"
-                        BorderThickness="{TemplateBinding BorderThickness}"
-                        CornerRadius="{TemplateBinding CornerRadius}">
-                        <ContentPresenter
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Content="{TemplateBinding Content}" />
-                    </Border>
-                </ControlTemplate>
-            </Setter>
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.15" />
-                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
-                        Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Button.pb-main:pointerover">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-        <Style Selector="Button.pb-main:pressed">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
-            <Setter Property="RenderTransform" Value="scale(0.94)" />
-        </Style>
-
-        <!--  ICON BUTTON  -->
-        <Style Selector="Button.ico-btn">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
-            <Setter Property="BorderThickness" Value="1.5" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="ToolTip.Placement" Value="Top" />
-            <Setter Property="ToolTip.VerticalOffset" Value="-6" />
-            <Setter Property="Template">
-                <ControlTemplate TargetType="Button">
-                    <Border
-                        Padding="{TemplateBinding Padding}"
-                        Background="{TemplateBinding Background}"
-                        BorderBrush="{TemplateBinding BorderBrush}"
-                        BorderThickness="{TemplateBinding BorderThickness}"
-                        CornerRadius="{TemplateBinding CornerRadius}">
-                        <ContentPresenter
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Content="{TemplateBinding Content}" />
-                    </Border>
-                </ControlTemplate>
-            </Setter>
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Background" Duration="0:0:0.15" />
-                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
-                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
-                        Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Button.ico-btn.active mi|MaterialIcon">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-        </Style>
-        <Style Selector="Button.ico-btn:pointerover">
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
-        </Style>
-        <Style Selector="Button.ico-btn:pressed">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="RenderTransform" Value="scale(0.92)" />
-        </Style>
-        <Style Selector="Button.ico-btn.popup-open">
-            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-
-        <!--  Heart animation  -->
-        <Style Selector="Button.ico-btn mi|MaterialIcon.heart-icon">
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2"
-                        Easing="BackEaseOut" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Button.ico-btn:pressed mi|MaterialIcon.heart-icon">
-            <Setter Property="RenderTransform" Value="scale(1.25)" />
-        </Style>
-
-        <!--  SEEK SLIDER                                                      -->
-
-        <!--  Track container hover  -->
-        <Style Selector="Grid.track-container">
-            <Setter Property="RenderTransform" Value="scaleY(1)" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
-                        Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Grid.seek-container:pointerover Grid.track-container">
-            <Setter Property="RenderTransform" Value="scaleY(1.5)" />
-        </Style>
-        <Style Selector="Grid.seek-container.dragging Grid.track-container">
-            <Setter Property="RenderTransform" Value="scaleY(1.5)" />
-        </Style>
-
-        <!--  Seek thumb: hidden when suspended or resetting  -->
-        <Style Selector="Ellipse.slider-thumb">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Grid.seek-container:pointerover Ellipse.slider-thumb">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-        <Style Selector="Grid.seek-container.dragging Ellipse.slider-thumb">
-            <Setter Property="Opacity" Value="1" />
-        </Style>
-        <!--  Force hide thumb during track reset  -->
-        <Style Selector="Ellipse.slider-thumb.hidden">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions />
-            </Setter>
-        </Style>
-
-        <!--  Seek cursor  -->
-        <Style Selector="Border.seek-cursor">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Grid.seek-container:pointerover Border.seek-cursor">
-            <Setter Property="Opacity" Value="0.6" />
-        </Style>
-        <!--  Force hide cursor during track reset  -->
-        <Style Selector="Border.seek-cursor.hidden">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions />
-            </Setter>
-        </Style>
-
-        <!--  Preview fill  -->
-        <Style Selector="Border.slider-preview">
-            <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="Opacity" Value="0" />
-        </Style>
-        <Style Selector="Border.slider-preview.active">
-            <Setter Property="Opacity" Value="0.5" />
-        </Style>
-
-        <!--  Progress bar: hide during reset with no transition  -->
-        <Style Selector="Border.progress-bar">
-            <Setter Property="Transitions">
-                <Transitions />
-            </Setter>
-        </Style>
-        <Style Selector="Border.progress-bar.hidden">
-            <Setter Property="Width" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions />
-            </Setter>
-        </Style>
-
-        <!--  Playing glow  -->
-        <Style Selector="Border.playing-glow">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="IsHitTestVisible" Value="False" />
-        </Style>
-        <Style Selector="Border.playing-glow.active">
-            <Style.Animations>
-                <Animation IterationCount="Infinite" Duration="0:0:1.5">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.3" />
-                    </KeyFrame>
-                    <KeyFrame Cue="50%">
-                        <Setter Property="Opacity" Value="0.7" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.3" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
-        <!--  Suppress glow when suspended  -->
-        <Style Selector="Border.playing-glow.suspended">
-            <Setter Property="Opacity" Value="0" />
-        </Style>
-
-        <!--  VOLUME SLIDER (Minimalist)  -->
-        <Style Selector="Ellipse.vol-thumb">
-            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <BrushTransition Property="Fill" Duration="0:0:0.15" />
-                    <ThicknessTransition Property="Margin" Duration="0:0:0.06" Easing="CubicEaseOut" />
-                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"
-                        Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <Style Selector="Ellipse.vol-thumb:pointerover">
-            <Setter Property="RenderTransform" Value="scale(1.1)" />
-            <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
-        </Style>
-        <!-- FIX: Убрали увеличение при dragging, только смена цвета -->
-        <Style Selector="Ellipse.vol-thumb.dragging">
-            <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
-        </Style>
-        <Style Selector="Ellipse.vol-thumb.boosted">
-            <Setter Property="Fill" Value="{DynamicResource SystemWarnOrangeBrush}" />
-        </Style>
-
-        <Style Selector="Border.vol-track">
-            <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-            <Setter Property="CornerRadius" Value="2" />
-            <Setter Property="Opacity" Value="0.4" />
-        </Style>
-
-        <Style Selector="Border.vol-fill">
-            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="CornerRadius" Value="2" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Height" Duration="0:0:0.06" Easing="CubicEaseOut" />
-                    <BrushTransition Property="Background" Duration="0:0:0.15" />
-                </Transitions>
-            </Setter>
-        </Style>
-        <!-- FIX: При dragging слайдер становится ярче -->
-        <Style Selector="Border.vol-fill.dragging">
-            <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
-        </Style>
-        <Style Selector="Border.vol-fill.boosted">
-            <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
-        </Style>
-
-        <Style Selector="Button.format-btn.popup-open">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-    </UserControl.Styles>
-
-    <!--  MAIN CONTENT                                                         -->
+    <!--  MAIN CONTENT  -->
     <Border Background="{DynamicResource BgSecondaryBrush}">
         <Grid RowDefinitions="Auto,*">
 
@@ -391,7 +63,7 @@
                         </Border>
                     </Border>
 
-                    <!--  Layer 2: Buffer segments — CANVAS для абсолютного позиционирования  -->
+                    <!--  Layer 2: Buffer segments  -->
                     <Canvas
                         Name="BufferSegmentsCanvas"
                         HorizontalAlignment="Stretch"
@@ -470,7 +142,7 @@
                     PointerReleased="OnSeekAreaReleased" />
             </Grid>
 
-            <!--  Seek Tooltip  -->
+            <!--  Seek Tooltip (time)  -->
             <Popup
                 Name="SeekTooltipPopup"
                 IsHitTestVisible="False"
@@ -495,6 +167,36 @@
                 </Border>
             </Popup>
 
+            <!--  Seek Hint Popup (cancel / wait info)  -->
+            <Popup
+                Name="SeekHintPopup"
+                IsHitTestVisible="False"
+                IsLightDismissEnabled="False"
+                Placement="Top"
+                PlacementTarget="{Binding #SeekContainer}"
+                HorizontalOffset="0"
+                VerticalOffset="-28">
+                <Border
+                    Padding="8,4"
+                    Background="{DynamicResource BgSkeletonBrush}"
+                    BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="1"
+                    BoxShadow="0 2 8 0 #60000000"
+                    CornerRadius="4">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <mi:MaterialIcon
+                            Width="14" Height="14"
+                            Foreground="{DynamicResource AccentBrush}"
+                            Kind="InformationOutline" />
+                        <TextBlock
+                            Name="SeekHintText"
+                            FontSize="11"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource TextPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+            </Popup>
+
             <!--  ROW 1: CONTROLS  -->
             <Grid
                 Grid.Row="1"
@@ -511,73 +213,71 @@
                     <!-- Shuffle -->
                     <Button
                         Width="40" Height="40"
-                        Classes="pb-btn"
+                        Classes="playback-btn"
                         Classes.active="{Binding ShuffleEnabled}"
                         Command="{Binding ShuffleQueueCommand}"
                         CornerRadius="20"
-                        ToolTip.Tip="{Binding ShuffleTooltip}">
+                        ToolTip.Tip="{Binding ShuffleTooltip}"
+                        ToolTip.Placement="Top"
+                        ToolTip.VerticalOffset="-6">
                         <mi:MaterialIcon Width="18" Height="18" Kind="Shuffle" />
                     </Button>
 
-                    <!--  Previous  -->
+                    <!-- Previous -->
                     <Button
-                        Width="40"
-                        Height="40"
-                        Classes="pb-btn"
+                        Width="40" Height="40"
+                        Classes="playback-btn"
                         Command="{Binding PreviousCommand}"
                         CornerRadius="20"
-                        ToolTip.Tip="{Binding PreviousTooltip}">
+                        ToolTip.Tip="{Binding PreviousTooltip}"
+                        ToolTip.Placement="Top"
+                        ToolTip.VerticalOffset="-6">
                         <mi:MaterialIcon Width="24" Height="24" Kind="SkipPrevious" />
                     </Button>
 
-                    <!--  Play/Pause  -->
+                    <!-- Play/Pause -->
                     <Button
-                        Width="52"
-                        Height="52"
-                        Classes="pb-main"
+                        Width="52" Height="52"
+                        Classes="playback-btn-main"
                         Command="{Binding PlayPauseCommand}"
                         CornerRadius="26"
-                        ToolTip.Tip="{Binding PlayPauseTooltip}">
+                        ToolTip.Tip="{Binding PlayPauseTooltip}"
+                        ToolTip.Placement="Top"
+                        ToolTip.VerticalOffset="-6">
                         <Panel>
-                            <mi:MaterialIcon
-                                Width="30"
-                                Height="30"
-                                IsVisible="{Binding IsPlaying}"
-                                Kind="Pause" />
-                            <mi:MaterialIcon
-                                Width="30"
-                                Height="30"
-                                IsVisible="{Binding IsPaused}"
-                                Kind="Play" />
+                            <mi:MaterialIcon Width="30" Height="30"
+                                IsVisible="{Binding IsPlaying}" Kind="Pause" />
+                            <mi:MaterialIcon Width="30" Height="30"
+                                IsVisible="{Binding IsPaused}" Kind="Play" />
                         </Panel>
                     </Button>
 
-                    <!--  Next  -->
+                    <!-- Next -->
                     <Button
-                        Width="40"
-                        Height="40"
-                        Classes="pb-btn"
+                        Width="40" Height="40"
+                        Classes="playback-btn"
                         Command="{Binding NextCommand}"
                         CornerRadius="20"
-                        ToolTip.Tip="{Binding NextTooltip}">
+                        ToolTip.Tip="{Binding NextTooltip}"
+                        ToolTip.Placement="Top"
+                        ToolTip.VerticalOffset="-6">
                         <mi:MaterialIcon Width="24" Height="24" Kind="SkipNext" />
                     </Button>
 
-                    <!--  Repeat  -->
+                    <!-- Repeat -->
                     <Panel>
                         <Button
                             x:Name="RepeatButton"
-                            Width="40"
-                            Height="40"
-                            Classes="pb-btn"
+                            Width="40" Height="40"
+                            Classes="playback-btn"
                             Classes.active="{Binding RepeatMode, Converter={StaticResource RepeatModeActive}}"
                             Command="{Binding ToggleRepeatCommand}"
                             CornerRadius="20"
-                            ToolTip.Tip="{Binding RepeatTooltip}">
+                            ToolTip.Tip="{Binding RepeatTooltip}"
+                            ToolTip.Placement="Top"
+                            ToolTip.VerticalOffset="-6">
                             <Grid>
-                                <mi:MaterialIcon
-                                    Width="18"
-                                    Height="18"
+                                <mi:MaterialIcon Width="18" Height="18"
                                     Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" />
                                 <Border
                                     HorizontalAlignment="Center"
@@ -596,14 +296,10 @@
                             <Border Classes="mode-hint"
                                 Classes.visible="{Binding IsRepeatHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon
-                                        Width="14"
-                                        Height="14"
+                                    <mi:MaterialIcon Width="14" Height="14"
                                         Foreground="{DynamicResource AccentBrush}"
                                         Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" />
-                                    <TextBlock
-                                        FontSize="12"
-                                        FontWeight="SemiBold"
+                                    <TextBlock FontSize="12" FontWeight="SemiBold"
                                         Foreground="{DynamicResource TextPrimaryBrush}"
                                         Text="{Binding RepeatHintText}" />
                                 </StackPanel>
@@ -611,58 +307,41 @@
                         </Popup>
                     </Panel>
 
-                    <Border
-                        Width="1"
-                        Height="28"
-                        Margin="6,0"
+                    <Border Width="1" Height="28" Margin="6,0"
                         Background="{DynamicResource BgHighlightBrush}" />
 
-                    <!--  Volume  -->
+                    <!-- Volume -->
                     <Panel Name="VolumePanel">
                         <Button
                             x:Name="VolumeButton"
-                            Width="38"
-                            Height="38"
-                            Classes="ico-btn"
+                            Width="38" Height="38"
+                            Classes="icon-btn"
                             Classes.popup-open="{Binding #VolumePopup.IsOpen}"
                             Command="{Binding ToggleMuteCommand}"
                             CornerRadius="19"
+                            ToolTip.Placement="Top"
+                            ToolTip.VerticalOffset="-6"
                             PointerWheelChanged="OnVolumeScroll">
                             <Grid>
-                                <mi:MaterialIcon
-                                    Width="20"
-                                    Height="20"
+                                <mi:MaterialIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextMutedBrush}"
-                                    IsVisible="{Binding IsMuted}"
-                                    Kind="VolumeMute" />
-                                <mi:MaterialIcon
-                                    Width="20"
-                                    Height="20"
+                                    IsVisible="{Binding IsMuted}" Kind="VolumeMute" />
+                                <mi:MaterialIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextSecondaryBrush}"
-                                    IsVisible="{Binding IsVolumeLow}"
-                                    Kind="VolumeLow" />
-                                <mi:MaterialIcon
-                                    Width="20"
-                                    Height="20"
+                                    IsVisible="{Binding IsVolumeLow}" Kind="VolumeLow" />
+                                <mi:MaterialIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextSecondaryBrush}"
-                                    IsVisible="{Binding IsVolumeMedium}"
-                                    Kind="VolumeMedium" />
-                                <mi:MaterialIcon
-                                    Width="20"
-                                    Height="20"
+                                    IsVisible="{Binding IsVolumeMedium}" Kind="VolumeMedium" />
+                                <mi:MaterialIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextSecondaryBrush}"
-                                    IsVisible="{Binding IsVolumeHigh}"
-                                    Kind="VolumeHigh" />
-                                <mi:MaterialIcon
-                                    Width="20"
-                                    Height="20"
+                                    IsVisible="{Binding IsVolumeHigh}" Kind="VolumeHigh" />
+                                <mi:MaterialIcon Width="20" Height="20"
                                     Foreground="{DynamicResource SystemWarnOrangeBrush}"
-                                    IsVisible="{Binding IsVolumeBoosted}"
-                                    Kind="VolumeVibrate" />
+                                    IsVisible="{Binding IsVolumeBoosted}" Kind="VolumeVibrate" />
                             </Grid>
                         </Button>
 
-                        <!--  Volume Popup — centered on button  -->
+                        <!-- Volume Popup -->
                         <Popup
                             x:Name="VolumePopup"
                             IsLightDismissEnabled="False"
@@ -679,42 +358,25 @@
                                 PointerExited="OnVolumePopupContentExited">
                                 <Panel
                                     Name="VolumeSliderPanel"
-                                    Width="20"
-                                    MinHeight="60"
-                                    Height="80"
+                                    Width="20" MinHeight="60" Height="80"
                                     HorizontalAlignment="Center">
-
-                                    <!--  Track  -->
-                                    <Border
-                                        Width="4"
+                                    <Border Width="4"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Stretch"
                                         Classes="vol-track" />
-
-                                    <!--  Fill  -->
-                                    <Border
-                                        Name="VolumeBar"
-                                        Width="4"
-                                        Height="0"
-                                        MinHeight="0"
+                                    <Border Name="VolumeBar"
+                                        Width="4" Height="0" MinHeight="0"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Bottom"
                                         Classes="vol-fill"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
-
-                                    <!--  Thumb — центрирован через HorizontalAlignment  -->
-                                    <Ellipse
-                                        Name="VolumeThumb"
-                                        Width="12"
-                                        Height="12"
+                                    <Ellipse Name="VolumeThumb"
+                                        Width="12" Height="12"
                                         HorizontalAlignment="Center"
                                         VerticalAlignment="Top"
                                         Classes="vol-thumb"
                                         Classes.boosted="{Binding IsVolumeBoosted}" />
-
-                                    <!--  Hit area  -->
-                                    <Border
-                                        Name="VolumeHitBox"
+                                    <Border Name="VolumeHitBox"
                                         Width="20"
                                         HorizontalAlignment="Stretch"
                                         VerticalAlignment="Stretch"
@@ -730,49 +392,41 @@
                             </Border>
                         </Popup>
 
-                        <!--  Volume Tooltip  -->
-                        <Popup
-                            Name="VolumeTooltipPopup"
+                        <!-- Volume Tooltip -->
+                        <Popup Name="VolumeTooltipPopup"
                             HorizontalOffset="-8"
                             IsHitTestVisible="False"
                             IsLightDismissEnabled="False"
                             Placement="Left"
                             PlacementTarget="{Binding #VolumeHitBox}">
-                            <Border
-                                Padding="6,4"
+                            <Border Padding="6,4"
                                 Background="{DynamicResource BgSkeletonBrush}"
                                 BorderBrush="{DynamicResource BgHighlightBrush}"
                                 BorderThickness="1"
                                 BoxShadow="0 2 6 0 #40000000"
                                 CornerRadius="4">
-                                <TextBlock
-                                    Name="VolumeTooltipText"
-                                    FontSize="11"
-                                    FontWeight="SemiBold"
+                                <TextBlock Name="VolumeTooltipText"
+                                    FontSize="11" FontWeight="SemiBold"
                                     Foreground="{DynamicResource TextPrimaryBrush}" />
                             </Border>
                         </Popup>
                     </Panel>
 
-                    <Border
-                        Width="1"
-                        Height="28"
-                        Margin="6,0"
+                    <Border Width="1" Height="28" Margin="6,0"
                         Background="{DynamicResource BgHighlightBrush}" />
 
-                    <!--  Like  -->
+                    <!-- Like -->
                     <Panel>
                         <Button
                             x:Name="LikeButton"
-                            Width="36"
-                            Height="36"
-                            Classes="ico-btn"
+                            Width="36" Height="36"
+                            Classes="icon-btn"
                             Command="{Binding ToggleLikeCommand}"
                             CornerRadius="18"
-                            ToolTip.Tip="{Binding LikeTooltip}">
-                            <mi:MaterialIcon
-                                Width="18"
-                                Height="18"
+                            ToolTip.Tip="{Binding LikeTooltip}"
+                            ToolTip.Placement="Top"
+                            ToolTip.VerticalOffset="-6">
+                            <mi:MaterialIcon Width="18" Height="18"
                                 Classes="heart-icon"
                                 Classes.active="{Binding IsLiked}"
                                 Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}" />
@@ -787,14 +441,9 @@
                             <Border Classes="mode-hint"
                                 Classes.visible="{Binding IsLikeHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon
-                                        Width="14"
-                                        Height="14"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        Kind="Heart" />
-                                    <TextBlock
-                                        FontSize="12"
-                                        FontWeight="SemiBold"
+                                    <mi:MaterialIcon Width="14" Height="14"
+                                        Foreground="{DynamicResource AccentBrush}" Kind="Heart" />
+                                    <TextBlock FontSize="12" FontWeight="SemiBold"
                                         Foreground="{DynamicResource TextPrimaryBrush}"
                                         Text="{Binding LikeHintText}" />
                                 </StackPanel>
@@ -802,19 +451,18 @@
                         </Popup>
                     </Panel>
 
-                    <!--  Copy  -->
+                    <!-- Copy -->
                     <Panel>
                         <Button
                             x:Name="CopyButton"
-                            Width="36"
-                            Height="36"
-                            Classes="ico-btn"
+                            Width="36" Height="36"
+                            Classes="icon-btn"
                             Command="{Binding CopyLinkCommand}"
                             CornerRadius="18"
-                            ToolTip.Tip="{Binding CopyTooltip}">
-                            <mi:MaterialIcon
-                                Width="16"
-                                Height="16"
+                            ToolTip.Tip="{Binding CopyTooltip}"
+                            ToolTip.Placement="Top"
+                            ToolTip.VerticalOffset="-6">
+                            <mi:MaterialIcon Width="16" Height="16"
                                 Classes.active="{Binding IsCopyHighlighted}"
                                 Kind="ContentCopy" />
                         </Button>
@@ -828,14 +476,9 @@
                             <Border Classes="mode-hint"
                                 Classes.visible="{Binding IsCopyHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon
-                                        Width="14"
-                                        Height="14"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        Kind="Check" />
-                                    <TextBlock
-                                        FontSize="12"
-                                        FontWeight="SemiBold"
+                                    <mi:MaterialIcon Width="14" Height="14"
+                                        Foreground="{DynamicResource AccentBrush}" Kind="Check" />
+                                    <TextBlock FontSize="12" FontWeight="SemiBold"
                                         Foreground="{DynamicResource TextPrimaryBrush}"
                                         Text="{Binding L[Track_Copied]}" />
                                 </StackPanel>

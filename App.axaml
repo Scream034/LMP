@@ -19,9 +19,12 @@
 
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
 
-        <!-- Наши переопределения -->
+        <!-- Наши переопределения (порядок важен!) -->
+        <!-- 1. ToolTip первым — единственный источник ToolTip template -->
         <StyleInclude Source="/UI/Theme/ToolTipTheme.axaml" />
+        <!-- 2. Theme.axaml подключает: Typography, Buttons, Controls, AppComponents, PlayerBarStyles -->
         <StyleInclude Source="/UI/Theme/Theme.axaml" />
+        <!-- 3. Дополнительные компоненты -->
         <StyleInclude Source="/UI/Theme/LoadingSkeletons.axaml" />
         <StyleInclude Source="/UI/Theme/PlaylistCardTemplate.axaml" />
         <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />

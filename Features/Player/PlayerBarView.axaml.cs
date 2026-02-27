@@ -31,6 +31,12 @@ public partial class PlayerBarView : UserControl
     private const double MinSegmentWidthPx = 2.0;
     private const double VolumePopupContentWidth = 28.0;
 
+    /// <summary>Время показа подсказки "ESC/ПКМ для отмены".</summary>
+    private const int SeekHintAutoHideMs = 2500;
+
+    /// <summary>Время показа подтверждения "Перемотка отменена".</summary>
+    private const int SeekCancelledHintMs = 1500;
+
     #endregion
 
     #region State
@@ -54,6 +60,7 @@ public partial class PlayerBarView : UserControl
     private DispatcherTimer? _volumePopupCloseTimer;
     private DispatcherTimer? _volumeTooltipHideTimer;
     private DispatcherTimer? _sparkAnimationTimer;
+    private DispatcherTimer? _seekHintTimer;
     private FlyoutBase? _formatFlyout;
 
     private PlayerBarViewModel? _currentViewModel;
@@ -118,6 +125,13 @@ public partial class PlayerBarView : UserControl
             Interval = TimeSpan.FromMilliseconds(SparkAnimationIntervalMs)
         };
         _sparkAnimationTimer.Tick += OnSparkAnimationTick;
+
+        _seekHintTimer = new DispatcherTimer();
+        _seekHintTimer.Tick += (_, _) =>
+        {
+            SeekHintPopup.IsOpen = false;
+            _seekHintTimer?.Stop();
+        };
     }
 
     #endregion
@@ -155,8 +169,11 @@ public partial class PlayerBarView : UserControl
         VolumePopup.Opened -= OnVolumePopupOpened;
         VolumePopup.Closed -= OnVolumePopupClosed;
 
-        _currentViewModel?.PropertyChanged -= OnViewModelPropertyChanged;
-        _currentViewModel = null;
+        if (_currentViewModel != null)
+        {
+            _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _currentViewModel = null;
+        }
 
         ClearBufferSegments();
     }
@@ -183,8 +200,11 @@ public partial class PlayerBarView : UserControl
     {
         base.OnDataContextChanged(e);
 
-        _currentViewModel?.PropertyChanged -= OnViewModelPropertyChanged;
-        _currentViewModel = null;
+        if (_currentViewModel != null)
+        {
+            _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _currentViewModel = null;
+        }
 
         if (DataContext is PlayerBarViewModel vm)
         {
@@ -210,7 +230,7 @@ public partial class PlayerBarView : UserControl
 
         if (e.PropertyName == nameof(PlayerBarViewModel.IsLoading))
         {
-            if (_isSuspended) return; // Не запускаем spark в suspended
+            if (_isSuspended) return;
 
             if (vm.IsLoading)
                 StartSparkAnimation();
@@ -267,17 +287,14 @@ public partial class PlayerBarView : UserControl
 
     private void ApplySliderReset()
     {
-        // Скрываем прогресс и thumb мгновенно
         ProgressBar.Classes.Add("hidden");
         ProgressBar.Width = 0;
         SeekThumb.Classes.Add("hidden");
         SeekCursor.Classes.Add("hidden");
         PlayingGlow.Width = 0;
 
-        // Полностью очищаем буферные сегменты
         HideAllBufferSegments();
 
-        // Запускаем spark только если не suspended
         if (!_isSuspended)
             StartSparkAnimation();
     }
@@ -288,7 +305,6 @@ public partial class PlayerBarView : UserControl
         SeekThumb.Classes.Remove("hidden");
         SeekCursor.Classes.Remove("hidden");
 
-        // Останавливаем spark если не загружаемся
         if (_currentViewModel?.IsLoading != true)
             StopSparkAnimation();
 
@@ -612,6 +628,29 @@ public partial class PlayerBarView : UserControl
 
     #endregion
 
+    #region Seek Hint Tooltip
+
+    /// <summary>
+    /// Показывает подсказку над seek-слайдером с автоскрытием.
+    /// </summary>
+    private void ShowSeekHint(string text, int autoHideMs)
+    {
+        SeekHintText.Text = text;
+        SeekHintPopup.IsOpen = true;
+
+        _seekHintTimer?.Stop();
+        _seekHintTimer!.Interval = TimeSpan.FromMilliseconds(autoHideMs);
+        _seekHintTimer.Start();
+    }
+
+    private void HideSeekHint()
+    {
+        SeekHintPopup.IsOpen = false;
+        _seekHintTimer?.Stop();
+    }
+
+    #endregion
+
     #region Volume Visual
 
     private static double ComputeVolumeSliderHeight(int maxVolume)
@@ -679,7 +718,6 @@ public partial class PlayerBarView : UserControl
 
     /// <summary>
     /// Показывает тултип громкости слева от текущей позиции ползунка.
-    /// Выравнивает центр тултипа с позицией на слайдере.
     /// </summary>
     private void ShowVolumeTooltip(int currentVolume, int maxVolume, double ratio)
     {
@@ -688,10 +726,7 @@ public partial class PlayerBarView : UserControl
         double height = VolumeSliderPanel.Height;
         if (height <= 0) height = VolumeSliderMinHeight;
 
-        // Позиция ползунка от верха панели
         double thumbY = height * (1 - ratio);
-
-        // VerticalOffset относительно центра PlacementTarget (VolumeHitBox)
         double panelCenter = height / 2.0;
         VolumeTooltipPopup.VerticalOffset = thumbY - panelCenter;
 
@@ -709,6 +744,7 @@ public partial class PlayerBarView : UserControl
     private void CloseAllPopups()
     {
         SeekTooltipPopup.IsOpen = false;
+        SeekHintPopup.IsOpen = false;
         VolumeTooltipPopup.IsOpen = false;
         VolumePopup.IsOpen = false;
         _isVolumeTooltipActive = false;
@@ -805,6 +841,8 @@ public partial class PlayerBarView : UserControl
             ShowSeekPreview();
             UpdateSeekPreview(x);
             SeekTooltipPopup.IsOpen = true;
+
+            // Визуальное обновление позиции мгновенно — даже если seek busy
             vm.UpdateSeekPosition(seconds);
         }
         else if (SeekHitBox.IsPointerOver)
@@ -852,6 +890,10 @@ public partial class PlayerBarView : UserControl
         UpdateSeekCursor(x);
         UpdateSeekTooltip(x, ratio * vm.DurationSeconds);
         SeekTooltipPopup.IsOpen = true;
+
+        // Показываем подсказку про отмену
+        string cancelHint = vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel");
+        ShowSeekHint(cancelHint, SeekHintAutoHideMs);
     }
 
     private void OnSeekAreaReleased(object? sender, PointerReleasedEventArgs e)
@@ -865,6 +907,7 @@ public partial class PlayerBarView : UserControl
             vm.EndSeek();
         }
 
+        HideSeekHint();
         CompleteSeekDrag(e.Pointer);
     }
 
@@ -897,7 +940,13 @@ public partial class PlayerBarView : UserControl
             SeekContainer.Classes.Remove("dragging");
 
             if (DataContext is PlayerBarViewModel vm)
+            {
                 vm.CancelSeek();
+
+                // Показываем подтверждение отмены
+                string cancelledText = vm.L.Get("Seek_Cancelled", "Seek cancelled");
+                ShowSeekHint(cancelledText, SeekCancelledHintMs);
+            }
         }
 
         SeekTooltipPopup.IsOpen = false;
@@ -957,7 +1006,6 @@ public partial class PlayerBarView : UserControl
         }
         else if (hitBox.IsPointerOver)
         {
-            // Показываем tooltip при наведении мыши (как при колёсике)
             ShowVolumeTooltip(volumePercent, vm.MaxVolume, ratio);
         }
     }
@@ -1048,9 +1096,14 @@ public partial class PlayerBarView : UserControl
     {
         if (e.Key == Key.Escape)
         {
+            bool hadSeek = _isDraggingSeek;
+            bool hadVolume = _isDraggingVolume;
+
             CancelSeekDrag();
             CancelVolumeDrag();
-            e.Handled = true;
+
+            if (hadSeek || hadVolume)
+                e.Handled = true;
         }
     }
 

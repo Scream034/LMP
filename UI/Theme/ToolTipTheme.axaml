@@ -3,14 +3,14 @@
 
     <!-- 
          GLOBAL TOOLTIP THEME
-         Использует динамические ресурсы темы с fallback на hardcoded значения
-          -->
+         Использует динамические ресурсы темы
+    -->
 
     <Style Selector="ToolTip">
         <Setter Property="MaxWidth" Value="320" />
-        <Setter Property="Background" Value="{DynamicResource BgElevated}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlight}" />
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="Template">
             <ControlTemplate TargetType="ToolTip">
                 <Border x:Name="PART_LayoutRoot"
@@ -90,7 +90,7 @@
         </Setter>
     </Style>
 
-    <!-- ═══ INFO VARIANT (с иконкой) ═══ -->
+    <!-- ═══ INFO VARIANT (с акцентной нижней полосой) ═══ -->
     <Style Selector="ToolTip.info">
         <Setter Property="Template">
             <ControlTemplate TargetType="ToolTip">

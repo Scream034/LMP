@@ -34,6 +34,21 @@ class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
 
+        // ═══════════════════════════════════════════════════════════════
+        // КРИТИЧНО: Регистрируем обработчики исключений ДО всего остального.
+        //
+        // SocketsHttpHandler (HTTP/2 + TLS) может выбросить IOException 
+        // в SslStream.EnsureFullTlsFrameAsync на IO completion thread
+        // при отмене HTTP запросов (seek, epoch reset, dispose).
+        // Это known .NET runtime behavior — исключение невозможно поймать
+        // в user code, потому что оно происходит внутри runtime.
+        //
+        // Без этих обработчиков:
+        // - Debug: отладчик останавливается на first-chance exception  
+        // - Release: приложение крашится с необработанным исключением
+        // ═══════════════════════════════════════════════════════════════
+        SetupGlobalExceptionHandlers();
+
         try
         {
             // ═══ ЭТАП 1: Логгер (мгновенно) ═══
@@ -61,6 +76,102 @@ class Program
         {
             Log.Fatal($"Global crash: {ex.Message}\n{ex.StackTrace}");
         }
+    }
+
+    /// <summary>
+    /// Регистрирует глобальные обработчики исключений.
+    /// Должен вызываться ДО создания любых Task, HttpClient, etc.
+    /// </summary>
+    private static void SetupGlobalExceptionHandlers()
+    {
+        // 1. Unobserved Task Exceptions — подавляем ВСЕ, логируем когда можем.
+        //    Это ловит exceptions из Task'ов которые не были await'нуты
+        //    и собираются GC.
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            e.SetObserved(); // Предотвращает crash в любом случае
+            
+            try
+            {
+                var msg = e.Exception?.InnerException?.Message 
+                       ?? e.Exception?.Message 
+                       ?? "unknown";
+                Log.Debug($"[UnobservedTask] Suppressed: {msg}");
+            }
+            catch
+            {
+                // Логгер ещё не инициализирован — молча подавляем
+            }
+        };
+
+        // 2. Unhandled Exceptions на уровне AppDomain — 
+        //    ловит исключения из IO completion threads, finalizer thread, etc.
+        //    IsTerminating=true означает что CLR уже решил крашить процесс,
+        //    но мы хотя бы залогируем.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            try
+            {
+                if (e.ExceptionObject is Exception ex)
+                {
+                    // SSL/TLS ошибки из SocketsHttpHandler — не фатальные
+                    if (IsSslRelatedException(ex))
+                    {
+                        Log.Warn($"[AppDomain] SSL/TLS exception suppressed: {ex.Message}");
+                        return;
+                    }
+                    
+                    Log.Error($"[AppDomain] Unhandled: {ex.Message}", ex);
+                }
+                else
+                {
+                    Log.Error($"[AppDomain] Unhandled non-exception: {e.ExceptionObject}");
+                }
+            }
+            catch
+            {
+                // Логгер не готов — ничего не можем сделать
+            }
+        };
+    }
+
+    /// <summary>
+    /// Проверяет, связано ли исключение с SSL/TLS (known .NET HTTP/2 issue).
+    /// </summary>
+    private static bool IsSslRelatedException(Exception ex)
+    {
+        var current = ex;
+        while (current != null)
+        {
+            var typeName = current.GetType().FullName ?? "";
+            var msg = current.Message ?? "";
+
+            if (typeName.Contains("SslStream", StringComparison.Ordinal) ||
+                typeName.Contains("Ssl", StringComparison.OrdinalIgnoreCase) ||
+                typeName.Contains("Tls", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("secure channel", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("authentication", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("EnsureFullTlsFrame", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            current = current.InnerException;
+        }
+
+        // Проверяем AggregateException
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.InnerExceptions)
+            {
+                if (IsSslRelatedException(inner))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     public static AppBuilder BuildAvaloniaApp()
@@ -165,6 +276,9 @@ class Program
 
         // === ERROR ORCHESTRATOR ===
         services.AddSingleton<PlaybackErrorOrchestrator>();
+
+        // === Other Services ===
+        services.AddSingleton<DominantColorService>();
 
         // === ViewModels ===
         services.AddTransient<HomeViewModel>();

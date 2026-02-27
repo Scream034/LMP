@@ -58,7 +58,7 @@
                 <Button Content="{Binding ConfirmText}" 
                         Click="OnConfirmClick"
                         MinWidth="90" 
-                        Classes="accent"/>
+                        Classes="accent accent-base"/>
             </StackPanel>
         </StackPanel>
     </Border>

@@ -1,4 +1,5 @@
 ﻿using Avalonia.Controls;
+using Avalonia.Media;
 using LMP.Core.Audio;
 using LMP.Core.Helpers;
 using LMP.Core.Models;
@@ -22,6 +23,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     private readonly MusicLibraryManager _manager;
     private readonly IDialogService _dialog;
     private readonly TrackViewModelFactory _vmFactory;
+    private readonly DominantColorService _dominantColor;
 
     private readonly EventHandler<string> _languageChangedHandler;
 
@@ -50,6 +52,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     [Reactive] public int TrackCount { get; private set; }
     [Reactive] public TimeSpan TotalDuration { get; private set; }
     [Reactive] public string FormattedDuration { get; set; } = "";
+    [Reactive] public IBrush? HeaderBackground { get; private set; }
+    [Reactive] public bool IsLikedPlaylist { get; private set; }
 
     [Reactive] public bool CanEdit { get; private set; }
     [Reactive] public bool IsCloud { get; private set; }
@@ -105,13 +109,15 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         DownloadService downloads,
         MusicLibraryManager manager,
         IDialogService dialog,
-        TrackViewModelFactory vmFactory)
+        TrackViewModelFactory vmFactory,
+        DominantColorService dominantColor)
     {
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
         _dialog = dialog;
         _vmFactory = vmFactory;
+        _dominantColor = dominantColor;
 
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
@@ -345,6 +351,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         CanEdit = playlist.IsEditable;
         IsCloud = playlist.IsFromAccount;
         IsReadOnly = !playlist.IsEditable;
+        IsLikedPlaylist = playlistId == LibraryService.LikedPlaylistId;
 
         var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
         TrackCount = allIds.Count;
@@ -355,14 +362,49 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         await InitializeAsync(allIds);
 
-        _ = HydrateCacheStatusInBackgroundAsync();
+        // Загружаем градиент в фоне
+        _ = LoadHeaderGradientAsync();
 
+        _ = HydrateCacheStatusInBackgroundAsync();
         await CheckPlaybackStateAsync();
     }
 
     #endregion
 
     #region Private Methods
+
+    private async Task LoadHeaderGradientAsync()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(ThumbnailUrl))
+            {
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => HeaderBackground = null);
+                return;
+            }
+
+            // Тяжёлая работа по извлечению цвета остаётся в фоне
+            var dominantColor = await _dominantColor.GetDominantColorAsync(ThumbnailUrl);
+
+            // Создание UI-объектов (Brush, Stops) и присвоение свойства СТРОГО на UI-потоке
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (dominantColor == null)
+                {
+                    HeaderBackground = null;
+                }
+                else
+                {
+                    HeaderBackground = DominantColorService.CreateHeaderGradient(dominantColor.Value);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Playlist] Gradient failed: {ex.Message}");
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => HeaderBackground = null);
+        }
+    }
 
     private async Task HydrateCacheStatusInBackgroundAsync()
     {

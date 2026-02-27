@@ -270,6 +270,10 @@
   "Player_VolumeLevel": "Громкость: {0}% / {1}%",
   "Player_Loading_Duration": "Загрузка длительности...",
 
+  "Seek_CancelHint": "ESC или ПКМ для отмены",
+  "Seek_Cancelled": "Перемотка отменена",
+  "Seek_WaitHint": "Ожидание завершения...",
+
   "Track_Like": "Добавить в избранное",
   "Track_Unlike": "Убрать из избранного",
   "Track_Added": "Добавлено в избранное",

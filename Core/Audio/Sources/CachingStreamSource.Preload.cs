@@ -1,7 +1,3 @@
-// Core/Audio/Sources/CachingStreamSource.Preload.cs
-
-using static LMP.Core.Audio.AudioConstants;
-
 namespace LMP.Core.Audio.Sources;
 
 public sealed partial class CachingStreamSource
@@ -10,18 +6,8 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Фоновый цикл упреждающей загрузки чанков.
+    /// Все параметры берутся из <see cref="_config"/>.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Стратегия:</b></para>
-    /// <list type="number">
-    ///   <item>Приоритет: чанки впереди текущей позиции (preload ahead)</item>
-    ///   <item>После заполнения буфера впереди — докачка остальных (background fill)</item>
-    ///   <item>Все загрузки привязаны к текущей download epoch</item>
-    /// </list>
-    /// <para>
-    /// При seek эпоха сменится → linked CTS отменится → цикл подхватит новую эпоху.
-    /// </para>
-    /// </remarks>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
         int lastReportedProgress = -1;
@@ -32,7 +18,7 @@ public sealed partial class CachingStreamSource
         {
             try
             {
-                await Task.Delay(PreloadIntervalMs, ct);
+                await Task.Delay(_config.PreloadIntervalMs, ct);
 
                 if (_cacheEntry.IsComplete)
                     break;
@@ -40,7 +26,7 @@ public sealed partial class CachingStreamSource
                 int current = Volatile.Read(ref _currentChunk);
                 int pending = _activeDownloads.Count;
 
-                if (pending >= MaxConcurrentDownloads)
+                if (pending >= _config.MaxConcurrentDownloads)
                 {
                     idleCycles = 0;
                     continue;
@@ -50,12 +36,12 @@ public sealed partial class CachingStreamSource
                 bool activePreload = false;
                 int chunksAhead = 0;
 
-                // Связываем с текущей download epoch
                 var downloadToken = CurrentDownloadToken;
                 using var linkedCts = CancellationTokenSource
                     .CreateLinkedTokenSource(ct, downloadToken);
 
-                for (int i = 0; i <= PreloadAheadChunks && pending < MaxConcurrentDownloads; i++)
+                for (int i = 0; i <= _config.ReadAheadChunks
+                         && pending < _config.MaxConcurrentDownloads; i++)
                 {
                     int idx = current + i;
                     if (idx >= _cacheEntry.TotalChunks) break;
@@ -66,8 +52,8 @@ public sealed partial class CachingStreamSource
                     }
                     else if (!_activeDownloads.ContainsKey(idx))
                     {
-                        // Fire-and-forget с epoch token
-                        _ = EnsureChunkAsync(idx, linkedCts.Token);
+                        // Используем безопасный wrapper, чтобы отладчик не ловил Unobserved Exceptions
+                        _ = SafeEnsureChunkAsync(idx, linkedCts.Token);
                         pending++;
                         activePreload = true;
                         await Task.Delay(50, ct);
@@ -82,11 +68,11 @@ public sealed partial class CachingStreamSource
                 // ── Background fill ──
                 bool canBackgroundFill =
                     !activePreload
-                    && idleCycles >= BackgroundFillIdleCycles
-                    && pending < MaxConcurrentDownloads
-                    && chunksAhead >= MinBufferAheadForBackgroundFill
-                    && (MaxBackgroundChunksPerSession == 0
-                        || _backgroundChunksLoaded < MaxBackgroundChunksPerSession);
+                    && idleCycles >= _config.BackgroundFillIdleCycles
+                    && pending < _config.MaxConcurrentDownloads
+                    && chunksAhead >= _config.MinBufferAheadForBackgroundFill
+                    && (_config.MaxBackgroundChunksPerSession == 0
+                        || _backgroundChunksLoaded < _config.MaxBackgroundChunksPerSession);
 
                 if (canBackgroundFill)
                 {
@@ -96,9 +82,9 @@ public sealed partial class CachingStreamSource
                         && !IsChunkAvailable(target.Value)
                         && !_activeDownloads.ContainsKey(target.Value))
                     {
-                        _ = EnsureChunkAsync(target.Value, linkedCts.Token);
+                        _ = SafeEnsureChunkAsync(target.Value, linkedCts.Token);
                         _backgroundChunksLoaded++;
-                        await Task.Delay(BackgroundFillIntervalMs, ct);
+                        await Task.Delay(_config.BackgroundFillIntervalMs, ct);
                     }
                 }
 
@@ -112,7 +98,7 @@ public sealed partial class CachingStreamSource
                 }
 
                 // ── RAM eviction ──
-                if (_ramChunks.Count > MaxRamChunks)
+                if (_ramChunks.Count > _config.MaxRamChunks)
                     ReleaseRamBuffers();
             }
             catch (OperationCanceledException)
@@ -121,8 +107,32 @@ public sealed partial class CachingStreamSource
             }
             catch
             {
-                // Подавляем все ошибки в фоновом цикле — не валим приложение
+                // Подавляем ошибки в фоновом цикле
             }
+        }
+    }
+
+    /// <summary>
+    /// Безопасная обёртка для fire-and-forget загрузок.
+    /// Предотвращает UnobservedTaskException (и остановки отладчика),
+    /// если сеть обрывается в фоновой загрузке.
+    /// </summary>
+    private async Task SafeEnsureChunkAsync(int index, CancellationToken ct)
+    {
+        try
+        {
+            await EnsureChunkAsync(index, ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exceptions.ChunkDownloadFatalException ex)
+        {
+            Log.Debug($"[Preload] Chunk {index} fatal error: {ex.Message}");
+            // Не крашим приложение. Decoder loop дойдёт до этого чанка, 
+            // вызовет EnsureChunkAsync сам и корректно передаст ошибку в UI.
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[Preload] Chunk {index} unexpected error: {ex.Message}");
         }
     }
 
@@ -130,10 +140,6 @@ public sealed partial class CachingStreamSource
 
     #region Helpers
 
-    /// <summary>
-    /// Находит ближайший незагруженный чанк относительно текущей позиции.
-    /// Ищет сначала вперёд, потом назад.
-    /// </summary>
     private int? FindNearestMissingChunk(int currentChunk)
     {
         if (_cacheEntry == null) return null;
@@ -188,9 +194,6 @@ public sealed partial class CachingStreamSource
         return ranges;
     }
 
-    /// <summary>
-    /// Обновляет URL потока (при 403 Forbidden).
-    /// </summary>
     private async Task RefreshUrlAsync(CancellationToken ct)
     {
         if (_urlRefresher == null) return;

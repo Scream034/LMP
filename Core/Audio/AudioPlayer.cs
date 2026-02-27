@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using LMP.Core.Audio.Interfaces;
+using LMP.Core.Models;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
@@ -11,6 +12,11 @@ public sealed class AudioPlayerOptions
     public int MaxRetryAttempts { get; init; } = AudioConstants.MaxRetryAttempts;
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMilliseconds(RetryDelayMs);
     public bool UseNullBackend { get; init; }
+
+    /// <summary>
+    /// Конфигурация стриминга. null = текущий глобальный профиль из <see cref="AudioSourceFactory"/>.
+    /// </summary>
+    public StreamingConfig? StreamingConfig { get; init; }
 }
 
 /// <summary>
@@ -658,6 +664,12 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     #endregion
 
     #region Statistics
+
+    /// <summary>
+    /// Возвращает текущий pipeline для прямого доступа к source.
+    /// Используется AudioEngine для Suspend/Resume.
+    /// </summary>
+    internal AudioPipeline? GetActivePipeline() => _activePipeline;
 
     public double BufferProgress => _activePipeline?.Source.BufferProgress ?? 0;
     public bool IsFullyBuffered => _activePipeline?.Source.IsFullyBuffered ?? false;

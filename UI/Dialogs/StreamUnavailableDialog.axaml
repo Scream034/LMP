@@ -89,7 +89,7 @@
                 <Button Content="{Binding CloseButtonText}"
                         Command="{Binding CloseCommand}"
                         MinWidth="120"
-                        Classes="accent" />
+                        Classes="accent accent-base" />
             </StackPanel>
 
         </Grid>
