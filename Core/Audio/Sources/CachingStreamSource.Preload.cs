@@ -4,10 +4,6 @@ public sealed partial class CachingStreamSource
 {
     #region Preload Loop
 
-    /// <summary>
-    /// Фоновый цикл упреждающей загрузки чанков.
-    /// Все параметры берутся из <see cref="_config"/>.
-    /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
         int lastReportedProgress = -1;
@@ -18,10 +14,17 @@ public sealed partial class CachingStreamSource
         {
             try
             {
+                // Проверяем suspend gate
+                _suspendGate.Wait(ct);
+
                 await Task.Delay(_config.PreloadIntervalMs, ct);
 
                 if (_cacheEntry.IsComplete)
                     break;
+
+                // ═══ КРИТИЧНО: Захватываем epoch И token атомарно ═══
+                var epochAtStart = Interlocked.Read(ref _downloadEpoch);
+                var downloadToken = CurrentDownloadToken;
 
                 int current = Volatile.Read(ref _currentChunk);
                 int pending = _activeDownloads.Count;
@@ -36,13 +39,16 @@ public sealed partial class CachingStreamSource
                 bool activePreload = false;
                 int chunksAhead = 0;
 
-                var downloadToken = CurrentDownloadToken;
-                using var linkedCts = CancellationTokenSource
-                    .CreateLinkedTokenSource(ct, downloadToken);
-
                 for (int i = 0; i <= _config.ReadAheadChunks
                          && pending < _config.MaxConcurrentDownloads; i++)
                 {
+                    // Проверяем что epoch не сменился (seek произошёл)
+                    if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
+                    {
+                        Log.Debug("[CachingSource] Preload: epoch changed, re-evaluating");
+                        break;
+                    }
+
                     int idx = current + i;
                     if (idx >= _cacheEntry.TotalChunks) break;
 
@@ -52,13 +58,20 @@ public sealed partial class CachingStreamSource
                     }
                     else if (!_activeDownloads.ContainsKey(idx))
                     {
-                        // Используем безопасный wrapper, чтобы отладчик не ловил Unobserved Exceptions
-                        _ = SafeEnsureChunkAsync(idx, linkedCts.Token);
+                        _ = SafeEnsureChunkAsync(idx, downloadToken);
                         pending++;
                         activePreload = true;
                         await Task.Delay(50, ct);
                     }
                 }
+
+                // Если epoch сменился, пропускаем остальное
+                if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
+                {
+                    Log.Debug("[CachingSource] Preload: epoch changed during preload ahead, re-evaluating");
+                    continue;
+                }
+                
 
                 if (!activePreload)
                     idleCycles++;
@@ -76,13 +89,17 @@ public sealed partial class CachingStreamSource
 
                 if (canBackgroundFill)
                 {
+                    // Ещё раз проверяем epoch
+                    if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
+                        continue;
+
                     int? target = FindNearestMissingChunk(current);
 
                     if (target.HasValue
                         && !IsChunkAvailable(target.Value)
                         && !_activeDownloads.ContainsKey(target.Value))
                     {
-                        _ = SafeEnsureChunkAsync(target.Value, linkedCts.Token);
+                        _ = SafeEnsureChunkAsync(target.Value, downloadToken);
                         _backgroundChunksLoaded++;
                         await Task.Delay(_config.BackgroundFillIntervalMs, ct);
                     }
@@ -112,11 +129,6 @@ public sealed partial class CachingStreamSource
         }
     }
 
-    /// <summary>
-    /// Безопасная обёртка для fire-and-forget загрузок.
-    /// Предотвращает UnobservedTaskException (и остановки отладчика),
-    /// если сеть обрывается в фоновой загрузке.
-    /// </summary>
     private async Task SafeEnsureChunkAsync(int index, CancellationToken ct)
     {
         try
@@ -126,13 +138,11 @@ public sealed partial class CachingStreamSource
         catch (OperationCanceledException) { }
         catch (Exceptions.ChunkDownloadFatalException ex)
         {
-            Log.Debug($"[Preload] Chunk {index} fatal error: {ex.Message}");
-            // Не крашим приложение. Decoder loop дойдёт до этого чанка, 
-            // вызовет EnsureChunkAsync сам и корректно передаст ошибку в UI.
+            Log.Debug($"[Preload] Chunk {index} fatal: {ex.Message}");
         }
         catch (Exception ex)
         {
-            Log.Debug($"[Preload] Chunk {index} unexpected error: {ex.Message}");
+            Log.Debug($"[Preload] Chunk {index} error: {ex.Message}");
         }
     }
 
@@ -159,7 +169,6 @@ public sealed partial class CachingStreamSource
         return null;
     }
 
-    /// <inheritdoc/>
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
     {
         if (_isOfflineMode)

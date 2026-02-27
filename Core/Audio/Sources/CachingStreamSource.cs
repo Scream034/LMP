@@ -62,7 +62,7 @@ public sealed partial class CachingStreamSource : IAudioSource
     private readonly SemaphoreSlim _downloadSlots;
 
     // ── Epoch-based cancellation ──
-    private volatile int _downloadEpoch;
+    private long _downloadEpoch;
     private CancellationTokenSource? _downloadCts;
     private readonly Lock _epochLock = new();
 
@@ -347,50 +347,24 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             if (oldCts != null)
             {
-                // Запускаем мягкую отмену.
-                // НЕ вызываем Cancel() сразу. Даем HttpClient 50мс чтобы завершить
-                // текущее чтение, а затем вызываем Cancel.
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        // 1. Сначала отменяем через CancelAfter, чтобы внутренний таймер
-                        // HttpClient мог аккуратно завершить сокеты.
-                        oldCts.CancelAfter(50);
+                // Синхронный Cancel — все ReadAsync/SendAsync мгновенно 
+                // получат OperationCanceledException
+                try { oldCts.Cancel(); }
+                catch (ObjectDisposedException) { }
 
-                        // 2. Ждем, чтобы HTTP запросы реально упали с TaskCanceledException
-                        await Task.Delay(200);
-                    }
-                    catch { }
-                    finally
-                    {
-                        try { oldCts.Dispose(); } catch { }
-                    }
-                });
+                // Dispose через 5 секунд — даём IO completion threads 
+                // время вернуть результат. Иначе ValueTask становится
+                // "orphaned" и вызывает unobserved exception в SslStream.
+                Timer? disposer = null;
+                disposer = new Timer(_ =>
+                {
+                    try { oldCts.Dispose(); } catch { }
+                    try { disposer?.Dispose(); } catch { }
+                }, null, 5000, Timeout.Infinite);
             }
 
             return _downloadCts.Token;
         }
-    }
-
-    /// <summary>
-    /// Graceful отмена CTS: сначала CancelAfter с коротким таймаутом,
-    /// затем dispose. Предотвращает crash в SslStream при обрыве TLS фрейма.
-    /// </summary>
-    private static async Task GracefulCancelAsync(CancellationTokenSource cts)
-    {
-        try
-        {
-            // Даём 50мс на завершение текущего TLS фрейма
-            cts.CancelAfter(TimeSpan.FromMilliseconds(50));
-
-            // Ждём чтобы Cancel успел пройти
-            await Task.Delay(60);
-        }
-        catch (ObjectDisposedException) { }
-
-        try { cts.Dispose(); }
-        catch (ObjectDisposedException) { }
     }
 
     /// <summary>CancellationToken текущей эпохи загрузки.</summary>

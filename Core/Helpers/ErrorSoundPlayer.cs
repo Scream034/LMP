@@ -13,7 +13,6 @@ public static partial class ErrorSoundPlayer
 
     // Windows MessageBeep types
     private const uint MB_ICONERROR = 0x00000010;
-    private const uint MB_ICONWARNING = 0x00000030;
     private const uint MB_OK = 0x00000000;
 
     /// <summary>

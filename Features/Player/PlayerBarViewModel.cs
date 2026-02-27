@@ -1185,8 +1185,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
     protected override void OnSuspend()
     {
         _isSuspended = true;
+
+        // 1. Полностью глушим таймеры (0% CPU)
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
+
+        // 2. Скрываем UI-элемент скорости, чтобы Avalonia не тратила ресурсы на его layout
+        DownloadSpeedText = "";
 
         if (_viewRef?.TryGetTarget(out var view) == true)
             view.OnSuspend();
@@ -1195,14 +1200,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
     protected override void OnResume()
     {
         _isSuspended = false;
+
+        // Включаем таймеры обратно
         _fallbackPositionTimer.Start();
         _speedUpdateTimer.Start();
 
+        // Подхватываем Duration, которая могла прийти от движка пока окно было свёрнуто
         var realDur = _audio.TotalDuration;
         if (realDur.TotalSeconds > 0)
         {
             Duration = realDur;
             DurationSeconds = Duration.TotalSeconds;
+
+            // Запрашиваем перерисовку строки с длительностью только при разворачивании
             this.RaisePropertyChanged(nameof(DurationTooltip));
         }
 

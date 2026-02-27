@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using LMP.Core.Exceptions;
 using LMP.Core.Youtube.Utils;
@@ -145,6 +146,7 @@ public sealed partial class CachingStreamSource
             try { await existingTask.WaitAsync(ct); }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
             catch (ChunkDownloadFatalException) { throw; }
+            catch { }
 
             if (IsChunkAvailable(index)) return;
         }
@@ -152,21 +154,36 @@ public sealed partial class CachingStreamSource
         ct.ThrowIfCancellationRequested();
         CheckCircuitBreaker(index);
 
-        // Retry loop: network errors + 403 refresh
         int maxAttempts = _config.MaxNetworkRetries + _config.Max403BeforeCircuitBreak;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
 
+            // Перепроверяем — мог загрузиться пока ждали
+            if (IsChunkAvailable(index)) return;
+
             var downloadTask = DownloadChunkCoreAsync(index, ct);
 
             if (_activeDownloads.TryAdd(index, downloadTask))
             {
                 ChunkDownloadResult result;
-                try { result = await downloadTask; }
+                try
+                {
+                    result = await downloadTask;
+                }
                 catch (ChunkDownloadFatalException) { throw; }
-                finally { _activeDownloads.TryRemove(index, out _); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Epoch change — можно retry
+                    _activeDownloads.TryRemove(index, out _);
+                    await Task.Delay(50, ct);
+                    continue;
+                }
+                finally
+                {
+                    _activeDownloads.TryRemove(index, out _);
+                }
 
                 switch (result)
                 {
@@ -174,12 +191,10 @@ public sealed partial class CachingStreamSource
                         return;
 
                     case ChunkDownloadResult.Forbidden403:
-                        // Refresh URL и повторить
                         await CoordinatedRefreshAsync(ct);
                         continue;
 
                     case ChunkDownloadResult.NetworkError:
-                        // Exponential backoff
                         int delay = ComputeRetryDelay(attempt);
                         Log.Warn($"[CachingSource] Chunk {index}: network retry " +
                                  $"{attempt + 1}/{maxAttempts}, delay={delay}ms");
@@ -187,34 +202,42 @@ public sealed partial class CachingStreamSource
                         continue;
 
                     case ChunkDownloadResult.SlotTimeout:
-                        // Короткая пауза и повтор
-                        await Task.Delay(100, ct);
+                        // Слоты заняты — короткая пауза
+                        await Task.Delay(200, ct);
                         continue;
 
                     case ChunkDownloadResult.Cancelled:
+                        // Отмена НЕ по нашему ct — epoch change
+                        if (!ct.IsCancellationRequested)
+                        {
+                            Log.Debug($"[CachingSource] Chunk {index}: cancelled (epoch change), retry");
+                            await Task.Delay(50, ct);
+                            continue;
+                        }
+                        // Отмена по нашему ct — выходим
                         ct.ThrowIfCancellationRequested();
                         return;
 
                     case ChunkDownloadResult.Fatal:
-                        // Уже выброшено из DownloadChunkCoreAsync
                         return;
                 }
             }
             else
             {
-                // Другой поток уже качает — ждём его
+                // Другой поток уже качает — ждём его результат
                 if (_activeDownloads.TryGetValue(index, out var concurrentTask))
                 {
                     try { await concurrentTask.WaitAsync(ct); }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
                     catch (ChunkDownloadFatalException) { throw; }
+                    catch { }
                 }
 
                 if (IsChunkAvailable(index)) return;
+                // Не загрузился — retry в следующей итерации
             }
         }
 
-        // Все попытки исчерпаны
         throw new ChunkDownloadFatalException(
             $"Failed to download chunk {index} after {maxAttempts} attempts",
             chunkIndex: index,
@@ -270,201 +293,152 @@ public sealed partial class CachingStreamSource
 
         try
         {
-            // Здесь оставляем 'ct', чтобы мгновенно отменить ожидание свободного слота
             gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct);
             if (!gotSlot)
                 return ChunkDownloadResult.SlotTimeout;
 
-            if (_cacheEntry.IsChunkDownloaded(index))
-                return ChunkDownloadResult.Success;
-
-            ct.ThrowIfCancellationRequested();
-
-            long start = (long)index * _chunkSize;
-            long end = Math.Min(start + _chunkSize - 1, _contentLength - 1);
-            int rn = Interlocked.Increment(ref _requestSequenceNumber);
-
-            // ═══════════════════════════════════════════════════════════════
-            // ИЗМЕНЕНИЕ ЗДЕСЬ: Независимый токен для HTTP запроса.
-            // ═══════════════════════════════════════════════════════════════
-            using var httpCts = new CancellationTokenSource(_config.DownloadTimeoutMs);
-
-            // Если сработал 'ct' (пользователь сделал Seek), даем HTTP клиенту 
-            // 50мс на мягкое закрытие TLS соединения, чтобы не крашнуть пул потоков.
-            using var reg = ct.Register(() =>
+            if (_cacheEntry.IsChunkDownloaded(index) || ct.IsCancellationRequested)
             {
-                try { httpCts.CancelAfter(50); } catch { }
-            });
-
-            using var request = CreateChunkRequest(index, start, end, rn);
-
-            Log.Debug($"[CachingSource] Chunk {index}: GET rn={rn}, range={start}-{end}");
-
-            HttpResponseMessage? response = null;
-            try
-            {
-                // ИСПОЛЬЗУЕМ httpCts.Token вместо timeoutCts.Token
-                response = await _httpClient.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, httpCts.Token);
-            }
-            catch (HttpRequestException ex) when (IsSslRelated(ex))
-            {
-                Log.Warn($"[CachingSource] Chunk {index} SSL error on send: {ex.Message}");
-                return ct.IsCancellationRequested
-                    ? ChunkDownloadResult.Cancelled
-                    : ChunkDownloadResult.NetworkError;
-            }
-            catch (IOException ex) when (IsSslRelated(ex))
-            {
-                Log.Warn($"[CachingSource] Chunk {index} SSL/IO error on send: {ex.Message}");
-                return ct.IsCancellationRequested
-                    ? ChunkDownloadResult.Cancelled
-                    : ChunkDownloadResult.NetworkError;
+                return _cacheEntry.IsChunkDownloaded(index)
+                    ? ChunkDownloadResult.Success
+                    : ChunkDownloadResult.Cancelled;
             }
 
-            ct.ThrowIfCancellationRequested();
+            // Освобождаем slot СРАЗУ — HTTP запрос будет жить своей жизнью
+            // Slot нужен только для throttling количества НОВЫХ запросов
+            try { _downloadSlots.Release(); } catch { }
+            gotSlot = false;
 
-            using (response)
-            {
-                // ── 403 Handling ──
-                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                {
-                    int count = Interlocked.Increment(ref _consecutive403Count);
-                    Log.Warn($"[CachingSource] 403 for chunk {index} " +
-                             $"(consecutive={count}, rn={rn})");
-                    return ChunkDownloadResult.Forbidden403;
-                }
-
-                Interlocked.Exchange(ref _consecutive403Count, 0);
-
-                // ── UMP detection ──
-                if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
-                {
-                    Log.Error($"[CachingSource] Chunk {index}: UMP format — FATAL");
-                    throw new ChunkDownloadFatalException(
-                        "YouTube returned encrypted UMP format",
-                        chunkIndex: index,
-                        consecutiveFailures: 0,
-                        reason: ChunkDownloadFailureReason.UmpFormat,
-                        trackId: _trackId);
-                }
-
-                response.EnsureSuccessStatusCode();
-
-                byte[] data;
-                try
-                {
-                    // ИСПОЛЬЗУЕМ httpCts.Token
-                    data = await response.Content.ReadAsByteArrayAsync(httpCts.Token);
-                }
-                catch (HttpRequestException ex) when (IsSslRelated(ex))
-                {
-                    Log.Warn($"[CachingSource] Chunk {index} SSL error on read: {ex.Message}");
-                    return ct.IsCancellationRequested
-                        ? ChunkDownloadResult.Cancelled
-                        : ChunkDownloadResult.NetworkError;
-                }
-                catch (IOException ex) when (IsSslRelated(ex))
-                {
-                    Log.Warn($"[CachingSource] Chunk {index} SSL/IO error on read: {ex.Message}");
-                    return ct.IsCancellationRequested
-                        ? ChunkDownloadResult.Cancelled
-                        : ChunkDownloadResult.NetworkError;
-                }
-
-                ct.ThrowIfCancellationRequested();
-
-                if (index == 0)
-                    LogFirstChunkDiagnostics(data);
-
-                _ramChunks.TryAdd(index, data);
-
-                try
-                {
-                    await _cacheManager.WriteChunkAsync(
-                        _cacheKey, index, data, CancellationToken.None);
-                }
-                catch (IOException ex)
-                {
-                    Log.Warn($"[CachingSource] Disk write failed for chunk {index}: {ex.Message}");
-                }
-
-                if (_ramChunks.Count > _config.MaxRamChunks)
-                    EvictDistantRamChunks();
-
-                return ChunkDownloadResult.Success;
-            }
+            return await DownloadChunkHttpAsync(index, ct);
         }
-        catch (ChunkDownloadFatalException)
-        {
-            throw;
-        }
-        catch (OperationCanceledException)
+        catch (ChunkDownloadFatalException) { throw; }
+        catch (OperationCanceledException) { return ChunkDownloadResult.Cancelled; }
+        catch (Exception) when (ct.IsCancellationRequested || _disposed)
         {
             return ChunkDownloadResult.Cancelled;
         }
-        catch (HttpRequestException ex)
-        {
-            if (!ct.IsCancellationRequested)
-                Log.Warn($"[CachingSource] Chunk {index} network error: {ex.Message}");
-            return ct.IsCancellationRequested
-                ? ChunkDownloadResult.Cancelled
-                : ChunkDownloadResult.NetworkError;
-        }
-        catch (IOException ex)
-        {
-            if (!ct.IsCancellationRequested)
-                Log.Warn($"[CachingSource] Chunk {index} IO error: {ex.Message}");
-            return ct.IsCancellationRequested
-                ? ChunkDownloadResult.Cancelled
-                : ChunkDownloadResult.NetworkError;
-        }
         catch (Exception ex)
         {
-            if (!ct.IsCancellationRequested)
-                Log.Warn($"[CachingSource] Chunk {index} unexpected: {ex.Message}");
-            return ct.IsCancellationRequested
-                ? ChunkDownloadResult.Cancelled
-                : ChunkDownloadResult.NetworkError;
+            Log.Warn($"[CachingSource] Chunk {index} unexpected: {ex.Message}");
+            return ChunkDownloadResult.NetworkError;
         }
         finally
         {
             if (gotSlot)
             {
-                try { _downloadSlots.Release(); }
-                catch (ObjectDisposedException) { }
+                try { _downloadSlots.Release(); } catch { }
             }
         }
     }
 
     /// <summary>
-    /// Проверяет, связана ли ошибка с SSL/TLS.
+    /// HTTP загрузка чанка. ВСЕГДА await'ит до конца — никогда не бросает
+    /// HTTP операцию "в полёте". При отмене ct — просто отбрасывает результат.
     /// </summary>
-    private static bool IsSslRelated(Exception ex)
+    private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(int index, CancellationToken ct)
     {
-        // Проверяем всю цепочку inner exceptions
-        var current = ex;
-        while (current != null)
+        long start = (long)index * _chunkSize;
+        long end = Math.Min(start + _chunkSize - 1, _contentLength - 1);
+        int rn = Interlocked.Increment(ref _requestSequenceNumber);
+
+        Log.Debug($"[CachingSource] Chunk {index}: GET rn={rn}, range={start}-{end}");
+
+        using var request = CreateChunkRequest(index, start, end, rn);
+
+        // ═══ SEND — всегда ждём до конца ═══
+        HttpResponseMessage response;
+        try
         {
-            string msg = current.Message;
-            string typeName = current.GetType().Name;
-
-            if (typeName.Contains("Ssl", StringComparison.OrdinalIgnoreCase) ||
-                typeName.Contains("Tls", StringComparison.OrdinalIgnoreCase) ||
-                typeName.Contains("Authentication", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (msg.Contains("SSL", StringComparison.OrdinalIgnoreCase) ||
-                msg.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
-                msg.Contains("secure channel", StringComparison.OrdinalIgnoreCase) ||
-                msg.Contains("authentication", StringComparison.OrdinalIgnoreCase) ||
-                msg.Contains("decryption", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            current = current.InnerException;
+            response = await _httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+        }
+        catch (TaskCanceledException)
+        {
+            // HttpClient.Timeout
+            return ChunkDownloadResult.NetworkError;
+        }
+        catch (HttpRequestException)
+        {
+            return ChunkDownloadResult.NetworkError;
         }
 
-        return false;
+        using (response)
+        {
+            // Проверяем отмену ПОСЛЕ завершения SendAsync
+            if (ct.IsCancellationRequested)
+                return ChunkDownloadResult.Cancelled;
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                int count = Interlocked.Increment(ref _consecutive403Count);
+                Log.Warn($"[CachingSource] 403 for chunk {index} (consecutive={count})");
+                return ChunkDownloadResult.Forbidden403;
+            }
+
+            Interlocked.Exchange(ref _consecutive403Count, 0);
+
+            if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
+            {
+                throw new ChunkDownloadFatalException(
+                    "YouTube returned encrypted UMP format",
+                    chunkIndex: index, consecutiveFailures: 0,
+                    reason: ChunkDownloadFailureReason.UmpFormat,
+                    trackId: _trackId);
+            }
+
+            response.EnsureSuccessStatusCode();
+
+            // ═══ READ — всегда ждём до конца ═══
+            byte[] chunkData;
+            try
+            {
+                chunkData = await response.Content.ReadAsByteArrayAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[CachingSource] Chunk {index} read: {ex.Message}");
+                return ChunkDownloadResult.NetworkError;
+            }
+
+            // Проверяем отмену ПОСЛЕ чтения
+            if (ct.IsCancellationRequested)
+                return ChunkDownloadResult.Cancelled;
+
+            // ═══ VALIDATE ═══
+            int totalBytesToRead = (int)(end - start + 1);
+
+            if (chunkData.Length < totalBytesToRead)
+            {
+                Log.Warn($"[CachingSource] Chunk {index} incomplete: " +
+                         $"{chunkData.Length}/{totalBytesToRead}");
+                return ChunkDownloadResult.NetworkError;
+            }
+
+            if (chunkData.Length > totalBytesToRead)
+            {
+                var trimmed = new byte[totalBytesToRead];
+                Array.Copy(chunkData, trimmed, totalBytesToRead);
+                chunkData = trimmed;
+            }
+
+            // ═══ SAVE ═══
+            _ramChunks.TryAdd(index, chunkData);
+
+            try
+            {
+                await _cacheManager.WriteChunkAsync(
+                    _cacheKey, index, chunkData, CancellationToken.None);
+            }
+            catch (IOException ex)
+            {
+                Log.Warn($"[CachingSource] Disk write chunk {index}: {ex.Message}");
+            }
+
+            if (_ramChunks.Count > _config.MaxRamChunks)
+                EvictDistantRamChunks();
+
+            return ChunkDownloadResult.Success;
+        }
     }
 
     #endregion
@@ -543,24 +517,6 @@ public sealed partial class CachingStreamSource
         url = UrlEx.SetQueryParameter(url, "rn", rn.ToString());
         url = UrlEx.SetQueryParameter(url, "rbuf", "0");
         return url;
-    }
-
-    private static void LogFirstChunkDiagnostics(byte[] data)
-    {
-        if (data.Length < 8) return;
-
-        var hex = string.Join(" ", data.Take(16).Select(b => b.ToString("X2")));
-        Log.Debug($"[CachingSource] First chunk bytes: {hex}");
-
-        if (data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3)
-            Log.Debug("[CachingSource] ✅ Valid WebM/EBML container");
-
-        if (data.Length >= 8)
-        {
-            var ftyp = System.Text.Encoding.ASCII.GetString(data, 4, 4);
-            if (ftyp == "ftyp")
-                Log.Debug("[CachingSource] ✅ Valid MP4 container");
-        }
     }
 
     #endregion

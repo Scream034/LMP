@@ -421,24 +421,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         ];
     }
 
-    private static string GetStreamErrorMessage(StreamUnavailableException exception)
-    {
-        var L = LocalizationService.Instance;
-
-        return exception.Reason switch
-        {
-            StreamUnavailableReason.Forbidden403 => L["Error_Stream_Forbidden"],
-            StreamUnavailableReason.RegionBlocked => L["Error_Stream_RegionBlocked"],
-            StreamUnavailableReason.AgeRestricted => L["Error_Stream_AgeRestricted"],
-            StreamUnavailableReason.Private => L["Error_Stream_Private"],
-            StreamUnavailableReason.AllClientsFailed => L["Error_Stream_AllClientsFailed"],
-            StreamUnavailableReason.LiveStream => L["Error_Stream_LiveStream"],
-            StreamUnavailableReason.Removed => L["Error_Stream_Removed"],
-            StreamUnavailableReason.PaymentRequired => L["Error_Stream_PaymentRequired"],
-            _ => exception.Message
-        };
-    }
-
     private static string GetChunkErrorMessage(ChunkDownloadFatalException exception)
     {
         var L = LocalizationService.Instance;

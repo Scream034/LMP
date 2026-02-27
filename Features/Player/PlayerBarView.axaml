@@ -546,7 +546,7 @@
                 <!--  Queue + Duration + Format  -->
                 <StackPanel
                     Grid.Column="4"
-                    Width="140"
+                    Width="180"
                     VerticalAlignment="Center"
                     Spacing="4">
                     <Grid ColumnDefinitions="*,*">

@@ -255,7 +255,7 @@ class Program
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
 
-        services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));
+        services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.CreateClient()));
         services.AddSingleton<SigCipherDecryptor>();
         services.AddSingleton<NTokenDecryptor>();
 
