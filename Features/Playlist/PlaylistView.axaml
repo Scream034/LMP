@@ -11,7 +11,6 @@
     x:CompileBindings="True">
 
     <UserControl.Styles>
-        <!-- GridSplitter стиль -->
         <Style Selector="GridSplitter.header-splitter">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="MinHeight" Value="6" />
@@ -30,56 +29,38 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180" MaxHeight="340" />
+            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180"
+                MaxHeight="340" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- ═══════════════════════════════════════════════════════════════ -->
-        <!-- HEADER: градиент + Viewbox для масштабирования                 -->
-        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ═══ HEADER ═══ -->
         <Panel Grid.Row="0">
-            <!-- 1. Базовый фон (решает проблему FallbackValue) -->
+            <!-- 1. Базовый фон -->
             <Border Background="{DynamicResource BgPrimaryBrush}" />
-            
-            <!-- 2. Градиентный фон (если загрузился) и контент -->
-            <Border Background="{Binding HeaderBackground}" Padding="32,24,32,24">
+
+            <!-- 2. Градиентный фон (для обычных плейлистов) -->
+            <Border Background="{Binding HeaderBackground}"
+                IsVisible="{Binding !IsLikedPlaylist}"
+                Padding="32,24,32,24">
                 <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
                     HorizontalAlignment="Left" VerticalAlignment="Bottom">
-
                     <Grid ColumnDefinitions="Auto, *" Width="840">
-
                         <!-- COVER -->
                         <Border Grid.Column="0"
                             Width="180" Height="180"
-                            CornerRadius="8"
-                            ClipToBounds="True"
+                            CornerRadius="8" ClipToBounds="True"
                             Background="{DynamicResource BgSkeletonBrush}"
                             BoxShadow="{StaticResource CardShadow}">
                             <Panel>
-                                <!-- Liked Playlist: Heart Icon -->
-                                <mi:MaterialIcon Kind="Heart"
-                                    Width="64" Height="64"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Center"
-                                    IsVisible="{Binding IsLikedPlaylist}" />
-
-                                <!-- Обычный плейлист без обложки -->
+                                <!-- Placeholder для обычных плейлистов без обложки -->
                                 <mi:MaterialIcon Kind="MusicNote"
                                     Width="64" Height="64"
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     HorizontalAlignment="Center"
-                                    VerticalAlignment="Center">
-                                    <mi:MaterialIcon.IsVisible>
-                                        <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                            <Binding Path="ThumbnailUrl"
-                                                Converter="{StaticResource NullToVisible}"
-                                                ConverterParameter="invert" />
-                                            <Binding Path="!IsLikedPlaylist" />
-                                        </MultiBinding>
-                                    </mi:MaterialIcon.IsVisible>
-                                </mi:MaterialIcon>
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding ThumbnailUrl, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
 
                                 <!-- Web Image -->
                                 <Image
@@ -98,16 +79,14 @@
 
                         <!-- INFO & ACTIONS -->
                         <Grid Grid.Column="1" Margin="32,0,0,0" RowDefinitions="*, Auto">
-
-                            <!-- Заголовок и Метаданные (сверху) -->
-                            <StackPanel Grid.Row="0" VerticalAlignment="Bottom" Margin="0,0,0,24">
+                            <StackPanel Grid.Row="0" VerticalAlignment="Bottom"
+                                Margin="0,0,0,24">
                                 <TextBlock Text="{Binding PlaylistName}"
                                     FontSize="42" FontWeight="Black"
                                     Foreground="{DynamicResource TextPrimaryBrush}"
                                     Margin="0,0,0,8"
                                     TextWrapping="Wrap" MaxLines="2"
                                     ClipToBounds="False" />
-
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock Text="{Binding FormattedTrackCount}"
                                         FontWeight="SemiBold"
@@ -119,12 +98,9 @@
                                 </StackPanel>
                             </StackPanel>
 
-                            <!-- Кнопки + Сепаратор + Фильтр (снизу на одной линии) -->
                             <StackPanel Grid.Row="1"
                                 Orientation="Horizontal" Spacing="12"
                                 VerticalAlignment="Center">
-
-                                <!-- Play/Pause -->
                                 <Button Classes="playback-btn-main accent-base"
                                     Command="{Binding PlayAllCommand}"
                                     Width="48" Height="48" CornerRadius="24"
@@ -136,53 +112,137 @@
                                             IsVisible="{Binding IsPlayingThisPlaylist}" />
                                     </Panel>
                                 </Button>
-
-                                <!-- Shuffle -->
                                 <Button Classes="playback-btn"
                                     Command="{Binding ShufflePlayCommand}"
                                     Width="40" Height="40" CornerRadius="20"
                                     ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
-                                    <mi:MaterialIcon Kind="ShuffleVariant" Width="20" Height="20"
+                                    <mi:MaterialIcon Kind="ShuffleVariant" Width="20"
+                                        Height="20"
                                         Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                                 </Button>
-
-                                <!-- Add to Queue -->
                                 <Button Classes="playback-btn"
                                     Command="{Binding AddToQueueCommand}"
                                     Width="40" Height="40" CornerRadius="20"
                                     ToolTip.Tip="{Binding L[Queue_Add]}">
-                                    <mi:MaterialIcon Kind="PlaylistPlus" Width="20" Height="20" />
+                                    <mi:MaterialIcon Kind="PlaylistPlus" Width="20"
+                                        Height="20" />
                                 </Button>
-
-                                <!-- Download All -->
                                 <Button Classes="playback-btn"
                                     Command="{Binding DownloadAllCommand}"
                                     Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="Download All">
+                                    ToolTip.Tip="{Binding L[Playlist_DownloadAll]}">
                                     <mi:MaterialIcon Kind="Download" Width="20" Height="20"
                                         Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                                 </Button>
-
-                                <!-- Sync -->
                                 <Button Classes="playback-btn"
                                     Command="{Binding RefreshPlaylistCommand}"
                                     IsVisible="{Binding IsCloud}"
                                     Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="Sync with YouTube">
+                                    ToolTip.Tip="{Binding L[Playlist_SyncWithCloud]}">
                                     <mi:MaterialIcon Kind="Sync" Width="20" Height="20" />
                                 </Button>
-
-                                <!-- Тонкий вертикальный разделитель -->
                                 <Border Width="1" Height="24"
                                     Background="{DynamicResource BgHighlightBrush}"
                                     Margin="8,0" />
-
-                                <!-- FilterBar теперь на одной линии с кнопками -->
                                 <controls:FilterBar
                                     FilterText="{Binding FilterQuery}"
                                     Watermark="{Binding L[Search_LocalFilterTitle]}"
                                     Width="220" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </Viewbox>
+            </Border>
 
+            <!-- 3. Liked Playlist: градиент СВЕРХУ ВНИЗ + Heart обложка -->
+            <Border IsVisible="{Binding IsLikedPlaylist}" Padding="32,24,32,24">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="50%,0%" EndPoint="50%,100%">
+                        <GradientStop Color="{DynamicResource Accent}" Offset="0.0" />
+                        <GradientStop Color="{DynamicResource BgElevated}" Offset="1.0" />
+                    </LinearGradientBrush>
+                </Border.Background>
+                <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
+                    HorizontalAlignment="Left" VerticalAlignment="Bottom">
+                    <Grid ColumnDefinitions="Auto, *" Width="840">
+                        <!-- COVER: Liked gradient с сердцем -->
+                        <Border Grid.Column="0"
+                            Width="180" Height="180"
+                            CornerRadius="8" ClipToBounds="True"
+                            BoxShadow="{StaticResource CardShadow}">
+                            <Border Classes="liked-gradient">
+                                <mi:MaterialIcon Kind="Heart" Width="72" Height="72"
+                                    Foreground="{DynamicResource AccentButtonTextBrush}"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Opacity="0.9" />
+                            </Border>
+                        </Border>
+
+                        <!-- INFO & ACTIONS (дублируем для Liked) -->
+                        <Grid Grid.Column="1" Margin="32,0,0,0" RowDefinitions="*, Auto">
+                            <StackPanel Grid.Row="0" VerticalAlignment="Bottom"
+                                Margin="0,0,0,24">
+                                <TextBlock Text="{Binding PlaylistName}"
+                                    FontSize="42" FontWeight="Black"
+                                    Foreground="{DynamicResource TextPrimaryBrush}"
+                                    Margin="0,0,0,8"
+                                    TextWrapping="Wrap" MaxLines="2"
+                                    ClipToBounds="False" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding FormattedTrackCount}"
+                                        FontWeight="SemiBold"
+                                        Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock Text="•"
+                                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    <TextBlock Text="{Binding FormattedDuration}"
+                                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1"
+                                Orientation="Horizontal" Spacing="12"
+                                VerticalAlignment="Center">
+                                <Button Classes="playback-btn-main accent-base"
+                                    Command="{Binding PlayAllCommand}"
+                                    Width="48" Height="48" CornerRadius="24"
+                                    ToolTip.Tip="{Binding L[Player_Play]}">
+                                    <Panel>
+                                        <mi:MaterialIcon Kind="Play" Width="26" Height="26"
+                                            IsVisible="{Binding !IsPlayingThisPlaylist}" />
+                                        <mi:MaterialIcon Kind="Pause" Width="26" Height="26"
+                                            IsVisible="{Binding IsPlayingThisPlaylist}" />
+                                    </Panel>
+                                </Button>
+                                <Button Classes="playback-btn"
+                                    Command="{Binding ShufflePlayCommand}"
+                                    Width="40" Height="40" CornerRadius="20"
+                                    ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
+                                    <mi:MaterialIcon Kind="ShuffleVariant" Width="20"
+                                        Height="20"
+                                        Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                                </Button>
+                                <Button Classes="playback-btn"
+                                    Command="{Binding AddToQueueCommand}"
+                                    Width="40" Height="40" CornerRadius="20"
+                                    ToolTip.Tip="{Binding L[Queue_Add]}">
+                                    <mi:MaterialIcon Kind="PlaylistPlus" Width="20"
+                                        Height="20" />
+                                </Button>
+                                <Button Classes="playback-btn"
+                                    Command="{Binding DownloadAllCommand}"
+                                    Width="40" Height="40" CornerRadius="20"
+                                    ToolTip.Tip="{Binding L[Playlist_DownloadAll]}">
+                                    <mi:MaterialIcon Kind="Download" Width="20" Height="20"
+                                        Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                                </Button>
+                                <Border Width="1" Height="24"
+                                    Background="{DynamicResource BgHighlightBrush}"
+                                    Margin="8,0" />
+                                <controls:FilterBar
+                                    FilterText="{Binding FilterQuery}"
+                                    Watermark="{Binding L[Search_LocalFilterTitle]}"
+                                    Width="220" />
                             </StackPanel>
                         </Grid>
                     </Grid>

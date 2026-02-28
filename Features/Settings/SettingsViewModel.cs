@@ -44,6 +44,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private bool _isLoadingTheme;
     private bool _isUpdatingPreset;
     private bool _isLoadingSettings;
+    private bool _isDisposed;
+
+    /// <summary>
+    /// true после завершения загрузки настроек в OnNavigatedToAsync.
+    /// View показывает скелетон пока false.
+    /// </summary>
+    [Reactive] public bool IsContentReady { get; private set; }
 
     #region Account
 
@@ -131,7 +138,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public AudioQualityPreference QualityPreference { get; set; }
     [Reactive] public bool RememberTrackFormat { get; set; }
 
-    // Настройки аудио
     [Reactive] public bool VolumeBoostEnabled { get; set; }
     [Reactive] public bool SmoothVolumeEnabled { get; set; }
     [Reactive] public bool AudioNormalizationEnabled { get; set; }
@@ -139,7 +145,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public List<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
     [Reactive] public LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
 
-    // ── Error notification settings ──
     public List<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
     [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
     [Reactive] public bool PlayErrorSound { get; set; }
@@ -198,9 +203,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _audio = audio;
         _youtube = youtube;
 
-        InitializeLists();
+        // ═══ ТОЛЬКО команды в конструкторе — без тяжёлой загрузки ═══
 
-        // Commands
         LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
         LogoutCommand = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
         SetFakeAccountCommand = CreateCommand(ReactiveCommand.CreateFromTask(SetFakeAccountAsync));
@@ -214,7 +218,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ResetThemeCommand = CreateCommand(ReactiveCommand.Create(ResetTheme));
         ClearDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
 
-        // Client change subscription
+        // Client change subscription (нужна сразу для реактивности)
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)
@@ -244,11 +248,31 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Subscribe(v => _library.UpdateSettings(s => s.Storage.AutoSaveToDownloads = v))
             .DisposeWith(Disposables);
 
+        // НЕ вызываем LoadAllSettings() и тяжёлые операции!
+        // Они будут в OnNavigatedToAsync().
+
+        LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
+    }
+
+    /// <summary>
+    /// Вызывается после CrossFade-анимации навигации.
+    /// Здесь делаем всю тяжёлую инициализацию.
+    /// </summary>
+    public override async Task OnNavigatedToAsync()
+    {
+        if (_isDisposed) return;
+
+        // Небольшая задержка чтобы UI отрисовал скелетон
+        await Task.Delay(50);
+
+        if (_isDisposed) return;
+
+        InitializeLists();
         LoadAllSettings();
         UpdateCacheStats();
         SetupSubscriptions();
 
-        LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
+        IsContentReady = true;
     }
 
     private void OnLanguageChanged(object? sender, string e) => RefreshLocalizedLists();
@@ -259,10 +283,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         RefreshLocalizedLists();
     }
 
-    /// <summary>
-    /// Перестраивает список пресетов: built-in + кастомный (если есть на диске).
-    /// Кастомная тема добавляется в конец списка, если не совпадает ни с одним built-in.
-    /// </summary>
     private void RefreshThemePresets()
     {
         var currentSelection = SelectedPreset;
@@ -271,7 +291,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
             ThemePresets.Add(preset);
 
-        // Если на диске сохранена кастомная тема — добавляем в список
         var saved = _themeManager.GetCurrentTheme();
         var isBuiltIn = ThemePresets.Any(p =>
             string.Equals(p.AccentColor, saved.AccentColor, StringComparison.OrdinalIgnoreCase) &&
@@ -293,13 +312,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             var currentTheme = _themeManager.GetCurrentTheme();
             ApplyThemeToColorPickers(currentTheme);
 
-            // Ищем точное совпадение среди пресетов по цветам
             var matchingPreset = ThemePresets.FirstOrDefault(p =>
                 string.Equals(p.AccentColor, currentTheme.AccentColor, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(p.BgPrimary, currentTheme.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(p.BgSecondary, currentTheme.BgSecondary, StringComparison.OrdinalIgnoreCase));
 
-            // Если не нашли по цветам — ищем по имени (кастомная тема)
             if (matchingPreset == null)
             {
                 matchingPreset = ThemePresets.FirstOrDefault(p =>
@@ -342,10 +359,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _themeManager.ApplyTheme(theme);
         HasUnsavedThemeChanges = false;
 
-        // Обновляем список пресетов чтобы кастомная тема была видна
         RefreshThemePresets();
 
-        // Находим только что сохранённую тему в обновлённом списке
         _isLoadingTheme = true;
         SelectedPreset = ThemePresets.FirstOrDefault(p =>
             string.Equals(p.Name, theme.Name, StringComparison.OrdinalIgnoreCase))
@@ -353,18 +368,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _isLoadingTheme = false;
     }
 
-    /// <summary>
-    /// Умный расчёт AccentHover: светлые цвета затемняем, тёмные — осветляем.
-    /// Решает проблему AMOLED (белый акцент) где LightenColor не даёт видимого эффекта.
-    /// </summary>
     private static Color SmartAccentHover(Color accent)
     {
-        // Perceived brightness по формуле ITU-R BT.601
         var brightness = (0.299 * accent.R + 0.587 * accent.G + 0.114 * accent.B) / 255.0;
 
         return brightness > 0.7
-            ? DarkenColor(accent, 0.15)    // Светлый акцент → затемняем при hover
-            : LightenColor(accent, 0.15);  // Тёмный акцент → осветляем при hover
+            ? DarkenColor(accent, 0.15)
+            : LightenColor(accent, 0.15);
     }
 
     private void RefreshLocalizedLists()
@@ -385,7 +395,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (currentImgPreset != ImageCachePreset.Custom)
             SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == currentImgPreset);
 
-        // Clients
         var currentClient = SelectedClient?.Value ?? _library.Settings.YoutubeClient;
         ClientOptions.Clear();
         ClientOptions.Add(new(YoutubeClientProfile.AndroidVR, SL["Client_AndroidVR"]));
@@ -393,7 +402,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ClientOptions.Add(new(YoutubeClientProfile.Web, SL["Client_Web"]));
         SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == currentClient) ?? ClientOptions[0];
 
-        // Volume curves
         var currentCurve = SelectedVolumeCurve?.Value ?? _library.Settings.Audio.VolumeCurve;
         VolumeCurveOptions.Clear();
         VolumeCurveOptions.Add(new(VolumeCurveType.Linear, SL["VolumeCurve_Linear"]));
@@ -404,7 +412,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == currentCurve)
                               ?? VolumeCurveOptions[1];
 
-        // Error behavior options
         var currentErrorBehavior = SelectedErrorBehavior?.Value ?? _library.Settings.Audio.CriticalErrorBehavior;
         ErrorBehaviorOptions.Clear();
         ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Dialog, SL["Settings_ErrorBehavior_Dialog"]));
@@ -490,7 +497,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        // Theme colors
         this.WhenAnyValue(
                 x => x.AccentColor, x => x.BgPrimaryColor, x => x.BgSecondaryColor,
                 x => x.BgElevatedColor, x => x.TextPrimaryColor, x => x.TextSecondaryColor)
@@ -509,7 +515,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Subscribe(ApplyPresetToColorPickers)
             .DisposeWith(Disposables);
 
-        // Audio settings
         this.WhenAnyValue(x => x.MaxVolumeLimit)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
@@ -565,7 +570,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.Audio.NormalizationEnabled = v);
-                // TODO: Включить/выключить нормализацию в AudioEngine
             })
             .DisposeWith(Disposables);
 
@@ -579,7 +583,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        // ── Error notification settings ──
         this.WhenAnyValue(x => x.SelectedErrorBehavior)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)
@@ -598,7 +601,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        // UI settings
         this.WhenAnyValue(x => x.DiscordRpcEnabled)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
@@ -667,14 +669,12 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             SearchCacheTtlMinutes = s.SearchCacheTtlMinutes;
             SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
 
-            // Audio settings
             VolumeBoostEnabled = s.Audio.VolumeBoostEnabled;
             SmoothVolumeEnabled = s.Audio.SmoothVolumeEnabled;
             AudioNormalizationEnabled = s.Audio.NormalizationEnabled;
             SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
                                   ?? VolumeCurveOptions[1];
 
-            // Error notification settings
             PlayErrorSound = s.Audio.PlayErrorSound;
             SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
                                     ?? ErrorBehaviorOptions[0];
@@ -703,7 +703,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             DownloadedTracksLimitMb = s.Storage.DownloadedTracksLimitMb;
             AutoSaveToDownloads = s.Storage.AutoSaveToDownloads;
 
-            // Image cache preset
             MaxBitmapCacheItems = s.Storage.MaxBitmapCacheItems > 0 ? s.Storage.MaxBitmapCacheItems : 40;
             _isUpdatingPreset = true;
             SelectedImageCachePreset = MaxBitmapCacheItems switch
@@ -964,8 +963,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     protected override void Dispose(bool disposing)
     {
+        if (_isDisposed) return;
         if (disposing)
         {
+            _isDisposed = true;
             LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
         }
 

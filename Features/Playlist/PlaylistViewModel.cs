@@ -180,7 +180,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             })
             .DisposeWith(Disposables);
 
-        // ИЗМЕНЕНО: Добавлена проверка _isSuspended для пропуска UI-обновлений
         _librarySubscription = Observable.FromEvent(
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
@@ -205,7 +204,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                 }
             });
 
-        // ИЗМЕНЕНО: Добавлена проверка _isSuspended
         _audioStateSub = Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
             h => (p, u) => h((p, u)),
             h => _audio.OnPlaybackStateChanged += h,
@@ -213,22 +211,17 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
-
                 await CheckPlaybackStateAsync();
             });
 
-        // ИЗМЕНЕНО: Добавлена проверка _isSuspended
         _trackChangeSub = Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
             h => _audio.OnTrackChanged += h,
             h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
-
                 await CheckPlaybackStateAsync();
             });
     }
@@ -239,7 +232,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     /// <summary>
     /// Окно свёрнуто — пропускаем UI-обновления от событий.
-    /// Музыка продолжает играть, но UI не обновляется.
     /// </summary>
     protected override void OnSuspend()
     {
@@ -252,17 +244,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     protected override void OnResume()
     {
         _isSuspended = false;
-
-        // Синхронизируем состояние воспроизведения (трек мог смениться)
         _ = CheckPlaybackStateAsync();
-
-        // Инвалидируем кэш — данные могли измениться
         InvalidateAllTracksCache();
-
-        // Обновляем UI-свойства
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
-
 
     #region Abstract Implementation
 
@@ -362,9 +347,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         await InitializeAsync(allIds);
 
-        // Загружаем градиент в фоне
         _ = LoadHeaderGradientAsync();
-
         _ = HydrateCacheStatusInBackgroundAsync();
         await CheckPlaybackStateAsync();
     }
@@ -383,10 +366,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                 return;
             }
 
-            // Тяжёлая работа по извлечению цвета остаётся в фоне
             var dominantColor = await _dominantColor.GetDominantColorAsync(ThumbnailUrl);
 
-            // Создание UI-объектов (Brush, Stops) и присвоение свойства СТРОГО на UI-потоке
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (dominantColor == null)
@@ -448,14 +429,17 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        _audio.ClearQueue();
+        // Атомарная замена очереди: Clear + AddRange + Play в одной операции
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
-        _audio.EnqueueRange(allTracks);
-
-        await _audio.PlayTrackAsync(allTracks[0]);
+        await _audio.StartQueueAsync(allTracks, allTracks[0]);
     }
 
+    /// <summary>
+    /// Перемешивает треки и атомарно заменяет очередь через StartQueueAsync.
+    /// Старая реализация делала ClearQueue → EnqueueRange → ShuffleQueue (3 отдельных
+    /// события OnQueueChanged). Новая — одна атомарная операция.
+    /// </summary>
     private async Task ShufflePlayAsync()
     {
         if (TrackCount == 0) return;
@@ -463,16 +447,20 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        _audio.ClearQueue();
-        _audio.EnqueueRange(allTracks);
-        _audio.ShuffleQueue();
-
-        var queue = _audio.Queue;
-        if (queue.Count > 0)
+        // Перемешиваем копию списка локально, НЕ трогая AudioEngine
+        var shuffled = new List<TrackInfo>(allTracks);
+        var rng = Random.Shared;
+        for (int i = shuffled.Count - 1; i > 0; i--)
         {
-            await _audio.PlayTrackAsync(queue[0]);
+            int j = rng.Next(i + 1);
+            (shuffled[i], shuffled[j]) = (shuffled[j], shuffled[i]);
         }
 
+        // Атомарная замена очереди: один вызов вместо Clear+Enqueue+Shuffle
+        _audio.ShuffleEnabled = false;
+        await _audio.StartQueueAsync(shuffled, shuffled[0]);
+
+        // Визуальная индикация Shuffle (временная)
         IsShuffleActive = true;
 
         Observable.Timer(TimeSpan.FromMilliseconds(800))
@@ -504,12 +492,13 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         int minutes = TotalDuration.Minutes;
         int seconds = TotalDuration.Seconds;
 
+        // Используем локализованные суффиксы длительности
         if (totalHours > 0)
-            FormattedDuration = $"{totalHours}h {minutes}m";
+            FormattedDuration = $"{totalHours}{SL["Duration_Hours"]} {minutes}{SL["Duration_Minutes"]}";
         else if (minutes > 0)
-            FormattedDuration = $"{minutes}m {seconds}s";
+            FormattedDuration = $"{minutes}{SL["Duration_Minutes"]} {seconds}{SL["Duration_Seconds"]}";
         else
-            FormattedDuration = $"{seconds}s";
+            FormattedDuration = $"{seconds}{SL["Duration_Seconds"]}";
     }
 
     private async void PlayFromPlaylistAsync(TrackInfo track)

@@ -5,7 +5,6 @@ using LMP.Core.ViewModels;
 using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -29,11 +28,26 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     // LIFECYCLE: Флаг для пропуска UI-обновлений когда окно свёрнуто
     private volatile bool _isSuspended;
 
+    /// <summary>
+    /// True когда очередь действительно пуста (нет треков вообще).
+    /// Показывает "Очередь пуста" с иконкой.
+    /// </summary>
     [Reactive] public bool IsEmpty { get; private set; } = true;
+
+    /// <summary>
+    /// True когда очередь НЕ пуста, но фильтр не нашёл совпадений.
+    /// Показывает "Ничего не найдено".
+    /// </summary>
+    [Reactive] public bool IsFilterEmpty { get; private set; }
+
     [Reactive] public bool CanReorderItems { get; private set; } = true;
     [Reactive] public string FilterQuery { get; set; } = string.Empty;
 
-    public ObservableCollection<TrackItemViewModel> QueueItems { get; } = [];
+    /// <summary>
+    /// Используем BatchObservableCollection для атомарной замены содержимого.
+    /// При фильтрации 500+ треков генерирует 1 Reset вместо 500 Add/Remove.
+    /// </summary>
+    public BatchObservableCollection<TrackItemViewModel> QueueItems { get; } = [];
 
     public ReactiveCommand<Unit, Unit> ClearQueueCommand { get; }
     public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; }
@@ -70,7 +84,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             MoveItem(tuple.oldIndex, tuple.newIndex);
         }));
 
-        // ИЗМЕНЕНО: Добавлена проверка _isSuspended для пропуска UI-обновлений
+        // Подписка на изменения очереди из AudioEngine
         Observable.FromEvent(
                 h => _audio.OnQueueChanged += h,
                 h => _audio.OnQueueChanged -= h)
@@ -80,7 +94,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             {
                 // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
-                
+
                 if (!_isMovingInternally)
                 {
                     RefreshFromAudioEngine();
@@ -88,7 +102,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             })
             .DisposeWith(Disposables);
 
-        // ИЗМЕНЕНО: Добавлена проверка _isSuspended
+        // Подписка на смену текущего трека
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
@@ -97,18 +111,17 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             {
                 // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
-                
+
                 UpdateActiveStates();
             })
             .DisposeWith(Disposables);
 
+        // Фильтрация с дебаунсом
         this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
-                // Фильтрация может сработать только при активном окне
-                // (пользователь вводит текст), проверка не нужна
                 CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);
                 RebuildVisibleItems();
             })
@@ -135,14 +148,12 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     protected override void OnResume()
     {
         _isSuspended = false;
-        
+
         // Синхронизируем данные которые могли измениться пока окно было свёрнуто
-        // (треки могли проигрываться, очередь могла измениться)
         RefreshFromAudioEngine();
-        
+
         Log.Debug($"[{GetType().Name}] Resumed — UI synchronized");
     }
-
 
     private void RefreshFromAudioEngine()
     {
@@ -150,6 +161,10 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         RebuildVisibleItems();
     }
 
+    /// <summary>
+    /// Перестраивает видимый список с учётом фильтра.
+    /// Использует BatchObservableCollection.ReplaceAll для атомарного обновления UI.
+    /// </summary>
     private void RebuildVisibleItems()
     {
         var currentId = _audio.CurrentTrack?.Id;
@@ -159,8 +174,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .Where(t => MatchesFilter(t, query))
             .ToList();
 
-        var newItems = new List<TrackItemViewModel>();
-        var usedIds = new HashSet<string>();
+        var newItems = new List<TrackItemViewModel>(filtered.Count);
+        var usedIds = new HashSet<string>(filtered.Count);
 
         foreach (var track in filtered)
         {
@@ -175,6 +190,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             usedIds.Add(track.Id);
         }
 
+        // Очищаем неиспользуемые VM из кэша
         var toRemove = _vmCache.Keys.Where(k => !usedIds.Contains(k)).ToList();
         foreach (var id in toRemove)
         {
@@ -182,31 +198,13 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             _vmCache.Remove(id);
         }
 
-        SyncCollection(newItems);
-        IsEmpty = QueueItems.Count == 0;
-    }
+        // Атомарная замена: 1 Reset-эвент вместо N Add/Remove
+        QueueItems.ReplaceAll(newItems);
 
-    private void SyncCollection(List<TrackItemViewModel> newItems)
-    {
-        while (QueueItems.Count > newItems.Count)
-        {
-            QueueItems.RemoveAt(QueueItems.Count - 1);
-        }
-
-        for (int i = 0; i < newItems.Count; i++)
-        {
-            if (i < QueueItems.Count)
-            {
-                if (!ReferenceEquals(QueueItems[i], newItems[i]))
-                {
-                    QueueItems[i] = newItems[i];
-                }
-            }
-            else
-            {
-                QueueItems.Add(newItems[i]);
-            }
-        }
+        // Обновляем состояния empty/filter
+        bool hasFilter = !string.IsNullOrWhiteSpace(query);
+        IsEmpty = _masterQueue.Count == 0;
+        IsFilterEmpty = !IsEmpty && hasFilter && QueueItems.Count == 0;
     }
 
     private static bool MatchesFilter(TrackInfo item, string query)
@@ -260,18 +258,18 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        
+
         if (disposing)
         {
             Log.Debug("[QueueVM] Disposing");
-            
+
             foreach (var vm in _vmCache.Values)
                 vm.Dispose();
 
             _vmCache.Clear();
             QueueItems.Clear();
         }
-        
+
         base.Dispose(disposing);
         _isDisposed = true;
     }

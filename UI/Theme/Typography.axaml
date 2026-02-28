@@ -81,21 +81,23 @@
     </Style>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- FEATURE BADGE                                                       -->
-    <!-- Маленький бейдж рядом с названием фичи (BOOST, BETA и т.д.)       -->
+    <!-- FEATURE BADGES (BOOST, BETA, СКОРО)                                -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Border.feature-badge">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="6,2" />
-        <Setter Property="Margin" Value="8,0,0,0" />
         <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="8,0,0,0" />
     </Style>
     <Style Selector="Border.feature-badge TextBlock">
         <Setter Property="FontSize" Value="10" />
         <Setter Property="FontWeight" Value="Bold" />
-        <Setter Property="Foreground" Value="{DynamicResource TextDarkBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="Border.feature-badge.coming-soon">
+        <Setter Property="Background" Value="{DynamicResource SystemInfoBlueBrush}" />
     </Style>
     <Style Selector="Border.feature-badge.experimental">
         <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />

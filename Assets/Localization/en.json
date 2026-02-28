@@ -8,18 +8,23 @@
   "Common_Set": "Set",
   "Common_Clear": "Clear",
   "Common_Enable": "Enable",
+  "Common_Remove": "Remove",
   "Common_Loading": "Loading...",
   "Common_Search": "Search",
   "Common_Minutes": "min",
   "Common_Files": "files",
   "Common_OpenGitHub": "Open GitHub repository",
-
+  "Duration_Hours": "h",
+  "Duration_Minutes": "m", 
+  "Duration_Seconds": "s",
+  "Time_Hours_Short": "h",
+  "Time_Minutes_Short": "min",
+  "Time_Seconds_Short": "sec",
   "Window_Minimize": "Minimize",
   "Window_Maximize": "Maximize",
   "Window_Restore": "Restore",
   "Window_Close": "Close",
   "Window_Close_Hover": "Close",
-
   "Nav_Home": "Home",
   "Nav_Search": "Search",
   "Nav_Library": "Library",
@@ -28,12 +33,15 @@
   "Nav_Settings": "Settings",
   "Nav_PleaseWait": "Please wait...",
   "Nav_Notifications": "Notifications",
-
+  "Nav_Home_Tip": "Home — recommendations & recent",
+  "Nav_Search_Tip": "Search music on YouTube and local files",
+  "Nav_Library_Tip": "Your playlists and collection",
+  "Nav_Queue_Tip": "Current playback queue",
+  "Nav_Settings_Tip": "Application settings",
   "Filter_Placeholder": "Filter tracks...",
   "Filter_All": "All",
   "Filter_Music": "Music",
   "Filter_Video": "Video",
-  
   "Home_Greeting_Morning": "Good morning",
   "Home_Greeting_Afternoon": "Good afternoon",
   "Home_Greeting_Evening": "Good evening",
@@ -41,12 +49,10 @@
   "Home_LoadMore": "Load more",
   "Home_LoadingSkeleton": "Loading tracks...",
   "Home_EndOfList": "No more tracks",
-  
   "Home_Debug_Total": "TOTAL",
   "Home_Debug_Displayed": "SHOWN",
   "Home_Debug_Cached": "CACHED",
   "Home_Debug_Memory": "RAM",
-  
   "Category_RecentlyPlayed": "Recently Played",
   "Category_Trending": "Trending",
   "Category_Pop": "Pop Hits",
@@ -54,7 +60,6 @@
   "Category_Electronic": "Electronic",
   "Category_LoFi": "Lo-Fi Beats",
   "Category_Rock": "Rock Classics",
-  
   "Search_Title": "Search",
   "Search_Placeholder": "Songs, artists, or links...",
   "Search_History": "Recent Searches",
@@ -69,30 +74,23 @@
   "Search_LocalFiles": "Local Files",
   "Search_NoLocalFiles": "No local files in library. Download some tracks or add local files.",
   "Search_OfflineMode": "Searching local library only",
-
   "VolumeCurve_Linear": "Linear",
   "VolumeCurve_Quadratic": "Quadratic (Recommended)",
   "VolumeCurve_Logarithmic": "Logarithmic",
   "VolumeCurve_Cubic": "Cubic",
   "VolumeCurve_SpeedOfLight": "Speed of Light ⚡",
-  
   "Settings_VolumeCurve": "Volume Curve",
   "Settings_VolumeCurve_Desc": "How volume slider maps to actual loudness",
-  
   "Settings_VolumeBoost": "Volume Boost",
   "Settings_VolumeBoost_Tooltip": "Allow volume above 100%. When disabled, higher max volume only increases precision for fine-tuning.",
-  
   "Settings_SmoothVolume": "Smooth Volume Changes",
   "Settings_SmoothVolume_Tooltip": "Fade volume instead of instant changes. Prevents audio pops and clicks.",
-  
   "Settings_AudioNormalization": "Audio Normalization",
   "Settings_AudioNormalization_Tooltip": "Automatically balance volume levels between different tracks. May affect dynamics.",
-  
   "Audio_ErrorSection": "🔔 Error Notifications",
   "Audio_VolumeSection": "🔊 Volume",
   "Audio_ProcessingSection": "⚙️ Processing",
   "Audio_QualitySection": "🎵 Quality",
-  
   "Settings_ErrorBehavior": "Playback Error Behavior",
   "Settings_ErrorBehaviorDesc": "How to react when a track fails to play (stream unavailable, download error). Bot detection always shows a dialog.",
   "Settings_ErrorBehavior_Dialog": "Show dialog and pause",
@@ -100,24 +98,17 @@
   "Settings_ErrorBehavior_Ignore": "Skip silently",
   "Settings_PlayErrorSound": "Error Sound",
   "Settings_PlayErrorSoundDesc": "Play a sound when a playback error occurs.",
-
   "Settings_RememberFormat": "Remember Track Format",
   "Settings_RememberFormatDesc": "Save preferred audio format per track",
-  
   "Settings_AudioQualityDesc": "Preferred streaming quality when available",
-  
   "Settings_SmoothLoading": "Smooth Loading Animations",
   "Settings_SmoothLoadingDesc": "Show smooth skeleton loaders instead of instant content",
-  
   "General_AutoPasteDesc": "Automatically play when YouTube URL is pasted",
   "General_DiscordDesc": "Show currently playing track in Discord status",
-  
   "Settings_SearchCache": "Cache Search Results",
   "Settings_SearchCacheDesc": "Store search results for faster repeated searches",
   "Settings_SearchCacheTtl": "Cache Duration",
-  
   "Settings_Playback": "Playback",
-
   "Settings_Title": "Settings",
   "Settings_Account_Language": "Account & Language",
   "Settings_Network": "Network & Streaming",
@@ -142,11 +133,9 @@
   "Settings_AutoSaveDownloadsDesc": "Automatically save fully cached tracks to Downloads folder. Disabled = tracks stay in cache only (saves disk space).",
   "Settings_DownloadedTracks": "Downloaded Tracks",
   "Settings_ClearDownloadsConfirm": "Delete all downloaded tracks? This cannot be undone.",
-
   "Settings_ChannelUrl": "Public Channel",
   "Settings_ChannelUrlDesc": "Sync public playlists without signing in to Google.",
   "Settings_ChannelPlaceholder": "https://youtube.com/@channel",
-
   "Settings_Audio": "Audio",
   "Settings_AudioQuality": "Quality",
   "Settings_SearchBatchSize": "Search batch size",
@@ -155,22 +144,17 @@
   "Settings_UserAgentSave": "Save",
   "Settings_RamCache": "RAM Image Cache",
   "Settings_RamCacheDesc": "Max number of images in memory. Lower = less RAM, more disk reads.",
-
   "Settings_General": "General",
-
   "NetProfile_Low": "Data Saver",
   "NetProfile_Medium": "Balanced",
   "NetProfile_High": "High Quality",
   "NetProfile_Ultra": "Lossless / LAN",
-
   "Client_AndroidVR": "Android VR (Recommended)",
   "Client_TV": "Smart TV / Console",
   "Client_Web": "Web Browser",
-
   "Cache_Low": "Economy",
   "Cache_Medium": "Balanced",
   "Cache_High": "Smooth",
-
   "Theme_Custom": "Custom",
   "Theme_Presets": "Theme Presets",
   "Theme_PresetsDesc": "Quickly switch between predefined color schemes.",
@@ -187,35 +171,28 @@
   "Theme_TextPrimaryDesc": "Main text color",
   "Theme_TextSecondary": "Text Secondary",
   "Theme_TextSecondaryDesc": "Subtitles and descriptions",
-
   "Account_LimitedAccess": "Limited Access",
   "Account_LimitedAccess_Hint1": "• Only public playlists can be added",
   "Account_LimitedAccess_Hint2": "• Likes and private data require Google sign-in",
-
   "Auth_NotSignedIn": "Not signed in",
   "Auth_LoggedIn": "Signed in",
   "Auth_LoggedInAs": "Signed in: {0}",
   "Auth_Guest": "Guest Mode",
   "Auth_Login": "Sign In",
   "Auth_Logout": "Sign Out",
-
   "Language": "Language",
-
   "Audio_MaxVolume": "Volume Limit",
   "Audio_MaxVolumeDesc": "Allow volume above 100% (Software boost).",
   "Audio_Gain": "Normalization (dB)",
   "Audio_GainDesc": "Adjusts playback volume to be consistent.",
-
   "Storage_Path": "Download Folder",
   "Storage_Change": "Change",
   "Storage_ClearHistory": "Clear History",
   "Storage_ResetApp": "Reset App",
-
   "General_Discord": "Discord RPC",
   "General_AutoPaste": "Auto-play from Clipboard",
   "Perf_SmoothLoading": "Smooth Loading",
   "Perf_SmoothLoadingDesc": "May improve performance",
-  
   "Library_Title": "Library",
   "Library_NewPlaylist": "New Playlist",
   "Library_SyncYoutube": "Sync YouTube",
@@ -223,7 +200,19 @@
   "Library_NewPlaylistName": "Name",
   "Library_PlaylistNameHint": "My awesome playlist",
   "Library_Empty": "Your library is empty",
-
+  "Library_PlaylistWord_one": "playlist",
+  "Library_PlaylistWord_few": "playlists",
+  "Library_PlaylistWord_many": "playlists",
+  "Library_TrackWord_one": "track",
+  "Library_TrackWord_few": "tracks",
+  "Library_TrackWord_many": "tracks",
+  "Library_AvgTrack": "track",
+  "Library_AvgPlaylist": "playlist",
+  "Library_Tip_PlaylistCount": "Total number of playlists in your library",
+  "Library_Tip_TrackCount": "Total number of tracks across all playlists",
+  "Library_Tip_TotalDuration": "Combined duration of all tracks",
+  "Library_Tip_AvgTrack": "Average duration of a single track",
+  "Library_Tip_AvgPlaylist": "Average duration of a single playlist",
   "Queue_Title": "Current Queue",
   "Queue_Empty": "The queue is empty.",
   "Queue_EmptySubtitle": "Play some music to get the party started!",
@@ -231,23 +220,24 @@
   "Queue_Shuffle": "Shuffle Queue",
   "Queue_DownloadAll": "Download All",
   "Queue_Add": "Add to Queue",
+  "Queue_AddAll": "Add to queue",
   "Queue_Remove": "Remove from Queue",
   "Queue_NowPlaying": "Now Playing",
-
   "Playlist_Type": "PLAYLIST",
   "Playlist_Empty": "Empty",
+  "Playlist_Open": "Open",
   "Playlist_TracksCount_0": "Empty",
   "Playlist_TracksCount_1": "{0} track",
   "Playlist_TracksCount_other": "{0} tracks",
   "Playlist_PlayAll": "Play All",
   "Playlist_ShufflePlay": "Shuffle",
   "Playlist_DownloadAll": "Download All",
+  "Playlist_SyncWithCloud": "Sync with YouTube",
   "Playlist_Liked": "Liked Tracks",
   "Playlist_CannotDeleteLiked": "You cannot delete the 'Liked' playlist.",
   "Playlist_DeleteConfirm": "Delete playlist \"{0}\"?",
   "Playlist_Deleting": "Deleting...",
   "Playlist_RemoveFrom": "Remove from Playlist",
-
   "Player_Previous": "Previous",
   "Player_Play": "Play",
   "Player_Pause": "Pause",
@@ -268,11 +258,9 @@
   "Player_Duration": "Duration: {0} / {1}",
   "Player_VolumeLevel": "Volume: {0}% / {1}%",
   "Player_Loading_Duration": "Loading duration...",
-
   "Seek_CancelHint": "ESC or Right Click to cancel",
   "Seek_Cancelled": "Seek cancelled",
   "Seek_WaitHint": "Waiting for completion...",
-
   "Track_Like": "Add to Liked",
   "Track_Unlike": "Remove from Liked",
   "Track_Added": "Added to Liked",
@@ -285,7 +273,6 @@
   "Track_MoreOptions": "More options",
   "Track_Cached": "Cached (available offline)",
   "Track_SaveToFolder": "Save to folder",
-
   "Dialog_Info_Title": "Info",
   "Dialog_Error_Title": "Error",
   "Dialog_Confirm_Title": "Confirm",
@@ -295,14 +282,12 @@
   "Dialog_Login_Title": "Login",
   "Dialog_SelectDownloadFolder_Title": "Select Folder",
   "Dialog_Success": "Success",
-
   "Dialog_ClearHistoryMessage": "Clear your search history?",
   "Dialog_HistoryCleared": "History cleared.",
   "Dialog_ResetMessage": "Reset all settings to default? Library data will remain.",
   "Dialog_ResetComplete": "App has been reset.",
   "Dialog_LogoutMessage": "Are you sure you want to sign out?",
   "Dialog_LoginMessage": "1. Open music.youtube.com in INCOGNITO mode (You need to sign in)\n2. F12 -> Network (Fetch requests) -> Copy 'Cookie' header\n3. Paste here:",
-
   "Dialog_Merge_NoTarget_Title": "Nothing to merge",
   "Dialog_Merge_NoTarget_Msg": "No other local playlists found to merge with.",
   "Dialog_Merge_Success_Msg": "Playlists merged successfully.",
@@ -310,11 +295,9 @@
   "Dialog_Merge_Error": "Could not find channel",
   "Input_Watermark": "Enter text...",
   "Input_PasteHere": "Paste here...",
-
   "Dialog_BotDetection_Title": "Temporary Slowdown",
   "Dialog_BotDetection_Message": "YouTube detected unusual activity and temporarily limited playback.\n\nThis is normal after playing many tracks quickly.",
   "Dialog_BotDetection_Hint": "Playback resumes automatically. Don't close the player.",
-
   "Sync_Action": "Import",
   "Sync_DuplicateName": "Imported",
   "Sync_ConfigureUrlFirst": "Please set a Channel URL in settings first.",
@@ -336,17 +319,14 @@
   "Sync_ConfirmLikedOnly": "No Playlists Found",
   "Sync_NoPlaylistsFound_AskLiked": "We couldn't find any public playlists on your channel. Do you want to sync your 'Liked Songs' instead?",
   "Sync_Success_Msg_LikedOnly": "Liked songs synchronized successfully.",
-
   "Conflict_Title": "Conflict",
   "Conflict_Header": "Playlist exists",
   "Conflict_Message": "Playlist \"{0}\" already exists locally.",
   "Conflict_Merge": "Merge",
   "Conflict_Duplicate": "Keep Both",
   "Conflict_Skip": "Skip",
-
   "Quality_BestAvailable": "High (Opus)",
   "Quality_Standard": "Standard (AAC)",
-
   "Stream_SelectQuality": "Select Quality",
   "Stream_LocalFile": "Local File",
   "Stream_Loading": "Buffering...",
@@ -356,18 +336,15 @@
   "Stream_Bitrate": "{0} kbps",
   "Stream_Format_Bitrate": "{0} • {1} kbps",
   "Stream_Downloaded_Mark": "✓",
-
   "Button_Cancel": "Cancel",
   "Button_Create": "Create",
   "Button_Delete": "Delete",
-
   "Delete_Title": "Delete Playlist",
   "Delete_Description": "How would you like to delete this playlist?",
   "Delete_LocalOnly": "Remove from Library",
   "Delete_LocalOnlyHint": "Keeps the playlist on YouTube",
   "Delete_Everywhere": "Delete Everywhere",
   "Delete_EverywhereHint": "Removes from YouTube account too",
-
   "Notification_JustNow": "Just now",
   "Notification_MinutesAgo": "{0} min ago",
   "Notification_HoursAgo": "{0}h ago",
@@ -378,11 +355,9 @@
   "Notification_HideDetails": "Hide details",
   "Notification_CopyError": "Copy error",
   "Notification_CopyTrackUrl": "Copy track link",
-
   "Attempt_Success": "Success",
   "Attempt_Failed": "Failed",
   "Attempt_Trying": "Trying {0}...",
-
   "Recommendation_Login": "Go to Settings → Account and sign in with YouTube cookies.",
   "Recommendation_Login_AgeRestricted": "This video is age-restricted. Sign in via Settings → Account.",
   "Recommendation_MembersOnly": "This content is for channel members only.",
@@ -397,11 +372,8 @@
   "Recommendation_Login_403": "Sign in to YouTube via Settings → Account to access this content.",
   "Recommendation_AllClientsFailed_Auth": "All clients failed. Try changing the client in Settings → Network, or contact the developer.",
   "Notification_Resize": "Drag to resize panel",
-
   "Error_CopyDetails": "Copy Details",
-  
   "Error_BotDetection_Message": "YouTube rate limit active. Please wait {0}.",
-  
   "Error_Stream_HlsForbidden": "HLS stream blocked (403). Please contact the developer.",
   "Error_Stream_Forbidden": "Track access forbidden (403). Try another track or contact the developer.",
   "Error_Stream_AllClientsFailed": "Could not access track through any method. Please contact the developer.",
@@ -422,7 +394,6 @@
   "Error_Stream_UmpFormat": "YouTube returned encrypted format. Please contact the developer.",
   "Error_Stream_MaxRetries": "Failed to download stream after multiple attempts.",
   "Error_Stream_Network": "Network error. Please check your connection.",
-
   "Splash_Initializing": "Initializing...",
   "Splash_InitAudioCache": "Initializing audio cache...",
   "Splash_LoadingLibrary": "Loading library...",
@@ -432,7 +403,6 @@
   "Splash_Ready": "Ready!",
   "Splash_Commits": "{0} commits",
   "Splash_Error": "Error: {0}",
-  
   "Build_Version": "v{0}",
   "Build_VersionDev": "v{0}-dev",
   "Build_CommitsCount": "{0} commits"

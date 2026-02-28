@@ -168,28 +168,61 @@ public sealed class ThemeManagerService
     }
 
     /// <summary>
-    /// Определяет контрастный цвет текста для данного фона.
-    /// Использует формулу относительной яркости WCAG 2.0.
+    /// Вычисляет относительную яркость цвета по стандарту WCAG 2.0.
+    /// Используется для расчёта контрастности.
     /// </summary>
-    /// <param name="background">Цвет фона</param>
-    /// <returns>Чёрный или белый цвет, обеспечивающий максимальный контраст</returns>
-    private static Color GetContrastingTextColor(Color background)
+    /// <param name="color">Цвет для анализа</param>
+    /// <returns>Значение яркости от 0.0 (чёрный) до 1.0 (белый)</returns>
+    private static double GetRelativeLuminance(Color color)
     {
-        // Линеаризация sRGB канала по WCAG 2.0
+        // Линеаризация sRGB канала по спецификации WCAG 2.0
         double Linearize(byte channel)
         {
             var s = channel / 255.0;
             return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
         }
 
-        var luminance = 0.2126 * Linearize(background.R)
-                      + 0.7152 * Linearize(background.G)
-                      + 0.0722 * Linearize(background.B);
+        return 0.2126 * Linearize(color.R)
+             + 0.7152 * Linearize(color.G)
+             + 0.0722 * Linearize(color.B);
+    }
 
-        // Порог 0.35 — оптимален для тёмных тем, обеспечивает читаемость
-        return luminance > 0.35
-            ? Color.FromRgb(0, 0, 0)        // Тёмный текст на светлом фоне
-            : Color.FromRgb(255, 255, 255);  // Светлый текст на тёмном фоне
+    /// <summary>
+    /// Вычисляет WCAG 2.0 contrast ratio между двумя цветами.
+    /// Результат от 1:1 (одинаковые) до 21:1 (чёрный/белый).
+    /// </summary>
+    /// <param name="color1">Первый цвет</param>
+    /// <param name="color2">Второй цвет</param>
+    /// <returns>Коэффициент контрастности (≥ 1.0)</returns>
+    private static double GetContrastRatio(Color color1, Color color2)
+    {
+        var l1 = GetRelativeLuminance(color1);
+        var l2 = GetRelativeLuminance(color2);
+        var lighter = Math.Max(l1, l2);
+        var darker = Math.Min(l1, l2);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    /// <summary>
+    /// Определяет контрастный цвет текста для данного фона.
+    /// Использует WCAG 2.0 contrast ratio для выбора между чёрным и белым.
+    /// Гарантирует читаемость текста на любом фоне, включая пограничные случаи
+    /// (AMOLED Black с белым акцентом, Classic Green с зелёным акцентом).
+    /// </summary>
+    /// <param name="background">Цвет фона</param>
+    /// <returns>Чёрный или белый цвет, обеспечивающий максимальный контраст</returns>
+    private static Color GetContrastingTextColor(Color background)
+    {
+        var white = Color.FromRgb(255, 255, 255);
+        var black = Color.FromRgb(0, 0, 0);
+
+        var contrastWithWhite = GetContrastRatio(background, white);
+        var contrastWithBlack = GetContrastRatio(background, black);
+
+        // Выбираем цвет с бОльшим контрастом.
+        // При равенстве предпочитаем белый (лучше читается на тёмных темах,
+        // которые составляют большинство пресетов).
+        return contrastWithBlack > contrastWithWhite ? black : white;
     }
 
     /// <summary>
@@ -234,7 +267,7 @@ public sealed class ThemeManagerService
         resources["TextFillColorSecondary"] = textSecondary;
         resources["TextFillColorTertiary"] = textSecondary;
         resources["TextFillColorDisabled"] = textSecondary;
-        resources["TextFillColorInverse"] = textDark;  // Инвертированный текст
+        resources["TextFillColorInverse"] = textDark;
 
         // ═══ CONTROL BACKGROUNDS ═══
         resources["ControlFillColorDefault"] = bgElevated;
@@ -498,7 +531,6 @@ public sealed class ThemeManagerService
         resources["ContentDialogForeground"] = textPrimary;
 
         // ═══ INFOBADGE / NOTIFICATIONS ═══
-        // textDark используется на светлых фонах (warning, info badges)
         resources["InfoBadgeForeground"] = textDark;
         resources["InfoBarErrorSeverityIconBackground"] = textDark;
         resources["InfoBarWarningSeverityIconBackground"] = textDark;
@@ -510,6 +542,16 @@ public sealed class ThemeManagerService
         resources["FocusVisualSecondaryBrush"] = new SolidColorBrush(transparent);
         resources["SystemControlFocusVisualPrimaryBrush"] = new SolidColorBrush(accent) { Opacity = 0.85 };
         resources["SystemControlFocusVisualSecondaryBrush"] = new SolidColorBrush(transparent);
+
+        // ═══ MENU ITEM — убиваем фоновую заливку Fluent ═══
+        resources["MenuFlyoutItemBackground"] = transparent;
+        resources["MenuFlyoutItemBackgroundPointerOver"] = transparent;
+        resources["MenuFlyoutItemBackgroundPressed"] = transparent;
+        resources["MenuFlyoutItemBackgroundDisabled"] = transparent;
+        resources["MenuFlyoutSubItemBackground"] = transparent;
+        resources["MenuFlyoutSubItemBackgroundPointerOver"] = transparent;
+        resources["MenuFlyoutSubItemBackgroundPressed"] = transparent;
+        resources["MenuFlyoutSubItemBackgroundDisabled"] = transparent;
     }
 
     /// <summary>

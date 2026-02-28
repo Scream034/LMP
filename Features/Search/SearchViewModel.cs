@@ -53,11 +53,19 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     [Reactive] public bool IsFromCache { get; private set; }
     [Reactive] public bool IsOfflineMode { get; private set; }
 
-    public bool ShowForceSearchButton => LibService.Settings.EnableSearchCache && IsFromCache && !IsLoading;
-    public ObservableCollection<string> RecentSearches { get; } = [];
+    /// <summary>
+    /// Флаг готовности страницы. False при первом открытии — 
+    /// позволяет странице отрисоваться мгновенно без загрузки данных.
+    /// </summary>
+    [Reactive] public bool IsInitialized { get; private set; }
 
-    public string SourceDisplayName => Source.GetDisplayName();
-    public string SourceIcon => Source.GetIcon();
+    public bool ShowForceSearchButton => LibService.Settings.EnableSearchCache && IsFromCache && !IsLoading;
+
+    /// <summary>
+    /// История поиска. Используем отдельную коллекцию, не привязанную к Settings напрямую,
+    /// чтобы избежать binding errors при dispose страницы.
+    /// </summary>
+    public ObservableCollection<string> RecentSearches { get; } = [];
     #endregion
 
     #region Commands
@@ -81,6 +89,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         _audio = audio;
         _vmFactory = vmFactory;
 
+        // Загружаем историю поиска (лёгкая операция)
         foreach (var item in LibService.Settings.SearchHistory)
             RecentSearches.Add(item);
 
@@ -100,19 +109,21 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
         HistoryClickCommand = CreateCommand(ReactiveCommand.CreateFromTask<string>(async q =>
         {
-            if (string.IsNullOrEmpty(q)) return;
+            if (_isDisposed || string.IsNullOrEmpty(q)) return;
             SearchQuery = q;
             await ExecuteSearchAsync(false);
         }));
 
         RemoveHistoryCommand = CreateCommand(ReactiveCommand.Create<string>(q =>
         {
+            if (_isDisposed) return;
             RecentSearches.Remove(q);
             UpdateHistoryStorage();
         }));
 
         SetSourceCommand = CreateCommand(ReactiveCommand.Create<string>(sourceStr =>
         {
+            if (_isDisposed) return;
             if (Enum.TryParse<ContentSource>(sourceStr, true, out var result))
             {
                 Source = result;
@@ -123,15 +134,14 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowForceSearchButton)))
             .DisposeWith(Disposables);
 
-        // При изменении источника — обновляем UI и перезапускаем поиск
+        // При изменении источника — обновляем состояние и перезапускаем поиск
         this.WhenAnyValue(x => x.Source)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async source =>
             {
-                this.RaisePropertyChanged(nameof(SourceDisplayName));
-                this.RaisePropertyChanged(nameof(SourceIcon));
+                if (_isDisposed) return;
                 IsOfflineMode = source == ContentSource.Local;
 
                 if (!string.IsNullOrWhiteSpace(SearchQuery))
@@ -142,11 +152,27 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             })
             .DisposeWith(Disposables);
 
+        // Восстанавливаем последний запрос в поле, но НЕ запускаем поиск автоматически
         if (!string.IsNullOrEmpty(LibService.Settings.LastSearchQuery))
         {
             SearchQuery = LibService.Settings.LastSearchQuery;
-            _ = ExecuteSearchAsync(false);
         }
+
+        // НЕ устанавливаем IsInitialized здесь — это делает OnNavigatedToAsync
+    }
+
+    /// <summary>
+    /// Вызывается из MainWindowViewModel после задержки (180ms).
+    /// Для Search — просто отмечаем готовность, данные грузятся по запросу пользователя.
+    /// </summary>
+    public override Task OnNavigatedToAsync()
+    {
+        if (_isDisposed) return Task.CompletedTask;
+
+        // Помечаем страницу как готовую — UI переключается со скелетона на рабочее состояние
+        IsInitialized = true;
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -156,7 +182,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     {
         ContentSource.YouTubeMusic => SearchFilter.MusicSong,
         ContentSource.YouTube => SearchFilter.Video,
-        ContentSource.Local => SearchFilter.None, // Не используется для локальных
+        ContentSource.Local => SearchFilter.None,
         _ => SearchFilter.MusicSong
     };
 
@@ -172,7 +198,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
-        // Локальные файлы не подгружаются с сети
+        if (_isDisposed) return [];
+
         if (Source == ContentSource.Local || TotalCount >= MaxResults)
             return [];
 
@@ -196,9 +223,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             {
                 var newTracks = await _searchSession.FetchNextBatchAsync(ScrollBatchSize, ct);
 
-                if (ct.IsCancellationRequested) return [];
+                if (ct.IsCancellationRequested || _isDisposed) return [];
 
-                // Помечаем треки из YouTube Music как музыку
                 if (Source == ContentSource.YouTubeMusic)
                 {
                     foreach (var t in newTracks) t.IsMusic = true;
@@ -247,9 +273,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         return [];
     }
 
-    /// <summary>
-    /// Конвертирует ContentSource в SearchSource для кэша.
-    /// </summary>
     private SearchSource SourceToSearchSource() => Source switch
     {
         ContentSource.YouTubeMusic => SearchSource.YouTubeMusic,
@@ -267,6 +290,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private async Task ExecuteSearchAsync(bool forceNetwork)
     {
+        if (_isDisposed) return;
         if (!forceNetwork && !CanExecuteSearch()) return;
 
         CancellationTokenSource? currentCts = null;
@@ -300,7 +324,6 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
             await Task.Delay(50, ct);
 
-            // Локальный поиск
             if (Source == ContentSource.Local)
             {
                 await HandleLocalSearchAsync(ct);
@@ -325,12 +348,15 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
-            Log.Error($"[Search] Error executing search: {ex}");
+            if (!_isDisposed)
+            {
+                ErrorMessage = ex.Message;
+                Log.Error($"[Search] Error executing search: {ex}");
+            }
         }
         finally
         {
-            if (currentCts == _searchCts && !currentCts!.IsCancellationRequested)
+            if (!_isDisposed && currentCts == _searchCts && !currentCts!.IsCancellationRequested)
             {
                 IsLoading = false;
                 IsFetchingFromNetwork = false;
@@ -338,27 +364,25 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         }
     }
 
-    /// <summary>
-    /// Поиск по локальной библиотеке (оффлайн).
-    /// </summary>
     private async Task HandleLocalSearchAsync(CancellationToken ct)
     {
+        if (_isDisposed) return;
+
         Log.Debug($"[Search] Local search: '{_currentQuery}'");
 
         List<TrackInfo> filtered;
 
         if (string.IsNullOrWhiteSpace(_currentQuery))
         {
-            // Если запрос пустой — показываем все локальные треки
             filtered = await LibService.GetLocalTracksAsync(MaxResults, 0, ct);
         }
         else
         {
-            // Поиск по локальной библиотеке
             filtered = await LibService.SearchLocalTracksAsync(_currentQuery, MaxResults, ct);
         }
 
         ct.ThrowIfCancellationRequested();
+        if (_isDisposed) return;
 
         await InitializeItemsAsync(filtered, canFetchMore: false);
 
@@ -377,8 +401,11 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private async Task HandleDirectUrlAsync(CancellationToken ct)
     {
+        if (_isDisposed) return;
+
         var track = await _youtube.GetTrackByUrlAsync(_currentQuery);
         ct.ThrowIfCancellationRequested();
+        if (_isDisposed) return;
 
         var tracks = track != null ? [track] : new List<TrackInfo>();
         await InitializeItemsAsync(tracks, canFetchMore: false);
@@ -394,9 +421,12 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private async Task HandlePlaylistAsync(CancellationToken ct)
     {
+        if (_isDisposed) return;
+
         IsFetchingFromNetwork = true;
         var playlist = await _youtube.GetPlaylistAsync(_currentQuery);
         ct.ThrowIfCancellationRequested();
+        if (_isDisposed) return;
 
         var tracks = playlist?.Tracks ?? [];
         IsFetchingFromNetwork = false;
@@ -408,6 +438,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private async Task HandleSearchAsync(CancellationToken ct, bool forceNetwork)
     {
+        if (_isDisposed) return;
+
         var sw = Stopwatch.StartNew();
         var apiFilter = GetSearchFilter();
         var cacheSource = SourceToSearchSource();
@@ -418,6 +450,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         {
             var cached = await _searchCache.GetAsync(_currentQuery, cacheSource, minCount: 20);
             ct.ThrowIfCancellationRequested();
+            if (_isDisposed) return;
 
             if (cached != null && cached.Count >= 20)
             {
@@ -448,15 +481,18 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
             apiFilter,
             ct);
 
+        if (_isDisposed) return;
+
         _searchSession = session;
 
-        // Помечаем треки из YouTube Music как музыку
         if (Source == ContentSource.YouTubeMusic)
         {
             foreach (var t in tracks) t.IsMusic = true;
         }
 
         ct.ThrowIfCancellationRequested();
+        if (_isDisposed) return;
+
         IsFetchingFromNetwork = false;
 
         if (tracks.Count > 0 && LibService.Settings.EnableSearchCache)
@@ -478,6 +514,8 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void AddToHistory(string query)
     {
+        if (_isDisposed || string.IsNullOrWhiteSpace(query)) return;
+
         RecentSearches.Remove(query);
         RecentSearches.Insert(0, query);
         while (RecentSearches.Count > 10) RecentSearches.RemoveAt(RecentSearches.Count - 1);
@@ -486,11 +524,13 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     private void UpdateHistoryStorage()
     {
+        if (_isDisposed) return;
         LibService.UpdateSettings(s => s.SearchHistory = [.. RecentSearches]);
     }
 
     private void PlayTrackWithContext(TrackInfo track)
     {
+        if (_isDisposed) return;
         _ = Task.Run(async () => await _audio.StartQueueAsync([track], track));
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
@@ -498,20 +538,19 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
+
         if (disposing)
         {
+            _isDisposed = true;
+
             _searchCts?.Cancel();
             _searchCts?.Dispose();
             _searchCts = null;
+
             try { _searchSession?.Dispose(); } catch { }
             _searchSession = null;
-
-            foreach (var item in Items)
-            {
-                item.Dispose();
-            }
         }
+
         base.Dispose(disposing);
-        _isDisposed = true;
     }
 }

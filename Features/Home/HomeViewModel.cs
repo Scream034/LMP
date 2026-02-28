@@ -37,6 +37,12 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     protected override int BatchSize => DefaultBatchSize;
     protected override int PrefetchThreshold => DefaultPrefetch;
 
+    /// <summary>
+    /// true после завершения первой загрузки данных.
+    /// View показывает скелетон пока false, основной контент когда true.
+    /// </summary>
+    [Reactive] public bool IsContentReady { get; private set; }
+
     [Reactive] public string Greeting { get; private set; } = string.Empty;
     [Reactive] public bool ShowDebugInfo { get; set; }
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
@@ -77,17 +83,32 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         ToggleDebugCommand = CreateCommand(ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo));
         RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true)));
 
+        // Подписка на смену категории — будет работать только после OnNavigatedToAsync
         this.WhenAnyValue(x => x.SelectedCategory)
             .WhereNotNull()
-            .Skip(1)
+            .Skip(1) // Пропускаем начальную установку
+            .Where(_ => IsContentReady) // Только после первой инициализации
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ => await LoadTracksAsync())
             .DisposeWith(Disposables);
 
-        _ = LoadTracksAsync();
+        // НЕ загружаем данные в конструкторе!
+        // Загрузка будет запущена из OnNavigatedToAsync() после CrossFade-анимации.
     }
 
     #endregion
+
+    /// <summary>
+    /// Вызывается из MainWindowViewModel после задержки (180ms).
+    /// Запускаем тяжёлую загрузку треков и категорий.
+    /// </summary>
+    public override async Task OnNavigatedToAsync()
+    {
+        if (_isDisposed) return;
+
+        await LoadTracksAsync();
+        IsContentReady = true;
+    }
 
     #region Overrides & Filter Implementation
 
@@ -275,7 +296,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        
+
         if (disposing)
         {
             Log.Debug("[HomeVM] Disposing");
@@ -283,7 +304,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
             _categoryCts?.Cancel();
             _categoryCts?.Dispose();
         }
-        
+
         base.Dispose(disposing);
         _isDisposed = true;
     }

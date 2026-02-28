@@ -133,7 +133,6 @@
         <Setter Property="Cursor" Value="Hand" />
     </Style>
 
-    <!-- Template-level -->
     <Style Selector="ComboBox /template/ Border#Background">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
@@ -159,7 +158,6 @@
         <Setter Property="Opacity" Value="0.5" />
     </Style>
 
-    <!-- ComboBoxItem: кастомный шаблон с border при hover -->
     <Style Selector="ComboBoxItem">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -275,17 +273,6 @@
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- TEXTBOX                                                             -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!--                                                                     -->
-    <!-- Fluent тема рисует фон через Border#PART_BorderElement внутри      -->
-    <!-- шаблона. Мы ОБЯЗАНЫ бить по этому элементу напрямую, иначе          -->
-    <!-- Fluent перехватит Background/BorderBrush в :pointerover и :focus.  -->
-    <!--                                                                     -->
-    <!-- ПРАВИЛО: фон НЕ меняется при hover/focus. Только BorderBrush.      -->
-    <!-- Затемнение (Opacity) только в :disabled.                           -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- === ОБЫЧНЫЙ TEXTBOX === -->
 
     <Style Selector="TextBox:not(.search-box):not(.filter-ghost)">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -298,7 +285,6 @@
         <Setter Property="Cursor" Value="IBeam" />
     </Style>
 
-    <!-- Template-level: базовое состояние -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost) /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -312,7 +298,6 @@
         </Setter>
     </Style>
 
-    <!-- Hover: ТОЛЬКО border меняется, фон НЕ трогаем -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost):pointerover /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -320,7 +305,6 @@
         <Setter Property="BorderThickness" Value="1" />
     </Style>
 
-    <!-- Focus: border акцентный и толще, фон НЕ трогаем -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost):focus /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -328,7 +312,6 @@
         <Setter Property="BorderThickness" Value="2" />
     </Style>
 
-    <!-- Focus + Hover -->
     <Style
         Selector="TextBox:not(.search-box):not(.filter-ghost):focus:pointerover /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -336,7 +319,6 @@
         <Setter Property="BorderThickness" Value="2" />
     </Style>
 
-    <!-- Disabled -->
     <Style Selector="TextBox:not(.search-box):not(.filter-ghost):disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
@@ -361,7 +343,6 @@
         <Setter Property="Cursor" Value="IBeam" />
     </Style>
 
-    <!-- Template-level для search-box -->
     <Style Selector="TextBox.search-box /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
@@ -392,7 +373,7 @@
         <Setter Property="Opacity" Value="0.5" />
     </Style>
 
-    <!-- === FILTER GHOST (прозрачный, внутри FilterBar) === -->
+    <!-- === FILTER GHOST === -->
 
     <Style Selector="TextBox.filter-ghost">
         <Setter Property="Background" Value="Transparent" />
@@ -406,7 +387,6 @@
         <Setter Property="SelectionBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Cursor" Value="IBeam" />
     </Style>
-    <!-- Жёстко фиксируем template для filter-ghost -->
     <Style Selector="TextBox.filter-ghost /template/ Border#PART_BorderElement">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
@@ -456,8 +436,17 @@
     </Style>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- CONTEXT MENU / MENUITEM                                             -->
+    <!-- CONTEXT MENU / MENUITEM — ПЛОСКОЕ МЕНЮ (БЕЗ SUBMENU/ШЕВРОНА)       -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="ContextMenu">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="4" />
+        <Setter Property="MinWidth" Value="180" />
+    </Style>
 
     <Style Selector="MenuFlyoutPresenter">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
@@ -468,34 +457,88 @@
         <Setter Property="MinWidth" Value="180" />
     </Style>
 
+    <!-- Полностью переопределяем шаблон MenuItem: плоское меню без шеврона -->
     <Style Selector="MenuItem">
-        <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="Transparent" />
         <Setter Property="Padding" Value="10,8" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <BrushTransition Property="Background" Duration="0:0:0.15" />
-            </Transitions>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="MenuItem">
+                <Border Name="PART_LayoutRoot"
+                        Background="Transparent"
+                        BorderBrush="Transparent"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="{TemplateBinding Padding}">
+                    <Border.Transitions>
+                        <Transitions>
+                            <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                        </Transitions>
+                    </Border.Transitions>
+
+                    <Grid ColumnDefinitions="24, *, Auto">
+                        <!-- Icon -->
+                        <ContentPresenter Name="PART_IconPresenter"
+                                          Content="{TemplateBinding Icon}"
+                                          Width="16" Height="16"
+                                          HorizontalAlignment="Left"
+                                          VerticalAlignment="Center" />
+
+                        <!-- Header -->
+                        <ContentPresenter Name="PART_HeaderPresenter"
+                                          Grid.Column="1"
+                                          Content="{TemplateBinding Header}"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="Left"
+                                          RecognizesAccessKey="True" />
+
+                        <!-- Input Gesture Text -->
+                        <TextBlock Name="PART_InputGestureText"
+                                   Grid.Column="2"
+                                   Text="{TemplateBinding InputGesture}"
+                                   Margin="16,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   FontSize="12" />
+                    </Grid>
+                </Border>
+            </ControlTemplate>
         </Setter>
     </Style>
-    <Style Selector="MenuItem:pointerover">
-        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+
+    <!-- Hover & Pressed: фон ВСЕГДА Transparent, меняется только BorderBrush -->
+    <Style Selector="MenuItem:pointerover /template/ Border#PART_LayoutRoot">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
+    <Style Selector="MenuItem:pressed /template/ Border#PART_LayoutRoot">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- Disabled State -->
     <Style Selector="MenuItem:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
+
+    <!-- Иконки внутри MenuItem -->
     <Style Selector="MenuItem mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
         <Setter Property="Width" Value="16" />
         <Setter Property="Height" Value="16" />
     </Style>
+
+    <!-- Danger (Удалить) -->
     <Style Selector="MenuItem.danger">
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBrush}" />
     </Style>
     <Style Selector="MenuItem.danger mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBrush}" />
+    </Style>
+    <Style Selector="MenuItem.danger:pointerover /template/ Border#PART_LayoutRoot">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorBrush}" />
     </Style>
 
     <Style Selector="Separator.menu-separator">

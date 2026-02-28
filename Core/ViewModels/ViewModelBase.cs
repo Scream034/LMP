@@ -137,6 +137,20 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
     /// </summary>
     protected virtual void OnResume() { }
 
+    /// <summary>
+    /// Вызывается из MainWindowViewModel после установки CurrentPage
+    /// и завершения CrossFade-анимации (~180ms задержка).
+    /// 
+    /// Переопределяйте для тяжёлой инициализации:
+    /// загрузка данных из БД/сети, подписки на события, stagger-анимации.
+    /// 
+    /// Конструктор ViewModel должен быть ЛЁГКИМ (только DI, команды, свойства).
+    /// Вся тяжёлая работа — здесь.
+    /// 
+    /// По умолчанию — пустая реализация (для лёгких страниц типа Queue).
+    /// </summary>
+    public virtual Task OnNavigatedToAsync() => Task.CompletedTask;
+
     #endregion
 
     #region Command Helper

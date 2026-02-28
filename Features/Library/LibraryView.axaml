@@ -3,73 +3,109 @@
     xmlns:vm="using:LMP.Features.Library"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:local="using:LMP.Core.Converters"
+    xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Library.LibraryView"
     x:DataType="vm:LibraryViewModel"
-    x:CompileBindings="True">
+    x:CompileBindings="True"
+    x:Name="LibraryRoot">
 
     <Grid RowDefinitions="Auto, Auto, *">
 
-        <!-- Header -->
-        <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,24,24,8">
-            <StackPanel>
-                <TextBlock Text="{Binding L[Library_Title]}"
-                    FontSize="28" FontWeight="Bold"
-                    RenderOptions.TextRenderingMode="Antialias"
-                    Foreground="{DynamicResource TextPrimaryBrush}" />
-                <TextBlock Text="{Binding SyncStatus}"
-                    FontSize="12"
-                    Foreground="{DynamicResource TextMutedBrush}"
-                    IsVisible="{Binding IsSyncing}"
-                    Margin="0,4,0,0" />
-            </StackPanel>
+        <!-- Row 0: Stats (слева) + Actions (справа) -->
+        <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,20,24,4">
 
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                <!-- Sync Button (Unified Crossfade Style) -->
+            <!-- Левая часть: Статистика -->
+            <Border
+                IsVisible="{Binding !IsSyncing}"
+                Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.4" Easing="CubicEaseOut" />
+                    </Transitions>
+                </Border.Transitions>
+                <StackPanel Spacing="6" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="20">
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                            ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount]}">
+                            <mi:MaterialIcon Kind="PlaylistMusic" Width="16" Height="16"
+                                Foreground="{DynamicResource AccentBrush}" />
+                            <TextBlock Text="{Binding PlaylistCountText}"
+                                FontSize="13" FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                            ToolTip.Tip="{Binding L[Library_Tip_TrackCount]}">
+                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16"
+                                Foreground="{DynamicResource TextMutedBrush}" />
+                            <TextBlock Text="{Binding TotalTracksText}"
+                                FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                            ToolTip.Tip="{Binding L[Library_Tip_TotalDuration]}">
+                            <mi:MaterialIcon Kind="ClockOutline" Width="16" Height="16"
+                                Foreground="{DynamicResource TextMutedBrush}" />
+                            <TextBlock Text="{Binding TotalDurationText}"
+                                FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="20">
+                        <TextBlock Text="{Binding AvgTrackDurationText}"
+                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
+                            ToolTip.Tip="{Binding L[Library_Tip_AvgTrack]}" />
+                        <TextBlock Text="{Binding AvgPlaylistDurationText}"
+                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
+                            ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist]}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Левая часть при синке -->
+            <TextBlock Text="{Binding SyncStatus}"
+                FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                IsVisible="{Binding IsSyncing}" VerticalAlignment="Center" />
+
+            <!-- Правая часть: Кнопки -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                VerticalAlignment="Center">
                 <Button Command="{Binding SyncAccountPlaylistsCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Library_SyncYoutube]}"
+                    Classes="icon-btn" ToolTip.Tip="{Binding L[Library_SyncYoutube]}"
                     Width="36" Height="36">
                     <Panel Width="22" Height="22">
-                        <!-- Static Icon (Visible when NOT syncing) -->
                         <mi:MaterialIcon Kind="CloudSync" Width="22" Height="22"
                             IsVisible="{Binding !IsSyncing}"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center" />
-
-                        <!-- Animated Icon Container (Visible when syncing) -->
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                         <Panel IsVisible="{Binding IsSyncing}" Width="22" Height="22">
-                            <!-- State A: Accent BG, Dark Cloud -->
                             <Panel>
-                                <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource AccentBrush}" />
-                                <mi:MaterialIcon Kind="Cloud" Width="14" Height="14" Foreground="{DynamicResource TextDarkBrush}" 
-                                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border Width="22" Height="22" CornerRadius="11"
+                                    Background="{DynamicResource AccentBrush}" />
+                                <mi:MaterialIcon Kind="Cloud" Width="14" Height="14"
+                                    Foreground="{DynamicResource TextDarkBrush}"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
-
-                            <!-- State B: Dark BG, Accent Cloud (Overlay) -->
                             <Panel Classes="cloud-crossfade-overlay">
-                                <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource BgSecondaryBrush}" />
-                                <mi:MaterialIcon Kind="Cloud" Width="14" Height="14" Foreground="{DynamicResource AccentBrush}"
-                                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border Width="22" Height="22" CornerRadius="11"
+                                    Background="{DynamicResource BgSecondaryBrush}" />
+                                <mi:MaterialIcon Kind="Cloud" Width="14" Height="14"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
                         </Panel>
                     </Panel>
                 </Button>
 
-                <!-- Create Button -->
                 <Button Command="{Binding OpenCreateCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Library_CreatePlaylist]}"
+                    Classes="icon-btn" ToolTip.Tip="{Binding L[Library_CreatePlaylist]}"
                     IsEnabled="{Binding !IsSyncing}">
                     <mi:MaterialIcon Kind="Plus" Width="20" Height="20" />
                 </Button>
             </StackPanel>
         </Grid>
 
-        <!-- Sync Progress Bar -->
+        <!-- Row 1: Sync Progress -->
         <Grid Grid.Row="1" Height="3" Margin="24,0" IsVisible="{Binding IsSyncing}">
             <Border Background="{DynamicResource BgHighlightBrush}" CornerRadius="1.5" />
-            <Border Background="{DynamicResource AccentBrush}"
-                CornerRadius="1.5"
+            <Border Background="{DynamicResource AccentBrush}" CornerRadius="1.5"
                 HorizontalAlignment="Left">
                 <Border.Width>
                     <MultiBinding>
@@ -82,67 +118,168 @@
                 </Border.Width>
                 <Border.Transitions>
                     <Transitions>
-                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                        <DoubleTransition Property="Width" Duration="0:0:0.2"
+                            Easing="CubicEaseOut" />
                     </Transitions>
                 </Border.Transitions>
             </Border>
         </Grid>
 
-        <!-- Content -->
+        <!-- Row 2: Content -->
         <Panel Grid.Row="2" Margin="0,8,0,0">
-            <!-- Skeleton (Initial) -->
-            <ScrollViewer IsVisible="{Binding IsSyncing}">
-                <StackPanel Margin="24,16,24,100">
-                    <WrapPanel Orientation="Horizontal">
-                        <Border Width="160" Height="220" Margin="0,0,16,16"
-                            Background="{DynamicResource BgElevatedBrush}"
-                            CornerRadius="8" Classes="skeleton" Opacity="0.7" />
-                        <Border Width="160" Height="220" Margin="0,0,16,16"
-                            Background="{DynamicResource BgElevatedBrush}"
-                            CornerRadius="8" Classes="skeleton" Opacity="0.5">
-                            <Border.Effect>
-                                <BlurEffect Radius="2" />
-                            </Border.Effect>
-                        </Border>
-                    </WrapPanel>
-                </StackPanel>
+
+            <!-- Skeleton -->
+            <ScrollViewer>
+                <ScrollViewer.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                        <Binding Path="!IsContentReady" />
+                        <Binding Path="IsSyncing" />
+                    </MultiBinding>
+                </ScrollViewer.IsVisible>
+                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="24,16,24,100">
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.7" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.5" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.3" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.2" />
+                </WrapPanel>
             </ScrollViewer>
 
             <!-- Main Content -->
-            <ScrollViewer IsVisible="{Binding !IsSyncing}">
+            <ScrollViewer>
+                <ScrollViewer.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                        <Binding Path="IsContentReady" />
+                        <Binding Path="!IsSyncing" />
+                    </MultiBinding>
+                </ScrollViewer.IsVisible>
                 <StackPanel Margin="24,0,24,100">
-                    <!-- Create Form -->
-                    <Border IsVisible="{Binding IsCreatingPlaylist}"
-                        Background="{DynamicResource BgElevatedBrush}"
-                        CornerRadius="8" Padding="16" Margin="0,0,0,16">
-                        <StackPanel Spacing="12">
-                            <TextBlock Text="{Binding L[Library_NewPlaylistName]}" FontWeight="Medium" />
-                            <TextBox Text="{Binding NewPlaylistName}" Watermark="{Binding L[Library_PlaylistNameHint]}" />
-                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                                <Button Content="{Binding L[Button_Cancel]}" Command="{Binding CancelCreateCommand}" />
-                                <Button Content="{Binding L[Button_Create]}" Command="{Binding SavePlaylistCommand}" Classes="accent accent-base" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
 
                     <!-- Playlist Grid -->
                     <ItemsControl ItemsSource="{Binding Playlists}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal" />
+                                <WrapPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Center" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <ContentControl Content="{Binding}" Classes="playlist-card" />
+                            <DataTemplate x:DataType="vm:PlaylistCardViewModel">
+                                <Border Width="220" Margin="10"
+                                    Classes="playlist-card-inner"
+                                    Classes.visible="{Binding IsVisible}">
+
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Playlist_Open]}"
+                                                Command="{Binding OpenCommand}">
+                                                <MenuItem.Icon>
+                                                    <mi:MaterialIcon Kind="FolderOpen" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Queue_AddAll]}"
+                                                Command="{Binding AddToQueueCommand}">
+                                                <MenuItem.Icon>
+                                                    <mi:MaterialIcon Kind="PlaylistPlay" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <Separator Classes="menu-separator" />
+                                            <MenuItem Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Button_Delete]}"
+                                                Command="{Binding DeleteCommand}"
+                                                IsVisible="{Binding CanDelete}"
+                                                Classes="danger">
+                                                <MenuItem.Icon>
+                                                    <mi:MaterialIcon Kind="Delete" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
+
+                                    <Grid RowDefinitions="220, Auto">
+                                        <!-- Cover: строгий квадрат 220x220 -->
+                                        <Button Grid.Row="0"
+                                            Command="{Binding OpenCommand}"
+                                            Background="Transparent" BorderThickness="0"
+                                            Padding="0" Cursor="Hand"
+                                            CornerRadius="8,8,0,0" ClipToBounds="True">
+                                            <Panel Width="220" Height="220">
+                                                <!-- Liked: градиент сверху вниз + Heart, заполняет весь квадрат -->
+                                                <Border IsVisible="{Binding IsLikedPlaylist}"
+                                                    Width="220" Height="220">
+                                                    <Border.Background>
+                                                        <LinearGradientBrush StartPoint="50%,0%" EndPoint="50%,100%">
+                                                            <GradientStop Color="{DynamicResource Accent}" Offset="0.0" />
+                                                            <GradientStop Color="{DynamicResource BgElevated}" Offset="1.0" />
+                                                        </LinearGradientBrush>
+                                                    </Border.Background>
+                                                    <mi:MaterialIcon Kind="Heart" Width="72" Height="72"
+                                                        Foreground="{DynamicResource AccentButtonTextBrush}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"
+                                                        Opacity="0.9" />
+                                                </Border>
+
+                                                <!-- Placeholder -->
+                                                <Border
+                                                    Background="{DynamicResource BgSkeletonBrush}"
+                                                    IsVisible="{Binding ShowPlaceholder}"
+                                                    Width="220" Height="220">
+                                                    <mi:MaterialIcon Kind="PlaylistMusic"
+                                                        Width="72" Height="72"
+                                                        Foreground="{DynamicResource TextMutedBrush}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center" />
+                                                </Border>
+
+                                                <!-- Thumbnail с QualityImage -->
+                                                <Image
+                                                    controls:QualityImage.Source="{Binding ThumbnailUrl}"
+                                                    controls:QualityImage.Quality="High"
+                                                    Stretch="UniformToFill"
+                                                    Width="220" Height="220"
+                                                    IsVisible="{Binding HasThumbnail}" />
+                                            </Panel>
+                                        </Button>
+
+                                        <!-- Info -->
+                                        <Button Grid.Row="1"
+                                            Command="{Binding OpenCommand}"
+                                            Background="Transparent" BorderThickness="0"
+                                            Padding="14,12"
+                                            HorizontalContentAlignment="Left" Cursor="Hand">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}"
+                                                    FontWeight="SemiBold" FontSize="14"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6"
+                                                    Margin="0,4,0,0">
+                                                    <TextBlock
+                                                        Text="{Binding FormattedTrackCount}"
+                                                        FontSize="12"
+                                                        Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <mi:MaterialIcon Kind="CloudCheck" Width="13"
+                                                        Height="13"
+                                                        Foreground="{DynamicResource TextMutedBrush}"
+                                                        IsVisible="{Binding IsSynced}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+                                </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <!-- Empty State -->
-                    <StackPanel IsVisible="{Binding !Playlists.Count}" HorizontalAlignment="Center" Margin="0,60">
-                        <mi:MaterialIcon Kind="PlaylistMusic" Width="64" Height="64" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
-                        <TextBlock Text="{Binding L[Library_Empty]}" FontSize="16" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,16,0,0" />
+                    <!-- Empty state -->
+                    <StackPanel IsVisible="{Binding !Playlists.Count}"
+                        HorizontalAlignment="Center" Margin="0,60">
+                        <mi:MaterialIcon Kind="PlaylistMusic" Width="64" Height="64"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding L[Library_Empty]}" FontSize="16"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
+                            HorizontalAlignment="Center" Margin="0,16,0,0" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

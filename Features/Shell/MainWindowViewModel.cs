@@ -22,19 +22,17 @@ public class MainWindowViewModel : ViewModelBase
 {
     private readonly IServiceProvider _services;
 
-    // ═══ VERSION INFO (реактивные для смены языка) ═══
-    private bool _isVersionInfoVisible;
-    public bool IsVersionInfoVisible
-    {
-        get => _isVersionInfoVisible;
-        set => this.RaiseAndSetIfChanged(ref _isVersionInfoVisible, value);
-    }
+    // ═══ VERSION INFO ═══
 
-    // Статические данные (не меняются)
+    /// <summary>
+    /// Видимость версии. По умолчанию true — показываем сразу.
+    /// Пользователь может скрыть кликом на лого.
+    /// </summary>
+    [Reactive] public bool IsVersionInfoVisible { get; set; } = true;
+
     public static string VersionDisplay => G.Build.DisplayVersion;
     public static string GitHashDisplay => G.Build.GitHash;
 
-    // Реактивное свойство для локализованного текста коммитов
     private string _commitsDisplay = "";
     public string CommitsDisplay
     {
@@ -48,7 +46,11 @@ public class MainWindowViewModel : ViewModelBase
     // ═══ NAVIGATION ═══
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
-    [Reactive] public string CurrentPageName { get; private set; } = "Home";
+
+    /// <summary>
+    /// Текущая страница. Пустая строка при старте — первый Navigate не блокируется.
+    /// </summary>
+    [Reactive] public string CurrentPageName { get; private set; } = "";
 
     [Reactive] public bool IsNavigationLocked { get; private set; }
     [Reactive] public string NavigationLockReason { get; private set; } = "";
@@ -57,6 +59,13 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public NotificationButtonViewModel NotificationButton { get; private set; }
     [Reactive] public NotificationPanelViewModel NotificationPanel { get; private set; }
     [Reactive] public ToastOverlayViewModel ToastOverlay { get; private set; }
+
+    /// <summary>
+    /// Задержка перед запуском тяжёлой инициализации страницы (ms).
+    /// Даёт время CrossFade-анимации (150ms) отработать без фризов.
+    /// Страница рендерит лёгкий скелетон/каркас за это время.
+    /// </summary>
+    private const int DeferredLoadDelayMs = 180;
 
     public ReactiveCommand<string, Unit> NavigateCommand { get; }
 
@@ -75,18 +84,15 @@ public class MainWindowViewModel : ViewModelBase
         NotificationPanel = notificationPanel;
         ToastOverlay = toastOverlay;
 
-        // ═══ ИНИЦИАЛИЗАЦИЯ ТЕКСТА КОММИТОВ ═══
         UpdateCommitsDisplay();
 
-        // ═══ ПОДПИСКА НА СМЕНУ ЯЗЫКА ═══
         LocalizationService.Instance.LanguageChanged += (_, _) =>
         {
             UpdateCommitsDisplay();
-            // Уведомляем UI об изменении L
             this.RaisePropertyChanged(nameof(L));
         };
 
-        // ═══ КОМАНДА TOGGLE VERSION ═══
+        // Toggle версии — клик на лого
         ToggleVersionInfoCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             IsVersionInfoVisible = !IsVersionInfoVisible;
@@ -132,63 +138,112 @@ public class MainWindowViewModel : ViewModelBase
     public async Task WithNavigationLockAsync(string reason, Func<Task> operation)
     {
         LockNavigation(reason);
-        try
-        {
-            await operation();
-        }
-        finally
-        {
-            UnlockNavigation();
-        }
+        try { await operation(); }
+        finally { UnlockNavigation(); }
     }
 
     public async Task<T> WithNavigationLockAsync<T>(string reason, Func<Task<T>> operation)
     {
         LockNavigation(reason);
-        try
-        {
-            return await operation();
-        }
-        finally
-        {
-            UnlockNavigation();
-        }
+        try { return await operation(); }
+        finally { UnlockNavigation(); }
     }
 
+    /// <summary>
+    /// Навигация с отложенной инициализацией (Deferred Loading).
+    /// 
+    /// Порядок действий:
+    /// 1. Создаём ViewModel через DI (конструктор ЛЁГКИЙ — только DI, команды, свойства).
+    /// 2. Устанавливаем CurrentPage → TransitioningContentControl начинает CrossFade (150ms).
+    /// 3. Страница рендерит пустой каркас/скелетон (IsContentReady=false).
+    /// 4. Через DeferredLoadDelayMs (180ms) вызываем OnNavigatedToAsync() → тяжёлая загрузка.
+    /// 5. По завершении загрузки страница переключает скелетон на реальный контент.
+    /// 
+    /// Результат: анимация всегда плавная, независимо от тяжести страницы.
+    /// </summary>
     private void Navigate(string pageName)
     {
         if (IsNavigationLocked) return;
 
+        if (CurrentPageName == pageName)
+        {
+            Log.Debug($"[Navigation] Already on '{pageName}', skipping");
+            return;
+        }
+
         var sw = Stopwatch.StartNew();
-        Log.Info($"Switching to page: {pageName} (Type: {pageName}ViewModel)");
+        Log.Info($"Switching to page: {pageName}");
 
         var oldPage = CurrentPage;
         var oldPageName = CurrentPageName;
 
-        CurrentPage = pageName switch
+        // Создаём ViewModel — конструктор должен быть лёгким (без загрузки данных)
+        ViewModelBase? newPage = pageName switch
         {
             "Home" => _services.GetRequiredService<HomeViewModel>(),
             "Search" => _services.GetRequiredService<SearchViewModel>(),
             "Library" => _services.GetRequiredService<LibraryViewModel>(),
             "Settings" => _services.GetRequiredService<SettingsViewModel>(),
             "Queue" => _services.GetRequiredService<QueueViewModel>(),
-            _ => CurrentPage
+            _ => null
         };
 
+        if (newPage == null)
+        {
+            Log.Warn($"[Navigation] Unknown page: {pageName}");
+            return;
+        }
+
+        // Устанавливаем страницу СРАЗУ — CrossFade начинается, страница рендерит скелетон
+        CurrentPage = newPage;
         CurrentPageName = pageName;
 
         sw.Stop();
-        Log.Info($"Successfully switched to {pageName} in {sw.ElapsedMilliseconds}ms");
+        Log.Info($"Page '{pageName}' VM created in {sw.ElapsedMilliseconds}ms, scheduling deferred init...");
 
-        if (oldPage is IDisposable disposable)
+        // Отложенная инициализация: даём CrossFade отработать, затем загружаем данные
+        _ = DeferredInitAsync(newPage, pageName);
+
+        // Dispose старой страницы с задержкой (чтобы CrossFade доиграл)
+        if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
         {
             _ = DisposePageDelayedAsync(disposable, oldPageName);
         }
     }
 
+    /// <summary>
+    /// Ждёт завершения CrossFade-анимации, затем запускает тяжёлую инициализацию страницы.
+    /// Если пользователь уже переключился на другую страницу — пропускаем.
+    /// </summary>
+    private async Task DeferredInitAsync(ViewModelBase page, string pageName)
+    {
+        try
+        {
+            // Ждём пока CrossFade-анимация отработает
+            await Task.Delay(DeferredLoadDelayMs);
+
+            // Проверяем что страница всё ещё актуальна (пользователь мог переключиться)
+            if (CurrentPage != page)
+            {
+                Log.Debug($"[Navigation] Page '{pageName}' is no longer current, skipping deferred init");
+                return;
+            }
+
+            var sw = Stopwatch.StartNew();
+            await page.OnNavigatedToAsync();
+            sw.Stop();
+
+            Log.Info($"[Navigation] Deferred init for '{pageName}' completed in {sw.ElapsedMilliseconds}ms");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Navigation] Deferred init failed for '{pageName}': {ex.Message}");
+        }
+    }
+
     private async Task DisposePageDelayedAsync(IDisposable page, string pageName)
     {
-        await Task.Delay(50);
+        await Task.Delay(200);
 
         try
         {
@@ -217,6 +272,7 @@ public class MainWindowViewModel : ViewModelBase
         Log.Info($"Navigating to Playlist: {playlistId}");
 
         var oldPage = CurrentPage;
+        var oldPageName = CurrentPageName;
 
         _ = Task.Run(async () =>
         {
@@ -229,9 +285,9 @@ public class MainWindowViewModel : ViewModelBase
                 CurrentPageName = "Playlist";
             });
 
-            if (oldPage is IDisposable disposable)
+            if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
             {
-                await DisposePageDelayedAsync(disposable, "Previous");
+                await DisposePageDelayedAsync(disposable, oldPageName);
             }
         });
     }

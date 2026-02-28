@@ -8,7 +8,7 @@
     x:CompileBindings="True">
 
     <Grid>
-        <!-- Empty State -->
+        <!-- Empty State: очередь действительно пуста -->
         <StackPanel IsVisible="{Binding IsEmpty}" HorizontalAlignment="Center"
             VerticalAlignment="Center" Spacing="16">
             <mi:MaterialIcon Kind="PlaylistMusicOutline" Width="64" Height="64"
@@ -59,6 +59,17 @@
                     Compact="True" />
             </StackPanel>
 
+            <!-- Filter No Results: очередь не пуста, но фильтр ничего не нашёл -->
+            <StackPanel Grid.Row="1"
+                IsVisible="{Binding IsFilterEmpty}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center" Spacing="12">
+                <mi:MaterialIcon Kind="MagnifyClose" Width="48" Height="48"
+                    Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding L[Search_NoResults]}" FontSize="16"
+                    Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center" />
+            </StackPanel>
+
             <!-- List -->
             <controls:TrackListControl
                 Grid.Row="1"
@@ -70,6 +81,7 @@
                 UseInternalScroll="True"
                 EnableSmoothLoading="False"
                 IsQueueContext="True"
+                IsVisible="{Binding !IsFilterEmpty}"
                 EnableReordering="{Binding CanReorderItems}"
                 MoveItemCommand="{Binding MoveItemCommand}" />
         </Grid>

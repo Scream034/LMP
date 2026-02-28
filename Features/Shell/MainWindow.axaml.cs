@@ -1,6 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
+using Avalonia.VisualTree;
 using LMP.Core.Helpers;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -58,13 +59,8 @@ public partial class MainWindow : Window
         {
             _isMinimized = true;
 
-            // Уведомляем ВСЕ ViewModel-и об остановке UI
             ViewModelBase.BroadcastSuspend();
-
-            // Замедляем мониторинг памяти
             MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(30));
-
-            // Запускаем мягкую очистку (без остановки фоновой загрузки!)
             ScheduleCleanup(TimeSpan.FromSeconds(2));
         }
         else if (_isMinimized)
@@ -72,9 +68,7 @@ public partial class MainWindow : Window
             _isMinimized = false;
 
             CancelCleanup();
-
             MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(5));
-
             ViewModelBase.BroadcastResume();
         }
     }
@@ -158,9 +152,26 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Обработка нажатия на TitleBar для перетаскивания окна.
+    /// Игнорирует клики на Button (навигационные табы, window controls).
+    /// </summary>
     private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        // Не начинаем drag если кликнули на кнопку (nav-tab, window-btn и т.д.)
         if (e.Source is Button) return;
+
+        // Проверяем родительские элементы — клик внутри кнопки (на иконке/тексте)
+        if (e.Source is Avalonia.Visual visual)
+        {
+            var parent = visual;
+            while (parent != null)
+            {
+                if (parent is Button) return;
+                parent = parent.GetVisualParent();
+            }
+        }
+
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             BeginMoveDrag(e);
     }

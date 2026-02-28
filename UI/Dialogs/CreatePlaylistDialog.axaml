@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:LMP.UI.Dialogs"
+        xmlns:mi="using:Material.Icons.Avalonia"
+        x:Class="LMP.UI.Dialogs.CreatePlaylistDialog"
+        x:DataType="vm:CreatePlaylistDialogViewModel"
+        Title="{Binding L[Library_CreatePlaylist]}"
+        Width="450" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False" ShowInTaskbar="False"
+        SystemDecorations="BorderOnly"
+        Background="{DynamicResource BgPrimaryBrush}">
+
+    <Border BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="1" CornerRadius="8" Padding="24">
+        <StackPanel Spacing="20">
+            
+            <!-- Заголовок -->
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Border Background="{DynamicResource BgHighlightBrush}" CornerRadius="20" Width="40" Height="40">
+                    <mi:MaterialIcon Kind="PlaylistPlus" Width="20" Height="20" Foreground="{DynamicResource TextPrimaryBrush}" />
+                </Border>
+                <TextBlock Text="{Binding L[Library_CreatePlaylist]}" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- Поля ввода -->
+            <StackPanel Spacing="12">
+                <StackPanel Spacing="4">
+                    <TextBlock Text="{Binding L[Library_NewPlaylistName]}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                    <TextBox Text="{Binding PlaylistName}" Watermark="{Binding L[Library_PlaylistNameHint]}" />
+                </StackPanel>
+
+                <!-- Опция облачной синхронизации (задел на будущее) -->
+                <Border Background="{DynamicResource BgElevatedBrush}" CornerRadius="6" Padding="12">
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{Binding L[Playlist_SyncWithCloud]}" FontWeight="Medium" />
+                                <Border Classes="feature-badge coming-soon">
+                                    <TextBlock Text="СКОРО" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock Text="{Binding L[Settings_ChannelUrlDesc]}" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding SyncToCloud}" IsEnabled="False" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+
+            <!-- Кнопки -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12" Margin="0,8,0,0">
+                <Button Content="{Binding L[Button_Cancel]}" Command="{Binding CancelCommand}" MinWidth="80" />
+                <Button Content="{Binding L[Button_Create]}" Command="{Binding ConfirmCommand}" MinWidth="100" Classes="accent accent-base" />
+            </StackPanel>
+
+        </StackPanel>
+    </Border>
+</Window>

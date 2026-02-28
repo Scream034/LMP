@@ -42,6 +42,8 @@ public interface IDialogService
     /// Показывает диалог требования авторизации.
     /// </summary>
     Task ShowLoginRequiredAsync(LoginRequiredException exception);
+
+    Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync();
 }
 
 public class DialogService : IDialogService
@@ -300,4 +302,17 @@ public class DialogService : IDialogService
     }
 
     #endregion
+
+    public async Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync()
+    {
+        return await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var window = GetMainWindow();
+            if (window == null) return null;
+
+            var vm = new CreatePlaylistDialogViewModel();
+            var dialog = new CreatePlaylistDialog { DataContext = vm };
+            return await ShowDialogSafeAsync<CreatePlaylistResult?>(dialog, window);
+        });
+    }
 }
