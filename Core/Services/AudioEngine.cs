@@ -534,6 +534,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private void HandlePlayerTrackEnded()
     {
+        // Если плеер в состоянии Loading/Buffering/Seeking, значит TrackEnded
+        // пришёл от устаревшего decoder loop (например, при быстром seek).
+        // AudioPlayer уже имеет свою защиту (OnTrackEnded проверяет state),
+        // но дополнительная проверка здесь — defense in depth.
+        var playerState = _player.State;
+        if (playerState is PlaybackState.Loading or PlaybackState.Buffering)
+        {
+            Log.Debug($"[AudioEngine] Ignoring TrackEnded during {playerState}");
+            return;
+        }
+
         int session = Interlocked.Increment(ref _session);
 
         _ = Task.Run(async () =>

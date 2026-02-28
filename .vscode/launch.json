@@ -16,7 +16,7 @@
 
       "logging": {
         "moduleLoad": false,
-        "exceptions": false,
+        "exceptions": true,
         "programOutput": true
       },
 

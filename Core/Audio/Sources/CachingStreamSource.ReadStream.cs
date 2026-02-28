@@ -62,6 +62,8 @@ public sealed partial class CachingStreamSource
             if (_fileStream != null)
                 return _fileStream.Read(buffer, offset, count);
 
+            // Sync-over-async: WebMParser вызывает ReadAsync, но на случай
+            // если парсер использует синхронный Read
             try
             {
                 var token = Volatile.Read(ref _readCts).Token;
@@ -105,6 +107,7 @@ public sealed partial class CachingStreamSource
             long posBefore = Volatile.Read(ref _position);
             int read = await _source.ReadAtAsync(posBefore, buffer, ct);
 
+            // Проверяем что позиция не сменилась (seek мог произойти)
             long posAfter = Volatile.Read(ref _position);
             if (posAfter != posBefore)
                 return 0;

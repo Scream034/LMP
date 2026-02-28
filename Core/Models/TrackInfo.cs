@@ -77,8 +77,8 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string GetRawId()
     {
-        if (Id.StartsWith("yt_pl_")) return Id.Substring(6);
-        if (Id.StartsWith("yt_")) return Id.Substring(3);
+        if (Id.StartsWith("yt_pl_")) return Id[6..];
+        if (Id.StartsWith("yt_")) return Id[3..];
         return Id;
     }
 

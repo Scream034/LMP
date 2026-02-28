@@ -1,9 +1,15 @@
+using System.Numerics;
+using System.Runtime.InteropServices;
 using SharpJaad.AAC;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Exceptions;
 
 namespace LMP.Core.Audio.Decoders;
 
+/// <summary>
+/// AAC декодер на базе SharpJaad с поддержкой HE-AAC (SBR).
+/// Оптимизирован с SIMD конвертацией и пулингом буферов.
+/// </summary>
 public sealed class AacDecoder : IAudioDecoder
 {
     private const int DefaultSampleRate = 44100;
@@ -312,16 +318,22 @@ public sealed class AacDecoder : IAudioDecoder
         return Decode(encodedData, outputBuffer);
     }
 
-    private static void ConvertBytesToFloat(byte[] pcmBytes, Span<float> output, int sampleCount)
+    /// <summary>
+    /// SIMD-оптимизированная конвертация byte[] (little-endian PCM16) → float[].
+    /// </summary>
+    /// <remarks>
+    /// <para>SharpJaad возвращает PCM данные как byte[] с int16 сэмплами.
+    /// Конвертация вызывается на каждый фрейм (~50 раз/сек), поэтому оптимизирована через SIMD.</para>
+    /// </remarks>
+    internal static void ConvertBytesToFloat(byte[] pcmBytes, Span<float> output, int sampleCount)
     {
-        const float scale = 1f / 32768f;
         int count = Math.Min(sampleCount, output.Length);
 
-        for (int i = 0; i < count; i++)
-        {
-            short sample = BitConverter.ToInt16(pcmBytes, i * sizeof(short));
-            output[i] = sample * scale;
-        }
+        // Интерпретируем byte[] как short[] без копирования
+        var shorts = MemoryMarshal.Cast<byte, short>(pcmBytes.AsSpan(0, count * sizeof(short)));
+
+        // Используем общую SIMD-конвертацию из OpusDecoder
+        OpusDecoder.ConvertShortToFloat(shorts[..count], output);
     }
 
     private static SampleFrequency GetSampleFrequency(int rate)

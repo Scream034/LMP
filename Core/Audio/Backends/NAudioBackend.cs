@@ -12,7 +12,8 @@ namespace LMP.Core.Audio.Backends;
 /// 
 /// <para><b>Потокобезопасность:</b></para>
 /// <list type="bullet">
-///   <item><see cref="Start"/>/<see cref="Stop"/> — можно вызывать из любого потока</item>
+///   <item><see cref="Start"/>/<see cref="Stop"/> — можно вызывать из любого потока.
+///     Защита от race condition через <see cref="_stateLock"/>.</item>
 ///   <item><see cref="Flush"/> — инкрементирует <see cref="_flushGeneration"/>,
 ///     fill loop пропускает текущие данные</item>
 ///   <item>Fill loop — единственный writer в <see cref="BufferedWaveProvider"/></item>
@@ -38,6 +39,9 @@ public sealed class NAudioBackend : IPlaybackBackend
     /// <summary>Пауза после ошибки в fill loop (ms).</summary>
     private const int ErrorSleepMs = 100;
 
+    /// <summary>Пауза fill loop когда decoder не работает (ms).</summary>
+    private const int DecoderDeadSleepMs = 50;
+
     private WaveOutEvent? _waveOut;
     private BufferedWaveProvider? _provider;
     private AudioDataCallback? _callback;
@@ -48,6 +52,14 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     private volatile bool _playing;
     private volatile bool _disposed;
+    private volatile bool _decoderAlive;
+
+    /// <summary>
+    /// Lock для синхронизации Start/Stop.
+    /// Предотвращает race condition когда Stop() и Start() 
+    /// вызываются быстро подряд (при seek).
+    /// </summary>
+    private readonly Lock _stateLock = new();
 
     /// <summary>
     /// Поколение flush. Инкрементируется при <see cref="Flush"/>.
@@ -115,10 +127,6 @@ public sealed class NAudioBackend : IPlaybackBackend
         _byteBuffer = new byte[samplesPerRead * sizeof(float)];
 
         _cts = new CancellationTokenSource();
-
-        // ИСПРАВЛЕНИЕ: Task.Run вместо Task.Factory.StartNew
-        // Task.Factory.StartNew с async lambda возвращает Task<Task>,
-        // и _fillTask.Wait() ждёт только внешний Task (завершается мгновенно).
         _fillTask = Task.Run(() => FillBufferLoopAsync(_cts.Token), _cts.Token);
 
         Log.Info($"[NAudioBackend] Initialized: {sampleRate}Hz, {channels}ch");
@@ -128,19 +136,47 @@ public sealed class NAudioBackend : IPlaybackBackend
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_waveOut == null || _playing) return;
+        if (_waveOut == null) return;
 
-        _waveOut.Play();
-        _playing = true;
+        lock (_stateLock)
+        {
+            if (_playing) return;
+
+            _decoderAlive = true;
+            _playing = true;
+            _waveOut.Play();
+        }
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <para><b>Синхронный вызов</b> — блокирует вызывающий поток до завершения Pause().
+    /// Это предотвращает race condition когда Stop() и Start() вызываются быстро подряд.</para>
+    /// <para>WaveOut.Pause() обычно завершается за &lt;1ms.
+    /// Предыдущий hang (11 секунд) был вызван fill loop,
+    /// который теперь проверяет <see cref="_decoderAlive"/> и не блокирует Pause.</para>
+    /// </remarks>
     public void Stop()
     {
-        if (_waveOut == null || !_playing) return;
+        if (_waveOut == null) return;
 
-        _waveOut.Pause();
-        _playing = false;
+        lock (_stateLock)
+        {
+            if (!_playing) return;
+
+            _playing = false;
+            _decoderAlive = false;
+
+            try
+            {
+                _waveOut.Pause();
+            }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                Log.Warn($"[NAudioBackend] Stop error: {ex.Message}");
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -187,6 +223,14 @@ public sealed class NAudioBackend : IPlaybackBackend
                 if (!_playing)
                 {
                     await Task.Delay(IdleSleepMs, ct);
+                    continue;
+                }
+
+                // Decoder не работает — спим подольше
+                // Предотвращает buffer underrun → NAudio flapping
+                if (!_decoderAlive)
+                {
+                    await Task.Delay(DecoderDeadSleepMs, ct);
                     continue;
                 }
 
@@ -244,6 +288,7 @@ public sealed class NAudioBackend : IPlaybackBackend
         _disposed = true;
 
         _playing = false;
+        _decoderAlive = false;
 
         // Отменяем fill loop
         _cts?.Cancel();

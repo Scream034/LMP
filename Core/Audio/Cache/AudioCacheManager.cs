@@ -14,13 +14,13 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     private readonly string _cacheDirectory;
     private readonly long _maxCacheSize;
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
-    
+
     /// <summary>
     /// Reverse index: trackId → list of cacheKeys.
     /// Ускоряет поиск кэшей трека с O(N) до O(1).
     /// </summary>
     private readonly ConcurrentDictionary<string, List<string>> _trackIndex = new();
-    
+
     private readonly SemaphoreSlim _saveLock = new(1, 1);
     private readonly CancellationTokenSource _timerCts = new();
     private readonly Task _autoSaveTask;
@@ -112,8 +112,8 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
             foreach (var key in keys)
             {
-                if (_entries.TryGetValue(key, out var entry) 
-                    && entry.IsComplete 
+                if (_entries.TryGetValue(key, out var entry)
+                    && entry.IsComplete
                     && (bestEntry == null || entry.Bitrate > bestEntry.Bitrate))
                 {
                     bestEntry = entry;
@@ -147,8 +147,8 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         foreach (var key in keys)
         {
-            if (_entries.TryGetValue(key, out var entry) 
-                && entry.IsComplete 
+            if (_entries.TryGetValue(key, out var entry)
+                && entry.IsComplete
                 && (best == null || entry.Bitrate > best.Bitrate))
             {
                 best = entry;
@@ -242,7 +242,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             UpdateFileSizeCache(entry);
 
             Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
-            
+
             _ = SaveIndexAsync();
 
             // Поднимаем событие для UI
@@ -328,29 +328,55 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         try
         {
-            var buffer = new byte[size];
-
-            await using var fs = new FileStream(
-                filePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite,
-                bufferSize: CacheFileBufferSize,
-                useAsync: true);
-
-            fs.Seek(offset, SeekOrigin.Begin);
+            // ═══ FIX: Используем pooled buffer для чтения с диска ═══
+            var rentedBuffer = Memory.ChunkPool.Shared.Rent(size);
             int totalRead = 0;
 
-            while (totalRead < size)
+            try
             {
-                int read = await fs.ReadAsync(buffer.AsMemory(totalRead, size - totalRead), ct);
-                if (read == 0) break;
-                totalRead += read;
+                await using var fs = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite,
+                    bufferSize: CacheFileBufferSize,
+                    useAsync: true);
+
+                fs.Seek(offset, SeekOrigin.Begin);
+
+                while (totalRead < size)
+                {
+                    int read = await fs.ReadAsync(
+                        rentedBuffer.AsMemory(totalRead, size - totalRead), ct);
+                    if (read == 0) break;
+                    totalRead += read;
+                }
+            }
+            catch
+            {
+                Memory.ChunkPool.Shared.Return(rentedBuffer);
+                return null;
+            }
+
+            if (totalRead != size)
+            {
+                Memory.ChunkPool.Shared.Return(rentedBuffer);
+                return null;
             }
 
             entry.LastAccessedAt = DateTime.UtcNow;
 
-            return totalRead == size ? buffer : null;
+            // Создаём точный массив для длительного хранения в RAM кэше
+            if (rentedBuffer.Length == size)
+            {
+                // Размеры совпали — используем как есть, не возвращаем в пул
+                return rentedBuffer;
+            }
+
+            var result = new byte[size];
+            Buffer.BlockCopy(rentedBuffer, 0, result, 0, size);
+            Memory.ChunkPool.Shared.Return(rentedBuffer);
+            return result;
         }
         catch
         {
@@ -545,7 +571,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     /// Экспортирует полностью закэшированный трек в папку Downloads.
     /// </summary>
     public async Task<bool> ExportTrackToDownloadsAsync(
-        string trackId, 
+        string trackId,
         Func<string, Task<TrackInfo?>> getTrackFunc,
         Func<TrackInfo, Task> updateTrackFunc,
         CancellationToken ct = default)

@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
-using LMP.Core.Youtube.Utils; // Добавьте если используете UserAgent из Utils
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Audio.Http;
 
@@ -11,14 +11,9 @@ public static class SharedHttpClient
 {
     private static readonly Lazy<HttpClient> _instance = new(CreateClient);
 
-    private const int PooledConnectionLifetimeMinutes = 15;
-    private const int PooledConnectionIdleTimeoutMinutes = 5;
-    private const int MaxConnectionsPerServer = 10;
-    private const int TimeoutSeconds = 30;
-
     public static HttpClient Instance => _instance.Value;
 
-    public static HttpClient CreateClient()
+    private static HttpClient CreateClient()
     {
         var handler = new SocketsHttpHandler
         {
@@ -27,7 +22,7 @@ public static class SharedHttpClient
             MaxConnectionsPerServer = 10,
             AutomaticDecompression = DecompressionMethods.All,
             UseCookies = false,
-            EnableMultipleHttp2Connections = false,
+            EnableMultipleHttp2Connections = true,
             ResponseDrainTimeout = TimeSpan.Zero,
             KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
             ConnectTimeout = TimeSpan.FromSeconds(15),
@@ -39,12 +34,12 @@ public static class SharedHttpClient
             // Это graceful timeout — не вызывает unhandled exceptions
             Timeout = TimeSpan.FromSeconds(30),
 
-            DefaultRequestVersion = HttpVersion.Version11,
-            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact,
+            DefaultRequestVersion = HttpVersion.Version20,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrHigher,
         };
 
         client.DefaultRequestHeaders.Add("User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            YoutubeClientUtils.UserAgent);
         client.DefaultRequestHeaders.Add("Accept", "*/*");
 
         return client;
@@ -59,7 +54,6 @@ public static class SharedHttpClient
         request.Headers.Range = new RangeHeaderValue(start, end);
 
         request.Version = HttpVersion.Version11;
-        request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
 
         return request;
     }
@@ -75,7 +69,6 @@ public static class SharedHttpClient
 
             // Здесь тоже HTTP/1.1 для надежности
             request.Version = HttpVersion.Version11;
-            request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
 
             using var response = await Instance.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             return response.Content.Headers.ContentLength ?? -1;
@@ -96,7 +89,6 @@ public static class SharedHttpClient
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
 
             request.Version = HttpVersion.Version11;
-            request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
 
             using var response = await Instance.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             return response.Content.Headers.ContentType?.MediaType;

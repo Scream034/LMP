@@ -1,5 +1,5 @@
-using System.Net;
 using System.Net.Http.Headers;
+using LMP.Core.Audio.Memory;
 using LMP.Core.Exceptions;
 using LMP.Core.Youtube.Utils;
 
@@ -50,7 +50,10 @@ public sealed partial class CachingStreamSource
         Cancelled,
 
         /// <summary>Не удалось получить слот загрузки (все заняты).</summary>
-        SlotTimeout
+        SlotTimeout,
+
+        /// <summary>Чанк за пределами файла — не ошибка, просто нечего качать.</summary>
+        OutOfRange
     }
 
     #endregion
@@ -68,19 +71,23 @@ public sealed partial class CachingStreamSource
         int chunkIndex = (int)(position / _chunkSize);
         int offsetInChunk = (int)(position % _chunkSize);
 
+        // Проверка границ — не пытаемся читать за пределами файла
+        if (chunkIndex >= _totalChunks)
+            return 0;
+
         // Быстрый путь: RAM
-        if (_ramChunks.TryGetValue(chunkIndex, out var ramData))
-            return CopyFromChunk(ramData, offsetInChunk, buffer);
+        if (_ramChunks.TryGetValue(chunkIndex, out var ramEntry))
+            return CopyFromChunk(ramEntry.Data, ramEntry.Length, offsetInChunk, buffer);
 
         // Средний путь: диск
         var diskData = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
         if (diskData != null)
         {
-            _ramChunks.TryAdd(chunkIndex, diskData);
-            return CopyFromChunk(diskData, offsetInChunk, buffer);
+            _ramChunks.TryAdd(chunkIndex, new ChunkData(diskData, diskData.Length));
+            return CopyFromChunk(diskData, diskData.Length, offsetInChunk, buffer);
         }
 
-        // Медленный путь: загрузка
+        // Медленный путь: загрузка из сети
         for (int attempt = 0; attempt < ReadAtMaxEpochRetries; attempt++)
         {
             ct.ThrowIfCancellationRequested();
@@ -91,16 +98,20 @@ public sealed partial class CachingStreamSource
                 using var linkedCts = CancellationTokenSource
                     .CreateLinkedTokenSource(ct, downloadToken);
 
-                await EnsureChunkAsync(chunkIndex, linkedCts.Token);
+                var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token);
 
-                if (_ramChunks.TryGetValue(chunkIndex, out ramData))
-                    return CopyFromChunk(ramData, offsetInChunk, buffer);
+                // Чанк за пределами файла — возвращаем 0 (EOF)
+                if (result == ChunkDownloadResult.OutOfRange)
+                    return 0;
+
+                if (_ramChunks.TryGetValue(chunkIndex, out ramEntry))
+                    return CopyFromChunk(ramEntry.Data, ramEntry.Length, offsetInChunk, buffer);
 
                 diskData = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
                 if (diskData != null)
                 {
-                    _ramChunks.TryAdd(chunkIndex, diskData);
-                    return CopyFromChunk(diskData, offsetInChunk, buffer);
+                    _ramChunks.TryAdd(chunkIndex, new ChunkData(diskData, diskData.Length));
+                    return CopyFromChunk(diskData, diskData.Length, offsetInChunk, buffer);
                 }
             }
             catch (ChunkDownloadFatalException)
@@ -120,9 +131,12 @@ public sealed partial class CachingStreamSource
             $"Failed to load chunk {chunkIndex} after {ReadAtMaxEpochRetries} retries");
     }
 
-    private static int CopyFromChunk(byte[] chunkData, int offset, Memory<byte> buffer)
+    /// <summary>
+    /// Копирует данные из чанка в целевой буфер с учётом смещения.
+    /// </summary>
+    private static int CopyFromChunk(byte[] chunkData, int chunkLength, int offset, Memory<byte> buffer)
     {
-        int available = Math.Min(buffer.Length, chunkData.Length - offset);
+        int available = Math.Min(buffer.Length, chunkLength - offset);
         if (available <= 0) return 0;
         chunkData.AsSpan(offset, available).CopyTo(buffer.Span);
         return available;
@@ -134,21 +148,35 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Гарантирует доступность чанка. Загружает если нужно, с retry и circuit breaker.
+    /// Возвращает результат операции вместо броска исключений при штатных ситуациях.
     /// </summary>
-    private async Task EnsureChunkAsync(int index, CancellationToken ct)
+    private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct)
     {
+        // Валидация индекса чанка — за пределами файла не качаем
+        if (index < 0 || index >= _totalChunks)
+            return ChunkDownloadResult.OutOfRange;
+
+        // Проверяем, есть ли данные для этого чанка (start >= contentLength)
+        long chunkStart = (long)index * _chunkSize;
+        if (chunkStart >= _contentLength)
+            return ChunkDownloadResult.OutOfRange;
+
         if (_cacheEntry == null || IsChunkAvailable(index))
-            return;
+            return ChunkDownloadResult.Success;
 
         // Ждём если кто-то уже качает этот чанк
         if (_activeDownloads.TryGetValue(index, out var existingTask))
         {
-            try { await existingTask.WaitAsync(ct); }
+            try
+            {
+                await existingTask.WaitAsync(ct);
+            }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
             catch (ChunkDownloadFatalException) { throw; }
             catch { }
 
-            if (IsChunkAvailable(index)) return;
+            if (IsChunkAvailable(index))
+                return ChunkDownloadResult.Success;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -161,7 +189,8 @@ public sealed partial class CachingStreamSource
             ct.ThrowIfCancellationRequested();
 
             // Перепроверяем — мог загрузиться пока ждали
-            if (IsChunkAvailable(index)) return;
+            if (IsChunkAvailable(index))
+                return ChunkDownloadResult.Success;
 
             var downloadTask = DownloadChunkCoreAsync(index, ct);
 
@@ -188,7 +217,8 @@ public sealed partial class CachingStreamSource
                 switch (result)
                 {
                     case ChunkDownloadResult.Success:
-                        return;
+                    case ChunkDownloadResult.OutOfRange:
+                        return result;
 
                     case ChunkDownloadResult.Forbidden403:
                         await CoordinatedRefreshAsync(ct);
@@ -216,10 +246,10 @@ public sealed partial class CachingStreamSource
                         }
                         // Отмена по нашему ct — выходим
                         ct.ThrowIfCancellationRequested();
-                        return;
+                        return result;
 
                     case ChunkDownloadResult.Fatal:
-                        return;
+                        return result;
                 }
             }
             else
@@ -233,7 +263,8 @@ public sealed partial class CachingStreamSource
                     catch { }
                 }
 
-                if (IsChunkAvailable(index)) return;
+                if (IsChunkAvailable(index))
+                    return ChunkDownloadResult.Success;
                 // Не загрузился — retry в следующей итерации
             }
         }
@@ -282,12 +313,25 @@ public sealed partial class CachingStreamSource
     #region DownloadChunkCoreAsync
 
     /// <summary>
-    /// Скачивает один чанк. Возвращает результат вместо глотания ошибок.
+    /// Скачивает один чанк. Вычисляет и валидирует HTTP Range перед запросом.
+    /// Возвращает результат вместо глотания ошибок.
     /// </summary>
     private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct)
     {
         if (_cacheEntry == null || _cacheEntry.IsChunkDownloaded(index))
             return ChunkDownloadResult.Success;
+
+        // Вычисляем и валидируем range
+        long start = (long)index * _chunkSize;
+        long end = Math.Min(start + _chunkSize - 1, _contentLength - 1);
+
+        // Невалидный range — чанк полностью за пределами файла
+        if (start >= _contentLength || start > end)
+        {
+            Log.Debug($"[CachingSource] Chunk {index} out of range: " +
+                      $"start={start}, contentLength={_contentLength}");
+            return ChunkDownloadResult.OutOfRange;
+        }
 
         bool gotSlot = false;
 
@@ -309,7 +353,7 @@ public sealed partial class CachingStreamSource
             try { _downloadSlots.Release(); } catch { }
             gotSlot = false;
 
-            return await DownloadChunkHttpAsync(index, ct);
+            return await DownloadChunkHttpAsync(index, start, end, ct);
         }
         catch (ChunkDownloadFatalException) { throw; }
         catch (OperationCanceledException) { return ChunkDownloadResult.Cancelled; }
@@ -332,14 +376,15 @@ public sealed partial class CachingStreamSource
     }
 
     /// <summary>
-    /// HTTP загрузка чанка. ВСЕГДА await'ит до конца — никогда не бросает
-    /// HTTP операцию "в полёте". При отмене ct — просто отбрасывает результат.
+    /// HTTP загрузка чанка с предвычисленным и валидным range.
+    /// Использует ChunkPool для избежания LOH аллокаций.
+    /// ВСЕГДА await'ит до конца — никогда не бросает HTTP операцию "в полёте".
     /// </summary>
-    private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(int index, CancellationToken ct)
+    private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(
+        int index, long start, long end, CancellationToken ct)
     {
-        long start = (long)index * _chunkSize;
-        long end = Math.Min(start + _chunkSize - 1, _contentLength - 1);
         int rn = Interlocked.Increment(ref _requestSequenceNumber);
+        int expectedBytes = (int)(end - start + 1);
 
         Log.Debug($"[CachingSource] Chunk {index}: GET rn={rn}, range={start}-{end}");
 
@@ -375,6 +420,13 @@ public sealed partial class CachingStreamSource
                 return ChunkDownloadResult.Forbidden403;
             }
 
+            // 416 Range Not Satisfiable = конец файла, не ошибка
+            if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
+            {
+                Log.Debug($"[CachingSource] Chunk {index}: 416 Range Not Satisfiable (EOF)");
+                return ChunkDownloadResult.OutOfRange;
+            }
+
             Interlocked.Exchange(ref _consecutive403Count, 0);
 
             if (response.Content.Headers.ContentType?.MediaType?.Contains("yt-ump") == true)
@@ -388,56 +440,118 @@ public sealed partial class CachingStreamSource
 
             response.EnsureSuccessStatusCode();
 
-            // ═══ READ — всегда ждём до конца ═══
-            byte[] chunkData;
+            // ═══ READ — через pooled buffer для избежания LOH ═══
+            byte[] rentedBuffer = ChunkPool.Shared.Rent(expectedBytes);
+            int actualLength;
+
             try
             {
-                chunkData = await response.Content.ReadAsByteArrayAsync(CancellationToken.None);
+                using var contentStream = await response.Content.ReadAsStreamAsync(CancellationToken.None);
+                actualLength = await ReadStreamFullyAsync(contentStream, rentedBuffer, expectedBytes);
             }
             catch (Exception ex)
             {
+                ChunkPool.Shared.Return(rentedBuffer);
                 Log.Warn($"[CachingSource] Chunk {index} read: {ex.Message}");
                 return ChunkDownloadResult.NetworkError;
             }
 
             // Проверяем отмену ПОСЛЕ чтения
             if (ct.IsCancellationRequested)
+            {
+                ChunkPool.Shared.Return(rentedBuffer);
                 return ChunkDownloadResult.Cancelled;
+            }
 
             // ═══ VALIDATE ═══
-            int totalBytesToRead = (int)(end - start + 1);
-
-            if (chunkData.Length < totalBytesToRead)
+            if (actualLength == 0)
             {
-                Log.Warn($"[CachingSource] Chunk {index} incomplete: " +
-                         $"{chunkData.Length}/{totalBytesToRead}");
+                ChunkPool.Shared.Return(rentedBuffer);
+                Log.Warn($"[CachingSource] Chunk {index}: empty response");
                 return ChunkDownloadResult.NetworkError;
             }
 
-            if (chunkData.Length > totalBytesToRead)
+            if (actualLength < expectedBytes)
             {
-                var trimmed = new byte[totalBytesToRead];
-                Array.Copy(chunkData, trimmed, totalBytesToRead);
-                chunkData = trimmed;
+                // Если это последний чанк и получили хоть что-то — OK
+                if (start + actualLength >= _contentLength - _chunkSize)
+                {
+                    Log.Debug($"[CachingSource] Chunk {index}: partial read " +
+                              $"{actualLength}/{expectedBytes} (near EOF)");
+                }
+                else
+                {
+                    ChunkPool.Shared.Return(rentedBuffer);
+                    Log.Warn($"[CachingSource] Chunk {index} incomplete: " +
+                             $"{actualLength}/{expectedBytes}");
+                    return ChunkDownloadResult.NetworkError;
+                }
             }
 
-            // ═══ SAVE ═══
-            _ramChunks.TryAdd(index, chunkData);
+            // ═══ SAVE — создаём точный массив для длительного хранения в RAM ═══
+            // rentedBuffer может быть больше actualLength (из-за ArrayPool),
+            // поэтому создаём массив точного размера для RAM кэша
+            byte[] chunkData;
+            if (rentedBuffer.Length == actualLength)
+            {
+                // Редкий случай — размеры совпали, используем как есть
+                // Не возвращаем в пул — массив уходит в _ramChunks
+                chunkData = rentedBuffer;
+            }
+            else
+            {
+                chunkData = new byte[actualLength];
+                Buffer.BlockCopy(rentedBuffer, 0, chunkData, 0, actualLength);
+                ChunkPool.Shared.Return(rentedBuffer);
+            }
 
-            try
-            {
-                await _cacheManager.WriteChunkAsync(
-                    _cacheKey, index, chunkData, CancellationToken.None);
-            }
-            catch (IOException ex)
-            {
-                Log.Warn($"[CachingSource] Disk write chunk {index}: {ex.Message}");
-            }
+            _ramChunks.TryAdd(index, new ChunkData(chunkData, actualLength));
+
+            // Асинхронная запись на диск — не блокируем поток загрузки
+            _ = WriteToDiskFireAndForgetAsync(index, chunkData);
 
             if (_ramChunks.Count > _config.MaxRamChunks)
                 EvictDistantRamChunks();
 
             return ChunkDownloadResult.Success;
+        }
+    }
+
+    /// <summary>
+    /// Полностью читает данные из потока в буфер (с учётом partial reads от TCP).
+    /// </summary>
+    private static async ValueTask<int> ReadStreamFullyAsync(
+        Stream stream, byte[] buffer, int maxBytes)
+    {
+        int totalRead = 0;
+
+        while (totalRead < maxBytes)
+        {
+            int read = await stream.ReadAsync(
+                buffer.AsMemory(totalRead, maxBytes - totalRead));
+
+            if (read == 0)
+                break; // EOF
+
+            totalRead += read;
+        }
+
+        return totalRead;
+    }
+
+    /// <summary>
+    /// Fire-and-forget запись чанка на диск.
+    /// Ошибки логируются, но не прерывают воспроизведение.
+    /// </summary>
+    private async Task WriteToDiskFireAndForgetAsync(int index, byte[] data)
+    {
+        try
+        {
+            await _cacheManager.WriteChunkAsync(_cacheKey, index, data, CancellationToken.None);
+        }
+        catch (IOException ex)
+        {
+            Log.Warn($"[CachingSource] Disk write chunk {index}: {ex.Message}");
         }
     }
 

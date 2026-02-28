@@ -168,12 +168,8 @@ public partial class PlayerBarView : UserControl
         VolumeButton.PointerExited -= OnVolumeButtonExited;
         VolumePopup.Opened -= OnVolumePopupOpened;
         VolumePopup.Closed -= OnVolumePopupClosed;
-
-        if (_currentViewModel != null)
-        {
-            _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
-            _currentViewModel = null;
-        }
+        _currentViewModel?.PropertyChanged -= OnViewModelPropertyChanged;
+        _currentViewModel = null;
 
         ClearBufferSegments();
     }
@@ -199,12 +195,8 @@ public partial class PlayerBarView : UserControl
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
-
-        if (_currentViewModel != null)
-        {
-            _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
-            _currentViewModel = null;
-        }
+        _currentViewModel?.PropertyChanged -= OnViewModelPropertyChanged;
+        _currentViewModel = null;
 
         if (DataContext is PlayerBarViewModel vm)
         {

@@ -381,7 +381,7 @@ internal static partial class SigCipherExtractor
 
                 if (pos < code.Length && (IsIdentStart(code[pos]) || char.IsAsciiDigit(code[pos])))
                 {
-                    var objName = code.Slice(identStart, identEnd - identStart).ToString();
+                    var objName = code[identStart..identEnd].ToString();
                     if (!paramNames.Contains(objName))
                         return objName;
                 }
@@ -455,7 +455,7 @@ internal static partial class SigCipherExtractor
                 // Structural fallback: single no-arg call → reverse
                 if (body.Trim().Length < 80 &&
                     !bodySpan.Contains(",", StringComparison.Ordinal) &&
-                    (bodySpan.Contains("()", StringComparison.Ordinal)))
+                    bodySpan.Contains("()", StringComparison.Ordinal))
                     opType = SigCipherOpType.Reverse;
                 else if (bodySpan.Trim().Contains("(0,", StringComparison.Ordinal) &&
                          !bodySpan.Trim().Contains("[0]", StringComparison.Ordinal))
@@ -503,7 +503,7 @@ internal static partial class SigCipherExtractor
             while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
             if (pos == numStart) continue;
 
-            if (!int.TryParse(span.Slice(numStart, pos - numStart), out int idx)) continue;
+            if (!int.TryParse(span[numStart..pos], out int idx)) continue;
             if (idx < 0 || idx >= dictArray.Length) continue;
 
             var resolved = dictArray[idx];
@@ -584,7 +584,7 @@ internal static partial class SigCipherExtractor
                 int numStart = pos;
                 while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
                 if (pos > numStart)
-                    int.TryParse(span.Slice(numStart, pos - numStart), out param);
+                    int.TryParse(span[numStart..pos], out param);
             }
 
             var methodName = span[methodStart..methodEnd].ToString();
@@ -631,7 +631,7 @@ internal static partial class SigCipherExtractor
             int numStart = pos;
             while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
             if (pos == numStart) continue;
-            if (!int.TryParse(span.Slice(numStart, pos - numStart), out int arrayIdx)) continue;
+            if (!int.TryParse(span[numStart..pos], out int arrayIdx)) continue;
 
             while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
             if (pos >= span.Length || span[pos] != ']') continue;
@@ -658,7 +658,7 @@ internal static partial class SigCipherExtractor
                 int paramStart = pos;
                 while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
                 if (pos > paramStart)
-                    int.TryParse(span.Slice(paramStart, pos - paramStart), out param);
+                    int.TryParse(span[paramStart..pos], out param);
             }
 
             if (arrayIdx < dictArray.Length)

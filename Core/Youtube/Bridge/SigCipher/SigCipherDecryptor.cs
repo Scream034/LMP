@@ -178,7 +178,7 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
             while (afterNum < span.Length && span[afterNum] is ' ' or '\t') afterNum++;
             if (afterNum >= span.Length || span[afterNum] != ',') continue;
 
-            if (int.TryParse(span.Slice(numStart, pos - numStart), out int num))
+            if (int.TryParse(span[numStart..pos], out int num))
             {
                 Log.Debug($"[SigCipher] Found call number {num} for '{funcName}'");
                 return num;

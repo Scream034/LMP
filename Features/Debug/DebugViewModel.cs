@@ -440,7 +440,7 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             }
 
             // PCM buffer
-            var pcmBuffer = new CircularBuffer<float>(decoder.SampleRate * decoder.Channels * 4);
+            var pcmBuffer = new LockFreeRingBuffer<float>(decoder.SampleRate * decoder.Channels * 4);
             var decodeOutput = new float[decoder.MaxFrameSize * decoder.Channels];
 
             backend.Initialize(decoder.SampleRate, decoder.Channels, buffer =>

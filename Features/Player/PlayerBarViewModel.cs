@@ -71,9 +71,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private string? _pendingStreamInfoTrackId;
 
     /// <summary>
-    /// Целевая позиция seek — блокирует обновление позиции от AudioEngine.
+    /// Ticks (DateTime.UtcNow.Ticks) когда IsSeekBusy был установлен в true.
+    /// Используется FallbackPositionUpdate как safety timeout: если SeekCompleted
+    /// не приходит в течение 2 секунд, guard сбрасывается принудительно.
+    /// 0 = не активен.
     /// </summary>
-    private double _seekTargetSeconds = -1;
+    private long _seekBusyStartTicks;
 
     #endregion
 
@@ -337,48 +340,50 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => UpdateQueueState())
             .DisposeWith(Disposables);
 
+        // ═══ SEEK COMPLETED — просто обновляем позицию и снимаем guard ═══
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
-                h => _audio.OnPositionChanged += h,
-                h => _audio.OnPositionChanged -= h)
-            .Where(_ => !_isSuspended && !_isSeeking && !IsTrackResetting)
-            .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(pos =>
-            {
-                if (_isSeeking || _isSuspended || IsTrackResetting) return;
+               h => _audio.OnSeekCompleted += h,
+               h => _audio.OnSeekCompleted -= h)
+           .ObserveOn(RxApp.MainThreadScheduler)
+           .Subscribe(pos =>
+           {
+               // Сбрасываем seek guard — position events снова проходят
+               Volatile.Write(ref _seekBusyStartTicks, 0L);
 
-                // Жёсткая блокировка: ждём SeekCompleted
-                if (_seekTargetSeconds >= 0) return;
+               if (!_isSuspended)
+               {
+                   PositionSeconds = pos.TotalSeconds;
+                   Position = pos;
+                   ForceUpdateBufferProgress();
+               }
 
-                Position = pos;
-                PositionSeconds = pos.TotalSeconds;
-                this.RaisePropertyChanged(nameof(DurationTooltip));
+               // Снимаем busy ПОСЛЕ обновления буфера и позиции
+               IsSeekBusy = false;
+           })
+           .DisposeWith(Disposables);
 
-                if (IsSeekBusy && !IsLoading)
-                    IsSeekBusy = false;
-            })
-            .DisposeWith(Disposables);
-
+        // ═══ POSITION — event-based с IsSeekBusy guard ═══
+        // IsSeekBusy блокирует stale position events между EndSeek() и SeekCompleted.
+        // Это надёжнее старой схемы с _seekTargetSeconds + cooldown,
+        // которая не учитывала Rx Throttle delay.
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
-                h => _audio.OnSeekCompleted += h,
-                h => _audio.OnSeekCompleted -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(pos =>
-            {
-                // Разблокируем позицию
-                _seekTargetSeconds = -1;
+                 h => _audio.OnPositionChanged += h,
+                 h => _audio.OnPositionChanged -= h)
+             .Where(_ => !_isSuspended && !_isSeeking && !IsTrackResetting && !IsSeekBusy)
+             .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
+             .DistinctUntilChanged(pos => (long)(pos.TotalMilliseconds / 100)) // 100ms precision, suppress jitter
+             .ObserveOn(RxApp.MainThreadScheduler)
+             .Subscribe(pos =>
+             {
+                 // Redundant check: state мог измениться между Where и Subscribe
+                 // (разные потоки: source thread → UI thread через ObserveOn)
+                 if (_isSeeking || _isSuspended || IsTrackResetting || IsSeekBusy) return;
 
-                if (!_isSuspended)
-                {
-                    PositionSeconds = pos.TotalSeconds;
-                    Position = pos;
-                    ForceUpdateBufferProgress();
-                }
-
-                // Снимаем busy — View проверит pending seek
-                IsSeekBusy = false;
-            })
-            .DisposeWith(Disposables);
+                 Position = pos;
+                 PositionSeconds = pos.TotalSeconds;
+                 this.RaisePropertyChanged(nameof(DurationTooltip));
+             })
+             .DisposeWith(Disposables);
 
         // MaxVolume — с дедупликацией
         Observable.FromEvent<Action<int>, int>(
@@ -404,12 +409,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(UpdateStreamInfo)
             .DisposeWith(Disposables);
 
-        // Buffer
         Observable.FromEvent<Action<BufferState>, BufferState>(
                 h => _audio.OnBufferStateChanged += h,
                 h => _audio.OnBufferStateChanged -= h)
             .Where(_ => !_isSuspended)
-            .Throttle(TimeSpan.FromMilliseconds(BufferUpdateIntervalMs))
+            .Throttle(TimeSpan.FromMilliseconds(100))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(HandleBufferStateChanged)
             .DisposeWith(Disposables);
@@ -631,11 +635,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
         BufferProgressPercent = state.Progress;
         IsFullyBuffered = state.IsFullyBuffered;
 
-        if (!RangesEqual(BufferedRanges, state.Ranges))
-        {
-            BufferedRanges = state.Ranges;
-            this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
-        }
+        // Всегда обновляем ranges — даже если кажутся "одинаковыми",
+        // может быть precision difference после seek
+        BufferedRanges = state.Ranges;
+        this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
     }
 
     private static bool RangesEqual(
@@ -937,7 +940,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         if (elapsed >= 0.5 && _lastSpeedCheck != DateTime.MinValue)
         {
-            var kbs = ((currentBytes - _lastDownloadedBytes) / elapsed) / 1024.0;
+            var kbs = (currentBytes - _lastDownloadedBytes) / elapsed / 1024.0;
             DownloadSpeedText = kbs > 10
                 ? (kbs >= 1024
                     ? string.Format(L.Get("Stream_Speed_Mb", "{0:F1} MB/s"), kbs / 1024)
@@ -951,9 +954,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void FallbackPositionUpdate()
     {
-        if (!HasTrack || _isSeeking || _isSuspended || IsTrackResetting)
+        if (!HasTrack || _isSuspended || IsTrackResetting)
             return;
 
+        // ═══ Duration обновляем ВСЕГДА, даже при seek ═══
+        // Это решает проблему "залагавшего Duration" —
+        // Duration приходит от AudioEngine асинхронно и не должна блокироваться guard'ами.
         var realDur = _audio.TotalDuration;
         if (Math.Abs(DurationSeconds - realDur.TotalSeconds) > 1 && realDur.TotalSeconds > 0)
         {
@@ -962,8 +968,35 @@ public sealed class PlayerBarViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(DurationTooltip));
         }
 
-        // Если ждём SeekCompleted — не трогаем позицию
-        if (IsPlaying && _seekTargetSeconds < 0)
+        // ═══ IsSeekBusy safety timeout ═══
+        // Если SeekCompleted не пришёл в течение 2 секунд (seek rejected,
+        // pipeline not ready, event lost), принудительно сбрасываем guard.
+        // В нормальном режиме SeekCompleted приходит за ~100ms.
+        if (IsSeekBusy)
+        {
+            long busyTicks = Volatile.Read(ref _seekBusyStartTicks);
+            if (busyTicks > 0 &&
+                (DateTime.UtcNow.Ticks - busyTicks) > TimeSpan.FromSeconds(2).Ticks)
+            {
+                Log.Debug("[PlayerBar] Seek busy timeout — clearing guard");
+                IsSeekBusy = false;
+                Volatile.Write(ref _seekBusyStartTicks, 0L);
+
+                // Подхватываем реальную позицию из AudioEngine
+                var realPos = _audio.CurrentPosition;
+                Position = realPos;
+                PositionSeconds = realPos.TotalSeconds;
+            }
+
+            // Пока IsSeekBusy — не обновляем позицию (ждём SeekCompleted)
+            return;
+        }
+
+        // Если seek в процессе (drag) — не трогаем позицию
+        if (_isSeeking)
+            return;
+
+        if (IsPlaying)
         {
             var pos = _audio.CurrentPosition;
             Position = pos;
@@ -991,8 +1024,18 @@ public sealed class PlayerBarViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Завершает drag и отправляет seek в AudioEngine с cooldown.
+    /// Завершает drag и отправляет seek в AudioEngine.
+    /// Блокирует обновление позиции через IsSeekBusy до получения OnSeekCompleted.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Guard lifecycle:</b></para>
+    /// <list type="number">
+    ///   <item>EndSeek → IsSeekBusy = true, _seekBusyStartTicks = now</item>
+    ///   <item>Rx Position events фильтруются (.Where(!IsSeekBusy))</item>
+    ///   <item>SeekCompleted → IsSeekBusy = false (нормальный путь, ~100ms)</item>
+    ///   <item>FallbackPositionUpdate: если IsSeekBusy > 2s → принудительный сброс (safety net)</item>
+    /// </list>
+    /// </remarks>
     public async void EndSeek()
     {
         if (!HasTrack)
@@ -1004,12 +1047,37 @@ public sealed class PlayerBarViewModel : ViewModelBase
         double target = PositionSeconds;
         _isSeeking = false;
 
-        _seekTargetSeconds = target;
+        // Оптимистичное обновление UI — мгновенный feedback
         PositionSeconds = target;
         Position = TimeSpan.FromSeconds(target);
 
-        await _audio.SeekAsync(TimeSpan.FromSeconds(target));
-        ForceUpdateBufferProgress();
+        // Активируем guard — блокируем stale position events
+        IsSeekBusy = true;
+        Volatile.Write(ref _seekBusyStartTicks, DateTime.UtcNow.Ticks);
+
+        try
+        {
+            await _audio.SeekAsync(TimeSpan.FromSeconds(target));
+            // SeekCompleted event снимет IsSeekBusy и обновит позицию
+        }
+        catch (OperationCanceledException)
+        {
+            // Seek отменён (например, новый трек) — сбрасываем guard
+            IsSeekBusy = false;
+            Volatile.Write(ref _seekBusyStartTicks, 0L);
+            Log.Debug("[PlayerBar] Seek cancelled, guards cleared");
+        }
+        catch (Exception ex)
+        {
+            // Ошибка seek — сбрасываем guard и восстанавливаем реальную позицию
+            IsSeekBusy = false;
+            Volatile.Write(ref _seekBusyStartTicks, 0L);
+
+            var realPos = _audio.CurrentPosition;
+            Position = realPos;
+            PositionSeconds = realPos.TotalSeconds;
+            Log.Warn($"[PlayerBar] Seek failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -1019,7 +1087,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public void CancelSeek()
     {
         _isSeeking = false;
-        _seekTargetSeconds = -1;
+
+        // Сбрасываем seek guard
+        IsSeekBusy = false;
+        Volatile.Write(ref _seekBusyStartTicks, 0L);
 
         var realPos = _audio.CurrentPosition;
         Position = realPos;

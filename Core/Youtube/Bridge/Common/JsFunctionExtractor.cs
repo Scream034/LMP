@@ -1296,19 +1296,6 @@ internal static partial class JsFunctionExtractor
         }
     }
 
-    /// <summary>
-    /// Concatenates spans into a single string via thread-local StringBuilder.
-    /// </summary>
-    private static string ConcatSpans(
-        ReadOnlySpan<char> a, ReadOnlySpan<char> b,
-        ReadOnlySpan<char> c, ReadOnlySpan<char> d)
-    {
-        var sb = t_concatBuilder ??= new StringBuilder(256);
-        sb.Clear();
-        sb.Append(a).Append(b).Append(c).Append(d);
-        return sb.ToString();
-    }
-
     private static string ConcatSpans(
         ReadOnlySpan<char> a, ReadOnlySpan<char> b,
         ReadOnlySpan<char> c, ReadOnlySpan<char> d,

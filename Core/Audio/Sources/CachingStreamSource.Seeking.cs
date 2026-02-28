@@ -14,57 +14,92 @@ public sealed partial class CachingStreamSource
 
         long targetBytePos = seekInfo.Value.BytePosition;
         long segmentStartMs = seekInfo.Value.TimestampMs;
+
+        // ═══ ВАЛИДАЦИЯ: не выходим за пределы файла ═══
+        if (targetBytePos >= _contentLength)
+        {
+            Log.Warn($"[CachingSource] Seek position {targetBytePos} >= contentLength {_contentLength}, clamping to EOF");
+            targetBytePos = Math.Max(0, _contentLength - 1);
+        }
+
         int targetChunk = (int)(targetBytePos / _chunkSize);
 
-        Log.Debug($"[CachingSource] Seek: {positionMs}ms → " +
-                  $"byte {targetBytePos}, chunk {targetChunk}/{_cacheEntry?.TotalChunks}");
+        // Ограничиваем chunk index валидным диапазоном
+        targetChunk = Math.Clamp(targetChunk, 0, _totalChunks - 1);
 
-        // Сбрасываем эпоху — preload loop перестанет запускать новые загрузки
-        // Но НЕ ждём завершения активных — они завершатся сами
+        Log.Debug($"[CachingSource] Seek: {positionMs}ms → " +
+                  $"byte {targetBytePos}, chunk {targetChunk}/{_totalChunks}");
+
+        // ═══ EPOCH RESET — отменяем старые загрузки ═══
+        // Preload loop перестанет запускать новые загрузки.
+        // Активные загрузки завершатся сами (через OperationCanceledException).
         ResetDownloadEpoch();
 
-        // Обновляем позицию
+        // ═══ POSITION UPDATE ═══
         Volatile.Write(ref _currentChunk, targetChunk);
         _readStream!.Position = targetBytePos;
         _parser.Reset();
         Volatile.Write(ref _positionMs, segmentStartMs);
 
-        // Загружаем нужные чанки — если уже в кэше, мгновенно
+        // ═══ NON-BLOCKING PRELOAD ═══
+        // Fire-and-forget: запускаем загрузку нужных чанков в фоне.
+        // Decoder loop начнёт читать немедленно — если чанк ещё не загружен,
+        // ReadAtAsync скачает его on-demand (через EnsureChunkAsync).
+        // Preload здесь — оптимизация, а не обязательное условие.
         if (!_isOfflineMode && _cacheEntry != null)
         {
-            try
-            {
-                await PreloadChunksForSeekAsync(targetChunk, ct);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                return false;
-            }
+            _ = PreloadChunksForSeekFireAndForgetAsync(targetChunk);
         }
 
         return true;
     }
 
     /// <summary>
-    /// Загружает чанки для новой позиции после seek.
+    /// Fire-and-forget preload чанков для seek позиции.
+    /// Не блокирует возврат из <see cref="SeekAsync"/> — decoder может начать
+    /// чтение немедленно, даже если чанки ещё не загружены.
     /// </summary>
-    private async Task PreloadChunksForSeekAsync(int targetChunk, CancellationToken ct)
+    /// <remarks>
+    /// Если до завершения загрузки произойдёт новый seek (epoch change),
+    /// все запросы будут отменены автоматически через <see cref="CurrentDownloadToken"/>.
+    /// </remarks>
+    private async Task PreloadChunksForSeekFireAndForgetAsync(int targetChunk)
     {
-        if (_cacheEntry == null) return;
-
-        var tasks = new List<Task>();
-        int end = Math.Min(targetChunk + _config.SeekPreloadChunks, _cacheEntry.TotalChunks);
-
-        for (int i = targetChunk; i < end; i++)
+        try
         {
-            if (!IsChunkAvailable(i))
-                tasks.Add(EnsureChunkAsync(i, ct));
+            var epochAtStart = Interlocked.Read(ref _downloadEpoch);
+            var downloadToken = CurrentDownloadToken;
+
+            int end = Math.Min(targetChunk + _config.SeekPreloadChunks, _totalChunks);
+
+            var tasks = new List<Task>();
+
+            for (int i = targetChunk; i < end; i++)
+            {
+                // Проверяем epoch — если новый seek произошёл, прерываемся
+                if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
+                {
+                    Log.Debug("[CachingSource] Seek preload cancelled: epoch changed");
+                    return;
+                }
+
+                if (!IsChunkAvailable(i))
+                    tasks.Add(SafeEnsureChunkAsync(i, downloadToken));
+            }
+
+            if (tasks.Count > 0)
+            {
+                Log.Debug($"[CachingSource] Seek preloading {tasks.Count} chunks from {targetChunk}");
+                await Task.WhenAll(tasks);
+            }
         }
-
-        if (tasks.Count > 0)
+        catch (OperationCanceledException)
         {
-            Log.Debug($"[CachingSource] Seek preloading {tasks.Count} chunks from {targetChunk}");
-            await Task.WhenAll(tasks);
+            // Epoch changed или dispose — ожидаемо
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[CachingSource] Seek preload error: {ex.Message}");
         }
     }
 }

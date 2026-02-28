@@ -1,7 +1,31 @@
+using LMP.Core.Exceptions;
+
 namespace LMP.Core.Audio.Sources;
 
 public sealed partial class CachingStreamSource
 {
+    #region Suspend/Resume
+
+    /// <summary>
+    /// Приостанавливает фоновую загрузку (при сворачивании окна).
+    /// </summary>
+    public void Suspend()
+    {
+        _suspendGate.Reset();
+        Log.Debug("[CachingSource] Suspended");
+    }
+
+    /// <summary>
+    /// Возобновляет фоновую загрузку.
+    /// </summary>
+    public void Resume()
+    {
+        _suspendGate.Set();
+        Log.Debug("[CachingSource] Resumed");
+    }
+
+    #endregion
+
     #region Preload Loop
 
     private async Task PreloadLoopAsync(CancellationToken ct)
@@ -14,8 +38,11 @@ public sealed partial class CachingStreamSource
         {
             try
             {
-                // Проверяем suspend gate
-                _suspendGate.Wait(ct);
+                // Асинхронная проверка suspend вместо блокирующей ManualResetEventSlim.Wait()
+                while (!_suspendGate.IsSet && !ct.IsCancellationRequested)
+                {
+                    await Task.Delay(100, ct);
+                }
 
                 await Task.Delay(_config.PreloadIntervalMs, ct);
 
@@ -50,7 +77,10 @@ public sealed partial class CachingStreamSource
                     }
 
                     int idx = current + i;
-                    if (idx >= _cacheEntry.TotalChunks) break;
+
+                    // Проверка границ — не выходим за пределы файла
+                    if (idx >= _totalChunks)
+                        break;
 
                     if (IsChunkAvailable(idx))
                     {
@@ -71,7 +101,6 @@ public sealed partial class CachingStreamSource
                     Log.Debug("[CachingSource] Preload: epoch changed during preload ahead, re-evaluating");
                     continue;
                 }
-                
 
                 if (!activePreload)
                     idleCycles++;
@@ -96,6 +125,7 @@ public sealed partial class CachingStreamSource
                     int? target = FindNearestMissingChunk(current);
 
                     if (target.HasValue
+                        && target.Value < _totalChunks
                         && !IsChunkAvailable(target.Value)
                         && !_activeDownloads.ContainsKey(target.Value))
                     {
@@ -136,7 +166,7 @@ public sealed partial class CachingStreamSource
             await EnsureChunkAsync(index, ct);
         }
         catch (OperationCanceledException) { }
-        catch (Exceptions.ChunkDownloadFatalException ex)
+        catch (ChunkDownloadFatalException ex)
         {
             Log.Debug($"[Preload] Chunk {index} fatal: {ex.Message}");
         }
@@ -153,7 +183,9 @@ public sealed partial class CachingStreamSource
     private int? FindNearestMissingChunk(int currentChunk)
     {
         if (_cacheEntry == null) return null;
-        int total = _cacheEntry.TotalChunks;
+
+        // Используем реальное количество чанков
+        int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
 
         for (int offset = 1; offset < total; offset++)
         {
@@ -169,6 +201,7 @@ public sealed partial class CachingStreamSource
         return null;
     }
 
+    /// <inheritdoc/>
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
     {
         if (_isOfflineMode)
@@ -177,7 +210,8 @@ public sealed partial class CachingStreamSource
         if (_cacheEntry == null)
             return [];
 
-        int total = _cacheEntry.TotalChunks;
+        // Используем реальное количество чанков
+        int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
         if (total == 0)
             return [];
 

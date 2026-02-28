@@ -90,11 +90,11 @@ class Program
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             e.SetObserved(); // Предотвращает crash в любом случае
-            
+
             try
             {
-                var msg = e.Exception?.InnerException?.Message 
-                       ?? e.Exception?.Message 
+                var msg = e.Exception?.InnerException?.Message
+                       ?? e.Exception?.Message
                        ?? "unknown";
                 Log.Debug($"[UnobservedTask] Suppressed: {msg}");
             }
@@ -120,7 +120,7 @@ class Program
                         Log.Warn($"[AppDomain] SSL/TLS exception suppressed: {ex.Message}");
                         return;
                     }
-                    
+
                     Log.Error($"[AppDomain] Unhandled: {ex.Message}", ex);
                 }
                 else
@@ -255,7 +255,7 @@ class Program
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
 
-        services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.CreateClient()));
+        services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));
         services.AddSingleton<SigCipherDecryptor>();
         services.AddSingleton<NTokenDecryptor>();
 

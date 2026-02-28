@@ -29,6 +29,16 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed partial class CachingStreamSource : IAudioSource
 {
+    #region Nested Types
+
+    /// <summary>
+    /// Хранит данные чанка вместе с реальной длиной.
+    /// Нужно потому что массив из ArrayPool может быть больше реальных данных.
+    /// </summary>
+    internal readonly record struct ChunkData(byte[] Data, int Length);
+
+    #endregion
+
     #region Fields
 
     // ── Configuration ──
@@ -57,7 +67,10 @@ public sealed partial class CachingStreamSource : IAudioSource
     private AsyncCachingReadStream? _readStream;
 
     // ── Chunk storage ──
-    private readonly ConcurrentDictionary<int, byte[]> _ramChunks = new();
+    /// <summary>
+    /// RAM кэш чанков. Ключ = индекс чанка. Значение = данные + реальная длина.
+    /// </summary>
+    private readonly ConcurrentDictionary<int, ChunkData> _ramChunks = new();
     private readonly ConcurrentDictionary<int, Task> _activeDownloads = new();
     private readonly SemaphoreSlim _downloadSlots;
 
@@ -162,7 +175,12 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         // Derived
         _chunkSize = config.ChunkSizeBytes;
-        _totalChunks = (int)Math.Ceiling((double)contentLength / _chunkSize);
+
+        // Корректный расчёт количества чанков
+        _totalChunks = contentLength > 0
+            ? (int)Math.Ceiling((double)contentLength / _chunkSize)
+            : 1;
+
         _downloadSlots = new SemaphoreSlim(config.MaxConcurrentDownloads);
     }
 
@@ -347,20 +365,18 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             if (oldCts != null)
             {
-                // Синхронный Cancel — все ReadAsync/SendAsync мгновенно 
+                // Синхронный Cancel — все ReadAsync/SendAsync мгновенно
                 // получат OperationCanceledException
                 try { oldCts.Cancel(); }
                 catch (ObjectDisposedException) { }
 
-                // Dispose через 5 секунд — даём IO completion threads 
-                // время вернуть результат. Иначе ValueTask становится
-                // "orphaned" и вызывает unobserved exception в SslStream.
-                Timer? disposer = null;
-                disposer = new Timer(_ =>
+                // Dispose через background task — даём IO completion threads
+                // время вернуть результат
+                _ = Task.Run(async () =>
                 {
+                    await Task.Delay(2000);
                     try { oldCts.Dispose(); } catch { }
-                    try { disposer?.Dispose(); } catch { }
-                }, null, 5000, Timeout.Infinite);
+                });
             }
 
             return _downloadCts.Token;

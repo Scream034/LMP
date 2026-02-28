@@ -22,8 +22,13 @@ public sealed class AudioPlayerOptions
 /// <summary>
 /// Аудио плеер с акторной моделью обработки команд.
 /// 
-/// Все публичные методы неблокирующие — они только отправляют команды в очередь.
-/// Обработка идёт строго последовательно в фоновом потоке.
+/// <para><b>Архитектура:</b></para>
+/// <para>Все публичные методы неблокирующие — они только отправляют команды в очередь.
+/// Обработка идёт строго последовательно в фоновом потоке.</para>
+/// 
+/// <para><b>Thread Safety:</b></para>
+/// <para>Все публичные методы потокобезопасны. Внутреннее состояние защищено
+/// через actor model (single reader channel).</para>
 /// </summary>
 public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 {
@@ -296,7 +301,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 // Проверяем актуальность сессии
                 if (command.SessionId < currentSession && command is not DisposeCommand)
                 {
-                    Log.Debug($"[AudioPlayer] Skipping outdated command: {command.GetType().Name} (session {command.SessionId} < {currentSession})");
+                    Log.Debug($"[AudioPlayer] Skipping outdated command: " +
+                              $"{command.GetType().Name} (session {command.SessionId} < {currentSession})");
 
                     if (command is SeekCommand { Completion: { } tcs })
                         tcs.TrySetCanceled();
@@ -414,7 +420,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (cmd.SessionId < currentSession)
             {
-                Log.Debug($"[AudioPlayer] Play cancelled after buffering: session {cmd.SessionId} < {currentSession}");
+                Log.Debug($"[AudioPlayer] Play cancelled after buffering: " +
+                          $"session {cmd.SessionId} < {currentSession}");
                 var stale = Interlocked.Exchange(ref _activePipeline, null);
                 if (stale != null) await stale.DisposeAsync();
                 return;
@@ -478,32 +485,34 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         bool wasPlaying = _state == PlayerState.Playing;
         SetState(PlayerState.Seeking);
 
+        // ═══ FIX: Останавливаем position timer во время seek ═══
+        // Это предотвращает попадание stale position events в Rx pipeline.
+        // Buffer timer НЕ останавливаем — cache line должна обновляться.
+        StopPositionTimer();
+
         try
         {
-            // Останавливаем декодер — он больше не читает из source
-            await pipeline.StopDecodingAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs));
+            // Decoder stop — в логах стабильно <10ms, 200ms safety timeout
+            await pipeline.StopDecodingAsync(TimeSpan.FromMilliseconds(200));
 
-            // Проверяем сессию
+            // Проверяем сессию — мог прийти новый Play/Stop пока ждали
             int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (cmd.SessionId < currentSession)
             {
                 cmd.Completion?.TrySetCanceled();
+                StartPositionTimerDelayed();
                 return;
             }
 
-            // Останавливаем backend и очищаем все буферы
-            // NAudioBackend.Flush() использует _flushGeneration — 
-            // fill loop пропустит устаревшие данные без дополнительных задержек
+            // Останавливаем backend и очищаем все буферы (быстро, <1ms)
             pipeline.Stop();
             pipeline.Flush();
 
-            // Подготавливаем decoder (skip frames counter)
-            pipeline.PrepareForSeek();
-
-            // Выполняем seek в source
-            // CachingStreamSource: epoch reset → старые загрузки умирают →
-            // preload новых чанков → position update → parser reset
+            // Подготавливаем decoder: skip frames + timestamp-based skip
             long posMs = (long)cmd.Position.TotalMilliseconds;
+            pipeline.PrepareForSeek(posMs);
+
+            // Выполняем seek в source — теперь non-blocking (fire-and-forget preload)
             bool success = await pipeline.Source.SeekAsync(posMs, _lifetimeCts.Token);
 
             if (!success)
@@ -511,6 +520,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 cmd.Completion?.TrySetResult(false);
                 SetState(wasPlaying ? PlayerState.Playing : PlayerState.Paused);
                 if (wasPlaying) pipeline.Start();
+                StartPositionTimerDelayed();
                 return;
             }
 
@@ -518,16 +528,17 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             long targetSamples = (long)(posMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
             pipeline.SetDecodedSamplesPosition(targetSamples);
 
-            // Перезапускаем decoder loop
+            // Перезапускаем decoder loop — он начнёт читать из новой позиции
             pipeline.StartDecoding(
                 CreateUrlRefresher(),
                 _options,
                 OnTrackEnded,
                 HandleError);
 
-            // Ждём минимальный буфер
-            int minSamples = pipeline.SampleRate * pipeline.Channels * MinSeekResumeBufferMs / 1000;
-            await pipeline.WaitForBufferAsync(minSamples, 300, _lifetimeCts.Token);
+            // ═══ FIX: Убран WaitForBufferAsync ═══
+            // Backend AudioCallback уже обрабатывает underrun: заполняет тишиной.
+            // Decoder заполнит буфер за 1-2 фрейма (~40ms).
+            // Для rapid seeking это критично: каждый WaitForBuffer добавлял 100-300ms.
 
             // Возобновляем воспроизведение
             if (wasPlaying)
@@ -540,6 +551,10 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 SetState(PlayerState.Paused);
             }
 
+            // ═══ FIX: Перезапускаем timer С ЗАДЕРЖКОЙ перед событием ═══
+            // Первый тик через interval мс — к этому моменту Position будет корректной
+            StartPositionTimerDelayed();
+
             _events.RaiseSeekCompleted(cmd.Position);
             cmd.Completion?.TrySetResult(true);
 
@@ -548,6 +563,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         catch (OperationCanceledException)
         {
             cmd.Completion?.TrySetCanceled();
+            StartPositionTimerDelayed();
         }
         catch (Exception ex)
         {
@@ -557,6 +573,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             // Восстанавливаем состояние
             SetState(wasPlaying ? PlayerState.Playing : PlayerState.Paused);
             if (wasPlaying) pipeline.Start();
+            StartPositionTimerDelayed();
         }
     }
 
@@ -590,6 +607,35 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         _bufferTimer = null;
     }
 
+    private void StartPositionTimer()
+    {
+        _positionTimer?.Dispose();
+        _positionTimer = new Timer(
+            _ => _events.RaisePositionChanged(Position),
+            null, 0, (int)_options.PositionUpdateInterval.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Запускает position timer с задержкой первого тика.
+    /// Используется после seek — даёт время decoder'у наполнить буфер
+    /// корректными данными перед первым position event.
+    /// </summary>
+    private void StartPositionTimerDelayed()
+    {
+        _positionTimer?.Dispose();
+        _positionTimer = new Timer(
+            _ => _events.RaisePositionChanged(Position),
+            null,
+            (int)_options.PositionUpdateInterval.TotalMilliseconds, // Первый тик с задержкой
+            (int)_options.PositionUpdateInterval.TotalMilliseconds);
+    }
+
+    private void StopPositionTimer()
+    {
+        _positionTimer?.Dispose();
+        _positionTimer = null;
+    }
+
     private void RaiseBufferState()
     {
         var pipeline = _activePipeline;
@@ -610,11 +656,19 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     private void OnTrackEnded()
     {
-        if (_state != PlayerState.Idle && _state != PlayerState.Disposed)
+        // Проверяем что плеер в адекватном состоянии для завершения трека.
+        // Если идёт seek (Seeking) или загрузка нового трека (Loading/Buffering),
+        // TrackEnded пришёл от устаревшего decoder loop — игнорируем.
+        var currentState = _state;
+        if (currentState is PlayerState.Idle or PlayerState.Disposed
+            or PlayerState.Loading or PlayerState.Buffering or PlayerState.Seeking)
         {
-            _events.RaiseTrackEnded();
-            SetState(PlayerState.Idle);
+            Log.Debug($"[AudioPlayer] Ignoring TrackEnded in state {currentState}");
+            return;
         }
+
+        _events.RaiseTrackEnded();
+        SetState(PlayerState.Idle);
     }
 
     private void HandleError(Exception ex)

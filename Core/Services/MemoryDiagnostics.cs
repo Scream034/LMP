@@ -7,13 +7,33 @@ namespace LMP.Core.Services;
 
 /// <summary>
 /// Объединённая система мониторинга и диагностики памяти.
-/// Заменяет отдельный MemoryMonitor.
+/// 
+/// <para><b>Режимы работы:</b></para>
+/// <list type="bullet">
+///   <item><b>Active (окно видимо):</b> мониторинг каждые 30 секунд — достаточно для отслеживания трендов</item>
+///   <item><b>Suspended (окно свёрнуто):</b> мониторинг каждые 120 секунд — минимальный overhead</item>
+///   <item><b>On-demand:</b> полный отчёт по запросу через <see cref="LogReport"/></item>
+/// </list>
+/// 
+/// <para><b>CPU Impact:</b></para>
+/// <para>Process.GetCurrentProcess() + GC.GetGCMemoryInfo() ≈ 0.1ms per call.
+/// При интервале 30s это ~0.0003% CPU — пренебрежимо мало.</para>
 /// </summary>
 public sealed class MemoryDiagnostics : IDisposable
 {
     #region Singleton
 
     public static MemoryDiagnostics Instance => field ??= new MemoryDiagnostics();
+
+    #endregion
+
+    #region Constants
+
+    /// <summary>Интервал мониторинга когда окно активно (30 секунд).</summary>
+    private const int ActiveIntervalSeconds = 30;
+
+    /// <summary>Интервал мониторинга когда окно свёрнуто (120 секунд).</summary>
+    private const int SuspendedIntervalSeconds = 120;
 
     #endregion
 
@@ -28,22 +48,26 @@ public sealed class MemoryDiagnostics : IDisposable
 
     #region Events
 
+    /// <summary>Вызывается после каждого обновления статистики.</summary>
     public event Action<MemoryStats>? OnStatsUpdated;
+
+    /// <summary>Вызывается при превышении порогов памяти.</summary>
     public event Action<string>? OnMemoryWarning;
 
     #endregion
 
     #region Properties
 
+    /// <summary>Последняя собранная статистика.</summary>
     public MemoryStats CurrentStats { get; private set; } = new();
 
-    /// <summary>Порог предупреждения (MB)</summary>
+    /// <summary>Порог предупреждения (MB). При превышении — логирование.</summary>
     public long WarningThresholdMb { get; set; } = 330;
 
-    /// <summary>Критический порог (MB)</summary>
+    /// <summary>Критический порог (MB). При превышении — автоочистка.</summary>
     public long CriticalThresholdMb { get; set; } = 440;
 
-    /// <summary>Автоматическая очистка при критическом пороге</summary>
+    /// <summary>Автоматическая очистка при критическом пороге.</summary>
     public bool AutoCleanupEnabled { get; set; } = true;
 
     #endregion
@@ -52,7 +76,12 @@ public sealed class MemoryDiagnostics : IDisposable
 
     private MemoryDiagnostics()
     {
-        _monitorTimer = new Timer(UpdateStats, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+        // Стартуем с активным интервалом. Первый тик через 5 секунд (даём приложению подняться).
+        _monitorTimer = new Timer(
+            UpdateStats,
+            null,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(ActiveIntervalSeconds));
     }
 
     #endregion
@@ -61,7 +90,7 @@ public sealed class MemoryDiagnostics : IDisposable
 
     /// <summary>
     /// Изменяет частоту мониторинга.
-    /// При сворачивании — реже (30с), при разворачивании — чаще (5с).
+    /// Вызывается из Lifecycle: Suspend → 120s, Resume → 30s.
     /// </summary>
     public void SetMonitoringInterval(TimeSpan interval)
     {
@@ -72,6 +101,22 @@ public sealed class MemoryDiagnostics : IDisposable
             Log.Debug($"[MemoryDiag] Monitoring interval: {interval.TotalSeconds}s");
         }
         catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Переключает в режим "окно свёрнуто" — редкий мониторинг.
+    /// </summary>
+    public void OnSuspend()
+    {
+        SetMonitoringInterval(TimeSpan.FromSeconds(SuspendedIntervalSeconds));
+    }
+
+    /// <summary>
+    /// Переключает в режим "окно активно" — штатный мониторинг.
+    /// </summary>
+    public void OnResume()
+    {
+        SetMonitoringInterval(TimeSpan.FromSeconds(ActiveIntervalSeconds));
     }
 
     /// <summary>
@@ -140,7 +185,7 @@ public sealed class MemoryDiagnostics : IDisposable
 
         try
         {
-            var process = Process.GetCurrentProcess();
+            using var process = Process.GetCurrentProcess();
             var gcInfo = GC.GetGCMemoryInfo();
 
             CurrentStats = new MemoryStats
@@ -198,7 +243,7 @@ public sealed class MemoryDiagnostics : IDisposable
     /// </summary>
     public string GetFullReport()
     {
-        var process = Process.GetCurrentProcess();
+        using var process = Process.GetCurrentProcess();
         var gcInfo = GC.GetGCMemoryInfo();
         var sb = new StringBuilder();
 
@@ -278,6 +323,10 @@ public sealed class MemoryDiagnostics : IDisposable
 
     /// <summary>
     /// Принудительная очистка памяти.
+    /// Вызывает полную сборку мусора с компактификацией LOH.
+    /// 
+    /// <para><b>Внимание:</b> вызывает stop-the-world паузу ~20-100ms.
+    /// Вызывать только при критическом давлении памяти.</para>
     /// </summary>
     public static void ForceCleanup()
     {
@@ -285,13 +334,12 @@ public sealed class MemoryDiagnostics : IDisposable
 
         var before = GC.GetTotalMemory(false);
 
-        // Компактификация LOH
+        // Компактификация LOH — борьба с фрагментацией от byte[] буферов
         GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
 
-        // Агрессивная сборка мусора
+        // Одна агрессивная сборка достаточна (вторая подряд почти всегда no-op)
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
-        GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
 
         var after = GC.GetTotalMemory(true);
         var freed = (before - after) / 1024 / 1024;
@@ -300,7 +348,8 @@ public sealed class MemoryDiagnostics : IDisposable
     }
 
     /// <summary>
-    /// Мягкая очистка (Gen1).
+    /// Мягкая очистка (Gen1, non-blocking).
+    /// Подходит для вызова при смене треков, навигации.
     /// </summary>
     public static void SoftCleanup()
     {
@@ -325,7 +374,7 @@ public sealed class MemoryDiagnostics : IDisposable
 }
 
 /// <summary>
-/// Статистика памяти.
+/// Снимок статистики памяти в момент последнего обновления.
 /// </summary>
 public class MemoryStats
 {

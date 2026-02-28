@@ -28,7 +28,7 @@ public sealed class AudioPipeline : IAsyncDisposable
     private readonly IAudioSource _source;
     private readonly IAudioDecoder _decoder;
     private readonly IPlaybackBackend _backend;
-    private readonly CircularBuffer<float> _pcmBuffer;
+    private readonly LockFreeRingBuffer<float> _pcmBuffer;
     private readonly float[] _decodeBuffer;
     private readonly AudioStreamInfo _streamInfo;
     private readonly CancellationTokenSource _lifetimeCts;
@@ -39,6 +39,13 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     private int _skipFramesCounter;
     private long _decodedSamples;
+
+    /// <summary>
+    /// Target timestamp для post-seek skipping.
+    /// Фреймы с timestamp < этого значения пропускаются (не пишутся в PCM buffer).
+    /// -1 = не активен.
+    /// </summary>
+    private long _seekTargetMs = -1;
 
     #endregion
 
@@ -65,7 +72,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         IAudioSource source,
         IAudioDecoder decoder,
         IPlaybackBackend backend,
-        CircularBuffer<float> pcmBuffer,
+        LockFreeRingBuffer<float> pcmBuffer,
         float[] decodeBuffer,
         AudioStreamInfo streamInfo,
         CancellationTokenSource lifetimeCts)
@@ -115,8 +122,11 @@ public sealed class AudioPipeline : IAsyncDisposable
             decoder = CreateDecoder(source);
             backend = CreateBackend(options);
 
-            int bufferSize = decoder.SampleRate * decoder.Channels * BufferSizeSeconds;
-            var pcmBuffer = new CircularBuffer<float>(bufferSize);
+            // Размер буфера — степень двойки для LockFreeRingBuffer
+            int rawSize = decoder.SampleRate * decoder.Channels * BufferSizeSeconds;
+            int bufferSize = RoundUpToPowerOf2(rawSize);
+            var pcmBuffer = new LockFreeRingBuffer<float>(bufferSize);
+
             decodeBuffer = ArrayPool<float>.Shared.Rent(DecoderBufferFrames * decoder.Channels);
 
             var streamInfo = BuildStreamInfo(source, trackId, bitrateHint);
@@ -234,6 +244,17 @@ public sealed class AudioPipeline : IAsyncDisposable
         };
     }
 
+    private static int RoundUpToPowerOf2(int value)
+    {
+        value--;
+        value |= value >> 1;
+        value |= value >> 2;
+        value |= value >> 4;
+        value |= value >> 8;
+        value |= value >> 16;
+        return value + 1;
+    }
+
     #endregion
 
     #region Decoder Loop
@@ -296,14 +317,15 @@ public sealed class AudioPipeline : IAsyncDisposable
     }
 
     private async Task DecoderLoopAsync(
-        Func<CancellationToken, Task<string?>>? urlRefresher,
-        AudioPlayerOptions options,
-        Action? onTrackEnded,
-        Action<Exception>? onError,
-        CancellationToken ct)
+    Func<CancellationToken, Task<string?>>? urlRefresher,
+    AudioPlayerOptions options,
+    Action? onTrackEnded,
+    Action<Exception>? onError,
+    CancellationToken ct)
     {
         int retryCount = 0;
-        bool useResetDecode = false;
+        int backoffCount = 0;
+        const int MaxYieldBeforeDelay = 4;
 
         try
         {
@@ -311,16 +333,24 @@ public sealed class AudioPipeline : IAsyncDisposable
             {
                 ct.ThrowIfCancellationRequested();
 
-                int skipCount = Interlocked.CompareExchange(ref _skipFramesCounter, 0, 0);
-                if (skipCount > 0)
-                    useResetDecode = true;
-
+                // Проверка места в буфере
                 if (_pcmBuffer.Available < _decoder.MaxFrameSize * _decoder.Channels)
                 {
-                    await Task.Delay(5, ct);
+                    if (backoffCount < MaxYieldBeforeDelay)
+                    {
+                        await Task.Yield();
+                        backoffCount++;
+                    }
+                    else
+                    {
+                        await Task.Delay(5, ct);
+                    }
                     continue;
                 }
 
+                backoffCount = 0;
+
+                // Чтение фрейма из source
                 AudioFrame? frame;
                 try
                 {
@@ -343,7 +373,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                 }
                 catch (Exceptions.ChunkDownloadFatalException)
                 {
-                    // Фатальная ошибка загрузки — пробрасываем
                     throw;
                 }
                 catch (IOException ex) when (retryCount++ < options.MaxRetryAttempts)
@@ -361,24 +390,56 @@ public sealed class AudioPipeline : IAsyncDisposable
 
                 if (frame == null)
                 {
+                    if (ct.IsCancellationRequested)
+                    {
+                        Log.Debug("[AudioPipeline] Decoder cancelled, skipping track end");
+                        break;
+                    }
+
                     await DrainBufferAsync(ct);
+
+                    if (ct.IsCancellationRequested)
+                    {
+                        Log.Debug("[AudioPipeline] Decoder cancelled during drain, skipping track end");
+                        break;
+                    }
+
                     onTrackEnded?.Invoke();
                     break;
                 }
 
+                // Декодирование
                 try
                 {
-                    int samplesDecoded = useResetDecode
+                    int skipCount = Volatile.Read(ref _skipFramesCounter);
+                    bool needReset = skipCount > 0;
+
+                    int samplesDecoded = needReset
                         ? _decoder.DecodeWithReset(frame.Value.Data.Span, _decodeBuffer)
                         : _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
 
-                    useResetDecode = false;
-
-                    skipCount = Interlocked.CompareExchange(ref _skipFramesCounter, 0, 0);
-                    if (skipCount > 0)
+                    // Skip frames (codec warmup после seek)
+                    if (needReset)
                     {
                         Interlocked.Decrement(ref _skipFramesCounter);
                         continue;
+                    }
+
+                    // ═══ POST-SEEK TIMESTAMP SKIP ═══
+                    // WebM cue points имеют шаг ~10-30 секунд.
+                    // Seek к 3s → cue point 0ms → парсер начинает с 0ms.
+                    // Пропускаем фреймы до целевого timestamp.
+                    long seekTarget = Volatile.Read(ref _seekTargetMs);
+                    if (seekTarget >= 0)
+                    {
+                        if (frame.Value.TimestampMs < seekTarget)
+                        {
+                            // Фрейм до цели — декодировали (для state), но не пишем
+                            continue;
+                        }
+
+                        // Достигли или превысили цель — выключаем skip
+                        Volatile.Write(ref _seekTargetMs, -1L);
                     }
 
                     if (samplesDecoded > 0)
@@ -422,21 +483,33 @@ public sealed class AudioPipeline : IAsyncDisposable
     public void Start()
     {
         if (_disposed) return;
+
+        // Сообщаем backend что decoder работает
         _backend.Start();
+
         Log.Debug("[AudioPipeline] Backend started");
     }
 
     public void Stop()
     {
         if (_disposed) return;
+
+        // Backend.Stop() теперь неблокирующий — не ждём
         _backend.Stop();
+
         Log.Debug("[AudioPipeline] Backend stopped");
     }
 
     public void Flush()
     {
         if (_disposed) return;
+
+        // Flush backend буфера — это сбросит _flushGeneration,
+        // fill loop пропустит устаревшие данные из PCM buffer
         _backend.Flush();
+
+        // Очищаем PCM ring buffer — критично для seek!
+        // Без этого fill loop будет качать старые данные
         _pcmBuffer.Clear();
     }
 
@@ -446,13 +519,33 @@ public sealed class AudioPipeline : IAsyncDisposable
         _backend.Volume = Math.Min(volume, 1f);
     }
 
-    public void PrepareForSeek()
+    /// <summary>
+    /// Подготавливает decoder к seek: устанавливает skip frames counter
+    /// и target timestamp для точного позиционирования.
+    /// </summary>
+    /// <param name="targetMs">Целевая позиция в миллисекундах. 
+    /// Фреймы до этого timestamp будут декодированы (для state decoder) но не записаны в PCM buffer.</param>
+    /// <remarks>
+    /// <para><b>AAC (MP4):</b> skip frames = 0. MP4 использует segment-based seek, каждый сегмент
+    /// начинается с keyframe. Warmup обеспечивается через <c>_seekTargetMs</c>: фреймы от начала
+    /// сегмента до целевой позиции декодируются (прогревая decoder state), но не пишутся в буфер.</para>
+    /// 
+    /// <para><b>Opus (WebM):</b> skip frames = N. Opus SILK layer имеет inter-frame зависимости.
+    /// Первые N фреймов после reset декодируются через <see cref="IAudioDecoder.DecodeWithReset"/>
+    /// для сброса внутреннего состояния декодера. Затем <c>_seekTargetMs</c> дополнительно
+    /// пропускает фреймы до целевого timestamp.</para>
+    /// </remarks>
+    public void PrepareForSeek(long targetMs = -1)
     {
-        int skipFrames = _source.Codec == AudioCodec.Aac
-            ? SkipFramesAfterSeekAac
-            : SkipFramesAfterSeekOpus;
+        // AAC: segment-based seek даёт keyframe сразу → codec warmup через DecodeWithReset не нужен.
+        // Warmup происходит через _seekTargetMs (decode-but-don't-write).
+        // Opus: cue point seek может попасть между keyframes → нужен explicit reset.
+        int skipFrames = _source.Codec == AudioCodec.Opus
+            ? SkipFramesAfterSeekOpus
+            : 0;
 
         Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
+        Volatile.Write(ref _seekTargetMs, targetMs);
     }
 
     public void SetDecodedSamplesPosition(long samples)

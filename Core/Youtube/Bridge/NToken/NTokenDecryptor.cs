@@ -159,7 +159,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager) 
             if (markerIdx < 0) continue;
 
             var contextStart = Math.Max(0, markerIdx - 5000);
-            var context = baseJs.Substring(contextStart, markerIdx - contextStart);
+            var context = baseJs[contextStart..markerIdx];
 
             string? lastName = null;
             foreach (System.Text.RegularExpressions.Match m in FunctionDefinitionRegex().Matches(context))
@@ -177,7 +177,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager) 
     private static string? FindContainingFunction(string js, int position)
     {
         var searchStart = Math.Max(0, position - 10000);
-        var context = js.Substring(searchStart, position - searchStart);
+        var context = js[searchStart..position];
 
         string? lastName = null;
         int lastPos = -1;

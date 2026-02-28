@@ -3,7 +3,7 @@
   <!-- ====================== ВЕРСИИ ПАКЕТОВ ====================== -->
   <PropertyGroup>
     <!-- Основная версия Avalonia (меняй здесь одну строку при обновлении) -->
-    <AvaloniaVersion>11.3.12</AvaloniaVersion>
+    <AvaloniaVersion>11.3.9</AvaloniaVersion>
 
     <!-- Другие версии -->
     <HotAvaloniaVersion>3.1.0</HotAvaloniaVersion>
@@ -101,7 +101,7 @@
     <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
-    <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.9" />
+    <PackageReference Include="Avalonia.ReactiveUI" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)"
       Condition="'$(Configuration)' == 'Debug'" />
 
