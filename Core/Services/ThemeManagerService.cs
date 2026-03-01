@@ -176,7 +176,7 @@ public sealed class ThemeManagerService
     private static double GetRelativeLuminance(Color color)
     {
         // Линеаризация sRGB канала по спецификации WCAG 2.0
-        double Linearize(byte channel)
+        static double Linearize(byte channel)
         {
             var s = channel / 255.0;
             return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);

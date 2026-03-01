@@ -1,14 +1,14 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
 namespace LMP.UI.Dialogs;
 
-public partial class SyncSelectionDialog : Window
+public partial class AddToPlaylistDialog : Window
 {
     private IDisposable? _confirmSub;
     private IDisposable? _cancelSub;
 
-    public SyncSelectionDialog()
+    public AddToPlaylistDialog()
     {
         InitializeComponent();
     }
@@ -21,11 +21,10 @@ public partial class SyncSelectionDialog : Window
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
-
         _confirmSub?.Dispose();
         _cancelSub?.Dispose();
 
-        if (DataContext is SyncSelectionViewModel vm)
+        if (DataContext is AddToPlaylistDialogViewModel vm)
         {
             _confirmSub = vm.ConfirmCommand.Subscribe(result =>
             {

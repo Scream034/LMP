@@ -13,7 +13,7 @@ using LMP.UI.Dialogs;
 
 namespace LMP.Features.Library;
 
-public class LibraryViewModel : ViewModelBase
+public sealed class LibraryViewModel : ViewModelBase
 {
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
@@ -95,12 +95,80 @@ public class LibraryViewModel : ViewModelBase
         var result = await _dialog.ShowCreatePlaylistDialogAsync();
         if (result == null || string.IsNullOrWhiteSpace(result.Name)) return;
 
-        var playlist = await _library.CreatePlaylistAsync(result.Name.Trim());
-        playlist.SyncMode = _auth.IsAuthenticated
-            ? PlaylistSyncMode.TwoWaySync
-            : PlaylistSyncMode.LocalOnly;
+        var trimmedName = result.Name.Trim();
+        bool wantsCloud = result.SyncToCloud && _auth.IsAuthenticated;
+
+        string? youtubeId = null;
+
+        // ═══ STEP 1: Если хочет создать в облаке — запрос к YouTube ═══
+
+        if (wantsCloud)
+        {
+            _mainWindow.LockNavigation(SL["Playlist_CreatingCloud"] ?? "Creating in cloud...");
+            try
+            {
+                youtubeId = await _youtube.CreatePlaylistAsync(trimmedName);
+
+                if (string.IsNullOrEmpty(youtubeId))
+                {
+                    wantsCloud = false;
+                    var createLocal = await OfferLocalFallbackAsync(
+                        SL["Playlist_CloudCreateFailed_AskLocal"]
+                            ?? "Could not create playlist in YouTube Music. Create locally?");
+                    if (!createLocal) return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[Library] Cloud playlist creation failed: {ex.Message}");
+                wantsCloud = false;
+
+                var createLocal = await OfferLocalFallbackAsync(
+                    string.Format(
+                        SL["Playlist_CloudError_AskLocal"]
+                            ?? "YouTube API error: {0}\n\nCreate locally instead?",
+                        ex.Message));
+                if (!createLocal) return;
+            }
+            finally
+            {
+                _mainWindow.UnlockNavigation();
+            }
+        }
+
+        // ═══ STEP 2: Создаём локальный Playlist ═══
+
+        var playlist = await _library.CreatePlaylistAsync(trimmedName);
+
+        if (wantsCloud && !string.IsNullOrEmpty(youtubeId))
+        {
+            playlist.YoutubeId = youtubeId;
+            playlist.SyncMode = PlaylistSyncMode.TwoWaySync;
+        }
+        else
+        {
+            playlist.SyncMode = PlaylistSyncMode.LocalOnly;
+        }
+
+        // ═══ STEP 3: Сохраняем и обновляем UI ═══
+
         await _library.AddOrUpdatePlaylistAsync(playlist);
         await LoadPlaylistsAsync();
+
+        Log.Info($"[Library] Created playlist '{trimmedName}' " +
+                 $"(Sync={playlist.SyncMode}, YtId={playlist.YoutubeId ?? "none"})");
+    }
+
+    /// <summary>
+    /// Предлагает пользователю создать плейлист локально при ошибке облака.
+    /// </summary>
+    private async Task<bool> OfferLocalFallbackAsync(string message)
+    {
+        return await _dialog.ConfirmAsync(
+            SL["Dialog_Warning_Title"] ?? "Warning",
+            message,
+            SL["Playlist_CreateLocal"] ?? "Create locally",
+            SL["Button_Cancel"] ?? "Cancel");
     }
 
     public override async Task OnNavigatedToAsync()
@@ -160,8 +228,7 @@ public class LibraryViewModel : ViewModelBase
                             !string.IsNullOrEmpty(p.YoutubeId) &&
                             p.YoutubeId != "LM" &&
                             p.YoutubeId != "VLLM" &&
-                            !p.YoutubeId.StartsWith("RD")
-                        )
+                            !p.YoutubeId.StartsWith("RD"))
                         .Select(p =>
                         {
                             var pid = new Core.Youtube.Playlists.PlaylistId(p.YoutubeId!);
@@ -172,13 +239,16 @@ public class LibraryViewModel : ViewModelBase
                 catch (Exception ex)
                 {
                     if (!_isDisposed)
-                        await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], SL["Sync_Error_API"] + ": " + ex.Message);
+                        await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"],
+                            SL["Sync_Error_API"] + ": " + ex.Message);
                     return;
                 }
             }
-            else if (_library.HasFakeAccount && !string.IsNullOrEmpty(_library.Settings.FakeAccountChannelUrl))
+            else if (_library.HasFakeAccount &&
+                     !string.IsNullOrEmpty(_library.Settings.FakeAccountChannelUrl))
             {
-                var result = await _youtube.GetChannelPlaylistsForSyncAsync(_library.Settings.FakeAccountChannelUrl, ct);
+                var result = await _youtube.GetChannelPlaylistsForSyncAsync(
+                    _library.Settings.FakeAccountChannelUrl, ct);
                 ct.ThrowIfCancellationRequested();
                 SyncProgress = 0.1;
                 if (result != null) playlistsToImport = result.Value.Playlists;
@@ -196,7 +266,7 @@ public class LibraryViewModel : ViewModelBase
                 {
                     var confirmSyncLikes = await _dialog.ConfirmAsync(
                         SL["Sync_ConfirmLikedOnly"] ?? "Playlists Not Found",
-                        SL["Sync_NoPlaylistsFound_AskLiked"] ?? "Do you want to sync Liked Songs?",
+                        SL["Sync_NoPlaylistsFound_AskLiked"] ?? "Sync Liked Songs?",
                         SL["Common_Yes"] ?? "Yes",
                         SL["Common_No"] ?? "No");
 
@@ -220,8 +290,14 @@ public class LibraryViewModel : ViewModelBase
             SyncProgress = 0.15;
             SyncStatus = SL["Sync_SelectPlaylists"];
 
-            var selected = await _dialog.ShowSyncSelectionAsync(playlistsToImport);
-            if (selected.Count == 0 || _isDisposed) return;
+            var allPlaylists = await _library.GetAllPlaylistsAsync(ct);
+            var existingLocal = allPlaylists
+                .Where(p => p.IsLocal)
+                .ToDictionary(p => p.Name, p => p);
+            var localNames = new HashSet<string>(existingLocal.Keys, StringComparer.Ordinal);
+
+            var decisions = await _dialog.ShowSyncSelectionAsync(playlistsToImport, localNames);
+            if (decisions.Count == 0 || _isDisposed) return;
 
             ct.ThrowIfCancellationRequested();
             SyncProgress = 0.2;
@@ -236,52 +312,37 @@ public class LibraryViewModel : ViewModelBase
                 }, ct);
             }
 
-            var allPlaylists = await _library.GetAllPlaylistsAsync(ct);
-            var existingLocal = allPlaylists.Where(p => p.IsLocal).ToDictionary(p => p.Name, p => p);
-
-            var conflicts = selected.Where(p => existingLocal.ContainsKey(p.Title)).Select(p => p.Title).ToList();
-
-            List<MergeDecision> decisions = [];
-            if (conflicts.Count > 0)
-            {
-                SyncStatus = SL["Sync_ResolvingConflicts"];
-                decisions = await _dialog.ShowMergeConflictResolutionDialogAsync(conflicts);
-                if (_isDisposed) return;
-            }
-
-            var decisionLookup = decisions.ToDictionary(d => d.PlaylistName, d => d.Action);
-
-            ct.ThrowIfCancellationRequested();
             SyncProgress = 0.25;
             SyncStatus = SL["Sync_ImportingPlaylists"];
 
             int importedCount = 0, mergedCount = 0, processed = 0;
-            int totalToProcess = selected.Count;
+            int totalToProcess = decisions.Count;
 
-            foreach (var candidate in selected)
+            foreach (var decision in decisions)
             {
                 ct.ThrowIfCancellationRequested();
                 if (_isDisposed) return;
 
-                var decision = decisionLookup.TryGetValue(candidate.Title, out var action)
-                    ? action : MergeAction.Duplicate;
+                SyncStatus = string.Format(SL["Sync_ImportingPlaylist"], decision.Playlist.Title);
 
-                if (decision == MergeAction.Skip) { processed++; continue; }
-
-                SyncStatus = string.Format(SL["Sync_ImportingPlaylist"], candidate.Title);
-
-                var fullPlaylist = await _youtube.ImportPlaylistAsync(candidate.Id.Value, _auth.IsAuthenticated, ct);
+                var fullPlaylist = await _youtube.ImportPlaylistAsync(
+                    decision.Playlist.Id.Value, _auth.IsAuthenticated, ct);
                 if (fullPlaylist == null) { processed++; continue; }
 
-                existingLocal.TryGetValue(candidate.Title, out var existing);
+                existingLocal.TryGetValue(decision.Playlist.Title, out var existing);
 
-                if (decision == MergeAction.Merge && existing != null)
+                if (decision.Action == MergeAction.Merge && existing != null)
                 {
                     var existingTrackSet = new HashSet<string>(existing.TrackIds);
                     bool changed = false;
                     foreach (var trackId in fullPlaylist.TrackIds)
                     {
-                        if (existingTrackSet.Add(trackId)) { existing.TrackIds.Add(trackId); changed = true; }
+                        if (existingTrackSet.Add(trackId))
+                        {
+                            existing.TrackIds.Add(trackId);
+                            changed = true;
+                        }
+
                         var t = await _library.GetTrackAsync(trackId, ct);
                         if (t != null && !t.InPlaylists.Contains(existing.Id))
                         {
@@ -289,18 +350,26 @@ public class LibraryViewModel : ViewModelBase
                             await _library.AddOrUpdateTrackAsync(t, ct);
                         }
                     }
-                    if (changed) { existing.UpdatedAt = DateTime.Now; await _library.AddOrUpdatePlaylistAsync(existing, ct); }
+
+                    if (changed)
+                    {
+                        existing.UpdatedAt = DateTime.Now;
+                        await _library.AddOrUpdatePlaylistAsync(existing, ct);
+                    }
+
                     mergedCount++;
                 }
                 else
                 {
-                    if (decision == MergeAction.Duplicate && existing != null)
-                        fullPlaylist.Name = $"{candidate.Title} ({SL["Sync_DuplicateName"]})";
+                    if (decision.Action == MergeAction.Duplicate && existing != null)
+                        fullPlaylist.Name = $"{decision.Playlist.Title} ({SL["Sync_DuplicateName"]})";
+
                     if (_auth.IsAuthenticated)
                     {
                         fullPlaylist.SyncMode = PlaylistSyncMode.TwoWaySync;
-                        fullPlaylist.YoutubeId = candidate.Id.Value;
+                        fullPlaylist.YoutubeId = decision.Playlist.Id.Value;
                     }
+
                     await _library.AddOrUpdatePlaylistAsync(fullPlaylist, ct);
                     importedCount++;
                 }
@@ -311,7 +380,8 @@ public class LibraryViewModel : ViewModelBase
 
             if (likedSongsSyncTask != null)
             {
-                if (!likedSongsSyncTask.IsCompleted) SyncStatus = SL["Sync_FinalizingLikedSongs"];
+                if (!likedSongsSyncTask.IsCompleted)
+                    SyncStatus = SL["Sync_FinalizingLikedSongs"];
                 await likedSongsSyncTask;
             }
 
@@ -322,11 +392,15 @@ public class LibraryViewModel : ViewModelBase
                 await _dialog.ShowInfoAsync(SL["Dialog_Done_Title"],
                     string.Format(SL["Sync_Success_Msg"], importedCount, mergedCount));
         }
-        catch (OperationCanceledException) { SyncStatus = SL["Sync_Cancelled"]; }
+        catch (OperationCanceledException)
+        {
+            SyncStatus = SL["Sync_Cancelled"];
+        }
         catch (Exception ex)
         {
             Log.Error($"[Library] Sync error: {ex.Message}");
-            if (!_isDisposed) await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], ex.Message);
+            if (!_isDisposed)
+                await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], ex.Message);
         }
         finally
         {
@@ -342,10 +416,6 @@ public class LibraryViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Анимированный подсчет статистики.
-    /// GetPlural уже возвращает строку с числом — не дублируем.
-    /// </summary>
     private async Task UpdateStatsAnimatedAsync()
     {
         if (_isDisposed) return;
@@ -380,8 +450,12 @@ public class LibraryViewModel : ViewModelBase
 
         if (ct.IsCancellationRequested || _isDisposed) return;
 
-        var avgTrack = trackCountForAvg > 0 ? TimeSpan.FromTicks(totalDuration.Ticks / trackCountForAvg) : TimeSpan.Zero;
-        var avgPlaylist = targetPlaylists > 0 ? TimeSpan.FromTicks(totalDuration.Ticks / targetPlaylists) : TimeSpan.Zero;
+        var avgTrack = trackCountForAvg > 0
+            ? TimeSpan.FromTicks(totalDuration.Ticks / trackCountForAvg)
+            : TimeSpan.Zero;
+        var avgPlaylist = targetPlaylists > 0
+            ? TimeSpan.FromTicks(totalDuration.Ticks / targetPlaylists)
+            : TimeSpan.Zero;
 
         IsStatsVisible = true;
 
@@ -442,10 +516,6 @@ public class LibraryViewModel : ViewModelBase
         return ts.TotalHours >= 1 ? ts.ToString(@"h\:mm\:ss") : ts.ToString(@"m\:ss");
     }
 
-    /// <summary>
-    /// Diff-алгоритм: обновляет, добавляет и удаляет карточки без Clear().
-    /// Использует GetAllPlaylistsWithCountsAsync для получения актуального TrackCount.
-    /// </summary>
     private async Task LoadPlaylistsAsync()
     {
         if (_isDisposed) return;
@@ -457,23 +527,18 @@ public class LibraryViewModel : ViewModelBase
 
         IsStatsVisible = false;
 
-        // Получаем данные из БД с количеством треков за один запрос
         var allPlaylistsWithCounts = await _library.GetAllPlaylistsWithCountsAsync();
         if (_isDisposed || ct.IsCancellationRequested) return;
 
-        // Сортировка
         var sorted = allPlaylistsWithCounts
             .OrderByDescending(x => x.Playlist.Id == LibraryService.LikedPlaylistId)
             .ThenByDescending(x => x.Playlist.IsLocal)
             .ThenBy(x => x.Playlist.Name)
             .ToList();
 
-        // ═══ DIFF ALGORITHM ═══
-
         var existingDict = Playlists.ToDictionary(vm => vm.Id);
         var newIdSet = new HashSet<string>(sorted.Select(x => x.Playlist.Id));
 
-        // 1. Удаляем плейлисты, которых больше нет в БД
         var toRemove = Playlists.Where(vm => !newIdSet.Contains(vm.Id)).ToList();
         foreach (var vm in toRemove)
         {
@@ -481,7 +546,6 @@ public class LibraryViewModel : ViewModelBase
             Playlists.Remove(vm);
         }
 
-        // 2. Обновляем существующие и собираем новые
         var newItems = new List<(PlaylistCardViewModel vm, int targetIndex)>();
 
         for (int i = 0; i < sorted.Count; i++)
@@ -490,10 +554,8 @@ public class LibraryViewModel : ViewModelBase
 
             if (existingDict.TryGetValue(playlist.Id, out var existingVm))
             {
-                // Обновляем свойства без пересоздания VM
                 existingVm.UpdateFrom(playlist, trackCount);
 
-                // Проверяем позицию
                 int currentIndex = Playlists.IndexOf(existingVm);
                 if (currentIndex != i && currentIndex >= 0 && i < Playlists.Count)
                 {
@@ -502,13 +564,11 @@ public class LibraryViewModel : ViewModelBase
             }
             else
             {
-                // Новый плейлист — создаём VM с правильным trackCount
                 var vm = CreatePlaylistCardVm(playlist, trackCount);
                 newItems.Add((vm, i));
             }
         }
 
-        // 3. Вставляем новые карточки на правильные позиции
         foreach (var (vm, targetIndex) in newItems)
         {
             if (ct.IsCancellationRequested || _isDisposed) return;
@@ -519,7 +579,6 @@ public class LibraryViewModel : ViewModelBase
                 Playlists.Insert(targetIndex, vm);
         }
 
-        // 4. Stagger reveal только для НОВЫХ карточек
         if (newItems.Count > 0)
         {
             foreach (var (vm, _) in newItems)
@@ -536,16 +595,12 @@ public class LibraryViewModel : ViewModelBase
             }
         }
 
-        // 5. Анимируем статистику
         if (!_isDisposed && !ct.IsCancellationRequested)
         {
             _ = UpdateStatsAnimatedAsync();
         }
     }
 
-    /// <summary>
-    /// Фабричный метод: создаёт PlaylistCardViewModel с правильным trackCount из БД.
-    /// </summary>
     private PlaylistCardViewModel CreatePlaylistCardVm(Core.Models.Playlist playlist, int trackCount)
     {
         return new PlaylistCardViewModel(
@@ -557,7 +612,178 @@ public class LibraryViewModel : ViewModelBase
                 var tracks = await _library.GetPlaylistTracksAsync(p.Id);
                 _audio.EnqueueRange(tracks);
             },
-            DeletePlaylistAsync);
+            async (p) =>
+            {
+                var tracks = await _library.GetPlaylistTracksAsync(p.Id);
+                if (tracks.Count > 0)
+                    await _audio.StartQueueAsync(tracks, tracks[0]);
+            },
+            DeletePlaylistAsync,
+            EditPlaylistFromCardAsync);
+    }
+
+    private async Task EditPlaylistFromCardAsync(Core.Models.Playlist playlist)
+    {
+        if (_isDisposed) return;
+
+        // Re-fetch from DB to get latest state
+        var fresh = await _library.GetPlaylistAsync(playlist.Id);
+        if (fresh == null) return;
+
+        var result = await _dialog.ShowEditPlaylistDialogAsync(fresh);
+        if (result == null) return;
+
+        bool changed = false;
+
+        // Name
+        var newName = result.Name?.Trim();
+        if (!string.IsNullOrWhiteSpace(newName) &&
+            !string.Equals(newName, fresh.Name, StringComparison.Ordinal))
+        {
+            if (fresh.IsFromAccount && !string.IsNullOrEmpty(fresh.YoutubeId))
+            {
+                _mainWindow.LockNavigation(SL["Playlist_Renaming"] ?? "Renaming...");
+                try
+                {
+                    await _youtube.RenamePlaylistAsync(fresh.YoutubeId, newName);
+                    fresh.Name = newName;
+                    changed = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[Library] YouTube rename failed: {ex.Message}");
+                    await _dialog.ShowInfoAsync(
+                        SL["Dialog_Error_Title"] ?? "Error",
+                        string.Format(SL["Playlist_RenameCloudFailed"] ?? "Rename failed: {0}", ex.Message));
+                }
+                finally
+                {
+                    _mainWindow.UnlockNavigation();
+                }
+            }
+            else
+            {
+                fresh.Name = newName;
+                changed = true;
+            }
+        }
+
+        // Thumbnail
+        if (!string.Equals(result.ThumbnailUrl, fresh.ThumbnailUrl, StringComparison.Ordinal))
+        {
+            if (!string.IsNullOrWhiteSpace(result.ThumbnailUrl))
+            {
+                if (PlaylistEditorViewModel.IsValidUri(result.ThumbnailUrl))
+                {
+                    fresh.ThumbnailUrl = result.ThumbnailUrl;
+                    changed = true;
+                }
+            }
+            else
+            {
+                fresh.ThumbnailUrl = null;
+                changed = true;
+            }
+        }
+
+        // Color
+        if (!string.Equals(result.CustomColor, fresh.CustomColor, StringComparison.Ordinal))
+        {
+            fresh.CustomColor = result.CustomColor;
+            changed = true;
+        }
+
+        // Sync toggle
+        if (result.SyncToCloud.HasValue && result.SyncToCloud.Value != fresh.IsFromAccount)
+        {
+            bool wantsSync = result.SyncToCloud.Value;
+
+            if (wantsSync && !fresh.IsFromAccount && _auth.IsAuthenticated)
+            {
+                _mainWindow.LockNavigation(SL["Playlist_LinkingToCloud"] ?? "Linking...");
+                try
+                {
+                    var ytId = await _youtube.CreatePlaylistAsync(fresh.Name);
+                    if (!string.IsNullOrEmpty(ytId))
+                    {
+                        fresh.YoutubeId = ytId;
+                        fresh.SyncMode = PlaylistSyncMode.TwoWaySync;
+                        changed = true;
+                        Log.Info($"[Library] Linked playlist to YouTube: {ytId}");
+
+                        // Upload existing tracks in background
+                        var trackIds = await _library.GetPlaylistTrackIdsAsync(fresh.Id);
+                        if (trackIds.Count > 0)
+                        {
+                            _ = UploadTracksInBackgroundAsync(ytId, trackIds);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[Library] Cloud link failed: {ex.Message}");
+                    await _dialog.ShowInfoAsync(
+                        SL["Dialog_Error_Title"] ?? "Error",
+                        string.Format(SL["Playlist_CloudLinkFailed"] ?? "Link failed: {0}", ex.Message));
+                }
+                finally
+                {
+                    _mainWindow.UnlockNavigation();
+                }
+            }
+            else if (!wantsSync && fresh.IsFromAccount)
+            {
+                var confirm = await _dialog.ConfirmAsync(
+                    SL["Dialog_Confirm_Title"] ?? "Confirm",
+                    SL["Playlist_UnlinkConfirm"] ?? "Unlink from YouTube Music?",
+                    SL["Playlist_Unlink"] ?? "Unlink",
+                    SL["Button_Cancel"] ?? "Cancel");
+
+                if (confirm)
+                {
+                    fresh.SyncMode = PlaylistSyncMode.LocalOnly;
+                    fresh.YoutubeId = null;
+                    changed = true;
+                    Log.Info($"[Library] Unlinked playlist from YouTube: {fresh.Id}");
+                }
+            }
+        }
+
+        if (changed)
+        {
+            fresh.UpdatedAt = DateTime.Now;
+            await _library.AddOrUpdatePlaylistAsync(fresh);
+            Log.Info($"[Library] Saved playlist {fresh.Id}: SyncMode={fresh.SyncMode}, YoutubeId={fresh.YoutubeId ?? "null"}");
+            await LoadPlaylistsAsync();
+        }
+    }
+
+    /// <summary>
+    /// Background upload of existing tracks to newly linked YouTube playlist.
+    /// </summary>
+    private async Task UploadTracksInBackgroundAsync(string youtubePlaylistId, List<string> trackIds)
+    {
+        try
+        {
+            int uploaded = 0;
+            for (int i = 0; i < trackIds.Count; i++)
+            {
+                var trackId = trackIds[i];
+                if (!trackId.StartsWith("yt_")) continue;
+
+                await _youtube.AddToPlaylistAsync(youtubePlaylistId, trackId);
+                uploaded++;
+
+                // Rate limiting
+                await Task.Delay(uploaded % 5 == 0 ? 1000 : 300);
+            }
+
+            Log.Info($"[Library] Uploaded {uploaded} tracks to YouTube playlist {youtubePlaylistId}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Library] Background upload failed: {ex.Message}");
+        }
     }
 
     private async Task DeletePlaylistAsync(string playlistId)

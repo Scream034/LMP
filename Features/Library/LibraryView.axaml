@@ -20,7 +20,8 @@
                 Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
                 <Border.Transitions>
                     <Transitions>
-                        <DoubleTransition Property="Opacity" Duration="0:0:0.4" Easing="CubicEaseOut" />
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.4"
+                            Easing="CubicEaseOut" />
                     </Transitions>
                 </Border.Transitions>
                 <StackPanel Spacing="6" VerticalAlignment="Center">
@@ -172,20 +173,38 @@
 
                                     <Border.ContextMenu>
                                         <ContextMenu>
-                                            <MenuItem Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Playlist_Open]}"
+                                            <MenuItem
+                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Player_Play]}"
+                                                Command="{Binding PlayCommand}">
+                                                <MenuItem.Icon>
+                                                    <mi:MaterialIcon Kind="Play" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Playlist_Open]}"
                                                 Command="{Binding OpenCommand}">
                                                 <MenuItem.Icon>
                                                     <mi:MaterialIcon Kind="FolderOpen" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Queue_AddAll]}"
+                                            <MenuItem
+                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[EditPlaylist_Title]}"
+                                                Command="{Binding EditCommand}"
+                                                IsVisible="{Binding CanEdit}">
+                                                <MenuItem.Icon>
+                                                    <mi:MaterialIcon Kind="Pencil" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Queue_AddAll]}"
                                                 Command="{Binding AddToQueueCommand}">
                                                 <MenuItem.Icon>
                                                     <mi:MaterialIcon Kind="PlaylistPlay" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                             <Separator Classes="menu-separator" />
-                                            <MenuItem Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Button_Delete]}"
+                                            <MenuItem
+                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Button_Delete]}"
                                                 Command="{Binding DeleteCommand}"
                                                 IsVisible="{Binding CanDelete}"
                                                 Classes="danger">
@@ -204,16 +223,23 @@
                                             Padding="0" Cursor="Hand"
                                             CornerRadius="8,8,0,0" ClipToBounds="True">
                                             <Panel Width="220" Height="220">
-                                                <!-- Liked: градиент сверху вниз + Heart, заполняет весь квадрат -->
+                                                <!-- Liked: градиент сверху вниз + Heart, заполняет
+                                                весь квадрат -->
                                                 <Border IsVisible="{Binding IsLikedPlaylist}"
                                                     Width="220" Height="220">
                                                     <Border.Background>
-                                                        <LinearGradientBrush StartPoint="50%,0%" EndPoint="50%,100%">
-                                                            <GradientStop Color="{DynamicResource Accent}" Offset="0.0" />
-                                                            <GradientStop Color="{DynamicResource BgElevated}" Offset="1.0" />
+                                                        <LinearGradientBrush StartPoint="50%,0%"
+                                                            EndPoint="50%,100%">
+                                                            <GradientStop
+                                                                Color="{DynamicResource Accent}"
+                                                                Offset="0.0" />
+                                                            <GradientStop
+                                                                Color="{DynamicResource BgElevated}"
+                                                                Offset="1.0" />
                                                         </LinearGradientBrush>
                                                     </Border.Background>
-                                                    <mi:MaterialIcon Kind="Heart" Width="72" Height="72"
+                                                    <mi:MaterialIcon Kind="Heart" Width="72"
+                                                        Height="72"
                                                         Foreground="{DynamicResource AccentButtonTextBrush}"
                                                         HorizontalAlignment="Center"
                                                         VerticalAlignment="Center"

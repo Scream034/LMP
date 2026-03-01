@@ -427,6 +427,14 @@
     <Style Selector="Button.playback-btn-main:pressed">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
+    <!-- Иконка: AccentButtonTextBrush + белый эффект для тёмных акцентов -->
+    <Style Selector="Button.playback-btn-main mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <!-- Template override: убираем дефолтный hover фон Avalonia -->
+    <Style Selector="Button.playback-btn-main /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- PLAY CIRCLE                                                         -->

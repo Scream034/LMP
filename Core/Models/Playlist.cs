@@ -40,6 +40,7 @@ public class Playlist : IBatchItem, ISearchResult
     public string Url => YoutubeId != null ? $"https://www.youtube.com/playlist?list={YoutubeId}" : string.Empty;
 
     public string? ThumbnailUrl { get; set; }
+    public string? CustomColor { get; set; }
     public string? Author { get; set; }
     public string? Description { get; set; }
 

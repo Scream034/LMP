@@ -1,0 +1,151 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="using:LMP.UI.Dialogs"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             xmlns:asyncImage="using:AsyncImageLoader"
+             x:Class="LMP.UI.Controls.PlaylistEditorControl"
+             x:DataType="d:PlaylistEditorViewModel"
+             x:CompileBindings="True">
+
+    <StackPanel Spacing="16">
+
+        <!-- ═══ Name ═══ -->
+        <StackPanel Spacing="6">
+            <TextBlock Text="{Binding L[EditPlaylist_Name]}"
+                       FontSize="13" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <TextBox Text="{Binding Name, Mode=TwoWay}"
+                     Watermark="{Binding L[Library_PlaylistNameHint]}" />
+        </StackPanel>
+
+        <!-- ═══ Thumbnail URL + Preview ═══ -->
+        <StackPanel Spacing="6">
+            <TextBlock Text="{Binding L[EditPlaylist_Cover]}"
+                       FontSize="13" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <Grid ColumnDefinitions="*, Auto">
+                <TextBox Grid.Column="0"
+                         Text="{Binding ThumbnailUrl, Mode=TwoWay}"
+                         Watermark="https://..." />
+                <Border Grid.Column="1"
+                        Width="40" Height="40"
+                        CornerRadius="6" ClipToBounds="True"
+                        Margin="8,0,0,0"
+                        Background="{DynamicResource BgSkeletonBrush}">
+                    <Panel>
+                        <mi:MaterialIcon Kind="ImageOutline"
+                                         Width="20" Height="20"
+                                         Foreground="{DynamicResource TextMutedBrush}"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"
+                                         IsVisible="{Binding !HasThumbnailPreview}" />
+                        <Image asyncImage:ImageLoader.Source="{Binding ThumbnailPreviewUrl}"
+                               Stretch="UniformToFill"
+                               Width="40" Height="40"
+                               IsVisible="{Binding HasThumbnailPreview}" />
+                    </Panel>
+                </Border>
+            </Grid>
+        </StackPanel>
+
+        <!-- ═══ Custom Color + Preview swatch ═══ -->
+        <StackPanel Spacing="6">
+            <TextBlock Text="{Binding L[EditPlaylist_Color]}"
+                       FontSize="13" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextSecondaryBrush}" />
+            <Grid ColumnDefinitions="*, Auto">
+                <TextBox Grid.Column="0"
+                         Text="{Binding CustomColor, Mode=TwoWay}"
+                         Watermark="#FF6B35" />
+                <Border Grid.Column="1"
+                        Width="32" Height="32"
+                        CornerRadius="6"
+                        Margin="8,0,0,0"
+                        BorderBrush="{DynamicResource BgHighlightBrush}"
+                        BorderThickness="1"
+                        Background="{Binding ColorPreviewBrush}" />
+            </Grid>
+            <TextBlock Text="{Binding L[EditPlaylist_ColorHint]}"
+                       FontSize="11"
+                       Foreground="{DynamicResource TextMutedBrush}" />
+        </StackPanel>
+
+        <!-- ═══ YouTube Sync Section ═══ -->
+        <Border Background="{DynamicResource BgElevatedBrush}"
+                CornerRadius="8" Padding="14,12"
+                IsVisible="{Binding ShowSyncSection}">
+            <StackPanel Spacing="10">
+
+                <!-- Toggle row -->
+                <Grid ColumnDefinitions="Auto, *, Auto">
+                    <mi:MaterialIcon Grid.Column="0"
+                                     Kind="CloudSync"
+                                     Width="20" Height="20"
+                                     Foreground="{DynamicResource AccentBrush}"
+                                     VerticalAlignment="Center"
+                                     Margin="0,0,10,0" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                        <TextBlock Text="{Binding L[EditPlaylist_Sync]}"
+                                   FontSize="13" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding L[EditPlaylist_SyncDesc]}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="2"
+                                  IsChecked="{Binding IsSyncedToCloud, Mode=TwoWay}"
+                                  IsEnabled="{Binding IsAuthenticated}"
+                                  VerticalAlignment="Center"
+                                  Margin="12,0,0,0" />
+                </Grid>
+
+                <!-- Active sync indicator (когда уже привязан) -->
+                <Border Padding="10,6" CornerRadius="4"
+                        IsVisible="{Binding HasYoutubeBinding}">
+                    <Border.Background>
+                        <SolidColorBrush Color="{DynamicResource AccentColor}" Opacity="0.1" />
+                    </Border.Background>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <mi:MaterialIcon Kind="CheckCircleOutline"
+                                         Width="14" Height="14"
+                                         Foreground="{DynamicResource AccentBrush}"
+                                         VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding L[EditPlaylist_SyncActive]}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Not authenticated warning (toggle отключён) -->
+                <Border Padding="10,6" CornerRadius="4"
+                        IsVisible="{Binding !IsAuthenticated}">
+                    <Border.Background>
+                        <SolidColorBrush Color="Orange" Opacity="0.1" />
+                    </Border.Background>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <mi:MaterialIcon Kind="AlertOutline"
+                                         Width="14" Height="14"
+                                         Foreground="Orange"
+                                         VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding L[EditPlaylist_LoginRequired]}"
+                                   FontSize="11"
+                                   Foreground="Orange"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </Border>
+
+        <!-- ═══ Validation Error ═══ -->
+        <TextBlock Text="{Binding ErrorMessage}"
+                   Foreground="{DynamicResource SystemError}"
+                   IsVisible="{Binding HasErrors}"
+                   FontSize="13" FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,4,0,0" />
+
+    </StackPanel>
+</UserControl>

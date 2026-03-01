@@ -15,6 +15,7 @@ using LMP.Features.Settings;
 using LMP.Features.Playlist;
 using LMP.Features.Notifications;
 using System.Runtime;
+using LMP.Core.Models;
 
 namespace LMP.Features.Shell;
 
@@ -111,6 +112,9 @@ public class MainWindowViewModel : ViewModelBase
         }, canNavigate));
 
         Navigate("Home");
+
+        // Фоновая валидация авторизации при старте
+        _ = ValidateAuthOnStartupAsync();
 
         Log.Info("MainWindowViewModel initialized.");
     }
@@ -305,6 +309,64 @@ public class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             Log.Error($"Failed to open GitHub: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Фоновая проверка авторизации при запуске.
+    /// 
+    /// Порядок:
+    /// 1. Профиль УЖЕ восстановлен из auth.json в конструкторе CookieAuthService
+    ///    → пользователь сразу видит своё имя/аватар (без ожидания сети).
+    /// 2. Эта задача проверяет валидность сессии в фоне.
+    /// 3. При ошибке — toast-уведомление, профиль остаётся кэшированным.
+    /// </summary>
+    private async Task ValidateAuthOnStartupAsync()
+    {
+        try
+        {
+            // Даём UI полностью загрузиться
+            await Task.Delay(2000);
+
+            var auth = _services.GetRequiredService<CookieAuthService>();
+
+            // Проверяем ошибку загрузки профиля с диска
+            if (auth.HasProfileLoadError)
+            {
+                Log.Warn("[Auth] Profile load error detected on startup");
+
+                if (auth.IsAuthenticated)
+                {
+                    var notifications = _services.GetRequiredService<NotificationService>();
+                    await notifications.ShowToastAsync(
+                        "Auth_ProfileLoadError_Title",
+                        "Auth_ProfileLoadError_Message",
+                        NotificationSeverity.Warning,
+                        durationMs: 6000);
+                }
+                return;
+            }
+
+            if (!auth.IsAuthenticated) return;
+
+            // Валидация сессии
+            var (isValid, error) = await auth.ValidateSessionAsync();
+
+            if (!isValid)
+            {
+                Log.Warn($"[Auth] Session expired on startup: {error}");
+
+                var notifications = _services.GetRequiredService<NotificationService>();
+                await notifications.ShowToastAsync(
+                    "Auth_SessionExpired_Title",
+                    "Auth_SessionExpired_Message",
+                    NotificationSeverity.Warning,
+                    durationMs: 8000);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Startup validation error: {ex.Message}");
         }
     }
 }

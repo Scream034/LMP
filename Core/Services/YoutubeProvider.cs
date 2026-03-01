@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using LMP.Core.Models;
 using LMP.Core.Youtube;
 using LMP.Core.Youtube.Channels;
+using LMP.Core.Youtube.Music;
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Youtube.Search;
 using LMP.Core.Youtube.Videos;
@@ -142,9 +143,6 @@ public partial class YoutubeProvider : IDisposable
     /// </summary>
     /// <exception cref="BotDetectionException">Если YouTube rate limiting активен.</exception>
     public static void ThrowIfInCooldown() => VideoController.ThrowIfInCooldown();
-
-    // УДАЛЕНО: HandleBotDetectionCooldown, HandleStreamUnavailable
-    // Эти методы вызывали DialogService напрямую — нарушение DIP
 
     #endregion
 
@@ -295,8 +293,7 @@ public partial class YoutubeProvider : IDisposable
                 {
                     var item = shelf.Items[i];
 
-                    string thumbUrl = GetBestThumbnailUrl(item.Thumbnails)
-                        ?? $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg";
+                    string thumbUrl = ThumbnailUtils.GetBestUrlOrDefault(item.Thumbnails, $"https://i.ytimg.com/vi/{item.Id}/mqdefault.jpg");
 
                     bool isMusicContent = string.Equals(item.Type, "Song", StringComparison.OrdinalIgnoreCase);
 
@@ -338,7 +335,7 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region Лайки и плейлисты
+    #region Edit youtube
 
     public async Task LikeTrackAsync(string trackId, bool like)
     {
@@ -356,31 +353,153 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public async Task<string?> CreatePlaylistAsync(string title)
+    public async Task RemoveFromPlaylistAsync(string playlistId, string videoId, string setVideoId)
+    {
+        if (AuthService?.IsAuthenticated != true) return;
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            var rawId = ExtractRawIdSpan(videoId).ToString();
+            await _youtube.Music.RemoveFromPlaylistAsync(playlistId, rawId, setVideoId);
+            Log.Info($"[Music] Removed item {setVideoId} from playlist {playlistId}");
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to remove from playlist: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Создаёт плейлист в YouTube Music аккаунте.
+    /// </summary>
+    /// <param name="title">Название плейлиста.</param>
+    /// <param name="description">Описание (опционально).</param>
+    /// <returns>YouTube ID созданного плейлиста.</returns>
+    /// <exception cref="InvalidOperationException">Если пользователь не аутентифицирован.</exception>
+    public async Task<string?> CreatePlaylistAsync(string title, string description = "")
+    {
+        if (AuthService?.IsAuthenticated != true)
+            throw new InvalidOperationException(
+                "Cannot create cloud playlist: user is not authenticated.");
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            var ytId = await _youtube.Music.CreatePlaylistAsync(title, description);
+            Log.Info($"[Music] Created playlist '{title}' → YT ID: {ytId}");
+            return ytId;
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to create playlist '{title}': {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Переименовывает плейлист в YouTube Music аккаунте.
+    /// </summary>
+    /// <param name="playlistId">YouTube ID плейлиста.</param>
+    /// <param name="newTitle">Новое название.</param>
+    /// <exception cref="InvalidOperationException">Если не аутентифицирован.</exception>
+    public async Task RenamePlaylistAsync(string playlistId, string newTitle)
+    {
+        if (string.IsNullOrWhiteSpace(playlistId))
+            throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
+
+        if (AuthService?.IsAuthenticated != true)
+            throw new InvalidOperationException(
+                "Cannot rename cloud playlist: user is not authenticated.");
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            await _youtube.Music.RenamePlaylistAsync(playlistId, newTitle);
+            Log.Info($"[Music] Renamed playlist {playlistId} → '{newTitle}'");
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to rename playlist {playlistId}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Удаляет плейлист из YouTube Music аккаунта.
+    /// </summary>
+    /// <param name="playlistId">YouTube ID плейлиста.</param>
+    public async Task DeletePlaylistAsync(string playlistId)
+    {
+        if (string.IsNullOrWhiteSpace(playlistId))
+            throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
+
+        if (AuthService?.IsAuthenticated != true)
+            throw new InvalidOperationException(
+                "Cannot delete cloud playlist: user is not authenticated.");
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            await _youtube.Music.DeletePlaylistAsync(playlistId);
+            Log.Info($"[Music] Deleted playlist {playlistId} from YouTube");
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to delete playlist {playlistId}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Добавляет трек в плейлист YouTube Music. Возвращает setVideoId если доступен.
+    /// </summary>
+    public async Task<string?> AddToPlaylistAsync(string playlistId, string trackId)
     {
         if (AuthService?.IsAuthenticated != true) return null;
         try
         {
-            return await _youtube.Music.CreatePlaylistAsync(title);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Music] Failed to create playlist: {ex.Message}");
-            return null;
-        }
-    }
-
-    public async Task AddToPlaylistAsync(string playlistId, string trackId)
-    {
-        if (AuthService?.IsAuthenticated != true) return;
-        try
-        {
             var rawId = ExtractRawIdSpan(trackId).ToString();
-            await _youtube.Music.AddToPlaylistAsync(playlistId, rawId);
+            return await _youtube.Music.AddToPlaylistAsync(playlistId, rawId);
         }
         catch (Exception ex)
         {
             Log.Error($"[Music] Failed to add to playlist: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Fetches playlist content from YouTube Music with setVideoId for each track.
+    /// Used for on-demand resolution of setVideoIds needed for track removal.
+    /// </summary>
+    public async Task<List<PlaylistVideoData>> GetPlaylistItemsWithSetVideoIdAsync(
+        string youtubePlaylistId, CancellationToken ct = default)
+    {
+        if (AuthService?.IsAuthenticated != true) return [];
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            var items = await _youtube.Music.GetPlaylistVideosAsync(youtubePlaylistId, ct);
+            Log.Info($"[Music] Fetched {items.Count} items with setVideoIds for playlist {youtubePlaylistId}");
+            return items;
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to fetch playlist items: {ex.Message}");
+            return [];
         }
     }
 
@@ -1623,27 +1742,6 @@ public partial class YoutubeProvider : IDisposable
         }
 
         return new string(buffer[..pos]);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string? GetBestThumbnailUrl(IReadOnlyList<Thumbnail> thumbnails)
-    {
-        if (thumbnails.Count == 0) return null;
-
-        string? best = null;
-        int bestArea = -1;
-
-        for (int i = 0; i < thumbnails.Count; i++)
-        {
-            int area = thumbnails[i].Resolution.Area;
-            if (area > bestArea)
-            {
-                bestArea = area;
-                best = thumbnails[i].Url;
-            }
-        }
-
-        return best;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

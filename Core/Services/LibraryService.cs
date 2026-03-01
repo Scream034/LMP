@@ -72,6 +72,7 @@ public sealed class LibraryService : IAsyncDisposable
         // Create/migrate database
         await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
         await ctx.Database.EnsureCreatedAsync(ct);
+        await ctx.MigrateSchemaAsync(ct);
         await ctx.OptimizeAsync(ct);
         await ctx.EnsureFtsTablesAsync(ct);
 
@@ -496,6 +497,26 @@ public sealed class LibraryService : IAsyncDisposable
     #endregion
 
     #region Playlists
+
+    public async Task<string?> GetSetVideoIdAsync(
+        string playlistId, string trackId, CancellationToken ct = default)
+    {
+        return await _playlists.GetSetVideoIdAsync(playlistId, trackId, ct);
+    }
+
+    public async Task UpdateSetVideoIdAsync(
+        string playlistId, string trackId, string setVideoId, CancellationToken ct = default)
+    {
+        await _playlists.UpdateSetVideoIdAsync(playlistId, trackId, setVideoId, ct);
+    }
+
+    public async Task UpdateSetVideoIdsAsync(
+        string playlistId,
+        IReadOnlyList<(string TrackId, string SetVideoId)> mappings,
+        CancellationToken ct = default)
+    {
+        await _playlists.UpdateSetVideoIdsAsync(playlistId, mappings, ct);
+    }
 
     public async Task<List<string>> GetPlaylistTrackIdsAsync(string playlistId, CancellationToken ct = default)
     {

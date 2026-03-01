@@ -475,3 +475,30 @@ public sealed class SeverityToColorConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotSupportedException();
 }
+
+/// <summary>
+/// Возвращает URL изображения только когда скролл остановлен.
+/// При быстром скролле возвращает null → ImageLoader не загружает картинку,
+/// отображается фоновый placeholder (BgSkeletonBrush).
+/// 
+/// values[0] = string ThumbnailUrl
+/// values[1] = bool IsScrollingFast
+/// </summary>
+public sealed class DeferredUrlConverter : IMultiValueConverter
+{
+    public static readonly DeferredUrlConverter Instance = new();
+
+    public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (values is not { Count: >= 2 })
+            return null;
+
+        if (values[0] is not string url || string.IsNullOrEmpty(url))
+            return null;
+
+        // values[1] может быть UnsetValue при recycling в VirtualizingStackPanel
+        var isScrollingFast = values[1] is true;
+
+        return isScrollingFast ? null : url;
+    }
+}

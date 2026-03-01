@@ -5,12 +5,14 @@ using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
+using LMP.Features.Shell;
 using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using LMP.UI.Dialogs;
 
 namespace LMP.Features.Playlist;
 
@@ -24,6 +26,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     private readonly IDialogService _dialog;
     private readonly TrackViewModelFactory _vmFactory;
     private readonly DominantColorService _dominantColor;
+    private readonly YoutubeProvider _youtube;
+    private readonly MainWindowViewModel _mainWindow;
 
     private readonly EventHandler<string> _languageChangedHandler;
 
@@ -36,11 +40,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     private DateTime _lastMoveTime = DateTime.MinValue;
     private const int MoveDebounceMs = 1000;
 
-    // Кэш всех треков для избежания повторных загрузок
     private List<TrackInfo>? _allTracksCache;
     private bool _allTracksCacheValid;
 
-    // LIFECYCLE: Флаг для пропуска UI-обновлений когда окно свёрнуто
     private volatile bool _isSuspended;
 
     #endregion
@@ -99,6 +101,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     public ReactiveCommand<Unit, Unit> RefreshPlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
     public ReactiveCommand<(int oldIndex, int newIndex), Unit> MoveItemCommand { get; }
+    public ReactiveCommand<Unit, Unit> EditPlaylistCommand { get; }
 
     #endregion
 
@@ -110,7 +113,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         MusicLibraryManager manager,
         IDialogService dialog,
         TrackViewModelFactory vmFactory,
-        DominantColorService dominantColor)
+        DominantColorService dominantColor,
+        YoutubeProvider youtube,
+        MainWindowViewModel mainWindow)
     {
         _audio = audio;
         _downloads = downloads;
@@ -118,6 +123,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         _dialog = dialog;
         _vmFactory = vmFactory;
         _dominantColor = dominantColor;
+        _youtube = youtube;
+        _mainWindow = mainWindow;
 
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
@@ -152,11 +159,13 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             await LoadPlaylistAsync(_currentPlaylistId);
         }));
 
-        RefreshPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(() => LoadPlaylistAsync(_currentPlaylistId)));
+        RefreshPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+            () => LoadPlaylistAsync(_currentPlaylistId)));
 
         ShufflePlayCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShufflePlayAsync, hasTracks));
         DownloadAllCommand = CreateCommand(ReactiveCommand.CreateFromTask(DownloadAllAsync, hasTracks));
-        MergePlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit)));
+        MergePlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+            MergePlaylistAsync, this.WhenAnyValue(x => x.CanEdit)));
 
         AddToQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
@@ -173,6 +182,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             await MoveItemAsync(tuple.oldIndex, tuple.newIndex);
         }));
 
+        EditPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+            EditPlaylistAsync,
+            this.WhenAnyValue(x => x.CanEdit)));
+
         this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ =>
             {
@@ -187,7 +200,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
 
                 if ((DateTime.Now - _lastMoveTime).TotalMilliseconds < MoveDebounceMs)
@@ -228,19 +240,13 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #endregion
 
-    // LIFECYCLE IMPLEMENTATION
+    #region Lifecycle
 
-    /// <summary>
-    /// Окно свёрнуто — пропускаем UI-обновления от событий.
-    /// </summary>
     protected override void OnSuspend()
     {
         _isSuspended = true;
     }
 
-    /// <summary>
-    /// Окно развёрнуто — синхронизируем UI с актуальным состоянием.
-    /// </summary>
     protected override void OnResume()
     {
         _isSuspended = false;
@@ -248,6 +254,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         InvalidateAllTracksCache();
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
+
+    #endregion
 
     #region Abstract Implementation
 
@@ -296,14 +304,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #endregion
 
-    #region All Tracks Helper (DRY)
+    #region All Tracks Helper
 
     private async Task<List<TrackInfo>> GetAllTracksAsync()
     {
         if (_allTracksCacheValid && _allTracksCache != null)
-        {
             return _allTracksCache;
-        }
 
         var allIds = GetAllIds();
         _allTracksCache = await LibService.GetPlaylistTracksAsync(
@@ -354,6 +360,246 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #endregion
 
+    #region Edit Playlist
+
+    private async Task EditPlaylistAsync()
+    {
+        var playlist = await LibService.GetPlaylistAsync(_currentPlaylistId);
+        if (playlist == null) return;
+
+        var result = await _dialog.ShowEditPlaylistDialogAsync(playlist);
+        if (result == null) return;
+
+        // ═══ Определяем что изменилось ═══
+
+        var newName = result.Name?.Trim();
+        bool nameChanged = !string.IsNullOrWhiteSpace(newName)
+                        && !string.Equals(newName, playlist.Name, StringComparison.Ordinal);
+        bool thumbnailChanged = !string.Equals(
+            result.ThumbnailUrl, playlist.ThumbnailUrl, StringComparison.Ordinal);
+        bool colorChanged = !string.Equals(
+            result.CustomColor, playlist.CustomColor, StringComparison.Ordinal);
+        bool syncChanged = result.SyncToCloud.HasValue
+                        && result.SyncToCloud.Value != playlist.IsFromAccount;
+
+        if (!nameChanged && !thumbnailChanged && !colorChanged && !syncChanged)
+            return;
+
+        bool localChanged = false;
+
+        // ═══ STEP 1: Обработка изменения синхронизации ═══
+
+        if (syncChanged)
+        {
+            bool wantsSync = result.SyncToCloud!.Value;
+
+            if (wantsSync && !playlist.IsFromAccount)
+            {
+                // Привязка к облаку
+                localChanged |= await TryLinkToCloudAsync(playlist);
+            }
+            else if (!wantsSync && playlist.IsFromAccount)
+            {
+                // Отвязка от облака
+                localChanged |= await TryUnlinkFromCloudAsync(playlist);
+            }
+        }
+
+        // ═══ STEP 2: Переименование ═══
+
+        if (nameChanged)
+        {
+            // Если плейлист привязан к облаку — синхронизируем название
+            if (playlist.IsFromAccount && !string.IsNullOrEmpty(playlist.YoutubeId))
+            {
+                _mainWindow.LockNavigation(SL["Playlist_Renaming"] ?? "Renaming...");
+                try
+                {
+                    await _youtube.RenamePlaylistAsync(playlist.YoutubeId, newName!);
+                    playlist.Name = newName!;
+                    localChanged = true;
+                    Log.Info($"[Playlist] Renamed on YouTube: {playlist.YoutubeId} → '{newName}'");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"[Playlist] YouTube rename failed: {ex.Message}");
+                    await _dialog.ShowInfoAsync(
+                        SL["Dialog_Error_Title"] ?? "Error",
+                        string.Format(
+                            SL["Playlist_RenameCloudFailed"]
+                                ?? "Failed to rename on YouTube:\n{0}\n\nLocal name was not changed.",
+                            ex.Message));
+                    // НЕ применяем переименование
+                }
+                finally
+                {
+                    _mainWindow.UnlockNavigation();
+                }
+            }
+            else
+            {
+                // Локальный плейлист — просто меняем
+                playlist.Name = newName!;
+                localChanged = true;
+            }
+        }
+
+        // ═══ STEP 3: Thumbnail (только локально) ═══
+
+        if (thumbnailChanged)
+        {
+            if (!string.IsNullOrWhiteSpace(result.ThumbnailUrl))
+            {
+                if (PlaylistEditorViewModel.IsValidUri(result.ThumbnailUrl))
+                {
+                    playlist.ThumbnailUrl = result.ThumbnailUrl;
+                    localChanged = true;
+                }
+                else
+                {
+                    Log.Warn($"[Playlist] Invalid thumbnail URL: {result.ThumbnailUrl}");
+                    await _dialog.ShowInfoAsync(
+                        SL["Dialog_Warning_Title"] ?? "Warning",
+                        SL["Error_InvalidThumbnailUrl"]
+                            ?? "Invalid image URL. Thumbnail was not updated.");
+                }
+            }
+            else
+            {
+                playlist.ThumbnailUrl = null;
+                localChanged = true;
+            }
+        }
+
+        // ═══ STEP 4: Color (только локально) ═══
+
+        if (colorChanged)
+        {
+            playlist.CustomColor = result.CustomColor;
+            localChanged = true;
+        }
+
+        // ═══ STEP 5: Сохранение ═══
+
+        if (localChanged)
+        {
+            playlist.UpdatedAt = DateTime.Now;
+            Log.Info($"[Playlist] Saving: SyncMode={playlist.SyncMode}, YoutubeId={playlist.YoutubeId ?? "null"}, Name={playlist.Name}");
+            await LibService.AddOrUpdatePlaylistAsync(playlist);
+
+            // Verify save
+            var verify = await LibService.GetPlaylistAsync(_currentPlaylistId);
+            Log.Info($"[Playlist] Verified: SyncMode={verify?.SyncMode}, YoutubeId={verify?.YoutubeId ?? "null"}");
+
+            await LoadPlaylistAsync(_currentPlaylistId);
+        }
+    }
+
+    /// <summary>
+    /// Привязывает локальный плейлист к YouTube Music.
+    /// </summary>
+    private async Task<bool> TryLinkToCloudAsync(Core.Models.Playlist playlist)
+    {
+        _mainWindow.LockNavigation(
+            SL["Playlist_LinkingToCloud"] ?? "Linking to YouTube Music...");
+        try
+        {
+            var ytId = await _youtube.CreatePlaylistAsync(playlist.Name);
+
+            if (string.IsNullOrEmpty(ytId))
+            {
+                await _dialog.ShowInfoAsync(
+                    SL["Dialog_Error_Title"] ?? "Error",
+                    SL["Playlist_CloudCreateFailed"]
+                        ?? "Could not create playlist in YouTube Music.");
+                return false;
+            }
+
+            playlist.YoutubeId = ytId;
+            playlist.SyncMode = PlaylistSyncMode.TwoWaySync;
+
+            Log.Info($"[Playlist] Linked to YouTube: {ytId}");
+
+            // Load track IDs from DB (playlist.TrackIds may be empty — it's JsonIgnore)
+            var trackIds = await LibService.GetPlaylistTrackIdsAsync(_currentPlaylistId);
+            if (trackIds.Count > 0)
+            {
+                _ = UploadTracksInBackgroundAsync(ytId, trackIds);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Playlist] Cloud link failed: {ex.Message}");
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Error_Title"] ?? "Error",
+                string.Format(
+                    SL["Playlist_CloudLinkFailed"]
+                        ?? "Failed to link to YouTube Music:\n{0}",
+                    ex.Message));
+            return false;
+        }
+        finally
+        {
+            _mainWindow.UnlockNavigation();
+        }
+    }
+
+    /// <summary>
+    /// Отвязывает плейлист от YouTube Music (локальная копия становится независимой).
+    /// </summary>
+    private async Task<bool> TryUnlinkFromCloudAsync(Core.Models.Playlist playlist)
+    {
+        var confirm = await _dialog.ConfirmAsync(
+            SL["Dialog_Confirm_Title"] ?? "Confirm",
+            SL["Playlist_UnlinkConfirm"]
+                ?? "Unlink this playlist from YouTube Music?\n\n" +
+                   "The playlist will remain in your YouTube account, " +
+                   "but local changes will no longer sync.",
+            SL["Playlist_Unlink"] ?? "Unlink",
+            SL["Button_Cancel"] ?? "Cancel");
+
+        if (!confirm) return false;
+
+        playlist.SyncMode = PlaylistSyncMode.LocalOnly;
+        playlist.YoutubeId = null;
+
+        Log.Info($"[Playlist] Unlinked from YouTube: {playlist.Id}");
+        return true;
+    }
+
+    /// <summary>
+    /// Фоновая загрузка треков в облачный плейлист.
+    /// </summary>
+    private async Task UploadTracksInBackgroundAsync(string youtubePlaylistId, List<string> trackIds)
+    {
+        if (trackIds.Count == 0) return;
+
+        try
+        {
+            int uploaded = 0;
+            for (int i = 0; i < trackIds.Count; i++)
+            {
+                if (!trackIds[i].StartsWith("yt_")) continue;
+
+                await _youtube.AddToPlaylistAsync(youtubePlaylistId, trackIds[i]);
+                uploaded++;
+
+                // Rate limiting
+                await Task.Delay(uploaded % 5 == 0 ? 1000 : 300);
+            }
+
+            Log.Info($"[Playlist] Uploaded {uploaded} tracks to YouTube playlist {youtubePlaylistId}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Playlist] Background upload failed: {ex.Message}");
+        }
+    }
+
+    #endregion
+
     #region Private Methods
 
     private async Task LoadHeaderGradientAsync()
@@ -362,7 +608,14 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         {
             if (string.IsNullOrEmpty(ThumbnailUrl))
             {
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => HeaderBackground = null);
+                await SetHeaderBackgroundAsync(null);
+                return;
+            }
+
+            if (!PlaylistEditorViewModel.IsValidUri(ThumbnailUrl))
+            {
+                Log.Warn($"[Playlist] Invalid thumbnail URL skipped: {ThumbnailUrl}");
+                await SetHeaderBackgroundAsync(null);
                 return;
             }
 
@@ -370,21 +623,40 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (dominantColor == null)
-                {
-                    HeaderBackground = null;
-                }
-                else
-                {
-                    HeaderBackground = DominantColorService.CreateHeaderGradient(dominantColor.Value);
-                }
+                HeaderBackground = dominantColor != null
+                    ? DominantColorService.CreateHeaderGradient(dominantColor.Value)
+                    : null;
             });
+        }
+        catch (HttpRequestException ex)
+        {
+            Log.Warn($"[Playlist] Thumbnail load failed (network): {ex.Message}");
+            await SetHeaderBackgroundAsync(null);
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Warning_Title"] ?? "Warning",
+                string.Format(SL["Playlist_ThumbnailLoadFailed"]
+                    ?? "Could not load cover image: {0}", ex.Message));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            Log.Warn($"[Playlist] Invalid image: {ex.Message}");
+            await SetHeaderBackgroundAsync(null);
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Warning_Title"] ?? "Warning",
+                SL["Playlist_ThumbnailInvalidFormat"]
+                    ?? "The cover image format is invalid or unsupported.");
         }
         catch (Exception ex)
         {
-            Log.Warn($"[Playlist] Gradient failed: {ex.Message}");
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => HeaderBackground = null);
+            Log.Warn($"[Playlist] Gradient error: {ex.Message}");
+            await SetHeaderBackgroundAsync(null);
         }
+    }
+
+    private async Task SetHeaderBackgroundAsync(IBrush? brush)
+    {
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
+            () => HeaderBackground = brush);
     }
 
     private async Task HydrateCacheStatusInBackgroundAsync()
@@ -429,17 +701,11 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        // Атомарная замена очереди: Clear + AddRange + Play в одной операции
         _audio.ShuffleEnabled = false;
         IsShuffleActive = false;
         await _audio.StartQueueAsync(allTracks, allTracks[0]);
     }
 
-    /// <summary>
-    /// Перемешивает треки и атомарно заменяет очередь через StartQueueAsync.
-    /// Старая реализация делала ClearQueue → EnqueueRange → ShuffleQueue (3 отдельных
-    /// события OnQueueChanged). Новая — одна атомарная операция.
-    /// </summary>
     private async Task ShufflePlayAsync()
     {
         if (TrackCount == 0) return;
@@ -447,7 +713,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        // Перемешиваем копию списка локально, НЕ трогая AudioEngine
         var shuffled = new List<TrackInfo>(allTracks);
         var rng = Random.Shared;
         for (int i = shuffled.Count - 1; i > 0; i--)
@@ -456,11 +721,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             (shuffled[i], shuffled[j]) = (shuffled[j], shuffled[i]);
         }
 
-        // Атомарная замена очереди: один вызов вместо Clear+Enqueue+Shuffle
         _audio.ShuffleEnabled = false;
         await _audio.StartQueueAsync(shuffled, shuffled[0]);
 
-        // Визуальная индикация Shuffle (временная)
         IsShuffleActive = true;
 
         Observable.Timer(TimeSpan.FromMilliseconds(800))
@@ -475,9 +738,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         var allTracks = await GetAllTracksAsync();
 
-        foreach (var track in allTracks.Where(t => !t.IsDownloaded))
+        foreach (var track in allTracks)
         {
-            _downloads.StartDownload(track);
+            if (!track.IsDownloaded)
+                _downloads.StartDownload(track);
         }
 
         Observable.Timer(TimeSpan.FromSeconds(2))
@@ -492,7 +756,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         int minutes = TotalDuration.Minutes;
         int seconds = TotalDuration.Seconds;
 
-        // Используем локализованные суффиксы длительности
         if (totalHours > 0)
             FormattedDuration = $"{totalHours}{SL["Duration_Hours"]} {minutes}{SL["Duration_Minutes"]}";
         else if (minutes > 0)

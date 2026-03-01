@@ -4,6 +4,10 @@ using LMP.Core.Youtube.Utils.Extensions;
 
 namespace LMP.Core.Services;
 
+/// <summary>
+/// Сервис для работы с данными пользователя YouTube Music.
+/// Делегирует сетевые операции в YoutubeProvider, добавляя бизнес-логику.
+/// </summary>
 public partial class YoutubeUserDataService
 {
     private readonly YoutubeProvider _provider;
@@ -15,57 +19,57 @@ public partial class YoutubeUserDataService
         _auth = auth;
     }
 
+    #region Liked Tracks
+
     /// <summary>
     /// Получает лайкнутые треки в зависимости от режима синхронизации.
     /// </summary>
-    public async Task<List<TrackInfo>> GetLikedTracksAsync(LikeSyncMode mode = LikeSyncMode.MusicOnly)
+    public async Task<List<TrackInfo>> GetLikedTracksAsync(
+        LikeSyncMode mode = LikeSyncMode.MusicOnly)
     {
         if (!_auth.IsAuthenticated) return [];
 
         try
         {
-            List<TrackInfo> likedTracks = [];
+            List<TrackInfo> likedTracks;
 
             switch (mode)
             {
                 case LikeSyncMode.MusicOnly:
-                    // Используем YouTube Music API (LM плейлист)
                     Log.Info("[Sync] Fetching Music Likes (LM) from YouTube Music...");
                     try
                     {
-                        var musicLikes = await _provider.GetClient().Music.GetLikedTracksAsync();
-                        likedTracks.AddRange(musicLikes);
-                        Log.Info($"[Sync] Got {musicLikes.Count} music likes from LM.");
+                        likedTracks = await _provider.GetClient().Music.GetLikedTracksAsync();
+                        Log.Info($"[Sync] Got {likedTracks.Count} music likes from LM.");
                     }
                     catch (Exception ex)
                     {
                         Log.Warn($"[Sync] Music API failed, falling back to LL: {ex.Message}");
-                        // Fallback на LL с фильтрацией
                         var allLikes = await GetAllLikedVideosAsync();
-                        likedTracks.AddRange(allLikes.Where(t => t.IsMusic));
+                        likedTracks = allLikes.FindAll(t => t.IsMusic);
                     }
                     break;
 
                 case LikeSyncMode.AllVideos:
-                    // Используем стандартный YouTube API (LL плейлист)
                     Log.Info("[Sync] Fetching ALL Liked Videos (LL)...");
                     likedTracks = await GetAllLikedVideosAsync();
                     break;
 
                 case LikeSyncMode.LocalOnly:
-                    // Не синхронизируем с облаком
                     Log.Info("[Sync] LocalOnly mode - no cloud sync.");
+                    return [];
+
+                default:
                     return [];
             }
 
-            // Помечаем все как лайкнутые и добавляем префикс
-            foreach (var track in likedTracks)
+            // Нормализация ID и пометка лайков
+            for (int i = 0; i < likedTracks.Count; i++)
             {
+                var track = likedTracks[i];
                 track.IsLiked = true;
                 if (!track.Id.StartsWith("yt_"))
-                {
                     track.Id = "yt_" + track.Id;
-                }
             }
 
             Log.Info($"[Sync] Total liked tracks: {likedTracks.Count}");
@@ -86,10 +90,38 @@ public partial class YoutubeUserDataService
             .ToListAsync();
     }
 
+    #endregion
+
+    #region Rating
+
     public async Task RateVideoAsync(string videoId, string rating)
     {
         await _provider.LikeTrackAsync(videoId, rating == "like");
     }
+
+    #endregion
+
+    #region Playlist Operations
+
+    public async Task<string> CreatePlaylistAsync(string title, string description = "")
+    {
+        return await _provider.CreatePlaylistAsync(title, description)
+            ?? throw new InvalidOperationException("YouTube API returned null playlist ID.");
+    }
+
+    public async Task DeletePlaylistAsync(string youtubePlaylistId)
+    {
+        await _provider.DeletePlaylistAsync(youtubePlaylistId);
+    }
+
+    public async Task AddTrackToPlaylistAsync(string youtubePlaylistId, string videoId)
+    {
+        await _provider.AddToPlaylistAsync(youtubePlaylistId, videoId);
+    }
+
+    #endregion
+
+    #region Account Info
 
     public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()
     {
@@ -99,46 +131,50 @@ public partial class YoutubeUserDataService
         {
             var json = await _provider.GetClient().Music.GetAccountMenuAsync();
 
-            var header = json.GetPropertyOrNull("actions")?.EnumerateArrayOrNull()?.FirstOrDefault()
+            var header = json.GetPropertyOrNull("actions")
+                ?.EnumerateArrayOrNull()
+                ?.FirstOrDefault()
                 .GetPropertyOrNull("openPopupAction")
                 ?.GetPropertyOrNull("popup")
                 ?.GetPropertyOrNull("multiPageMenuRenderer")
                 ?.GetPropertyOrNull("header")
                 ?.GetPropertyOrNull("activeAccountHeaderRenderer");
 
-            if (header != null)
-            {
-                var name = header.Value.GetPropertyOrNull("accountName")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ?? "User";
-                var email = header.Value.GetPropertyOrNull("email")?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault().GetPropertyOrNull("text")?.GetStringOrNull() ?? "";
+            if (header == null) return ("User", "", "");
 
-                var thumbs = header.Value.GetPropertyOrNull("accountPhoto")?.GetPropertyOrNull("thumbnails");
-                var avatar = thumbs?.EnumerateArrayOrNull()?.LastOrDefault().GetPropertyOrNull("url")?.GetStringOrNull() ?? "";
+            var name = header.Value.GetPropertyOrNull("accountName")
+                ?.GetPropertyOrNull("runs")
+                ?.EnumerateArrayOrNull()
+                ?.FirstOrDefault()
+                .GetPropertyOrNull("text")
+                ?.GetStringOrNull() ?? "User";
 
-                return (name, email, avatar);
-            }
+            var email = header.Value.GetPropertyOrNull("email")
+                ?.GetPropertyOrNull("runs")
+                ?.EnumerateArrayOrNull()
+                ?.FirstOrDefault()
+                .GetPropertyOrNull("text")
+                ?.GetStringOrNull() ?? "";
+
+            var avatar = header.Value.GetPropertyOrNull("accountPhoto")
+                ?.GetPropertyOrNull("thumbnails")
+                ?.EnumerateArrayOrNull()
+                ?.LastOrDefault()
+                .GetPropertyOrNull("url")
+                ?.GetStringOrNull() ?? "";
+
+            return (name, email, avatar);
         }
         catch (Exception ex)
         {
             Log.Error($"Failed to get account menu: {ex.Message}");
+            return ("User", "", "");
         }
-        return ("User", "", "");
     }
 
-    public async Task<string> CreatePlaylistAsync(string title, string description = "")
-    {
-        return await _provider.CreatePlaylistAsync(title) ?? throw new Exception("Create failed");
-    }
+    #endregion
 
-    public static async Task DeletePlaylistAsync(string youtubePlaylistId)
-    {
-        await Task.CompletedTask;
-    }
-
-    public async Task<string> AddTrackToPlaylistAsync(string youtubePlaylistId, string videoId)
-    {
-        await _provider.AddToPlaylistAsync(youtubePlaylistId, videoId);
-        return "ok";
-    }
+    #region Library
 
     public async Task<List<Playlist>> GetMyPlaylistsAsync()
     {
@@ -146,8 +182,7 @@ public partial class YoutubeUserDataService
 
         try
         {
-            var ytPlaylists = await _provider.GetClient().Music.GetLibraryPlaylistsAsync();
-            return ytPlaylists;
+            return await _provider.GetClient().Music.GetLibraryPlaylistsAsync();
         }
         catch (Exception ex)
         {
@@ -155,4 +190,6 @@ public partial class YoutubeUserDataService
             return [];
         }
     }
+
+    #endregion
 }

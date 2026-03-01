@@ -34,6 +34,12 @@ public partial class CookieAuthService
         "1PSIDTS", "SAPISID", "SIDCC"
     }.ToFrozenSet(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Ошибка загрузки профиля при старте. Не null → auth.json не удалось прочитать.
+    /// </summary>
+    private string? _profileLoadError;
+    public bool HasProfileLoadError => _profileLoadError != null;
+
     public AuthState State { get; private set; } = new();
 
     public bool IsAuthenticated
@@ -69,18 +75,41 @@ public partial class CookieAuthService
 
     private void LoadAuthData()
     {
+        if (!File.Exists(_authDataPath)) return;
+
         try
         {
-            if (File.Exists(_authDataPath))
+            var json = File.ReadAllText(_authDataPath);
+
+            if (string.IsNullOrWhiteSpace(json))
             {
-                var json = File.ReadAllText(_authDataPath);
-                var loadedState = JsonSerializer.Deserialize<AuthState>(json);
-                if (loadedState != null)
-                    State = loadedState;
+                Log.Warn("[Auth] auth.json is empty");
+                return;
             }
+
+            var loadedState = JsonSerializer.Deserialize<AuthState>(json);
+            if (loadedState != null)
+            {
+                State = loadedState;
+                Log.Info($"[Auth] Profile restored from cache: {State.UserName} (updated: {State.LastUpdated:g})");
+            }
+        }
+        catch (JsonException ex)
+        {
+            _profileLoadError = ex.Message;
+            Log.Error($"[Auth] Corrupted auth.json: {ex.Message}");
+
+            // Пытаемся спасти: если куки валидны, не перезаписываем файл дефолтным State
+            // State остаётся Guest, но мы не вызываем SaveAuthData() чтобы не затереть файл
+        }
+        catch (IOException ex)
+        {
+            _profileLoadError = ex.Message;
+            Log.Error($"[Auth] Cannot read auth.json (file locked?): {ex.Message}");
         }
         catch (Exception ex)
         {
+            _profileLoadError = ex.Message;
             Log.Error($"[Auth] Failed to load auth data: {ex.Message}");
         }
     }
@@ -104,7 +133,81 @@ public partial class CookieAuthService
         if (State.IsAuthenticated != currentAuth)
         {
             State.IsAuthenticated = currentAuth;
-            SaveAuthData();
+
+            // Не перезаписываем auth.json если загрузка провалилась —
+            // файл может содержать валидные данные профиля, которые мы не смогли прочитать.
+            if (!HasProfileLoadError)
+            {
+                SaveAuthData();
+            }
+            else
+            {
+                Log.Warn("[Auth] Skipping SaveAuthData — profile load error present, avoiding overwrite");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Лёгкая проверка валидности сессии через HTTP запрос к YouTube Music.
+    /// Не бросает исключений — возвращает результат проверки.
+    /// </summary>
+    /// <returns>
+    /// true  — сессия валидна (или нет сети — оптимистичный подход)
+    /// false — куки точно протухли (HTTP 401/403 от Google)
+    /// </returns>
+    public async Task<(bool IsValid, string? Error)> ValidateSessionAsync()
+    {
+        if (!IsAuthenticated)
+            return (false, "Not authenticated");
+
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+            client.DefaultRequestHeaders.Add("Cookie", GetCookieHeader());
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
+            // Лёгкий запрос к YouTube Music sw.js_data — возвращает visitor data
+            var response = await client.GetAsync("https://music.youtube.com/sw.js_data");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                // Если тело содержит данные — сессия валидна
+                if (body.Length > 10)
+                {
+                    Log.Info("[Auth] Session validated successfully");
+                    return (true, null);
+                }
+            }
+
+            // 401/403 — куки протухли
+            if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized
+                or System.Net.HttpStatusCode.Forbidden)
+            {
+                Log.Warn($"[Auth] Session invalid: HTTP {(int)response.StatusCode}");
+                return (false, $"HTTP {(int)response.StatusCode}");
+            }
+
+            // Другие ошибки — оптимистично считаем что сессия ок (проблема сети?)
+            Log.Warn($"[Auth] Validation ambiguous: HTTP {(int)response.StatusCode}");
+            return (true, null);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Нет сети — не паникуем, используем кэшированный профиль
+            Log.Info($"[Auth] Network unavailable during validation: {ex.Message}");
+            return (true, null); // Оптимистичный подход
+        }
+        catch (TaskCanceledException)
+        {
+            Log.Info("[Auth] Session validation timed out");
+            return (true, null); // Оптимистичный подход
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Auth] Validation error: {ex.Message}");
+            return (true, null); // При сомнениях — не ломаем UX
         }
     }
 

@@ -24,5 +24,6 @@
     <conv:BoolToIconConverter x:Key="BoolToIconConverter" />
     <conv:WindowButtonVisibilityConverter x:Key="WindowButtonVisibility" />
     <conv:SeverityToColorConverter x:Key="SeverityToColor" />
+    <conv:DeferredUrlConverter x:Key="DeferredUrlConverter" />
 
 </ResourceDictionary>

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LMP.Core.Models;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Music;
 
@@ -8,10 +9,12 @@ public class MusicClient(HttpClient http)
 {
     private readonly MusicController _controller = new(http);
 
-    public async Task<List<TrackInfo>> GetLikedTracksAsync(CancellationToken cancellationToken = default)
+    public async Task<List<TrackInfo>> GetLikedTracksAsync(
+        CancellationToken cancellationToken = default)
     {
         var allTracks = new List<TrackInfo>(100);
-        var response = await _controller.GetBrowseAsync(browseId: "VLLM", cancellationToken: cancellationToken);
+        var response = await _controller.GetBrowseAsync(
+            browseId: "VLLM", cancellationToken: cancellationToken);
 
         ProcessShelves(response.Shelves, allTracks);
 
@@ -22,7 +25,8 @@ public class MusicClient(HttpClient http)
         {
             if (cancellationToken.IsCancellationRequested) break;
 
-            response = await _controller.GetBrowseAsync(continuation: continuation, cancellationToken: cancellationToken);
+            response = await _controller.GetBrowseAsync(
+                continuation: continuation, cancellationToken: cancellationToken);
             var prevCount = allTracks.Count;
             ProcessShelves(response.Shelves, allTracks);
 
@@ -36,9 +40,11 @@ public class MusicClient(HttpClient http)
         return allTracks;
     }
 
-    public async Task<List<Playlist>> GetLibraryPlaylistsAsync(CancellationToken cancellationToken = default)
+    public async Task<List<Playlist>> GetLibraryPlaylistsAsync(
+        CancellationToken cancellationToken = default)
     {
-        var response = await _controller.GetBrowseAsync(browseId: "FEmusic_liked_playlists", cancellationToken: cancellationToken);
+        var response = await _controller.GetBrowseAsync(
+            browseId: "FEmusic_liked_playlists", cancellationToken: cancellationToken);
         var result = new List<Playlist>();
 
         foreach (var shelf in response.Shelves)
@@ -47,8 +53,7 @@ public class MusicClient(HttpClient http)
             {
                 if (item.Type == "Playlist" && !string.IsNullOrEmpty(item.Id))
                 {
-                    // Без LINQ: ручной поиск лучшего thumbnail
-                    string? bestThumb = GetBestThumbnailUrl(item.Thumbnails);
+                    string? bestThumb = ThumbnailUtils.GetBestUrl(item.Thumbnails);
 
                     result.Add(new Playlist
                     {
@@ -65,9 +70,11 @@ public class MusicClient(HttpClient http)
         return result;
     }
 
-    public async Task<List<MusicShelf>> GetPersonalizedHomeAsync(CancellationToken cancellationToken = default)
+    public async Task<List<MusicShelf>> GetPersonalizedHomeAsync(
+        CancellationToken cancellationToken = default)
     {
-        var response = await _controller.GetBrowseAsync(browseId: "FEmusic_home", cancellationToken: cancellationToken);
+        var response = await _controller.GetBrowseAsync(
+            browseId: "FEmusic_home", cancellationToken: cancellationToken);
         return response.Shelves;
     }
 
@@ -82,8 +89,7 @@ public class MusicClient(HttpClient http)
                 if (item.Type != "Song" || string.IsNullOrEmpty(item.Id))
                     continue;
 
-                // Без LINQ: ручной поиск лучшего thumbnail
-                string bestThumb = GetBestThumbnailUrl(item.Thumbnails)
+                string bestThumb = ThumbnailUtils.GetBestUrl(item.Thumbnails)
                     ?? string.Concat("https://i.ytimg.com/vi/", item.Id, "/mqdefault.jpg");
 
                 targetList.Add(new TrackInfo
@@ -101,40 +107,21 @@ public class MusicClient(HttpClient http)
         }
     }
 
-    /// <summary>
-    /// Поиск thumbnail с максимальным разрешением без LINQ.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string? GetBestThumbnailUrl(IReadOnlyList<Thumbnail> thumbnails)
-    {
-        if (thumbnails.Count == 0) return null;
+    public void SetVisitorData(string visitorData) =>
+        _controller.VisitorData = visitorData;
 
-        string? bestUrl = null;
-        int bestArea = -1;
+    #region Track Actions
 
-        for (int i = 0; i < thumbnails.Count; i++)
-        {
-            var area = thumbnails[i].Resolution.Area;
-            if (area > bestArea)
-            {
-                bestArea = area;
-                bestUrl = thumbnails[i].Url;
-            }
-        }
-
-        return bestUrl;
-    }
-
-    public void SetVisitorData(string visitorData) => _controller.VisitorData = visitorData;
-
-    public async Task LikeTrackAsync(string videoId, bool like, CancellationToken cancellationToken = default)
+    public async Task LikeTrackAsync(
+        string videoId, bool like, CancellationToken cancellationToken = default)
     {
         var endpoint = like ? "like/like" : "like/removelike";
         await _controller.SendLikeActionAsync(endpoint, videoId, cancellationToken);
     }
 
-    public async Task<JsonElement> GetAccountMenuAsync(CancellationToken cancellationToken = default) =>
-        await _controller.GetAccountMenuAsync(cancellationToken);
+    #endregion
+
+    #region Playlist CRUD
 
     public async Task<string> CreatePlaylistAsync(
         string title,
@@ -142,11 +129,86 @@ public class MusicClient(HttpClient http)
         List<string>? initialVideoIds = null,
         CancellationToken cancellationToken = default)
     {
-        return await _controller.CreatePlaylistAsync(title, description, initialVideoIds, cancellationToken);
+        return await _controller.CreatePlaylistAsync(
+            title, description, initialVideoIds, cancellationToken);
     }
 
-    public async Task AddToPlaylistAsync(string playlistId, string videoId, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Переименовывает плейлист в YouTube Music.
+    /// </summary>
+    public async Task RenamePlaylistAsync(
+        string playlistId,
+        string newTitle,
+        CancellationToken cancellationToken = default)
     {
-        await _controller.EditPlaylistAsync(playlistId, videoId, "ACTION_ADD_VIDEO", cancellationToken);
+        await _controller.RenamePlaylistAsync(playlistId, newTitle, cancellationToken);
     }
+
+    /// <summary>
+    /// Обновляет описание плейлиста.
+    /// </summary>
+    public async Task SetPlaylistDescriptionAsync(
+        string playlistId,
+        string description,
+        CancellationToken cancellationToken = default)
+    {
+        await _controller.SetPlaylistDescriptionAsync(
+            playlistId, description, cancellationToken);
+    }
+
+    /// <summary>
+    /// Удаляет плейлист из YouTube Music аккаунта.
+    /// </summary>
+    public async Task DeletePlaylistAsync(
+        string playlistId,
+        CancellationToken cancellationToken = default)
+    {
+        await _controller.DeletePlaylistAsync(playlistId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Добавляет видео в плейлист. Возвращает setVideoId если доступен в ответе.
+    /// </summary>
+    public async Task<string?> AddToPlaylistAsync(
+        string playlistId,
+        string videoId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _controller.AddPlaylistItemAsync(
+            playlistId, videoId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Removes a track from a YouTube Music playlist.
+    /// Requires setVideoId — the unique playlist item identifier.
+    /// </summary>
+    public async Task RemoveFromPlaylistAsync(
+        string playlistId,
+        string videoId,
+        string setVideoId,
+        CancellationToken cancellationToken = default)
+    {
+        await _controller.RemovePlaylistItemAsync(
+            playlistId, videoId, setVideoId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Fetches playlist content with setVideoId for each track.
+    /// </summary>
+    public async Task<List<PlaylistVideoData>> GetPlaylistVideosAsync(
+        string playlistId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _controller.GetPlaylistVideosAsync(playlistId, cancellationToken);
+    }
+
+    #endregion
+
+    #region Account
+
+    public async Task<JsonElement> GetAccountMenuAsync(
+        CancellationToken cancellationToken = default) =>
+        await _controller.GetAccountMenuAsync(cancellationToken);
+
+    #endregion
 }

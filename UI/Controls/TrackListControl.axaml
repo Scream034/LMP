@@ -64,7 +64,14 @@
                 DragDrop.Drop="OnDrop"
                 DragDrop.DragLeave="OnDragLeave">
 
-                <!-- ★  Переносим футер внутрь шаблона, чтобы он был частью прокрутки -->
+                <!-- VirtualizingStackPanel для ленивой отрисовки -->
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+
+                <!-- Футер внутри шаблона (скроллится с контентом) -->
                 <ListBox.Template>
                     <ControlTemplate TargetType="ListBox">
                         <Border Background="{TemplateBinding Background}"
@@ -74,7 +81,6 @@
                                 HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
                                 VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
                                 <DockPanel>
-                                    <!-- Футер теперь прикреплен к низу внутри ScrollViewer -->
                                     <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,16"
                                         DataContext="{Binding #Root}">
                                         <StackPanel Orientation="Horizontal"
@@ -116,7 +122,6 @@
                                         </Border>
                                     </StackPanel>
 
-                                    <!-- Основной контент (треки) -->
                                     <ItemsPresenter Name="PART_ItemsPresenter"
                                         ItemsPanel="{TemplateBinding ItemsPanel}"
                                         Margin="{TemplateBinding Padding}" />
@@ -148,14 +153,23 @@
                                     Classes="cover-btn"
                                     Command="{Binding PlayCommand}"
                                     Width="44" Height="44"
-                                    Margin="0,0,12,0">
+                                    Margin="0,0,12,0"
+                                    ToolTip.Tip="{Binding L[Player_Play]}">
                                     <Panel>
                                         <Border CornerRadius="6" ClipToBounds="True"
                                             Background="{DynamicResource BgSkeletonBrush}">
-                                            <Image
-                                                asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
-                                                Stretch="UniformToFill"
-                                                Width="44" Height="44" />
+                                            <!-- Отложенная загрузка: null при быстром скролле -->
+                                            <Image Stretch="UniformToFill"
+                                                Width="44" Height="44">
+                                                <asyncImage:ImageLoader.Source>
+                                                    <MultiBinding
+                                                        Converter="{StaticResource DeferredUrlConverter}">
+                                                        <Binding Path="ThumbnailUrl" />
+                                                        <Binding Path="IsScrollingFast"
+                                                            ElementName="Root" />
+                                                    </MultiBinding>
+                                                </asyncImage:ImageLoader.Source>
+                                            </Image>
                                         </Border>
                                         <Panel Classes="cover-overlay">
                                             <Panel.IsVisible>
@@ -169,7 +183,6 @@
                                             <Border CornerRadius="6"
                                                 Background="{DynamicResource BgOverlayBrush}" />
 
-                                            <!-- ИСПРАВЛЕНО: используем TextDarkBrush вместо White -->
                                             <mi:MaterialIcon Kind="Play"
                                                 Classes="play-icon"
                                                 Width="24" Height="24"
@@ -192,8 +205,6 @@
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Bottom"
                                             Margin="0,0,2,2">
-                                            <!-- ИСПРАВЛЕНО: используем TextDarkBrush для контраста
-                                            с акцентом -->
                                             <mi:MaterialIcon Kind="VolumeHigh"
                                                 Width="8" Height="8"
                                                 Foreground="{DynamicResource TextDarkBrush}"
@@ -219,13 +230,11 @@
 
                                 <!-- КОЛОНКА 2: Статус кэширования/скачивания -->
                                 <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
-                                    <!-- Скачано (в Downloads) -->
                                     <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
                                         IsVisible="{Binding IsDownloaded}"
                                         ToolTip.Tip="{Binding L[Track_Downloaded]}" />
 
-                                    <!-- Только закэшировано (офлайн доступ) -->
                                     <mi:MaterialIcon Kind="CloudCheck" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
                                         ToolTip.Tip="{Binding L[Track_Cached]}">
@@ -237,7 +246,6 @@
                                         </mi:MaterialIcon.IsVisible>
                                     </mi:MaterialIcon>
 
-                                    <!-- Прогресс скачивания -->
                                     <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
                                         Width="32" Height="3"
                                         IsVisible="{Binding IsDownloading}"
@@ -248,7 +256,8 @@
                                 <Button Grid.Column="3"
                                     Classes="icon-btn like-btn"
                                     Classes.is-liked="{Binding IsLiked}"
-                                    Command="{Binding ToggleLikeCommand}">
+                                    Command="{Binding ToggleLikeCommand}"
+                                    ToolTip.Tip="{Binding L[Track_ToggleLike]}">
                                     <mi:MaterialIcon
                                         Kind="{Binding IsLiked, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Heart|HeartOutline'}"
                                         Width="16" Height="16" />
@@ -294,6 +303,13 @@
                                                     </MenuItem.Icon>
                                                 </MenuItem>
 
+                                                <MenuItem Header="{Binding L[AddToPlaylist_Title]}"
+                                                    Command="{Binding AddToPlaylistCommand}">
+                                                    <MenuItem.Icon>
+                                                        <mi:MaterialIcon Kind="PlaylistPlus" />
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+
                                                 <Separator Classes="menu-separator" />
 
                                                 <MenuItem Header="{Binding L[Track_StartRadio]}"
@@ -303,7 +319,6 @@
                                                     </MenuItem.Icon>
                                                 </MenuItem>
 
-                                                <!-- Download / Save -->
                                                 <MenuItem Header="{Binding DownloadStatusText}"
                                                     Command="{Binding SaveToDownloadsCommand}"
                                                     IsEnabled="{Binding !IsDownloaded}">

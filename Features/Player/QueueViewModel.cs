@@ -16,6 +16,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly TrackViewModelFactory _vmFactory;
+    private readonly IDialogService _dialog;
+    private readonly MusicLibraryManager _manager;
 
     private bool _isMovingInternally;
     private readonly Dictionary<string, TrackItemViewModel> _vmCache = [];
@@ -54,14 +56,19 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     public ReactiveCommand<Unit, Unit> DownloadAllCommand { get; }
     public ReactiveCommand<TrackItemViewModel, Unit> RemoveTrackCommand { get; }
     public ReactiveCommand<(int, int), Unit> MoveItemCommand { get; }
+    public ReactiveCommand<Unit, Unit> SaveQueueToPlaylistCommand { get; }
 
     public QueueViewModel(
         AudioEngine audio,
         DownloadService downloads,
+        IDialogService dialog,
+        MusicLibraryManager manager,
         TrackViewModelFactory vmFactory)
     {
         _audio = audio;
         _downloads = downloads;
+        _dialog = dialog;
+        _manager = manager;
         _vmFactory = vmFactory;
 
         ClearQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.ClearQueue()));
@@ -83,6 +90,10 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             if (!CanReorderItems) return;
             MoveItem(tuple.oldIndex, tuple.newIndex);
         }));
+
+        SaveQueueToPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+        SaveQueueToPlaylistAsync,
+        this.WhenAnyValue(x => x.IsEmpty, empty => !empty)));
 
         // Подписка на изменения очереди из AudioEngine
         Observable.FromEvent(
@@ -128,6 +139,26 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .DisposeWith(Disposables);
 
         RefreshFromAudioEngine();
+    }
+
+    private async Task SaveQueueToPlaylistAsync()
+    {
+        if (_masterQueue.Count == 0) return;
+
+        var result = await _dialog.ShowCreatePlaylistDialogAsync();
+        if (result == null || string.IsNullOrWhiteSpace(result.Name)) return;
+
+        var library = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<LibraryService>(Program.Services);
+
+        var playlist = await library.CreatePlaylistAsync(result.Name.Trim());
+
+        foreach (var track in _masterQueue)
+        {
+            await _manager.AddTrackToPlaylistAsync(playlist.Id, track);
+        }
+
+        Log.Info($"[Queue] Saved {_masterQueue.Count} tracks to playlist '{result.Name}'");
     }
 
     // LIFECYCLE IMPLEMENTATION

@@ -25,9 +25,23 @@
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Opacity" Value="0.3" />
         </Style>
+
+        <!-- Fade-in for playlist content -->
+        <Style Selector="Grid.playlist-content">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Grid.playlist-content.loaded">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
     </UserControl.Styles>
 
-    <Grid>
+    <Grid Classes="playlist-content"
+        Classes.loaded="{Binding !IsLoading}">
         <Grid.RowDefinitions>
             <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180"
                 MaxHeight="340" />
@@ -140,6 +154,13 @@
                                     Width="40" Height="40" CornerRadius="20"
                                     ToolTip.Tip="{Binding L[Playlist_SyncWithCloud]}">
                                     <mi:MaterialIcon Kind="Sync" Width="20" Height="20" />
+                                </Button>
+                                <Button Classes="playback-btn"
+                                    Command="{Binding EditPlaylistCommand}"
+                                    IsVisible="{Binding CanEdit}"
+                                    Width="40" Height="40" CornerRadius="20"
+                                    ToolTip.Tip="{Binding L[EditPlaylist_Title]}">
+                                    <mi:MaterialIcon Kind="Pencil" Width="20" Height="20" />
                                 </Button>
                                 <Border Width="1" Height="24"
                                     Background="{DynamicResource BgHighlightBrush}"

@@ -17,7 +17,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         var playlist = MapToModel(entity);
 
-        // Load track IDs and set count
         playlist.TrackIds = await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == id)
             .OrderBy(pt => pt.Position)
@@ -33,7 +32,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // Get playlists with track counts in a single query
         var playlistsWithCounts = await ctx.Playlists
             .Select(p => new
             {
@@ -50,7 +48,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // Get playlists with track counts in efficient query
         var playlistsWithCounts = await ctx.Playlists
             .Select(p => new
             {
@@ -95,16 +92,53 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         if (existing != null)
         {
+            // BUG 1 DIAG: Log what we're about to write
+            Log.Debug($"[PlaylistRepo] UpsertAsync UPDATE id={playlist.Id}: " +
+                       $"SyncMode={playlist.SyncMode}({(int)playlist.SyncMode}), " +
+                       $"YoutubeId={playlist.YoutubeId ?? "null"}, " +
+                       $"Name={playlist.StoredName}, " +
+                       $"existing.SyncMode={existing.SyncMode}, " +
+                       $"existing.YoutubeId={existing.YoutubeId ?? "null"}");
+
             entity.CreatedAt = existing.CreatedAt;
             ctx.Entry(existing).CurrentValues.SetValues(entity);
+
+            // BUG 1 DIAG: Verify entity state after SetValues
+            Log.Debug($"[PlaylistRepo] After SetValues: " +
+                       $"SyncMode={existing.SyncMode}, " +
+                       $"YoutubeId={existing.YoutubeId ?? "null"}");
         }
         else
         {
             entity.CreatedAt = DateTime.UtcNow;
             ctx.Playlists.Add(entity);
+
+            Log.Debug($"[PlaylistRepo] UpsertAsync INSERT id={playlist.Id}: " +
+                       $"SyncMode={entity.SyncMode}, " +
+                       $"YoutubeId={entity.YoutubeId ?? "null"}");
         }
 
         await ctx.SaveChangesAsync(ct);
+
+        // BUG 1 DIAG: Read-back verification
+        var verify = await ctx.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == playlist.Id, ct);
+
+        if (verify != null)
+        {
+            if (verify.SyncMode != (int)playlist.SyncMode ||
+                verify.YoutubeId != playlist.YoutubeId)
+            {
+                Log.Error($"[PlaylistRepo] PERSISTENCE MISMATCH for {playlist.Id}! " +
+                          $"Expected SyncMode={(int)playlist.SyncMode}, got {verify.SyncMode}; " +
+                          $"Expected YoutubeId={playlist.YoutubeId ?? "null"}, got {verify.YoutubeId ?? "null"}");
+            }
+            else
+            {
+                Log.Debug($"[PlaylistRepo] Verified OK: SyncMode={verify.SyncMode}, YoutubeId={verify.YoutubeId ?? "null"}");
+            }
+        }
     }
 
     public async Task DeleteAsync(string id, CancellationToken ct = default)
@@ -127,12 +161,10 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // Check if relationship already exists
         var exists = await ctx.PlaylistTracks
             .AnyAsync(pt => pt.PlaylistId == playlistId && pt.TrackId == trackId, ct);
         if (exists) return;
 
-        // IMPORTANT: Check if track exists in database first!
         var trackExists = await ctx.Tracks.AnyAsync(t => t.Id == trackId, ct);
         if (!trackExists)
         {
@@ -153,16 +185,11 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         await ctx.SaveChangesAsync(ct);
 
-        // Update playlist timestamp
         await ctx.Playlists
             .Where(p => p.Id == playlistId)
             .ExecuteUpdateAsync(s => s.SetProperty(p => p.UpdatedAt, DateTime.UtcNow), ct);
     }
 
-    /// <summary>
-    /// Batch add tracks to playlist - skips tracks that don't exist.
-    /// Returns the count of actually added tracks.
-    /// </summary>
     public async Task<int> AddTracksAsync(string playlistId, IEnumerable<string> trackIds, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
@@ -170,19 +197,16 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         var trackIdList = trackIds.ToList();
         if (trackIdList.Count == 0) return 0;
 
-        // Get existing tracks in DB
         var existingTrackIds = await ctx.Tracks
             .Where(t => trackIdList.Contains(t.Id))
             .Select(t => t.Id)
             .ToHashSetAsync(ct);
 
-        // Get already linked tracks
         var alreadyLinked = await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId && trackIdList.Contains(pt.TrackId))
             .Select(pt => pt.TrackId)
             .ToHashSetAsync(ct);
 
-        // Get current max position
         int maxPos = await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
             .MaxAsync(pt => (int?)pt.Position, ct) ?? -1;
@@ -190,7 +214,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         int added = 0;
         foreach (var trackId in trackIdList)
         {
-            // Skip if track doesn't exist or already linked
             if (!existingTrackIds.Contains(trackId) || alreadyLinked.Contains(trackId))
                 continue;
 
@@ -229,7 +252,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         ctx.PlaylistTracks.Remove(entry);
         await ctx.SaveChangesAsync(ct);
 
-        // Reorder remaining tracks
         await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId && pt.Position > removedPos)
             .ExecuteUpdateAsync(s => s.SetProperty(pt => pt.Position, pt => pt.Position - 1), ct);
@@ -279,25 +301,19 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     }
 
     public async Task<Dictionary<string, HashSet<string>>> GetPlaylistsForTracksAsync(
-    IEnumerable<string> trackIds,
-    CancellationToken ct = default)
+        IEnumerable<string> trackIds, CancellationToken ct = default)
     {
         var ids = trackIds as IList<string> ?? [.. trackIds];
-
-        if (ids.Count == 0)
-            return [];
+        if (ids.Count == 0) return [];
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // Один SQL-запрос вместо N
         var links = await ctx.PlaylistTracks
             .Where(pt => ids.Contains(pt.TrackId))
             .Select(pt => new { pt.TrackId, pt.PlaylistId })
             .ToListAsync(ct);
 
-        // Группируем в памяти
         var result = new Dictionary<string, HashSet<string>>(ids.Count);
-
         foreach (var link in links)
         {
             if (!result.TryGetValue(link.TrackId, out var set))
@@ -315,7 +331,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // JOIN PlaylistTracks с Tracks и суммируем DurationTicks
         var totalTicks = await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
             .Join(ctx.Tracks,
@@ -327,6 +342,63 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         return totalTicks;
     }
 
+    #region SetVideoId
+
+    public async Task<string?> GetSetVideoIdAsync(string playlistId, string trackId, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        return await ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId == playlistId && pt.TrackId == trackId)
+            .Select(pt => pt.SetVideoId)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task UpdateSetVideoIdAsync(string playlistId, string trackId, string setVideoId, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        await ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId == playlistId && pt.TrackId == trackId)
+            .ExecuteUpdateAsync(s => s.SetProperty(pt => pt.SetVideoId, setVideoId), ct);
+    }
+
+    public async Task UpdateSetVideoIdsAsync(
+        string playlistId,
+        IReadOnlyList<(string TrackId, string SetVideoId)> mappings,
+        CancellationToken ct = default)
+    {
+        if (mappings.Count == 0) return;
+
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        // Load all playlist tracks in one query
+        var entries = await ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId == playlistId)
+            .ToListAsync(ct);
+
+        // Build lookup for fast matching
+        var entryMap = new Dictionary<string, PlaylistTrackEntity>(entries.Count, StringComparer.Ordinal);
+        for (int i = 0; i < entries.Count; i++)
+            entryMap[entries[i].TrackId] = entries[i];
+
+        int updated = 0;
+        for (int i = 0; i < mappings.Count; i++)
+        {
+            var (trackId, setVideoId) = mappings[i];
+            if (entryMap.TryGetValue(trackId, out var entry))
+            {
+                entry.SetVideoId = setVideoId;
+                updated++;
+            }
+        }
+
+        if (updated > 0)
+            await ctx.SaveChangesAsync(ct);
+    }
+
+    #endregion
+
     #region Mapping
 
     private static Playlist MapToModel(PlaylistEntity e) => new()
@@ -336,6 +408,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         YoutubeId = e.YoutubeId,
         Author = e.Author,
         ThumbnailUrl = e.ThumbnailUrl,
+        CustomColor = e.CustomColor,
         SyncMode = (PlaylistSyncMode)e.SyncMode,
         UpdatedAt = e.UpdatedAt
     };
@@ -343,10 +416,11 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
     private static PlaylistEntity MapToEntity(Playlist m) => new()
     {
         Id = m.Id,
-        Name = m.Name,
+        Name = m.StoredName,  // BUG 1 FIX: Use StoredName directly to avoid computed property
         YoutubeId = m.YoutubeId,
         Author = m.Author,
         ThumbnailUrl = m.ThumbnailUrl,
+        CustomColor = m.CustomColor,
         SyncMode = (int)m.SyncMode,
         UpdatedAt = DateTime.UtcNow
     };

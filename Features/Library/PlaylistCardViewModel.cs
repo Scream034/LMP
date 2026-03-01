@@ -11,7 +11,9 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 {
     #region Fields
     private readonly Func<string, Task>? _onDelete;
+    private readonly Func<Core.Models.Playlist, Task>? _onEdit;
     private readonly Func<Core.Models.Playlist, Task> _addToQueueAction;
+    private readonly Func<Core.Models.Playlist, Task> _playAction;
     private readonly Action<string> _onOpen;
     private readonly EventHandler<string> _languageChangedHandler;
     private bool _isDisposed;
@@ -29,22 +31,13 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     public bool IsSynced => Playlist.IsFromAccount;
     public bool IsReadOnly => !Playlist.IsEditable;
     public bool CanDelete => Playlist.Id != LibraryService.LikedPlaylistId;
+    public bool CanEdit => Playlist.IsEditable && Playlist.Id != LibraryService.LikedPlaylistId;
     public bool IsLikedPlaylist => Playlist.Id == LibraryService.LikedPlaylistId;
     public string FormattedTrackCount => FormatTrackCount(TrackCount);
 
-    /// <summary>
-    /// Показывать обложку? true если есть URL И это НЕ liked playlist.
-    /// </summary>
     public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
-
-    /// <summary>
-    /// Показывать placeholder иконку? Только если нет обложки и не liked.
-    /// </summary>
     public bool ShowPlaceholder => string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
 
-    /// <summary>
-    /// Флаг видимости для staggered animation.
-    /// </summary>
     [Reactive] public bool IsVisible { get; set; }
     #endregion
 
@@ -52,24 +45,26 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
     public ReactiveCommand<Unit, Unit> DeleteCommand { get; }
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
+    public ReactiveCommand<Unit, Unit> PlayCommand { get; }
+    public ReactiveCommand<Unit, Unit> EditCommand { get; }
     #endregion
 
     #region Constructor
-    /// <summary>
-    /// Конструктор с явным trackCount из БД (GetAllPlaylistsWithCountsAsync).
-    /// Не полагается на playlist.TrackCount, который может быть 0.
-    /// </summary>
     public PlaylistCardViewModel(
         Core.Models.Playlist playlist,
         int trackCount,
         Action<string> onOpen,
         Func<Core.Models.Playlist, Task> addToQueueAction,
-        Func<string, Task>? onDelete = null)
+        Func<Core.Models.Playlist, Task> playAction,
+        Func<string, Task>? onDelete = null,
+        Func<Core.Models.Playlist, Task>? onEdit = null)
     {
         Playlist = playlist;
         _onOpen = onOpen;
         _addToQueueAction = addToQueueAction;
+        _playAction = playAction;
         _onDelete = onDelete;
+        _onEdit = onEdit;
 
         Name = playlist.Name;
         TrackCount = trackCount;
@@ -91,6 +86,16 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             if (!_isDisposed) await _addToQueueAction(Playlist);
         }));
 
+        PlayCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
+        {
+            if (!_isDisposed) await _playAction(Playlist);
+        }));
+
+        EditCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
+        {
+            if (!_isDisposed && _onEdit != null) await _onEdit(Playlist);
+        }));
+
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)))
             .DisposeWith(Disposables);
@@ -108,10 +113,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     }
     #endregion
 
-    /// <summary>
-    /// Обновляет свойства карточки из данных БД без пересоздания VM.
-    /// Используется Diff-алгоритмом в LibraryViewModel.
-    /// </summary>
     public void UpdateFrom(Core.Models.Playlist playlist, int trackCount)
     {
         if (_isDisposed) return;
@@ -135,9 +136,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Заменяет low-res YouTube thumbnails на HD версию.
-    /// </summary>
     private static string? UpscaleThumbnailUrl(string? url)
     {
         if (string.IsNullOrEmpty(url)) return url;

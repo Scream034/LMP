@@ -15,16 +15,30 @@ namespace LMP.UI.Controls;
 public partial class TrackListControl : UserControl
 {
     #region Constants
+
     private const string DragFormatTrackIndex = "application/x-lmp-track-index";
     private const double DragThreshold = 5.0;
-    private static readonly DataFormat<string> TrackIndexDataFormat = DataFormat.CreateStringPlatformFormat(DragFormatTrackIndex);
 
-    // Константы для авто-скролла
-    private const int AutoScrollMargin = 50; // Размер "горячей зоны" у краев списка
-    private const double AutoScrollAmount = 12.0; // На сколько пикселей скроллить за тик
+    private static readonly DataFormat<string> TrackIndexDataFormat =
+        DataFormat.CreateStringPlatformFormat(DragFormatTrackIndex);
+
+    private const int AutoScrollMargin = 50;
+    private const double AutoScrollAmount = 12.0;
+
+    /// <summary>
+    /// Если дельта скролла за кадр больше этого порога — считаем скролл быстрым.
+    /// </summary>
+    private const double ScrollSpeedThreshold = 2.0;
+
+    /// <summary>
+    /// Задержка после остановки скролла перед загрузкой обложек (мс).
+    /// </summary>
+    private const int ScrollDebounceMs = 150;
+
     #endregion
 
     #region Fields
+
     private readonly EventHandler<string> _languageChangedHandler;
 
     // Drag & Drop State
@@ -33,10 +47,17 @@ public partial class TrackListControl : UserControl
     private ListBoxItem? _lastDragOverItem;
     private bool _isDragging;
 
-    // Поля для авто-скролла
+    // Авто-скролл при drag
     private ScrollViewer? _scrollViewer;
     private DispatcherTimer? _autoScrollTimer;
     private double _autoScrollOffset;
+
+    // Отслеживание скорости скролла
+    private DispatcherTimer? _scrollSpeedTimer;
+    private IDisposable? _scrollTrackingSub;
+    private double _lastScrollOffset;
+    private bool _scrollInitialized;
+
     #endregion
 
     #region Styled Properties
@@ -69,7 +90,7 @@ public partial class TrackListControl : UserControl
     }
 
     public static readonly StyledProperty<bool> EnableReorderingProperty =
-    AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableReordering), false);
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableReordering), false);
 
     public bool EnableReordering
     {
@@ -158,6 +179,19 @@ public partial class TrackListControl : UserControl
         set => SetValue(IsQueueContextProperty, value);
     }
 
+    /// <summary>
+    /// True когда пользователь активно скроллит список.
+    /// Используется для отложенной загрузки обложек через DeferredUrlConverter.
+    /// </summary>
+    public static readonly StyledProperty<bool> IsScrollingFastProperty =
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsScrollingFast), false);
+
+    public bool IsScrollingFast
+    {
+        get => GetValue(IsScrollingFastProperty);
+        private set => SetValue(IsScrollingFastProperty, value);
+    }
+
     #endregion
 
     #region Direct Properties
@@ -239,17 +273,18 @@ public partial class TrackListControl : UserControl
         UpdateLocalizedTexts();
         _listBox = this.FindControl<ListBox>("MainListBox");
 
-        // Находим ScrollViewer и инициализируем таймер
         if (_listBox is { IsLoaded: true })
         {
             _scrollViewer = _listBox.FindDescendantOfType<ScrollViewer>();
+            SetupScrollTracking();
         }
         else
         {
             _listBox?.Loaded += OnListBoxLoaded;
         }
 
-        _autoScrollTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Render, OnAutoScrollTick);
+        _autoScrollTimer = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(16), DispatcherPriority.Render, OnAutoScrollTick);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -257,9 +292,17 @@ public partial class TrackListControl : UserControl
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
         base.OnDetachedFromVisualTree(e);
 
-        // Очищаем ресурсы
+        // Авто-скролл
         _autoScrollTimer?.Stop();
         _autoScrollTimer = null;
+
+        // Скорость скролла
+        _scrollSpeedTimer?.Stop();
+        _scrollSpeedTimer = null;
+        _scrollTrackingSub?.Dispose();
+        _scrollTrackingSub = null;
+        _scrollInitialized = false;
+        IsScrollingFast = false;
 
         _listBox?.Loaded -= OnListBoxLoaded;
         _listBox = null;
@@ -270,6 +313,66 @@ public partial class TrackListControl : UserControl
     private void OnListBoxLoaded(object? sender, RoutedEventArgs e)
     {
         _scrollViewer = _listBox?.FindDescendantOfType<ScrollViewer>();
+        SetupScrollTracking();
+    }
+
+    #endregion
+
+    #region Scroll Speed Tracking
+
+    /// <summary>
+    /// Подписка на изменения Offset в ScrollViewer для отслеживания скорости скролла.
+    /// При быстром скролле IsScrollingFast=true → DeferredUrlConverter отдаёт null → обложки не грузятся.
+    /// Через 150мс после остановки скролла IsScrollingFast=false → обложки загружаются.
+    /// </summary>
+    private void SetupScrollTracking()
+    {
+        if (_scrollViewer == null) return;
+
+        // Очищаем предыдущую подписку
+        _scrollTrackingSub?.Dispose();
+        _scrollSpeedTimer?.Stop();
+
+        _scrollInitialized = false;
+        _lastScrollOffset = 0;
+
+        // Таймер дебаунса — срабатывает через 150мс после последнего скролл-события
+        _scrollSpeedTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(ScrollDebounceMs)
+        };
+        _scrollSpeedTimer.Tick += OnScrollSpeedDebounce;
+
+        // Подписка на изменение Offset
+        _scrollTrackingSub = _scrollViewer.GetObservable(ScrollViewer.OffsetProperty)
+            .Subscribe(OnScrollOffsetChanged);
+    }
+
+    private void OnScrollOffsetChanged(Vector offset)
+    {
+        // Пропускаем первое значение (инициализация)
+        if (!_scrollInitialized)
+        {
+            _scrollInitialized = true;
+            _lastScrollOffset = offset.Y;
+            return;
+        }
+
+        var delta = Math.Abs(offset.Y - _lastScrollOffset);
+        _lastScrollOffset = offset.Y;
+
+        if (delta > ScrollSpeedThreshold)
+        {
+            IsScrollingFast = true;
+            _scrollSpeedTimer?.Stop();
+            _scrollSpeedTimer?.Start();
+        }
+    }
+
+    private void OnScrollSpeedDebounce(object? sender, EventArgs e)
+    {
+        _scrollSpeedTimer?.Stop();
+        IsScrollingFast = false;
     }
 
     #endregion
@@ -292,7 +395,6 @@ public partial class TrackListControl : UserControl
         {
             UpdateItemsContext();
 
-            // При изменении Items проверяем, нужно ли подгрузить ещё
             if (change.Property == ItemsProperty)
             {
                 Dispatcher.UIThread.Post(() => CheckInitialLoad(), DispatcherPriority.Background);
@@ -300,14 +402,10 @@ public partial class TrackListControl : UserControl
         }
     }
 
-    /// <summary>
-    /// Проверяет, нужно ли сразу загрузить ещё данных (если контент не заполняет viewport)
-    /// </summary>
     private void CheckInitialLoad()
     {
         if (_scrollViewer == null || LoadMoreCommand == null) return;
 
-        // Если контент меньше viewport и команда доступна
         if (_scrollViewer.Extent.Height <= _scrollViewer.Viewport.Height)
         {
             if (LoadMoreCommand.CanExecute(null))
@@ -410,20 +508,19 @@ public partial class TrackListControl : UserControl
             overItem.Classes.Add("insert-bottom");
         }
 
-        // Запускаем или останавливаем авто-скролл
         HandleAutoScroll(e);
     }
 
     private void OnDragLeave(object? sender, RoutedEventArgs e)
     {
         CleanupDragStyles();
-        _autoScrollTimer?.Stop(); // Останавливаем таймер
+        _autoScrollTimer?.Stop();
     }
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
         CleanupDragStyles();
-        _autoScrollTimer?.Stop(); // Останавливаем таймер
+        _autoScrollTimer?.Stop();
 
         if (!EnableReordering || !HasTrackIndexData(e) || _listBox == null) return;
 
@@ -437,7 +534,6 @@ public partial class TrackListControl : UserControl
         }
     }
 
-    // НОВЫЕ МЕТОДЫ ДЛЯ АВТО-СКРОЛЛА
     private void HandleAutoScroll(DragEventArgs e)
     {
         if (_scrollViewer == null) return;
@@ -446,19 +542,16 @@ public partial class TrackListControl : UserControl
 
         if (positionInScroller.Y < AutoScrollMargin)
         {
-            // Прокрутка вверх
             _autoScrollOffset = -AutoScrollAmount;
             _autoScrollTimer?.Start();
         }
         else if (positionInScroller.Y > _scrollViewer.Bounds.Height - AutoScrollMargin)
         {
-            // Прокрутка вниз
             _autoScrollOffset = AutoScrollAmount;
             _autoScrollTimer?.Start();
         }
         else
         {
-            // Зона без прокрутки
             _autoScrollOffset = 0;
             _autoScrollTimer?.Stop();
         }
@@ -467,15 +560,13 @@ public partial class TrackListControl : UserControl
     private void OnAutoScrollTick(object? sender, EventArgs e)
     {
         if (_scrollViewer == null || _autoScrollOffset == 0) return;
-
-        var newOffset = _scrollViewer.Offset + new Vector(0, _autoScrollOffset);
-        _scrollViewer.Offset = newOffset;
+        _scrollViewer.Offset += new Vector(0, _autoScrollOffset);
     }
-    // КОНЕЦ НОВЫХ МЕТОДОВ
 
     private static bool HasTrackIndexData(DragEventArgs e)
     {
-        return e.DataTransfer is DragDataTransfer || e.DataTransfer.Formats.Any(f => f.Identifier == DragFormatTrackIndex);
+        return e.DataTransfer is DragDataTransfer ||
+               e.DataTransfer.Formats.Any(f => f.Identifier == DragFormatTrackIndex);
     }
 
     private static int GetTrackIndex(DragEventArgs e)
@@ -483,28 +574,20 @@ public partial class TrackListControl : UserControl
         IDataTransfer transfer = e.DataTransfer;
 
         if (transfer is DragDataTransfer adapter)
-        {
             return adapter.TrackIndex;
-        }
 
         foreach (var item in transfer.Items)
         {
             if (item is DragDataTransferItem dragItem)
-            {
                 return dragItem.TrackIndex;
-            }
 
             object? rawValue = item.TryGetRaw(TrackIndexDataFormat);
 
             if (rawValue is string strValue && int.TryParse(strValue, out int index))
-            {
                 return index;
-            }
 
             if (rawValue is int intValue)
-            {
                 return intValue;
-            }
         }
 
         return -1;
@@ -518,9 +601,7 @@ public partial class TrackListControl : UserControl
         var targetItem = sourceVisual.FindAncestorOfType<ListBoxItem>();
 
         if (targetItem == null)
-        {
             return _listBox.ItemCount - 1;
-        }
 
         int containerIndex = _listBox.IndexFromContainer(targetItem);
         if (containerIndex < 0)
@@ -529,16 +610,13 @@ public partial class TrackListControl : UserControl
         var position = e.GetPosition(targetItem);
         bool insertAfter = position.Y > targetItem.Bounds.Height / 2;
 
-        // targetVisualIndex - позиция для вставки (перед каким элементом)
         int targetVisualIndex = containerIndex;
         if (insertAfter)
             targetVisualIndex++;
 
-        // Корректируем для Move семантики
-        // Move(old, new) перемещает элемент НА позицию new
         int moveIndex = targetVisualIndex;
         if (oldIndex < targetVisualIndex)
-            moveIndex--; // Компенсируем сдвиг от удаления
+            moveIndex--;
 
         return Math.Clamp(moveIndex, 0, _listBox.ItemCount - 1);
     }
@@ -555,11 +633,12 @@ public partial class TrackListControl : UserControl
 
     #endregion
 
-    #region Drag Data Types (Avalonia 11.3+ IDataTransfer)
+    #region Drag Data Types (Avalonia 11.3+)
 
     private sealed class DragDataTransferItem : IDataTransferItem
     {
         public int TrackIndex { get; }
+
         public DragDataTransferItem(int trackIndex)
         {
             TrackIndex = trackIndex;
@@ -571,9 +650,7 @@ public partial class TrackListControl : UserControl
         public object? TryGetRaw(DataFormat format)
         {
             if (format.Identifier == DragFormatTrackIndex)
-            {
                 return TrackIndex.ToString();
-            }
             return null;
         }
     }

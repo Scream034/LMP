@@ -45,6 +45,10 @@
                             ToolTip.Tip="{Binding L[Queue_DownloadAll]}">
                             <mi:MaterialIcon Kind="DownloadOutline" Width="20" Height="20" />
                         </Button>
+                        <Button Command="{Binding SaveQueueToPlaylistCommand}" Classes="icon-btn"
+                            ToolTip.Tip="{Binding L[Queue_SaveToPlaylist]}">
+                            <mi:MaterialIcon Kind="ContentSave" Width="20" Height="20" />
+                        </Button>
                         <Button Command="{Binding ClearQueueCommand}" Classes="icon-btn"
                             ToolTip.Tip="{Binding L[Queue_Clear]}">
                             <mi:MaterialIcon Kind="Broom" Width="20" Height="20" />

@@ -18,6 +18,7 @@ public sealed class TrackItemViewModel : ViewModelBase
     private readonly AudioEngine _audio;
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
+    private readonly IDialogService _dialog;
 
     private readonly ObservableAsPropertyHelper<bool> _isLiked;
     private readonly ObservableAsPropertyHelper<bool> _isDownloaded;
@@ -104,6 +105,7 @@ public sealed class TrackItemViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> SaveToDownloadsCommand { get; }
     public ReactiveCommand<Unit, Unit> RemoveFromPlaylistCommand { get; }
     public ReactiveCommand<Unit, Unit> RemoveFromQueueCommand { get; }
+    public ReactiveCommand<Unit, Unit> AddToPlaylistCommand { get; }
 
     #endregion
 
@@ -115,6 +117,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         DownloadService downloads,
         MusicLibraryManager manager,
         LibraryService library,
+        IDialogService dialog,
         Action<TrackInfo>? onPlay = null)
     {
         Track = track;
@@ -122,6 +125,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         _manager = manager;
         _downloads = downloads;
         _library = library;
+        _dialog = dialog;
         _onPlay = onPlay;
 
         // ObservableAsPropertyHelper - используем Disposables из ViewModelBase
@@ -195,6 +199,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         AddToQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.Enqueue(Track)));
         StartRadioCommand = CreateCommand(ReactiveCommand.Create(() => StartRadioAction?.Invoke(Track)));
         SaveToDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(SaveToDownloadsAsync));
+        AddToPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(AddToPlaylistAsync));
 
         RemoveFromPlaylistCommand = CreateCommand(
             ReactiveCommand.Create(
@@ -281,6 +286,17 @@ public sealed class TrackItemViewModel : ViewModelBase
     }
 
     public void UpdatePlayAction(Action<TrackInfo>? onPlay) => _onPlay = onPlay;
+
+    private async Task AddToPlaylistAsync()
+    {
+        var selectedIds = await _dialog.ShowAddToPlaylistDialogAsync(Track);
+        if (selectedIds.Count == 0) return;
+
+        foreach (var playlistId in selectedIds)
+        {
+            await _manager.AddTrackToPlaylistAsync(playlistId, Track);
+        }
+    }
 
     #endregion
 

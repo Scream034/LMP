@@ -6,26 +6,38 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.UI.Dialogs;
 
-public record CreatePlaylistResult(string Name, bool SyncToCloud);
-
-public class CreatePlaylistDialogViewModel : ViewModelBase
+public sealed class CreatePlaylistDialogViewModel : ViewModelBase
 {
-    [Reactive] public string PlaylistName { get; set; } = string.Empty;
+    public PlaylistEditorViewModel Editor { get; }
+
+    /// <summary>
+    /// Синхронизировать с YouTube Music.
+    /// </summary>
     [Reactive] public bool SyncToCloud { get; set; }
 
+    /// <summary>
+    /// Показывать ли переключатель синхронизации.
+    /// </summary>
+    public bool ShowSyncToggle { get; }
+
     public ReactiveCommand<Unit, CreatePlaylistResult?> ConfirmCommand { get; }
-    public ReactiveCommand<Unit, Unit> CancelCommand { get; }
+    public ReactiveCommand<Unit, CreatePlaylistResult?> CancelCommand { get; }
 
-    public CreatePlaylistDialogViewModel()
+    public CreatePlaylistDialogViewModel(bool isAuthenticated = false)
     {
-        var canCreate = this.WhenAnyValue(
-            x => x.PlaylistName, 
-            name => !string.IsNullOrWhiteSpace(name));
-        
-        ConfirmCommand = CreateCommand(ReactiveCommand.Create<Unit, CreatePlaylistResult?>(
-            _ => new CreatePlaylistResult(PlaylistName.Trim(), SyncToCloud),
-            canCreate));
+        Editor = PlaylistEditorViewModel.ForCreate();
+        ShowSyncToggle = isAuthenticated;
+        SyncToCloud = isAuthenticated; // По умолчанию вкл. если аутентифицирован
 
-        CancelCommand = CreateCommand(ReactiveCommand.Create(() => { }));
+        ConfirmCommand = CreateCommand(ReactiveCommand.Create(
+            () => (CreatePlaylistResult?)new CreatePlaylistResult(
+                Name: Editor.ToResult().Name,
+                SyncToCloud: SyncToCloud),
+            Editor.CanSave));
+
+        CancelCommand = CreateCommand(ReactiveCommand.Create(
+            () => (CreatePlaylistResult?)null));
     }
 }
+
+public sealed record CreatePlaylistResult(in string Name, in bool SyncToCloud);

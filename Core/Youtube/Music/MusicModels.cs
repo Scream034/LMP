@@ -21,6 +21,12 @@ public sealed class MusicItem
     public TimeSpan? Duration { get; set; }
     public IReadOnlyList<Thumbnail> Thumbnails { get; set; } = [];
     public string Type { get; set; } = "Song";
+
+    /// <summary>
+    /// YouTube playlist item ID, required for removing tracks from playlists.
+    /// Only populated when item is loaded from a playlist context.
+    /// </summary>
+    public string? SetVideoId { get; set; }
 }
 
 internal sealed class MusicBrowseResponse
@@ -29,7 +35,6 @@ internal sealed class MusicBrowseResponse
     public string? Title { get; private set; }
     public string? ContinuationToken { get; private set; }
 
-    // Кэшированные форматы парсинга длительности
     private static readonly string[] DurationFormats =
         [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"];
 
@@ -198,16 +203,19 @@ internal sealed class MusicBrowseResponse
 
     private static MusicItem? ParseMusicItem(JsonElement json)
     {
-        var id = json.GetPropertyOrNull("playlistItemData")?.GetPropertyOrNull("videoId")?.GetStringOrNull();
+        var playlistItemData = json.GetPropertyOrNull("playlistItemData");
+
+        var id = playlistItemData?.GetPropertyOrNull("videoId")?.GetStringOrNull();
         if (id == null)
         {
-            // Fallback: FindFirstDescendantProperty вместо EnumerateDescendantProperties + LINQ
             id = json.FindFirstDescendantProperty("videoId")?.GetStringOrNull();
         }
 
         if (id == null) return null;
 
-        // Без LINQ: GetArrayElementOrNull(index)
+        // Extract setVideoId for playlist track removal
+        var setVideoId = playlistItemData?.GetPropertyOrNull("setVideoId")?.GetStringOrNull();
+
         var flexCols = json.GetPropertyOrNull("flexColumns");
 
         var title = flexCols?.GetArrayElementOrNull(0)
@@ -276,7 +284,8 @@ internal sealed class MusicBrowseResponse
             Album = album,
             Duration = duration,
             Thumbnails = thumbs,
-            Type = "Song"
+            Type = "Song",
+            SetVideoId = setVideoId
         };
     }
 
@@ -346,9 +355,6 @@ internal sealed class MusicBrowseResponse
         };
     }
 
-    /// <summary>
-    /// Извлекает thumbnails без LINQ Select/ToArray.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Thumbnail[] ExtractThumbnails(JsonElement? thumbsElement)
     {
@@ -367,9 +373,6 @@ internal sealed class MusicBrowseResponse
         return result;
     }
 
-    /// <summary>
-    /// Быстрый парсинг длительности без string.Split (аллокация массива).
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void TryParseDurationFast(string text, out TimeSpan? duration)
     {
@@ -410,9 +413,6 @@ internal sealed class MusicBrowseResponse
         duration = null;
     }
 
-    /// <summary>
-    /// Проверка наличия любой из подстрок без множественных string.Contains.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ContainsAnyOf(string text, string a, string b, string c, string d)
     {

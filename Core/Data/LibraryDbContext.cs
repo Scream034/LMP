@@ -36,6 +36,7 @@ public class LibraryDbContext(DbContextOptions<LibraryDbContext> options) : DbCo
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasMaxLength(64);
             entity.Property(e => e.Name).HasMaxLength(256);
+            entity.Property(e => e.CustomColor).HasMaxLength(16);
         });
 
         // === PlaylistTrack (Junction Table) ===
@@ -54,6 +55,8 @@ public class LibraryDbContext(DbContextOptions<LibraryDbContext> options) : DbCo
                 .OnDelete(DeleteBehavior.Cascade);
 
             entity.HasIndex(e => new { e.PlaylistId, e.Position });
+
+            entity.Property(e => e.SetVideoId).HasMaxLength(128);
         });
 
         // === RecentlyPlayed ===
@@ -84,7 +87,6 @@ public class LibraryDbContext(DbContextOptions<LibraryDbContext> options) : DbCo
             entity.Property(e => e.RecommendationKey).HasMaxLength(128);
             entity.Property(e => e.TrackId).HasMaxLength(64);
             entity.Property(e => e.TrackTitle).HasMaxLength(500);
-            // AttemptsJson, MessageArgsJson, ExceptionDetails — без ограничений
 
             entity.HasIndex(e => e.CreatedAt);
             entity.HasIndex(e => e.IsRead);

@@ -19,9 +19,27 @@ public interface IDialogService
     Task ShowInfoAsync(string title, string message);
     Task ShowInfoAsync(string title, string message, string buttonText);
     Task<string?> ShowInputAsync(string title, string prompt, string? watermark = null);
-    Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items);
-    Task<List<MergeDecision>> ShowMergeConflictResolutionDialogAsync(List<string> playlistNames);
     Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated);
+
+    /// <summary>
+    /// Объединённый диалог синхронизации: выбор плейлистов + разрешение конфликтов.
+    /// Возвращает список решений (Skip-элементы исключены).
+    /// </summary>
+    Task<List<SyncDecision>> ShowSyncSelectionAsync(
+        IEnumerable<PlaylistSearchResult> items,
+        ISet<string> existingLocalNames);
+
+    /// <summary>
+    /// Диалог «Добавить трек в плейлист» — список плейлистов с CheckBox'ами.
+    /// Возвращает список ID плейлистов, в которые нужно добавить трек. Пустой = отмена.
+    /// </summary>
+    Task<List<string>> ShowAddToPlaylistDialogAsync(TrackInfo track);
+
+    /// <summary>
+    /// Диалог редактирования плейлиста: название, обложка, цвет, синхронизация.
+    /// Возвращает null при отмене.
+    /// </summary>
+    Task<EditPlaylistResult?> ShowEditPlaylistDialogAsync(Playlist playlist);
 
     /// <summary>
     /// Показывает диалог ожидания bot detection cooldown.
@@ -46,13 +64,20 @@ public interface IDialogService
     Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync();
 }
 
-public class DialogService : IDialogService
+public sealed class DialogService : IDialogService
 {
     private static readonly LocalizationService L = LocalizationService.Instance;
+
+    private readonly CookieAuthService? _authService;
 
     // Синглтоны для диалогов, которые не должны дублироваться
     private BotDetectionDialog? _activeBotDetectionDialog;
     private readonly Lock _botDetectionLock = new();
+
+    public DialogService(CookieAuthService? authService)
+    {
+        _authService = authService;
+    }
 
     private static Window? GetMainWindow()
     {
@@ -163,33 +188,21 @@ public class DialogService : IDialogService
 
     #endregion
 
-    #region Sync/Merge Dialogs
+    #region Sync Dialogs
 
-    public async Task<List<PlaylistSearchResult>> ShowSyncSelectionAsync(IEnumerable<PlaylistSearchResult> items)
+    public async Task<List<SyncDecision>> ShowSyncSelectionAsync(
+        IEnumerable<PlaylistSearchResult> items,
+        ISet<string> existingLocalNames)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
-            if (window == null) return new List<PlaylistSearchResult>();
-            var vm = new SyncSelectionViewModel(items);
+            if (window == null) return new List<SyncDecision>();
+
+            var vm = new SyncSelectionViewModel(items, existingLocalNames);
             var dialog = new SyncSelectionDialog { DataContext = vm };
-            var result = await ShowDialogSafeAsync<List<PlaylistSearchResult>>(dialog, window);
-            return result ?? new List<PlaylistSearchResult>();
-        });
-    }
-
-    public async Task<List<MergeDecision>> ShowMergeConflictResolutionDialogAsync(List<string> playlistNames)
-    {
-        return await Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            var window = GetMainWindow();
-            if (window == null)
-                return playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
-
-            var vm = new MergeConflictResolutionViewModel(playlistNames);
-            var dialog = new MergeConflictResolutionDialog { DataContext = vm };
-            var result = await ShowDialogSafeAsync<List<MergeDecision>>(dialog, window);
-            return result ?? playlistNames.Select(n => new MergeDecision(n, MergeAction.Skip)).ToList();
+            var result = await ShowDialogSafeAsync<List<SyncDecision>>(dialog, window);
+            return result ?? new List<SyncDecision>();
         });
     }
 
@@ -303,16 +316,51 @@ public class DialogService : IDialogService
 
     #endregion
 
+    #region Playlists
+
     public async Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync()
+    {
+        var owner = GetMainWindow();
+        if (owner == null) return null;
+
+        var isAuthenticated = _authService?.IsAuthenticated == true;
+        var vm = new CreatePlaylistDialogViewModel(isAuthenticated);
+        var dialog = new CreatePlaylistDialog(vm);
+
+        // ShowDialog<T> блокирует до Close(result)
+        return await dialog.ShowDialog<CreatePlaylistResult?>(owner);
+    }
+
+    public async Task<List<string>> ShowAddToPlaylistDialogAsync(TrackInfo track)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
-            if (window == null) return null;
+            if (window == null) return new List<string>();
 
-            var vm = new CreatePlaylistDialogViewModel();
-            var dialog = new CreatePlaylistDialog { DataContext = vm };
-            return await ShowDialogSafeAsync<CreatePlaylistResult?>(dialog, window);
+            var library = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                .GetRequiredService<LibraryService>(Program.Services);
+            var playlists = await library.GetAllPlaylistsAsync();
+
+            var vm = new AddToPlaylistDialogViewModel(track, playlists);
+            var dialog = new AddToPlaylistDialog { DataContext = vm };
+            var result = await ShowDialogSafeAsync<List<string>>(dialog, window);
+            return result ?? new List<string>();
         });
     }
+
+    public async Task<EditPlaylistResult?> ShowEditPlaylistDialogAsync(Playlist playlist)
+    {
+        var owner = GetMainWindow();
+        if (owner == null) return null;
+
+        var isAuthenticated = _authService?.IsAuthenticated == true;
+        var vm = new EditPlaylistDialogViewModel(playlist, isAuthenticated);
+        var dialog = new EditPlaylistDialog(vm);
+
+        // ShowDialog<T> блокирует до Close(result)
+        return await dialog.ShowDialog<EditPlaylistResult?>(owner);
+    }
+
+    #endregion
 }

@@ -44,33 +44,35 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <!-- ВОТ ИСПРАВЛЕНИЕ АНИМАЦИИ ФОНА ТРЕКА! -->
+    <!-- ═══ TRACK ROW — Border-only hover/active (no background change) ═══ -->
     <Style Selector="Border.track-row">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Padding" Value="8,6" />
         <Setter Property="Margin" Value="0,1" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Transitions">
             <Transitions>
-                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
     </Style>
     <Style Selector="Border.track-row:pointerover">
-        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
     <Style Selector="Border.track-row.is-active">
-        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="Border.track-row.menu-open">
-        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
     <Style Selector="Border.track-row.is-active.menu-open">
-        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="Border.track-row.menu-open:pointerover">
-        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
 
     <Style Selector="Border.track-row TextBlock.track-title">

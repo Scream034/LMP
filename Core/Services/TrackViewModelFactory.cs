@@ -11,6 +11,7 @@ namespace LMP.Core.Services;
 public class TrackViewModelFactory
 {
     private readonly LibraryService _library;
+    private readonly IDialogService _dialog;
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
@@ -21,12 +22,14 @@ public class TrackViewModelFactory
 
     public TrackViewModelFactory(
         LibraryService library,
+        IDialogService dialog,
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
         TrackRegistry registry)
     {
         _library = library;
+        _dialog = dialog;
         _audio = audio;
         _downloads = downloads;
         _manager = manager;
@@ -104,6 +107,7 @@ public class TrackViewModelFactory
             _downloads,
             _manager,
             _library,
+            _dialog,
             playAction);
     }
 
