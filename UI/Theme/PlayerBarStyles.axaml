@@ -200,4 +200,37 @@
         <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
     </Style>
 
+       <!-- ═══ AUTO-SHUFFLE INDICATOR ═══ -->
+    <Style Selector="Button.playback-btn.auto-enabled">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.playback-btn.auto-enabled mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- ═══ SHUFFLE ANIMATION (active = IsShuffleAnimating) ═══ -->
+    <Style Selector="Button.playback-btn.active mi|MaterialIcon">
+        <Setter Property="RenderTransformOrigin" Value="50%, 50%" />
+        <!-- Обязательно задаём тип трансформации ДО анимации -->
+        <Setter Property="RenderTransform">
+            <RotateTransform />
+        </Setter>
+        <Style.Animations>
+            <Animation Duration="0:0:0.4" Easing="CubicEaseOut">
+                <!-- Анимируем конкретно свойство Angle -->
+                <KeyFrame Cue="0%">
+                    <Setter Property="RotateTransform.Angle" Value="-20" />
+                </KeyFrame>
+                <KeyFrame Cue="40%">
+                    <Setter Property="RotateTransform.Angle" Value="15" />
+                </KeyFrame>
+                <KeyFrame Cue="70%">
+                    <Setter Property="RotateTransform.Angle" Value="-5" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="RotateTransform.Angle" Value="0" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
 </Styles>

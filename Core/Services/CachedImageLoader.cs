@@ -27,7 +27,6 @@ public sealed class CachedImageLoader : IAsyncImageLoader
             return null;
 
         // Строгая проверка: только http:// и https://
-        // url.StartsWith("http") пропустит "httpfoo://..." — проверяем явно
         if (!url.StartsWith(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
             !url.StartsWith(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
             return null;

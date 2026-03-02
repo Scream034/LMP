@@ -176,8 +176,8 @@ public sealed class AudioSettings
 public enum RepeatMode
 {
     None,
-    RepeatOne,
-    RepeatAll
+    One,
+    All
 }
 
 public enum AudioQualityPreference
@@ -226,12 +226,21 @@ public sealed class AppSettings
     public bool EnableSmoothLoading { get; set; } = true;
 
     /// <summary>
+    /// Действие при нажатии кнопки закрытия окна.
+    /// По умолчанию — спрашивать.
+    /// </summary>
+    public CloseAction CloseAction { get; set; } = CloseAction.Ask;
+
+    /// <summary>
+    /// Сворачивать в системный трей при нажатии кнопки минимизации.
+    /// По умолчанию false — обычное сворачивание в панель задач.
+    /// </summary>
+    public bool MinimizeToTray { get; set; } = false;
+
+    /// <summary>
     /// Ширина панели уведомлений.
     /// </summary>
     public int NotificationPanelWidth { get; set; } = 360;
-
-    // === Fake Account ===
-    public string? FakeAccountChannelUrl { get; set; }
 
     // === Search ===
     public string LastSearchQuery { get; set; } = "";

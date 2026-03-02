@@ -78,25 +78,6 @@
 
                         <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                        <!-- Fake Account (Guest) -->
-                        <Grid ColumnDefinitions="*, Auto"
-                            IsVisible="{Binding !IsAuthenticated}">
-                            <StackPanel Margin="0,0,20,0">
-                                <TextBlock Classes="label"
-                                    Text="{Binding L[Settings_ChannelUrl]}" />
-                                <TextBlock Classes="desc"
-                                    Text="{Binding L[Settings_ChannelUrlDesc]}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                                <TextBox Width="300" Text="{Binding FakeChannelInput}"
-                                    Watermark="youtube.com/@..." />
-                                <Button Content="{Binding L[Common_OK]}"
-                                    Command="{Binding SetFakeAccountCommand}" />
-                                <Button Content="✕"
-                                    Command="{Binding ClearFakeAccountCommand}" />
-                            </StackPanel>
-                        </Grid>
-
                         <!-- Language -->
                         <Grid ColumnDefinitions="*, Auto">
                             <TextBlock Classes="label" Text="{Binding L[Language]}" />
@@ -641,6 +622,46 @@
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                 IsChecked="{Binding EnableSmoothLoading}" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- WINDOW BEHAVIOR -->
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                    <mi:MaterialIcon Kind="WindowRestore" Width="20" Height="20"
+                        Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_WindowBehavior]}"
+                        Margin="0" />
+                </StackPanel>
+                <Border Classes="card">
+                    <StackPanel Spacing="16">
+                        <!-- Close Action -->
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_CloseAction]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_CloseActionDesc]}" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1"
+                                ItemsSource="{Binding CloseActionOptions}"
+                                SelectedItem="{Binding SelectedCloseAction}"
+                                DisplayMemberBinding="{Binding Name}"
+                                MinWidth="240" />
+                        </Grid>
+
+                        <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                        <!-- Minimize to Tray -->
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_MinimizeToTray]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_MinimizeToTrayDesc]}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                IsChecked="{Binding MinimizeToTray}" />
                         </Grid>
                     </StackPanel>
                 </Border>

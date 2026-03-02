@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using LMP.Core.Data;
+using LMP.Core.Data.Entities;
 using LMP.Core.Data.Repositories;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Utils;
@@ -30,32 +31,17 @@ public sealed class LibraryService : IAsyncDisposable
 
     public AppSettings Settings { get; private set; } = new();
 
-    // Fake Account cache
-
     public event Action? OnInitialized;
     public event Action? OnDataChanged;
-    public event Action? OnFakeAccountChanged;
     public event Action<TrackInfo>? OnTrackUpdated;
 
     /// <summary>
     /// Вызывается при добавлении или обновлении конкретного плейлиста.
-    /// 
-    /// <para><b>Назначение:</b> позволяет UI выполнять инкрементальные обновления
-    /// (обновить одну карточку) вместо полной перезагрузки всех плейлистов.</para>
-    /// 
-    /// <para><b>Вызывается из:</b> <see cref="AddOrUpdatePlaylistAsync"/>.</para>
-    /// <para><b>Подписчики:</b> <c>LibraryViewModel.OnPlaylistChangedIncremental</c>.</para>
     /// </summary>
     public event Action<Playlist>? OnPlaylistChanged;
 
     /// <summary>
     /// Вызывается при удалении плейлиста.
-    /// 
-    /// <para><b>Назначение:</b> позволяет UI инкрементально удалить одну карточку
-    /// без полной перезагрузки страницы.</para>
-    /// 
-    /// <para><b>Вызывается из:</b> <see cref="DeletePlaylistAsync"/>.</para>
-    /// <para><b>Подписчики:</b> <c>LibraryViewModel.OnPlaylistRemovedIncremental</c>.</para>
     /// </summary>
     public event Action<string>? OnPlaylistRemoved;
 
@@ -91,26 +77,18 @@ public sealed class LibraryService : IAsyncDisposable
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        // ═══ БД уже мигрирована в Program.cs — только загружаем настройки ═══
         Settings = await _settings.GetOrDefaultAsync("AppSettings", new AppSettings(), ct);
-
-        // ИНИЦИАЛИЗИРУЕМ СТАТИКУ
         YoutubeClientUtils.CurrentProfile = Settings.YoutubeClient;
 
-        // Migrate from JSON if exists
         var jsonPath = G.FilePath.Library;
         if (File.Exists(jsonPath))
         {
             await MigrateFromJsonAsync(jsonPath, ct);
         }
 
-        // Hydrate cache
         await _registry.HydrateAsync(ct);
-
-        // Подписываем registry на события кэша
         _registry.SubscribeToCacheEvents();
 
-        // Ensure liked playlist
         await EnsureLikedPlaylistAsync(ct);
 
         sw.Stop();
@@ -133,7 +111,6 @@ public sealed class LibraryService : IAsyncDisposable
                 return;
             }
 
-            // Step 1: Migrate all tracks first
             var migratedTrackIds = new HashSet<string>();
 
             if (legacy.Tracks?.Count > 0)
@@ -159,7 +136,6 @@ public sealed class LibraryService : IAsyncDisposable
                 Log.Info($"[Migration] Migrated {migrated} tracks ({failed} failed)");
             }
 
-            // Step 2: Migrate playlists (create playlist entries first, then add tracks)
             if (legacy.Playlists?.Count > 0)
             {
                 int playlistsMigrated = 0;
@@ -170,14 +146,10 @@ public sealed class LibraryService : IAsyncDisposable
                 {
                     try
                     {
-                        // Convert LegacyPlaylist to Playlist
                         var playlist = legacyPl.ToPlaylist();
-
-                        // First, create the playlist itself
                         await _playlists.UpsertAsync(playlist, ct);
                         playlistsMigrated++;
 
-                        // Then, add only tracks that exist in the database
                         var validTrackIds = legacyPl.TrackIds
                             .Where(migratedTrackIds.Contains)
                             .ToList();
@@ -186,14 +158,10 @@ public sealed class LibraryService : IAsyncDisposable
                         if (missingCount > 0)
                         {
                             totalTracksMissing += missingCount;
-                            Log.Warn($"[Migration] Playlist '{legacyPl.Name}': {missingCount} tracks not found in library");
                         }
 
-                        // Use batch add for efficiency
                         var added = await _playlists.AddTracksAsync(playlist.Id, validTrackIds, ct);
                         totalTracksAdded += added;
-
-                        Log.Debug($"[Migration] Playlist '{legacyPl.Name}': {added}/{legacyPl.TrackIds.Count} tracks linked");
                     }
                     catch (Exception ex)
                     {
@@ -201,10 +169,9 @@ public sealed class LibraryService : IAsyncDisposable
                     }
                 }
 
-                Log.Info($"[Migration] Migrated {playlistsMigrated} playlists, added {totalTracksAdded} track links ({totalTracksMissing} tracks were missing)");
+                Log.Info($"[Migration] Migrated {playlistsMigrated} playlists, added {totalTracksAdded} track links");
             }
 
-            // Step 3: Migrate recently played (only for existing tracks)
             if (legacy.RecentlyPlayedIds?.Count > 0)
             {
                 int historyAdded = 0;
@@ -223,11 +190,9 @@ public sealed class LibraryService : IAsyncDisposable
                 Log.Info($"[Migration] Added {historyAdded} history entries");
             }
 
-            // Step 4: Migrate settings
             Settings = MapLegacySettings(legacy);
             await _settings.SetAsync("AppSettings", Settings, ct);
 
-            // Backup old file
             var backup = path + $".migrated.{DateTime.Now:yyyyMMddHHmmss}";
             File.Move(path, backup);
 
@@ -261,7 +226,6 @@ public sealed class LibraryService : IAsyncDisposable
         SearchCacheTtlMinutes = d.SearchCacheTtlMinutes,
         EnableSmoothLoading = d.EnableSmoothLoading,
         PlaylistHeaderHeight = d.PlaylistHeaderHeight,
-        FakeAccountChannelUrl = d.FakeAccountChannelUrl,
         LastSearchQuery = d.LastSearchQuery,
         SearchHistory = d.SearchHistory ?? []
     };
@@ -287,16 +251,12 @@ public sealed class LibraryService : IAsyncDisposable
 
     public bool HasTrack(string id) => _registry.TryGet(id) != null;
 
-    /// <summary>
-    /// Full-text search in database.
-    /// </summary>
     public async Task<List<TrackInfo>> SearchTracksAsync(
      string query, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
         var tracks = await _tracks.SearchAsync(query, limit, offset, ct);
         if (tracks.Count == 0) return tracks;
 
-        // ОПТИМИЗАЦИЯ: Один SQL-запрос вместо N
         var trackIds = tracks.Select(t => t.Id).ToList();
         var playlistsMap = await _playlists.GetPlaylistsForTracksAsync(trackIds, ct);
 
@@ -309,18 +269,18 @@ public sealed class LibraryService : IAsyncDisposable
         return tracks;
     }
 
-    /// <summary>
-    /// Gets total duration of all tracks in playlist.
-    /// </summary>
     public async Task<TimeSpan> GetPlaylistTotalDurationAsync(string playlistId, CancellationToken ct = default)
     {
         var totalTicks = await _playlists.GetTotalDurationTicksAsync(playlistId, ct);
         return TimeSpan.FromTicks(totalTicks);
     }
 
-    /// <summary>
-    /// Gets all tracks from the library with pagination.
-    /// </summary>
+    // ═══ НОВЫЙ МЕТОД: ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
+    public async Task<long> GetTotalLibraryDurationAsync(CancellationToken ct = default)
+    {
+        return await _playlists.GetTotalLibraryDurationAsync(ct);
+    }
+
     public async Task<List<TrackInfo>> GetAllTracksAsync(
         int limit = 10000,
         int offset = 0,
@@ -341,9 +301,6 @@ public sealed class LibraryService : IAsyncDisposable
         return tracks;
     }
 
-    /// <summary>
-    /// Gets only local and downloaded tracks (for offline search).
-    /// </summary>
     public async Task<List<TrackInfo>> GetLocalTracksAsync(
         int limit = 1000,
         int offset = 0,
@@ -364,26 +321,16 @@ public sealed class LibraryService : IAsyncDisposable
         return tracks;
     }
 
-    /// <summary>
-    /// Gets total count of tracks in the library.
-    /// </summary>
     public async Task<int> GetTrackCountAsync(CancellationToken ct = default)
     {
         return await _tracks.CountAsync(ct);
     }
 
-    /// <summary>
-    /// Gets count of local/downloaded tracks.
-    /// </summary>
     public async Task<int> GetLocalTrackCountAsync(CancellationToken ct = default)
     {
         return await _tracks.CountLocalAsync(ct);
     }
 
-    /// <summary>
-    /// Searches tracks in the local library (offline-capable).
-    /// Uses FTS for fast full-text search.
-    /// </summary>
     public async Task<List<TrackInfo>> SearchLocalTracksAsync(
      string query,
      int limit = 100,
@@ -442,15 +389,24 @@ public sealed class LibraryService : IAsyncDisposable
 
     #region Likes
 
-    public async Task ToggleLikeAsync(TrackInfo track, CancellationToken ct = default)
+    public async Task SetLikeStateAsync(TrackInfo track, bool isLiked, CancellationToken ct = default)
     {
         track.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(track.Id, ct);
         var canonical = _registry.RegisterOrUpdate(track);
 
-        canonical.IsLiked = !canonical.IsLiked;
-        if (canonical.IsLiked) canonical.IsDisliked = false;
+        if (canonical.IsLiked == isLiked)
+        {
+            Log.Debug($"[LibraryService] Like state already {isLiked} for {track.Id}");
+            return;
+        }
 
-        if (canonical.IsLiked)
+        canonical.IsLiked = isLiked;
+        if (isLiked) canonical.IsDisliked = false;
+
+        // Гарантируем наличие трека в БД перед созданием связи
+        await _tracks.UpsertAsync(canonical, ct);
+
+        if (isLiked)
         {
             await _playlists.AddTrackAsync(LikedPlaylistId, canonical.Id, 0, ct);
             canonical.InPlaylists.Add(LikedPlaylistId);
@@ -461,11 +417,17 @@ public sealed class LibraryService : IAsyncDisposable
             canonical.InPlaylists.Remove(LikedPlaylistId);
         }
 
-        await _tracks.SetLikedAsync(canonical.Id, canonical.IsLiked, ct);
         _registry.UpdatePinStatus(canonical);
 
         OnDataChanged?.Invoke();
         OnTrackUpdated?.Invoke(canonical);
+    }
+
+    public async Task ToggleLikeAsync(TrackInfo track, CancellationToken ct = default)
+    {
+        track.InPlaylists = await _playlists.GetPlaylistsForTrackAsync(track.Id, ct);
+        var canonical = _registry.RegisterOrUpdate(track);
+        await SetLikeStateAsync(track, !canonical.IsLiked, ct);
     }
 
     public async Task ToggleDislikeAsync(TrackInfo track, CancellationToken ct = default)
@@ -553,18 +515,6 @@ public sealed class LibraryService : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Получает один плейлист с количеством его треков.
-    /// 
-    /// <para><b>Зачем:</b> для инкрементальных обновлений UI.
-    /// Эффективнее чем <see cref="GetAllPlaylistsWithCountsAsync"/>
-    /// когда нужно обновить только одну карточку.</para>
-    /// 
-    /// <para><b>Сложность:</b> O(1) по плейлисту + один SQL-запрос для подсчёта треков.</para>
-    /// </summary>
-    /// <param name="playlistId">ID плейлиста.</param>
-    /// <param name="ct">Токен отмены.</param>
-    /// <returns>Кортеж (плейлист, кол-во треков) или <c>null</c> если не найден.</returns>
     public async Task<(Playlist Playlist, int TrackCount)?> GetPlaylistWithCountAsync(
         string playlistId, CancellationToken ct = default)
     {
@@ -575,14 +525,10 @@ public sealed class LibraryService : IAsyncDisposable
         return (playlist, trackIds.Count);
     }
 
-    /// <summary>
-    /// Gets all playlists with their track counts.
-    /// </summary>
     public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllPlaylistsWithCountsAsync(CancellationToken ct = default)
     {
         var results = await _playlists.GetAllWithCountsAsync(ct);
 
-        // Update "Liked" playlist name
         for (int i = 0; i < results.Count; i++)
         {
             if (results[i].Playlist.Id == LikedPlaylistId)
@@ -620,9 +566,6 @@ public sealed class LibraryService : IAsyncDisposable
         return all;
     }
 
-    /// <summary>
-    /// Gets playlist tracks with pagination support.
-    /// </summary>
     public async Task<List<TrackInfo>> GetPlaylistTracksAsync(
         string playlistId, int limit = 50, int offset = 0, CancellationToken ct = default)
     {
@@ -631,10 +574,8 @@ public sealed class LibraryService : IAsyncDisposable
 
         if (pageIds.Count == 0) return [];
 
-        // Preload загрузит все треки в кэш одним batch-запросом
         await _registry.PreloadAsync(pageIds, ct);
 
-        // Теперь берём из кэша синхронно
         var tracks = new List<TrackInfo>(pageIds.Count);
         foreach (var id in pageIds)
         {
@@ -653,27 +594,10 @@ public sealed class LibraryService : IAsyncDisposable
         return playlist;
     }
 
-    /// <summary>
-    /// Создаёт или обновляет плейлист в БД.
-    /// 
-    /// <para><b>Алгоритм:</b></para>
-    /// <list type="number">
-    ///   <item>Upsert основного объекта плейлиста</item>
-    ///   <item>Если <c>TrackIds</c> не пуст — добавляет новые связи плейлист↔трек</item>
-    ///   <item>Вызывает <see cref="OnPlaylistChanged"/> для инкрементального обновления UI</item>
-    ///   <item>Вызывает <see cref="OnDataChanged"/> для общих подписчиков (статистика и пр.)</item>
-    /// </list>
-    /// 
-    /// <para><b>Примечание:</b> <c>TrackIds</c> — транзиентное поле (<c>[JsonIgnore]</c>).
-    /// Оно заполняется при импорте плейлиста, но НЕ загружается при чтении из БД.
-    /// Поэтому проверяем <c>Count > 0</c> перед синхронизацией связей.</para>
-    /// </summary>
     public async Task AddOrUpdatePlaylistAsync(Playlist playlist, CancellationToken ct = default)
     {
         await _playlists.UpsertAsync(playlist, ct);
 
-        // Синхронизируем связи плейлист↔трек если TrackIds заполнен
-        // (типично при импорте нового плейлиста с треками)
         if (playlist.TrackIds.Count > 0)
         {
             var existingTrackIds = await _playlists.GetTrackIdsAsync(playlist.Id, ct);
@@ -687,9 +611,7 @@ public sealed class LibraryService : IAsyncDisposable
             }
         }
 
-        // Детализированное событие → инкрементальное обновление карточки в UI
         OnPlaylistChanged?.Invoke(playlist);
-        // Глобальное событие → обновление статистики и других подписчиков
         OnDataChanged?.Invoke();
     }
 
@@ -727,26 +649,16 @@ public sealed class LibraryService : IAsyncDisposable
         OnDataChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Удаляет плейлист из БД.
-    /// 
-    /// <para><b>Защита:</b> системные плейлисты (Liked) не могут быть удалены.</para>
-    /// <para><b>Побочный эффект:</b> удаляет playlistId из <c>InPlaylists</c>
-    /// всех закэшированных треков в <see cref="TrackRegistry"/>.</para>
-    /// </summary>
     public async Task DeletePlaylistAsync(string playlistId, CancellationToken ct = default)
     {
         if (IsSystemPlaylist(playlistId)) return;
 
-        // Обновляем кэш треков: убираем ссылку на удалённый плейлист
         foreach (var track in _registry.GetPinnedTracks())
             track.InPlaylists.Remove(playlistId);
 
         await _playlists.DeleteAsync(playlistId, ct);
 
-        // Детализированное событие → инкрементальное удаление карточки из UI
         OnPlaylistRemoved?.Invoke(playlistId);
-        // Глобальное событие → обновление статистики
         OnDataChanged?.Invoke();
     }
 
@@ -777,42 +689,6 @@ public sealed class LibraryService : IAsyncDisposable
 
     #endregion
 
-    #region Fake Account
-
-    public bool HasFakeAccount => !string.IsNullOrEmpty(Settings.FakeAccountChannelUrl);
-    public string? FakeAccountUrl => Settings.FakeAccountChannelUrl;
-    public string? FakeAccountName { get; private set; }
-    public string? FakeAccountAvatarUrl { get; private set; }
-
-    public void SetFakeAccount(string url, string name, string avatar)
-    {
-        Settings.FakeAccountChannelUrl = url;
-        FakeAccountName = name;
-        FakeAccountAvatarUrl = avatar;
-        SaveSettings();
-        OnFakeAccountChanged?.Invoke();
-        OnDataChanged?.Invoke();
-    }
-
-    public void UpdateFakeAccountCache(string name, string avatar)
-    {
-        FakeAccountName = name;
-        FakeAccountAvatarUrl = avatar;
-        OnFakeAccountChanged?.Invoke();
-    }
-
-    public void ClearFakeAccount()
-    {
-        Settings.FakeAccountChannelUrl = null;
-        FakeAccountName = null;
-        FakeAccountAvatarUrl = null;
-        SaveSettings();
-        OnFakeAccountChanged?.Invoke();
-        OnDataChanged?.Invoke();
-    }
-
-    #endregion
-
     #region Events
 
     private void OnLanguageChanged(object? _, string __)
@@ -827,8 +703,6 @@ public sealed class LibraryService : IAsyncDisposable
     public async Task ResetAsync(CancellationToken ct = default)
     {
         _registry.Clear();
-        FakeAccountName = null;
-        FakeAccountAvatarUrl = null;
 
         await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
         await ctx.Database.EnsureDeletedAsync(ct);
@@ -847,7 +721,6 @@ public sealed class LibraryService : IAsyncDisposable
         _saveSubscription.Dispose();
         _saveSettingsSignal.Dispose();
 
-        // Final flush
         await _registry.FlushAsync();
         await _settings.SetAsync("AppSettings", Settings);
 

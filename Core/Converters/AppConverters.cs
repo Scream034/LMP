@@ -322,7 +322,7 @@ public sealed class RepeatModeIconConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        return value is RepeatMode mode && mode == RepeatMode.RepeatOne
+        return value is RepeatMode mode && mode == RepeatMode.One
             ? MaterialIconKind.RepeatOne
             : MaterialIconKind.Repeat;
     }
@@ -356,8 +356,8 @@ public sealed class RepeatModeEqualsConverter : IValueConverter
         {
             return modeStr switch
             {
-                "RepeatAll" => mode == RepeatMode.RepeatAll,
-                "RepeatOne" => mode == RepeatMode.RepeatOne,
+                "RepeatAll" => mode == RepeatMode.All,
+                "RepeatOne" => mode == RepeatMode.One,
                 "None" => mode == RepeatMode.None,
                 _ => false
             };

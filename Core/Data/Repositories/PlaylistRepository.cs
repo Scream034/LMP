@@ -96,9 +96,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
                        $"YoutubeId={playlist.YoutubeId ?? "null"}, " +
                        $"Name={playlist.StoredName}");
 
-            // ═══ FIX: Attach entity и помечаем как Modified ═══
-            // С NoTracking нужно явно сказать EF что entity изменён
-
             var entry = ctx.Entry(existing);
             entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
 
@@ -113,11 +110,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             existing.UpdatedAt = DateTime.UtcNow;
 
             ctx.Playlists.Update(existing);
-
-            Log.Debug($"[PlaylistRepo] After Update(): " +
-                       $"SyncMode={existing.SyncMode}, " +
-                       $"YoutubeId={existing.YoutubeId ?? "null"}, " +
-                       $"State={entry.State}");
         }
         else
         {
@@ -132,26 +124,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         }
 
         await ctx.SaveChangesAsync(ct);
-
-        // Read-back verification
-        var verify = await ctx.Playlists
-            .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == playlist.Id, ct);
-
-        if (verify != null)
-        {
-            if (verify.SyncMode != (int)playlist.SyncMode ||
-                verify.YoutubeId != playlist.YoutubeId)
-            {
-                Log.Error($"[PlaylistRepo] PERSISTENCE MISMATCH for {playlist.Id}! " +
-                          $"Expected SyncMode={(int)playlist.SyncMode}, got {verify.SyncMode}; " +
-                          $"Expected YoutubeId={playlist.YoutubeId ?? "null"}, got {verify.YoutubeId ?? "null"}");
-            }
-            else
-            {
-                Log.Debug($"[PlaylistRepo] Verified OK: SyncMode={verify.SyncMode}, YoutubeId={verify.YoutubeId ?? "null"}");
-            }
-        }
     }
 
     public async Task DeleteAsync(string id, CancellationToken ct = default)
@@ -355,6 +327,22 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         return totalTicks;
     }
 
+    // ═══ НОВЫЙ МЕТОД: ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
+    public async Task<long> GetTotalLibraryDurationAsync(CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        // Вычисляет сумму всех треков, привязанных ко всем плейлистам
+        var totalTicks = await ctx.PlaylistTracks
+            .Join(ctx.Tracks,
+                pt => pt.TrackId,
+                t => t.Id,
+                (pt, t) => t.DurationTicks)
+            .SumAsync(ct);
+
+        return totalTicks;
+    }
+
     #region SetVideoId
 
     public async Task<string?> GetSetVideoIdAsync(string playlistId, string trackId, CancellationToken ct = default)
@@ -385,12 +373,10 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // Load all playlist tracks in one query
         var entries = await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
             .ToListAsync(ct);
 
-        // Build lookup for fast matching
         var entryMap = new Dictionary<string, PlaylistTrackEntity>(entries.Count, StringComparer.Ordinal);
         for (int i = 0; i < entries.Count; i++)
             entryMap[entries[i].TrackId] = entries[i];
@@ -414,10 +400,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
     #region Mapping
 
-    /// <summary>
-    /// Entity → Domain Model.
-    /// Включает все поля: ComputedColor, Description.
-    /// </summary>
     private static Playlist MapToModel(PlaylistEntity e) => new()
     {
         Id = e.Id,
@@ -432,11 +414,6 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         UpdatedAt = e.UpdatedAt
     };
 
-    /// <summary>
-    /// Domain Model → Entity.
-    /// Включает все поля: ComputedColor, Description.
-    /// Использует StoredName напрямую чтобы избежать computed property Name.
-    /// </summary>
     private static PlaylistEntity MapToEntity(Playlist m) => new()
     {
         Id = m.Id,

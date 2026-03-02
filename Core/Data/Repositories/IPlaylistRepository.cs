@@ -27,6 +27,12 @@ public interface IPlaylistRepository
     Task<long> GetTotalDurationTicksAsync(string playlistId, CancellationToken ct = default);
 
     /// <summary>
+    /// Возвращает сумму Ticks всех треков во всех плейлистах одним SQL-запросом.
+    /// Решает проблему N+1 запросов при обновлении статистики библиотеки.
+    /// </summary>
+    Task<long> GetTotalLibraryDurationAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// Gets the YouTube setVideoId for a track in a playlist.
     /// Required for removing tracks from YouTube playlists via API.
     /// </summary>

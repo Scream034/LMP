@@ -31,10 +31,7 @@ public partial class PlayerBarView : UserControl
     private const double MinSegmentWidthPx = 2.0;
     private const double VolumePopupContentWidth = 28.0;
 
-    /// <summary>Время показа подсказки "ESC/ПКМ для отмены".</summary>
     private const int SeekHintAutoHideMs = 2500;
-
-    /// <summary>Время показа подтверждения "Перемотка отменена".</summary>
     private const int SeekCancelledHintMs = 1500;
 
     #endregion
@@ -359,6 +356,32 @@ public partial class PlayerBarView : UserControl
 
     #endregion
 
+    #region Shuffle Button - Right Click Handler
+
+    /// <summary>
+    /// Обработчик нажатия на кнопку shuffle.
+    /// ЛКМ: выполняется Command (ShuffleQueueCommand) — однократное перемешивание.
+    /// ПКМ: toggle auto-shuffle (сохраняется в настройках).
+    /// </summary>
+    private void OnShuffleButtonPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(sender as Control);
+        
+        if (point.Properties.IsRightButtonPressed)
+        {
+            // ПКМ — toggle auto-shuffle
+            e.Handled = true;
+            
+            if (DataContext is PlayerBarViewModel vm)
+            {
+                vm.ToggleAutoShuffleCommand.Execute().Subscribe();
+            }
+        }
+        // ЛКМ обрабатывается стандартным Command binding
+    }
+
+    #endregion
+
     #region Spark Animation
 
     private void StartSparkAnimation()
@@ -622,9 +645,6 @@ public partial class PlayerBarView : UserControl
 
     #region Seek Hint Tooltip
 
-    /// <summary>
-    /// Показывает подсказку над seek-слайдером с автоскрытием.
-    /// </summary>
     private void ShowSeekHint(string text, int autoHideMs)
     {
         SeekHintText.Text = text;
@@ -708,9 +728,6 @@ public partial class PlayerBarView : UserControl
         VolumeThumb.Margin = new Thickness(0, thumbTop, 0, 0);
     }
 
-    /// <summary>
-    /// Показывает тултип громкости слева от текущей позиции ползунка.
-    /// </summary>
     private void ShowVolumeTooltip(int currentVolume, int maxVolume, double ratio)
     {
         VolumeTooltipText.Text = $"{currentVolume}% / {maxVolume}%";
@@ -834,7 +851,6 @@ public partial class PlayerBarView : UserControl
             UpdateSeekPreview(x);
             SeekTooltipPopup.IsOpen = true;
 
-            // Визуальное обновление позиции мгновенно — даже если seek busy
             vm.UpdateSeekPosition(seconds);
         }
         else if (SeekHitBox.IsPointerOver)
@@ -883,7 +899,6 @@ public partial class PlayerBarView : UserControl
         UpdateSeekTooltip(x, ratio * vm.DurationSeconds);
         SeekTooltipPopup.IsOpen = true;
 
-        // Показываем подсказку про отмену
         string cancelHint = vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel");
         ShowSeekHint(cancelHint, SeekHintAutoHideMs);
     }
@@ -935,7 +950,6 @@ public partial class PlayerBarView : UserControl
             {
                 vm.CancelSeek();
 
-                // Показываем подтверждение отмены
                 string cancelledText = vm.L.Get("Seek_Cancelled", "Seek cancelled");
                 ShowSeekHint(cancelledText, SeekCancelledHintMs);
             }

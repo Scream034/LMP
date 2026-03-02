@@ -46,32 +46,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private bool _isLoadingSettings;
     private bool _isDisposed;
 
-    /// <summary>
-    /// true после завершения загрузки настроек в OnNavigatedToAsync.
-    /// View показывает скелетон пока false.
-    /// </summary>
     [Reactive] public bool IsContentReady { get; private set; }
 
     #region Account
 
     [Reactive] public bool IsAuthenticated { get; private set; }
-    [Reactive] public string FakeChannelInput { get; set; } = string.Empty;
-    [Reactive] public bool IsLoadingFakeAccount { get; set; }
 
-    public bool HasAccount => IsAuthenticated || _library.HasFakeAccount;
-    public bool IsFakeAccount => !IsAuthenticated && _library.HasFakeAccount;
-
-    public string AccountName => IsAuthenticated
-        ? _auth.State.UserName
-        : _library.FakeAccountName ?? SL["Auth_NotSignedIn"];
-
-    public string? AccountAvatarUrl => IsAuthenticated
-        ? _auth.State.AvatarUrl
-        : _library.FakeAccountAvatarUrl;
-
-    public string AccountSubtitle => IsAuthenticated
-        ? _auth.State.UserEmail
-        : IsFakeAccount ? SL["Account_LimitedAccess"] : SL["Auth_Guest"];
+    public string AccountName => IsAuthenticated ? _auth.State.UserName : SL["Auth_NotSignedIn"];
+    public string? AccountAvatarUrl => IsAuthenticated ? _auth.State.AvatarUrl : null;
+    public string AccountSubtitle => IsAuthenticated ? _auth.State.UserEmail : SL["Auth_Guest"];
 
     #endregion
 
@@ -163,6 +146,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
 
+    public List<LocalizedItem<CloseAction>> CloseActionOptions { get; } = [];
+    [Reactive] public LocalizedItem<CloseAction>? SelectedCloseAction { get; set; }
+    [Reactive] public bool MinimizeToTray { get; set; }
+
     #endregion
 
     #region Commands
@@ -172,8 +159,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ResetLibraryCommand { get; }
     public ReactiveCommand<Unit, Unit> LoginCommand { get; }
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
-    public ReactiveCommand<Unit, Unit> SetFakeAccountCommand { get; }
-    public ReactiveCommand<Unit, Unit> ClearFakeAccountCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearImageCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
@@ -203,12 +188,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _audio = audio;
         _youtube = youtube;
 
-        // ═══ ТОЛЬКО команды в конструкторе — без тяжёлой загрузки ═══
-
         LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
         LogoutCommand = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
-        SetFakeAccountCommand = CreateCommand(ReactiveCommand.CreateFromTask(SetFakeAccountAsync));
-        ClearFakeAccountCommand = CreateCommand(ReactiveCommand.Create(ClearFakeAccount));
         BrowseDownloadPathCommand = CreateCommand(ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync));
         ClearHistoryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearHistoryAsync));
         ResetLibraryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ResetLibraryAsync));
@@ -218,7 +199,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ResetThemeCommand = CreateCommand(ReactiveCommand.Create(ResetTheme));
         ClearDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
 
-        // Client change subscription (нужна сразу для реактивности)
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)
@@ -248,21 +228,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Subscribe(v => _library.UpdateSettings(s => s.Storage.AutoSaveToDownloads = v))
             .DisposeWith(Disposables);
 
-        // НЕ вызываем LoadAllSettings() и тяжёлые операции!
-        // Они будут в OnNavigatedToAsync().
-
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
     }
 
-    /// <summary>
-    /// Вызывается после CrossFade-анимации навигации.
-    /// Здесь делаем всю тяжёлую инициализацию.
-    /// </summary>
     public override async Task OnNavigatedToAsync()
     {
         if (_isDisposed) return;
 
-        // Небольшая задержка чтобы UI отрисовал скелетон
         await Task.Delay(50);
 
         if (_isDisposed) return;
@@ -272,7 +244,34 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         UpdateCacheStats();
         SetupSubscriptions();
 
+        // ═══ ИСПРАВЛЕНИЕ GUEST: Если авторизованы, но профиля нет — получаем автоматически ═══
+        if (IsAuthenticated && _auth.State.UserName == "Guest")
+        {
+            _ = FetchUserProfileQuietlyAsync();
+        }
+
         IsContentReady = true;
+    }
+
+    private async Task FetchUserProfileQuietlyAsync()
+    {
+        try
+        {
+            Log.Info("[Settings] Auto-fetching missing user profile info...");
+            var ytUser = Program.Services.GetRequiredService<YoutubeUserDataService>();
+            var (name, email, avatar) = await ytUser.GetAccountInfoAsync();
+
+            if (!string.IsNullOrEmpty(name))
+            {
+                _auth.UpdateUserProfile(name, email, avatar);
+                RaiseAccountProperties();
+                Log.Info($"[Settings] Profile successfully restored: {name}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Settings] Failed to auto-fetch profile: {ex.Message}");
+        }
     }
 
     private void OnLanguageChanged(object? sender, string e) => RefreshLocalizedLists();
@@ -419,10 +418,36 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Ignore, SL["Settings_ErrorBehavior_Ignore"]));
         SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == currentErrorBehavior)
                                 ?? ErrorBehaviorOptions[0];
+
+        var currentCloseAction = SelectedCloseAction?.Value ?? _library.Settings.CloseAction;
+        CloseActionOptions.Clear();
+        CloseActionOptions.Add(new(CloseAction.Exit, SL["CloseAction_Exit"]));
+        CloseActionOptions.Add(new(CloseAction.MinimizeToTray, SL["CloseAction_MinimizeToTray"]));
+        CloseActionOptions.Add(new(CloseAction.Ask, SL["CloseAction_Ask"]));
+        SelectedCloseAction = CloseActionOptions.FirstOrDefault(x => x.Value == currentCloseAction)
+                              ?? CloseActionOptions[2];
     }
 
     private void SetupSubscriptions()
     {
+        this.WhenAnyValue(x => x.SelectedCloseAction)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(c =>
+            {
+                _library.UpdateSettings(s => s.CloseAction = c.Value);
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.MinimizeToTray)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.MinimizeToTray = v);
+            })
+            .DisposeWith(Disposables);
+
         this.WhenAnyValue(x => x.SelectedLanguage)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)
@@ -679,7 +704,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
                                     ?? ErrorBehaviorOptions[0];
 
-            FakeChannelInput = _library.FakeAccountUrl ?? "";
             IsAuthenticated = _auth.IsAuthenticated;
             RaiseAccountProperties();
 
@@ -713,6 +737,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 _ => null
             };
             _isUpdatingPreset = false;
+
+            SelectedCloseAction = CloseActionOptions.FirstOrDefault(x => x.Value == s.CloseAction)
+                                  ?? CloseActionOptions.LastOrDefault();
+            MinimizeToTray = s.MinimizeToTray;
 
             LoadThemeColors();
         }
@@ -839,42 +867,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             ? Math.Clamp((double)downloadSizeMb / DownloadedTracksLimitMb, 0, 1) : 0;
     }
 
-    private async Task SetFakeAccountAsync()
-    {
-        if (string.IsNullOrWhiteSpace(FakeChannelInput)) return;
-        IsLoadingFakeAccount = true;
-        try
-        {
-            var info = await _youtube.GetChannelInfoAsync(FakeChannelInput);
-            if (info != null)
-            {
-                _library.SetFakeAccount(FakeChannelInput, info.Value.Name, info.Value.AvatarUrl);
-                RaiseAccountProperties();
-                await _dialog.ShowInfoAsync(SL["Dialog_Success"],
-                    string.Format(SL["Dialog_Merge_Success"], info.Value.Name));
-            }
-            else
-            {
-                await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], SL["Dialog_Merge_Error"]);
-            }
-        }
-        catch (Exception ex)
-        {
-            await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], ex.Message);
-        }
-        finally
-        {
-            IsLoadingFakeAccount = false;
-        }
-    }
-
-    private void ClearFakeAccount()
-    {
-        _library.ClearFakeAccount();
-        FakeChannelInput = "";
-        RaiseAccountProperties();
-    }
-
     private async Task LoginAsync()
     {
         var cookies = await _dialog.ShowInputAsync(SL["Dialog_Login_Title"],
@@ -913,13 +905,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(AccountName));
         this.RaisePropertyChanged(nameof(AccountAvatarUrl));
         this.RaisePropertyChanged(nameof(AccountSubtitle));
-        this.RaisePropertyChanged(nameof(HasAccount));
-        this.RaisePropertyChanged(nameof(IsFakeAccount));
     }
 
     private async Task BrowseDownloadPathAsync()
     {
-        var newPath = await _dialog.SelectFolderAsync(DownloadPath);
+        var newPath = await DialogService.SelectFolderAsync(DownloadPath);
         if (string.IsNullOrEmpty(newPath)) return;
         DownloadPath = newPath;
         _library.DownloadPath = newPath;

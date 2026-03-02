@@ -17,7 +17,9 @@ using ReactiveUI.Fody.Helpers;
 namespace LMP.Features.Player;
 
 /// <summary>
-/// ViewModel для панели управления плеером.
+/// ViewModel для нижней панели управления плеером (Player Bar).
+/// Координирует UI с движком AudioEngine, управляет состоянием воспроизведения,
+/// очередью, ползунками громкости и времени.
 /// </summary>
 public sealed class PlayerBarViewModel : ViewModelBase
 {
@@ -29,6 +31,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int PositionUpdateThrottleMs = 50;
     private const int TrackResetMinDurationMs = 300;
     private const int FallbackPositionIntervalMs = 500;
+    private const int ShuffleAnimationDurationMs = 500;
 
     #endregion
 
@@ -54,27 +57,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private WeakReference<PlayerBarView>? _viewRef;
 
-    /// <summary>
-    /// Монотонный счётчик сессий track reset.
-    /// </summary>
     private int _trackResetSession;
-
-    /// <summary>
-    /// Время начала текущего reset.
-    /// </summary>
     private DateTime _trackResetStartTime;
-
-    /// <summary>
-    /// ID трека, для которого ожидается первый StreamInfo.
-    /// </summary>
     private string? _pendingStreamInfoTrackId;
-
-    /// <summary>
-    /// Ticks (DateTime.UtcNow.Ticks) когда IsSeekBusy был установлен в true.
-    /// Используется FallbackPositionUpdate как safety timeout: если SeekCompleted
-    /// не приходит в течение 2 секунд, guard сбрасывается принудительно.
-    /// 0 = не активен.
-    /// </summary>
     private long _seekBusyStartTicks;
 
     #endregion
@@ -90,7 +75,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool IsNavigating { get; private set; }
     [Reactive] public bool IsTrackResetting { get; private set; }
 
-    public string SafeTitle => CurrentTrack?.Title ?? L["Player_NotPlaying"];
+    public string SafeTitle => CurrentTrack?.Title ?? SL["Player_NotPlaying"];
     public string SafeAuthor => CurrentTrack?.Author ?? "";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
 
@@ -194,10 +179,27 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Repeat & Shuffle
 
-    [Reactive] public bool ShuffleEnabled { get; private set; }
+    /// <summary>
+    /// Визуальная анимация shuffle (кратковременная подсветка при нажатии ЛКМ).
+    /// НЕ персистентное состояние.
+    /// </summary>
+    [Reactive] public bool IsShuffleAnimating { get; private set; }
+
+    /// <summary>
+    /// Автоматическое перемешивание при старте очереди.
+    /// Персистентное состояние из настроек. Переключается по ПКМ.
+    /// </summary>
+    [Reactive] public bool AutoShuffleEnabled { get; private set; }
+
     [Reactive] public RepeatMode RepeatMode { get; set; }
     [Reactive] public bool IsRepeatHintVisible { get; private set; }
     [Reactive] public string RepeatHintText { get; private set; } = "";
+
+    /// <summary>
+    /// Подсказка для shuffle (показывается при toggle auto-shuffle).
+    /// </summary>
+    [Reactive] public bool IsShuffleHintVisible { get; private set; }
+    [Reactive] public string ShuffleHintText { get; private set; } = "";
 
     #endregion
 
@@ -222,34 +224,37 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Tooltips
 
-    public string ShuffleTooltip => L.Get("Player_Shuffle", "Shuffle");
-    public string PreviousTooltip => L.Get("Player_Previous", "Previous");
-    public string NextTooltip => L.Get("Player_Next", "Next");
+    public string ShuffleTooltip => AutoShuffleEnabled
+        ? SL["Player_Shuffle_AutoEnabled"] 
+        : SL["Player_Shuffle_AutoDisabled"];
+
+    public static string PreviousTooltip => SL["Player_Previous"];
+    public static string NextTooltip => SL["Player_Next"];
 
     public string PlayPauseTooltip => IsPlaying
-        ? L.Get("Player_Pause", "Pause")
-        : L.Get("Player_Play", "Play");
+        ? SL["Player_Pause"]
+        : SL["Player_Play"];
 
     public string RepeatTooltip => RepeatMode switch
     {
-        RepeatMode.None => L.Get("Player_Repeat_Off", "Repeat Off"),
-        RepeatMode.RepeatAll => L.Get("Player_Repeat_All", "Repeat Queue"),
-        RepeatMode.RepeatOne => L.Get("Player_Repeat_One", "Repeat Track"),
+        RepeatMode.None => SL["Player_Repeat_Off"],
+        RepeatMode.All => SL["Player_Repeat_All"],
+        RepeatMode.One => SL["Player_Repeat_One"],
         _ => ""
     };
 
     public string LikeTooltip => IsLiked
-        ? L.Get("Track_Unlike", "Remove from Liked")
-        : L.Get("Track_Like", "Add to Liked");
+        ? SL["Track_Unlike"]
+        : SL["Track_Like"];
 
-    public string CopyTooltip => L.Get("Track_CopyLink", "Copy Link");
+    public static string CopyTooltip => SL["Track_CopyLink"];
 
     public string MuteTooltip => IsMuted
-        ? L.Get("Player_Unmute", "Unmute")
-        : L.Get("Player_Mute", "Mute");
+        ? SL["Player_Unmute"]
+        : SL["Player_Mute"];
 
     public string TrackNumberTooltip => string.Format(
-        L.Get("Player_TrackNumber", "Track {0} of {1}"),
+        SL["Player_TrackNumber"],
         CurrentTrackIndex + 1,
         TotalTracksInQueue);
 
@@ -258,10 +263,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
         get
         {
             if (IsLoading || DurationSeconds <= 0)
-                return L.Get("Player_Loading_Duration", "Loading duration...");
+                return SL["Player_Loading_Duration"];
 
             return string.Format(
-                L.Get("Player_Duration", "Duration: {0} / {1}"),
+                SL["Player_Duration"],
                 FormatTime(Position),
                 FormatTime(Duration));
         }
@@ -274,7 +279,17 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
+    
+    /// <summary>
+    /// ЛКМ: однократное перемешивание очереди.
+    /// </summary>
     public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; }
+    
+    /// <summary>
+    /// ПКМ: toggle auto-shuffle (сохраняется в настройках).
+    /// </summary>
+    public ReactiveCommand<Unit, Unit> ToggleAutoShuffleCommand { get; }
+    
     public ReactiveCommand<Unit, Unit> ToggleRepeatCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleMuteCommand { get; }
@@ -297,25 +312,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _youtube = youtube;
         _musicManager = musicManager;
 
-        MaxVolume = 100;
-        Volume = 50;
-        _lastVolumeBeforeMute = 50;
-        ShuffleEnabled = false;
-        RepeatMode = RepeatMode.None;
-        UpdateQueueState();
-
-        Log.Debug("[PlayerBar] Created, waiting for initialization...");
+        Log.Debug("[PlayerBar] Created, initializing settings...");
 
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
 
-        // ИНИЦИАЛИЗАЦИЯ ИЗ НАСТРОЕК
-        Observable.FromEvent(
-                h => _library.OnInitialized += h,
-                h => _library.OnInitialized -= h)
-            .Take(1)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ => OnLibraryInitialized())
-            .DisposeWith(Disposables);
+        // ═══ ИСПРАВЛЕНИЕ БАГА ВОССТАНОВЛЕНИЯ НАСТРОЕК ═══
+        // Вызываем инициализацию немедленно, так как LibraryService
+        // уже загрузил настройки при старте приложения.
+        // Раньше мы ждали события OnInitialized, которое мы пропускали (Race Condition).
+        OnLibraryInitialized();
 
         // AUDIO ENGINE EVENTS
         Observable.FromEvent<Action<bool, bool>, (bool Playing, bool Paused)>(
@@ -337,14 +342,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => UpdateQueueState())
             .DisposeWith(Disposables);
 
-        // ═══ SEEK COMPLETED — просто обновляем позицию и снимаем guard ═══
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                h => _audio.OnSeekCompleted += h,
                h => _audio.OnSeekCompleted -= h)
            .ObserveOn(RxApp.MainThreadScheduler)
            .Subscribe(pos =>
            {
-               // Сбрасываем seek guard — position events снова проходят
                Volatile.Write(ref _seekBusyStartTicks, 0L);
 
                if (!_isSuspended)
@@ -354,26 +357,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
                    ForceUpdateBufferProgress();
                }
 
-               // Снимаем busy ПОСЛЕ обновления буфера и позиции
                IsSeekBusy = false;
            })
            .DisposeWith(Disposables);
 
-        // ═══ POSITION — event-based с IsSeekBusy guard ═══
-        // IsSeekBusy блокирует stale position events между EndSeek() и SeekCompleted.
-        // Это надёжнее старой схемы с _seekTargetSeconds + cooldown,
-        // которая не учитывала Rx Throttle delay.
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                  h => _audio.OnPositionChanged += h,
                  h => _audio.OnPositionChanged -= h)
              .Where(_ => !_isSuspended && !_isSeeking && !IsTrackResetting && !IsSeekBusy)
              .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
-             .DistinctUntilChanged(pos => (long)(pos.TotalMilliseconds / 100)) // 100ms precision, suppress jitter
+             .DistinctUntilChanged(pos => (long)(pos.TotalMilliseconds / 100))
              .ObserveOn(RxApp.MainThreadScheduler)
              .Subscribe(pos =>
              {
-                 // Redundant check: state мог измениться между Where и Subscribe
-                 // (разные потоки: source thread → UI thread через ObserveOn)
                  if (_isSeeking || _isSuspended || IsTrackResetting || IsSeekBusy) return;
 
                  Position = pos;
@@ -382,7 +378,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
              })
              .DisposeWith(Disposables);
 
-        // MaxVolume — с дедупликацией
         Observable.FromEvent<Action<int>, int>(
                 h => _audio.OnMaxVolumeChanged += h,
                 h => _audio.OnMaxVolumeChanged -= h)
@@ -398,7 +393,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(HandleTrackChanged)
             .DisposeWith(Disposables);
 
-        // StreamInfo
         Observable.FromEvent<Action<AudioStreamInfo>, AudioStreamInfo>(
                 h => _audio.OnStreamInfoChanged += h,
                 h => _audio.OnStreamInfoChanged -= h)
@@ -415,7 +409,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(HandleBufferStateChanged)
             .DisposeWith(Disposables);
 
-        // CACHE & LIBRARY EVENTS
         var cacheManager = AudioSourceFactory.GlobalCache ?? throw new NullReferenceException("AudioSourceFactory.GlobalCache is not initialized");
         Observable.FromEvent<Action<string, string, int, bool>, (string TrackId, string Container, int Bitrate, bool Downloaded)>(
                 h => (t, c, b, d) => h((t, c, b, d)),
@@ -432,12 +425,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(t =>
             {
                 IsLiked = t.IsLiked;
-                CurrentTrack?.IsLiked = t.IsLiked;
+                if (CurrentTrack != null)
+                    CurrentTrack.IsLiked = t.IsLiked;
                 this.RaisePropertyChanged(nameof(LikeTooltip));
             })
             .DisposeWith(Disposables);
 
-        // VOLUME BINDING
         this.WhenAnyValue(x => x.Volume)
             .Subscribe(v =>
             {
@@ -459,6 +452,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         this.WhenAnyValue(x => x.CurrentTrackIndex, x => x.TotalTracksInQueue)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(TrackNumberTooltip)))
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.AutoShuffleEnabled)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(ShuffleTooltip)))
             .DisposeWith(Disposables);
 
         Observable.FromEvent<Action<bool>, bool>(
@@ -530,24 +527,35 @@ public sealed class PlayerBarViewModel : ViewModelBase
             x => x.HasQueueToShuffle, x => x.IsLoading,
             (hasTracks, loading) => hasTracks && !loading);
 
+        // ЛКМ: Однократное перемешивание с визуальной анимацией
         ShuffleQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             _audio.ShuffleQueue();
-            ShuffleEnabled = true;
-            _library.UpdateSettings(s => s.ShuffleEnabled = true);
-
-            Observable.Timer(TimeSpan.FromMilliseconds(500))
+            
+            // Визуальная анимация (кратковременная подсветка)
+            IsShuffleAnimating = true;
+            Observable.Timer(TimeSpan.FromMilliseconds(ShuffleAnimationDurationMs))
                 .ObserveOn(RxApp.MainThreadScheduler)
-                .Subscribe(_ => ShuffleEnabled = false)
+                .Subscribe(_ => IsShuffleAnimating = false)
                 .DisposeWith(Disposables);
         }, canShuffle));
+
+        // ПКМ: Toggle auto-shuffle (сохраняется в настройках)
+        ToggleAutoShuffleCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            AutoShuffleEnabled = !AutoShuffleEnabled;
+            _library.UpdateSettings(s => s.ShuffleEnabled = AutoShuffleEnabled);
+            _audio.ShuffleEnabled = AutoShuffleEnabled;
+            
+            ShowShuffleHint();
+        }));
 
         ToggleRepeatCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             RepeatMode = RepeatMode switch
             {
-                RepeatMode.None => RepeatMode.RepeatAll,
-                RepeatMode.RepeatAll => RepeatMode.RepeatOne,
+                RepeatMode.None => RepeatMode.All,
+                RepeatMode.All => RepeatMode.One,
                 _ => RepeatMode.None
             };
             _audio.RepeatMode = RepeatMode;
@@ -631,9 +639,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         BufferProgressPercent = state.Progress;
         IsFullyBuffered = state.IsFullyBuffered;
-
-        // Всегда обновляем ranges — даже если кажутся "одинаковыми",
-        // может быть precision difference после seek
         BufferedRanges = state.Ranges;
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
     }
@@ -729,8 +734,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             _lastVolumeBeforeMute = 50;
         }
 
-        ShuffleEnabled = settings.ShuffleEnabled;
+        // Синхронизируем состояние визуальных кнопок с базой данных
+        AutoShuffleEnabled = settings.ShuffleEnabled;
         RepeatMode = settings.RepeatMode;
+        
+        // Синхронизируем движок
+        _audio.ShuffleEnabled = AutoShuffleEnabled;
         _audio.RepeatMode = RepeatMode;
         _audio.SetVolumeInstant(Volume);
 
@@ -738,7 +747,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         RaiseVolumePropertiesChanged();
         UpdateQueueState();
 
-        Log.Info($"[PlayerBar] Initialized: MaxVol={MaxVolume}, Vol={Volume}");
+        Log.Info($"[PlayerBar] Initialized: Vol={Volume}, MaxVol={MaxVolume}, AutoShuffle={AutoShuffleEnabled}, Repeat={RepeatMode}");
     }
 
     #endregion
@@ -795,7 +804,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             }
 
             ShowStreamInfo = true;
-            StreamInfo = L.Get("Player_StreamInfo_Loading", "Loading...");
+            StreamInfo = SL["Player_StreamInfo_Loading"];
         }
         else
         {
@@ -897,7 +906,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
         else
         {
-            StreamInfo = L.Get("Player_StreamInfo_Loading", "Loading...");
+            StreamInfo = SL["Player_StreamInfo_Loading"];
         }
 
         ShowStreamInfo = true;
@@ -923,8 +932,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
             var kbs = (currentBytes - _lastDownloadedBytes) / elapsed / 1024.0;
             DownloadSpeedText = kbs > 10
                 ? (kbs >= 1024
-                    ? string.Format(L.Get("Stream_Speed_Mb", "{0:F1} MB/s"), kbs / 1024)
-                    : string.Format(L.Get("Stream_Speed_Kb", "{0:F0} KB/s"), kbs))
+                    ? string.Format(SL["Stream_Speed_Mb"] ?? "{0:F1} MB/s", kbs / 1024)
+                    : string.Format(SL["Stream_Speed_Kb"] ?? "{0:F0} KB/s", kbs))
                 : "";
         }
 
@@ -937,9 +946,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (!HasTrack || _isSuspended || IsTrackResetting)
             return;
 
-        // ═══ Duration обновляем ВСЕГДА, даже при seek ═══
-        // Это решает проблему "залагавшего Duration" —
-        // Duration приходит от AudioEngine асинхронно и не должна блокироваться guard'ами.
         var realDur = _audio.TotalDuration;
         if (Math.Abs(DurationSeconds - realDur.TotalSeconds) > 1 && realDur.TotalSeconds > 0)
         {
@@ -948,10 +954,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(DurationTooltip));
         }
 
-        // ═══ IsSeekBusy safety timeout ═══
-        // Если SeekCompleted не пришёл в течение 2 секунд (seek rejected,
-        // pipeline not ready, event lost), принудительно сбрасываем guard.
-        // В нормальном режиме SeekCompleted приходит за ~100ms.
         if (IsSeekBusy)
         {
             long busyTicks = Volatile.Read(ref _seekBusyStartTicks);
@@ -962,17 +964,14 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 IsSeekBusy = false;
                 Volatile.Write(ref _seekBusyStartTicks, 0L);
 
-                // Подхватываем реальную позицию из AudioEngine
                 var realPos = _audio.CurrentPosition;
                 Position = realPos;
                 PositionSeconds = realPos.TotalSeconds;
             }
 
-            // Пока IsSeekBusy — не обновляем позицию (ждём SeekCompleted)
             return;
         }
 
-        // Если seek в процессе (drag) — не трогаем позицию
         if (_isSeeking)
             return;
 
@@ -1003,19 +1002,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(DurationTooltip));
     }
 
-    /// <summary>
-    /// Завершает drag и отправляет seek в AudioEngine.
-    /// Блокирует обновление позиции через IsSeekBusy до получения OnSeekCompleted.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Guard lifecycle:</b></para>
-    /// <list type="number">
-    ///   <item>EndSeek → IsSeekBusy = true, _seekBusyStartTicks = now</item>
-    ///   <item>Rx Position events фильтруются (.Where(!IsSeekBusy))</item>
-    ///   <item>SeekCompleted → IsSeekBusy = false (нормальный путь, ~100ms)</item>
-    ///   <item>FallbackPositionUpdate: если IsSeekBusy > 2s → принудительный сброс (safety net)</item>
-    /// </list>
-    /// </remarks>
     public async void EndSeek()
     {
         if (!HasTrack)
@@ -1027,29 +1013,24 @@ public sealed class PlayerBarViewModel : ViewModelBase
         double target = PositionSeconds;
         _isSeeking = false;
 
-        // Оптимистичное обновление UI — мгновенный feedback
         PositionSeconds = target;
         Position = TimeSpan.FromSeconds(target);
 
-        // Активируем guard — блокируем stale position events
         IsSeekBusy = true;
         Volatile.Write(ref _seekBusyStartTicks, DateTime.UtcNow.Ticks);
 
         try
         {
             await _audio.SeekAsync(TimeSpan.FromSeconds(target));
-            // SeekCompleted event снимет IsSeekBusy и обновит позицию
         }
         catch (OperationCanceledException)
         {
-            // Seek отменён (например, новый трек) — сбрасываем guard
             IsSeekBusy = false;
             Volatile.Write(ref _seekBusyStartTicks, 0L);
             Log.Debug("[PlayerBar] Seek cancelled, guards cleared");
         }
         catch (Exception ex)
         {
-            // Ошибка seek — сбрасываем guard и восстанавливаем реальную позицию
             IsSeekBusy = false;
             Volatile.Write(ref _seekBusyStartTicks, 0L);
 
@@ -1060,15 +1041,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Отменяет seek полностью — и drag state, и блокировку позиции.
-    /// Ползунок возвращается на реальную текущую позицию.
-    /// </summary>
     public void CancelSeek()
     {
         _isSeeking = false;
 
-        // Сбрасываем seek guard
         IsSeekBusy = false;
         Volatile.Write(ref _seekBusyStartTicks, 0L);
 
@@ -1171,9 +1147,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         RepeatHintText = RepeatMode switch
         {
-            RepeatMode.None => L.Get("Player_Repeat_Off", "Repeat Off"),
-            RepeatMode.RepeatAll => L.Get("Player_Repeat_All", "Repeat Queue"),
-            RepeatMode.RepeatOne => L.Get("Player_Repeat_One", "Repeat Track"),
+            RepeatMode.None => SL["Player_Repeat_Off"],
+            RepeatMode.All => SL["Player_Repeat_All"],
+            RepeatMode.One => SL["Player_Repeat_One"],
             _ => ""
         };
         IsRepeatHintVisible = true;
@@ -1181,11 +1157,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
         IsRepeatHintVisible = false;
     }
 
+    private async void ShowShuffleHint()
+    {
+        ShuffleHintText = AutoShuffleEnabled
+            ? SL["Player_Shuffle_AutoOn"]
+            : SL["Player_Shuffle_AutoOff"];
+        IsShuffleHintVisible = true;
+        await Task.Delay(HintDisplayDurationMs);
+        IsShuffleHintVisible = false;
+    }
+
     private async void ShowLikeHint()
     {
-        LikeHintText = IsLiked
-            ? L.Get("Track_Added", "Added to Liked")
-            : L.Get("Track_Removed", "Removed from Liked");
+        LikeHintText = IsLiked ? SL["Track_Added"] : SL["Track_Removed"];
         IsLikeHintVisible = true;
         await Task.Delay(HintDisplayDurationMs);
         IsLikeHintVisible = false;
@@ -1218,6 +1202,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(TrackNumberTooltip));
         this.RaisePropertyChanged(nameof(DurationTooltip));
+        
+        // Обновляем XAML биндинги
+        this.RaisePropertyChanged(nameof(L));
     }
 
     #endregion
@@ -1237,11 +1224,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         _isSuspended = true;
 
-        // 1. Полностью глушим таймеры (0% CPU)
         _fallbackPositionTimer.Stop();
         _speedUpdateTimer.Stop();
 
-        // 2. Скрываем UI-элемент скорости, чтобы Avalonia не тратила ресурсы на его layout
         DownloadSpeedText = "";
 
         if (_viewRef?.TryGetTarget(out var view) == true)
@@ -1252,18 +1237,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         _isSuspended = false;
 
-        // Включаем таймеры обратно
         _fallbackPositionTimer.Start();
         _speedUpdateTimer.Start();
 
-        // Подхватываем Duration, которая могла прийти от движка пока окно было свёрнуто
         var realDur = _audio.TotalDuration;
         if (realDur.TotalSeconds > 0)
         {
             Duration = realDur;
             DurationSeconds = Duration.TotalSeconds;
 
-            // Запрашиваем перерисовку строки с длительностью только при разворачивании
             this.RaisePropertyChanged(nameof(DurationTooltip));
         }
 

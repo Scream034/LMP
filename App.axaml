@@ -22,11 +22,21 @@
         <!-- Наши переопределения (порядок важен!) -->
         <!-- 1. ToolTip первым — единственный источник ToolTip template -->
         <StyleInclude Source="/UI/Theme/ToolTipTheme.axaml" />
-        <!-- 2. Theme.axaml подключает: Typography, Buttons, Controls, AppComponents, PlayerBarStyles -->
+        <!-- 2. Theme.axaml подключает: Typography, Buttons, Controls, AppComponents,
+        PlayerBarStyles -->
         <StyleInclude Source="/UI/Theme/Theme.axaml" />
         <!-- 3. Дополнительные компоненты -->
         <StyleInclude Source="/UI/Theme/LoadingSkeletons.axaml" />
         <StyleInclude Source="/UI/Theme/PlaylistCardTemplate.axaml" />
         <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />
     </Application.Styles>
+
+    <TrayIcon.Icons>
+        <TrayIcons>
+            <TrayIcon
+                Icon="avares://LMP/Assets/app.ico"
+                ToolTipText="Lite Music Player"
+                IsVisible="False" />
+        </TrayIcons>
+    </TrayIcon.Icons>
 </Application>

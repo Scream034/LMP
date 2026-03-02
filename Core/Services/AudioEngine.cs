@@ -499,9 +499,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private bool TryMoveNext(bool userInitiated)
     {
         if (_queue.Count == 0) return false;
-        if (!userInitiated && RepeatMode == RepeatMode.RepeatOne) return true;
+        if (!userInitiated && RepeatMode == RepeatMode.One) return true;
         if (_currentIndex + 1 < _queue.Count) { _currentIndex++; return true; }
-        if (RepeatMode == RepeatMode.RepeatAll) { _currentIndex = 0; return true; }
+        if (RepeatMode == RepeatMode.All) { _currentIndex = 0; return true; }
         return false;
     }
 
@@ -510,7 +510,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_queue.Count == 0) return false;
         if (CurrentPosition.TotalSeconds > 3) return false;
         if (_currentIndex > 0) { _currentIndex--; return true; }
-        if (RepeatMode == RepeatMode.RepeatAll) { _currentIndex = _queue.Count - 1; return true; }
+        if (RepeatMode == RepeatMode.All) { _currentIndex = _queue.Count - 1; return true; }
         return false;
     }
 

@@ -2,7 +2,6 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:ia="using:Avalonia.Xaml.Interactions.Core"
     xmlns:b="using:LMP.Core.Behaviors"
     xmlns:svm="using:LMP.Features.Shared"
     xmlns:asyncImage="using:AsyncImageLoader"
@@ -11,7 +10,6 @@
     x:CompileBindings="True">
 
     <Grid>
-
         <!-- 1. СОСТОЯНИЕ ЗАГРУЗКИ -->
         <Panel IsVisible="{Binding IsLoading, ElementName=Root}" ZIndex="10">
             <Panel IsVisible="{Binding EnableSmoothLoading, ElementName=Root}">
@@ -71,7 +69,13 @@
                     </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
 
-                <!-- Футер внутри шаблона (скроллится с контентом) -->
+                <!--
+                    Футер ВНУТРИ ListBox.Template — скроллится вместе с контентом.
+                    DockPanel: футер внизу, ItemsPresenter забирает оставшееся пространство.
+                    ВАЖНО: ItemsPresenter без DockPanel.Dock = Fill (по умолчанию).
+                    Это НЕ ломает виртуализацию, т.к. VirtualizingStackPanel получает
+                    Infinity height от ScrollViewer и виртуализирует внутри себя.
+                -->
                 <ListBox.Template>
                     <ControlTemplate TargetType="ListBox">
                         <Border Background="{TemplateBinding Background}"
@@ -81,8 +85,17 @@
                                 HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
                                 VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
                                 <DockPanel>
+                                    <!-- Футер: докнут снизу, появляется только при загрузке или конце списка -->
                                     <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,16"
                                         DataContext="{Binding #Root}">
+                                        <StackPanel.IsVisible>
+                                            <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                                                <Binding Path="IsLoadingMore" />
+                                                <Binding Path="IsFooterVisible" />
+                                            </MultiBinding>
+                                        </StackPanel.IsVisible>
+
+                                        <!-- Сетевая загрузка -->
                                         <StackPanel Orientation="Horizontal"
                                             HorizontalAlignment="Center" Margin="0,16,0,24"
                                             Opacity="0.6"
@@ -100,6 +113,8 @@
                                                 Foreground="{DynamicResource AccentBrush}"
                                                 Classes="loading-dot3" />
                                         </StackPanel>
+
+                                        <!-- Скелетоны загрузки -->
                                         <ContentControl Classes="loading-skeletons">
                                             <ContentControl.IsVisible>
                                                 <MultiBinding
@@ -109,7 +124,10 @@
                                                 </MultiBinding>
                                             </ContentControl.IsVisible>
                                         </ContentControl>
-                                        <Border IsVisible="{Binding ReachedEnd}" Margin="0,16,0,32"
+
+                                        <!-- Конец списка -->
+                                        <Border IsVisible="{Binding IsFooterVisible}"
+                                            Margin="0,16,0,32"
                                             HorizontalAlignment="Center" Opacity="0.5">
                                             <StackPanel Orientation="Horizontal" Spacing="8">
                                                 <mi:MaterialIcon Kind="CheckCircle" Width="16"
@@ -122,6 +140,7 @@
                                         </Border>
                                     </StackPanel>
 
+                                    <!-- ItemsPresenter: без DockPanel.Dock → Fill, получает всё оставшееся -->
                                     <ItemsPresenter Name="PART_ItemsPresenter"
                                         ItemsPanel="{TemplateBinding ItemsPanel}"
                                         Margin="{TemplateBinding Padding}" />
@@ -228,7 +247,7 @@
                                         FontSize="12" />
                                 </StackPanel>
 
-                                <!-- КОЛОНКА 2: Статус кэширования/скачивания -->
+                                <!-- КОЛОНКА 2: Статус -->
                                 <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
                                     <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
@@ -263,7 +282,7 @@
                                         Width="16" Height="16" />
                                 </Button>
 
-                                <!-- КОЛОНКА 4: Меню -->
+                                <!-- КОЛОНКА 4: Длительность + Меню -->
                                 <Panel Grid.Column="4">
                                     <TextBlock Text="{Binding FormattedDuration}"
                                         Classes="duration-text"

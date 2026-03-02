@@ -18,6 +18,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private readonly TrackViewModelFactory _vmFactory;
     private readonly DialogService _dialog;
     private readonly MusicLibraryManager _manager;
+    private readonly LibraryService _library;
 
     private bool _isMovingInternally;
     private readonly Dictionary<string, TrackItemViewModel> _vmCache = [];
@@ -63,12 +64,14 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         DownloadService downloads,
         DialogService dialog,
         MusicLibraryManager manager,
+        LibraryService library,
         TrackViewModelFactory vmFactory)
     {
         _audio = audio;
         _downloads = downloads;
         _dialog = dialog;
         _manager = manager;
+        _library = library;
         _vmFactory = vmFactory;
 
         ClearQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.ClearQueue()));
@@ -76,8 +79,11 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
         DownloadAllCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            foreach (var item in QueueItems.Where(t => !t.IsDownloaded))
-                _downloads.StartDownload(item.Track);
+            foreach (var item in QueueItems)
+            {
+                if (!item.IsDownloaded)
+                    _downloads.StartDownload(item.Track);
+            }
         }));
 
         RemoveTrackCommand = CreateCommand(ReactiveCommand.Create<TrackItemViewModel>(item =>
@@ -92,8 +98,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         }));
 
         SaveQueueToPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
-        SaveQueueToPlaylistAsync,
-        this.WhenAnyValue(x => x.IsEmpty, empty => !empty)));
+            SaveQueueToPlaylistAsync,
+            this.WhenAnyValue(x => x.IsEmpty, empty => !empty)));
 
         // Подписка на изменения очереди из AudioEngine
         Observable.FromEvent(
@@ -103,7 +109,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
-                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
 
                 if (!_isMovingInternally)
@@ -120,9 +125,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
-                // LIFECYCLE: Пропускаем обновления когда окно свёрнуто
                 if (_isSuspended) return;
-
                 UpdateActiveStates();
             })
             .DisposeWith(Disposables);
@@ -148,10 +151,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         var result = await _dialog.ShowCreatePlaylistDialogAsync();
         if (result == null || string.IsNullOrWhiteSpace(result.Name)) return;
 
-        var library = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
-            .GetRequiredService<LibraryService>(Program.Services);
-
-        var playlist = await library.CreatePlaylistAsync(result.Name.Trim());
+        var playlist = await _library.CreatePlaylistAsync(result.Name.Trim());
 
         foreach (var track in _masterQueue)
         {
@@ -165,7 +165,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
 
     /// <summary>
     /// Окно свёрнуто — пропускаем UI-обновления от событий AudioEngine.
-    /// Очередь продолжает работать, но UI не обновляется.
     /// </summary>
     protected override void OnSuspend()
     {
@@ -179,10 +178,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     protected override void OnResume()
     {
         _isSuspended = false;
-
-        // Синхронизируем данные которые могли измениться пока окно было свёрнуто
         RefreshFromAudioEngine();
-
         Log.Debug($"[{GetType().Name}] Resumed — UI synchronized");
     }
 
@@ -195,21 +191,28 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     /// <summary>
     /// Перестраивает видимый список с учётом фильтра.
     /// Использует BatchObservableCollection.ReplaceAll для атомарного обновления UI.
+    /// 
+    /// <para><b>Оптимизации:</b></para>
+    /// <list type="bullet">
+    ///   <item>In-place очистка _vmCache вместо LINQ .Where().ToList()</item>
+    ///   <item>Capacity hint для List и HashSet</item>
+    /// </list>
     /// </summary>
     private void RebuildVisibleItems()
     {
         var currentId = _audio.CurrentTrack?.Id;
         var query = FilterQuery;
+        bool hasFilter = !string.IsNullOrWhiteSpace(query);
 
-        var filtered = _masterQueue
-            .Where(t => MatchesFilter(t, query))
-            .ToList();
+        // Фильтруем master list
+        var newItems = new List<TrackItemViewModel>(_masterQueue.Count);
+        var usedIds = new HashSet<string>(_masterQueue.Count);
 
-        var newItems = new List<TrackItemViewModel>(filtered.Count);
-        var usedIds = new HashSet<string>(filtered.Count);
-
-        foreach (var track in filtered)
+        foreach (var track in _masterQueue)
         {
+            if (hasFilter && !MatchesFilter(track, query))
+                continue;
+
             if (!_vmCache.TryGetValue(track.Id, out var vm))
             {
                 vm = _vmFactory.CreateForQueue(track, PlayFromQueue);
@@ -221,19 +224,34 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             usedIds.Add(track.Id);
         }
 
-        // Очищаем неиспользуемые VM из кэша
-        var toRemove = _vmCache.Keys.Where(k => !usedIds.Contains(k)).ToList();
-        foreach (var id in toRemove)
+        // Очищаем неиспользуемые VM из кэша in-place (без промежуточного List)
+        if (usedIds.Count < _vmCache.Count)
         {
-            _vmCache[id].Dispose();
-            _vmCache.Remove(id);
+            // Собираем ключи для удаления — нельзя модифицировать словарь во время итерации
+            List<string>? keysToRemove = null;
+            foreach (var kvp in _vmCache)
+            {
+                if (!usedIds.Contains(kvp.Key))
+                {
+                    keysToRemove ??= new List<string>(_vmCache.Count - usedIds.Count);
+                    keysToRemove.Add(kvp.Key);
+                }
+            }
+
+            if (keysToRemove != null)
+            {
+                foreach (var key in keysToRemove)
+                {
+                    _vmCache[key].Dispose();
+                    _vmCache.Remove(key);
+                }
+            }
         }
 
         // Атомарная замена: 1 Reset-эвент вместо N Add/Remove
         QueueItems.ReplaceAll(newItems);
 
         // Обновляем состояния empty/filter
-        bool hasFilter = !string.IsNullOrWhiteSpace(query);
         IsEmpty = _masterQueue.Count == 0;
         IsFilterEmpty = !IsEmpty && hasFilter && QueueItems.Count == 0;
     }
@@ -272,9 +290,13 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         }
     }
 
+    /// <summary>
+    /// Запускает воспроизведение трека из очереди.
+    /// Fire-and-forget без лишнего Task.Run — PlayTrackAsync уже async.
+    /// </summary>
     private void PlayFromQueue(TrackInfo track)
     {
-        Task.Run(async () => await _audio.PlayTrackAsync(track));
+        _ = _audio.PlayTrackAsync(track);
     }
 
     private void UpdateActiveStates()

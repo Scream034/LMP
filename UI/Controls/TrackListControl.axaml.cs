@@ -26,14 +26,22 @@ public partial class TrackListControl : UserControl
     private const double AutoScrollAmount = 12.0;
 
     /// <summary>
-    /// Если дельта скролла за кадр больше этого порога — считаем скролл быстрым.
+    /// Порог скорости скролла в пикселях за кадр.
+    /// 50px отфильтровывает медленный скролл — обложки грузятся нормально.
+    /// Только при быстром "пролистывании" (flick/fling) загрузка откладывается.
     /// </summary>
-    private const double ScrollSpeedThreshold = 2.0;
+    private const double ScrollSpeedThreshold = 100.0;
 
     /// <summary>
-    /// Задержка после остановки скролла перед загрузкой обложек (мс).
+    /// Задержка после остановки быстрого скролла перед загрузкой обложек (мс).
+    /// 300мс достаточно чтобы пользователь "остановился", но не слишком долго для UX.
     /// </summary>
-    private const int ScrollDebounceMs = 150;
+    private const int ScrollDebounceMs = 400;
+
+    /// <summary>
+    /// Расстояние от нижнего края скролла (в пикселях), при котором показываем футер "End of list".
+    /// </summary>
+    private const double NearBottomThreshold = 80.0;
 
     #endregion
 
@@ -180,8 +188,8 @@ public partial class TrackListControl : UserControl
     }
 
     /// <summary>
-    /// True когда пользователь активно скроллит список.
-    /// Используется для отложенной загрузки обложек через DeferredUrlConverter.
+    /// True когда пользователь быстро скроллит список.
+    /// При медленном скролле остаётся false — обложки грузятся нормально.
     /// </summary>
     public static readonly StyledProperty<bool> IsScrollingFastProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsScrollingFast), false);
@@ -243,6 +251,22 @@ public partial class TrackListControl : UserControl
         private set => SetAndRaise(ScrollVisibilityProperty, ref field, value);
     } = ScrollBarVisibility.Disabled;
 
+    /// <summary>
+    /// True когда ReachedEnd=true И скролл находится у нижнего края.
+    /// Футер "End of list" виден только когда это свойство true.
+    /// При скролле вверх — скрывается.
+    /// </summary>
+    public static readonly DirectProperty<TrackListControl, bool> IsFooterVisibleProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, bool>(
+            nameof(IsFooterVisible),
+            static o => o.IsFooterVisible);
+
+    public bool IsFooterVisible
+    {
+        get;
+        private set => SetAndRaise(IsFooterVisibleProperty, ref field, value);
+    }
+
     #endregion
 
     #region Constructor
@@ -292,11 +316,9 @@ public partial class TrackListControl : UserControl
         LocalizationService.Instance.LanguageChanged -= _languageChangedHandler;
         base.OnDetachedFromVisualTree(e);
 
-        // Авто-скролл
         _autoScrollTimer?.Stop();
         _autoScrollTimer = null;
 
-        // Скорость скролла
         _scrollSpeedTimer?.Stop();
         _scrollSpeedTimer = null;
         _scrollTrackingSub?.Dispose();
@@ -318,39 +340,39 @@ public partial class TrackListControl : UserControl
 
     #endregion
 
-    #region Scroll Speed Tracking
+    #region Scroll Speed Tracking & Near-Bottom Detection
 
     /// <summary>
-    /// Подписка на изменения Offset в ScrollViewer для отслеживания скорости скролла.
-    /// При быстром скролле IsScrollingFast=true → DeferredUrlConverter отдаёт null → обложки не грузятся.
-    /// Через 150мс после остановки скролла IsScrollingFast=false → обложки загружаются.
+    /// Подписка на изменения Offset в ScrollViewer для двух целей:
+    /// 1) Отслеживание скорости скролла (IsScrollingFast) — отложенная загрузка обложек.
+    /// 2) Отслеживание позиции (IsFooterVisible) — показ/скрытие футера "End of list".
     /// </summary>
     private void SetupScrollTracking()
     {
         if (_scrollViewer == null) return;
 
-        // Очищаем предыдущую подписку
         _scrollTrackingSub?.Dispose();
         _scrollSpeedTimer?.Stop();
 
         _scrollInitialized = false;
         _lastScrollOffset = 0;
 
-        // Таймер дебаунса — срабатывает через 150мс после последнего скролл-события
         _scrollSpeedTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(ScrollDebounceMs)
         };
         _scrollSpeedTimer.Tick += OnScrollSpeedDebounce;
 
-        // Подписка на изменение Offset
         _scrollTrackingSub = _scrollViewer.GetObservable(ScrollViewer.OffsetProperty)
             .Subscribe(OnScrollOffsetChanged);
     }
 
     private void OnScrollOffsetChanged(Vector offset)
     {
-        // Пропускаем первое значение (инициализация)
+        // Near-bottom detection для футера
+        UpdateFooterVisibility(offset);
+
+        // Scroll speed tracking для обложек
         if (!_scrollInitialized)
         {
             _scrollInitialized = true;
@@ -367,6 +389,27 @@ public partial class TrackListControl : UserControl
             _scrollSpeedTimer?.Stop();
             _scrollSpeedTimer?.Start();
         }
+    }
+
+    /// <summary>
+    /// Обновляет видимость футера на основе позиции скролла.
+    /// Футер виден только когда ReachedEnd=true И пользователь у нижнего края.
+    /// </summary>
+    private void UpdateFooterVisibility(Vector offset)
+    {
+        if (_scrollViewer == null)
+        {
+            IsFooterVisible = false;
+            return;
+        }
+
+        double distanceToBottom = _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height - offset.Y;
+
+        // "У нижнего края" если осталось меньше порога ИЛИ контент меньше viewport
+        bool isNearBottom = distanceToBottom <= NearBottomThreshold
+                            || _scrollViewer.Extent.Height <= _scrollViewer.Viewport.Height;
+
+        IsFooterVisible = ReachedEnd && isNearBottom;
     }
 
     private void OnScrollSpeedDebounce(object? sender, EventArgs e)
@@ -398,6 +441,18 @@ public partial class TrackListControl : UserControl
             if (change.Property == ItemsProperty)
             {
                 Dispatcher.UIThread.Post(CheckInitialLoad, DispatcherPriority.Background);
+            }
+        }
+        else if (change.Property == ReachedEndProperty)
+        {
+            // При изменении ReachedEnd пересчитываем видимость футера
+            if (_scrollViewer != null)
+            {
+                UpdateFooterVisibility(_scrollViewer.Offset);
+            }
+            else
+            {
+                IsFooterVisible = ReachedEnd;
             }
         }
     }
@@ -720,6 +775,10 @@ public partial class TrackListControl : UserControl
         EndOfListText = l["Search_EndOfList"] ?? "End of list";
     }
 
+    /// <summary>
+    /// Устанавливает контекст (playlist/queue) для каждого элемента коллекции.
+    /// O(N) — вызывается только при смене Items/контекста, не при скролле.
+    /// </summary>
     private void UpdateItemsContext()
     {
         if (Items == null) return;

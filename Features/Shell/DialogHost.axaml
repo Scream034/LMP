@@ -62,7 +62,12 @@
             <!-- DataTemplates для всех типов диалогов -->
             <ContentControl.DataTemplates>
 
-                <!-- ViewModel-based dialogs: DataTemplate → Content UserControl -->
+                <!-- ═══ Универсальный диалог выбора ═══ -->
+                <DataTemplate DataType="{x:Type dialogs:ChoiceDialogViewModel}">
+                    <content:ChoiceDialogContent />
+                </DataTemplate>
+
+                <!-- ═══ ViewModel-based dialogs ═══ -->
                 <DataTemplate DataType="{x:Type dialogs:DeletePlaylistDialogViewModel}">
                     <content:DeletePlaylistDialogContent />
                 </DataTemplate>

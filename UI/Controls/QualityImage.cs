@@ -103,7 +103,6 @@ public static class QualityImage
             var localPath = ResolveLocalPath(url);
             if (localPath != null && File.Exists(localPath))
             {
-                // Декодируем в фоне чтобы не блокировать UI
                 int decodeW = (int)GetQuality(image);
                 var bitmap = await Task.Run(() =>
                 {

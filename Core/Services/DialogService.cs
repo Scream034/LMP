@@ -32,11 +32,6 @@ namespace LMP.Core.Services;
 /// 3. Вызвать dialogHost.ShowAsync() (fire-and-forget)
 /// 4. await tcs.Task для получения результата
 /// </code>
-/// 
-/// <para><b>Почему два шага (TCS + ShowAsync):</b></para>
-/// <para>ShowAsync ожидает закрытия диалога, но нам нужен типизированный результат.
-/// TCS позволяет получить конкретный тип (bool, string?, List и т.д.)
-/// независимо от generic-параметра ShowAsync.</para>
 /// </summary>
 public sealed class DialogService
 {
@@ -54,7 +49,6 @@ public sealed class DialogService
 
     /// <param name="authService">Сервис авторизации — для проверки состояния входа в YouTube.</param>
     /// <param name="notifications">Сервис уведомлений — для toast-сообщений внутри диалогов синхронизации.</param>
-    /// <param name="clipboard">Сервис буфера обмена — для копирования ссылок в диалогах.</param>
     /// <param name="getDialogHost">
     /// Lazy accessor для DialogHostViewModel.
     /// Используется <c>Func</c> вместо прямой инъекции из-за циклической зависимости:
@@ -107,16 +101,78 @@ public sealed class DialogService
 
     #endregion
 
+    #region Generic Choice Dialog (Overlay)
+
+    /// <summary>
+    /// Универсальный диалог выбора с произвольным набором кнопок и опциональным чекбоксом.
+    /// 
+    /// <para><b>Использование:</b></para>
+    /// <code>
+    /// var result = await dialog.ShowChoiceAsync(
+    ///     title: "Close?",
+    ///     message: "What would you like to do?",
+    ///     options: [
+    ///         new() { Text = "Minimize", Value = CloseAction.MinimizeToTray, IsPrimary = true },
+    ///         new() { Text = "Exit", Value = CloseAction.Exit }
+    ///     ],
+    ///     cancelText: "Cancel",
+    ///     checkBoxText: "Remember my choice");
+    /// 
+    /// if (result != null)
+    /// {
+    ///     var action = result.Value.Value;     // CloseAction
+    ///     var remember = result.Value.IsChecked; // bool
+    /// }
+    /// </code>
+    /// </summary>
+    /// <typeparam name="T">Тип значения кнопок.</typeparam>
+    /// <param name="title">Заголовок диалога.</param>
+    /// <param name="message">Текст сообщения (опционально).</param>
+    /// <param name="options">Список кнопок с их значениями.</param>
+    /// <param name="cancelText">Текст кнопки отмены. Null — кнопки Cancel нет.</param>
+    /// <param name="checkBoxText">Текст чекбокса. Null — чекбокс не показывается.</param>
+    /// <returns>
+    /// Результат выбора (Value + IsChecked), или <c>null</c> если пользователь нажал Cancel
+    /// или закрыл диалог иным способом.
+    /// </returns>
+    public async Task<ChoiceResult<T>?> ShowChoiceAsync<T>(
+        string title,
+        string? message,
+        IReadOnlyList<ChoiceOption<T>> options,
+        string? cancelText = null,
+        string? checkBoxText = null)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<ChoiceResult<T>?>();
+
+        var vm = ChoiceDialogViewModel.Create(
+            title: title,
+            message: message,
+            options: options,
+            onResult: (value, isChecked) =>
+            {
+                tcs.TrySetResult(new ChoiceResult<T>(value, isChecked));
+                host.CloseDialog(value);
+            },
+            onCancel: () =>
+            {
+                tcs.TrySetResult(null);
+                host.CloseDialog();
+            },
+            cancelText: cancelText,
+            checkBoxText: checkBoxText);
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
+    }
+
+    #endregion
+
     #region Basic Dialogs (Overlay)
 
     /// <summary>
     /// Показывает диалог подтверждения (Yes/No, OK/Cancel).
     /// </summary>
-    /// <param name="title">Заголовок.</param>
-    /// <param name="message">Текст сообщения.</param>
-    /// <param name="confirmText">Текст кнопки подтверждения.</param>
-    /// <param name="cancelText">Текст кнопки отмены.</param>
-    /// <returns><c>true</c> если подтверждено, <c>false</c> если отменено.</returns>
     public async Task<bool> ConfirmAsync(
         string title, string message,
         string confirmText, string cancelText)
@@ -145,9 +201,6 @@ public sealed class DialogService
     /// <summary>
     /// Показывает информационный диалог с одной кнопкой.
     /// </summary>
-    /// <param name="title">Заголовок.</param>
-    /// <param name="message">Текст сообщения.</param>
-    /// <param name="buttonText">Текст кнопки закрытия.</param>
     public async Task ShowInfoAsync(string title, string message, string buttonText)
     {
         var host = _getDialogHost();
@@ -174,10 +227,6 @@ public sealed class DialogService
     /// <summary>
     /// Показывает диалог ввода текста.
     /// </summary>
-    /// <param name="title">Заголовок.</param>
-    /// <param name="prompt">Подсказка над полем ввода.</param>
-    /// <param name="watermark">Placeholder в поле ввода.</param>
-    /// <returns>Введённый текст, или <c>null</c> при отмене.</returns>
     public async Task<string?> ShowInputAsync(
         string title, string prompt, string? watermark = null)
     {
@@ -201,9 +250,7 @@ public sealed class DialogService
     /// Показывает системный диалог выбора папки.
     /// Это единственный диалог использующий нативный OS picker.
     /// </summary>
-    /// <param name="startPath">Начальный путь (опционально).</param>
-    /// <returns>Выбранный путь, или <c>null</c> при отмене.</returns>
-    public async Task<string?> SelectFolderAsync(string? startPath = null)
+    public static async Task<string?> SelectFolderAsync(string? startPath = null)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -229,13 +276,42 @@ public sealed class DialogService
 
     #endregion
 
+    #region Close Action Dialog
+
+    /// <summary>
+    /// Показывает диалог "Что сделать при закрытии?" через универсальный ChoiceDialog.
+    /// </summary>
+    /// <returns>Результат выбора или null если отменено.</returns>
+    public async Task<ChoiceResult<CloseAction>?> ShowCloseActionDialogAsync()
+    {
+        return await ShowChoiceAsync(
+            title: L["Dialog_CloseAction_Title"] ?? "Close application?",
+            message: L["Dialog_CloseAction_Message"] ?? "What would you like to do?",
+            options:
+            [
+                new ChoiceOption<CloseAction>
+                {
+                    Text = L["Dialog_CloseAction_Tray"] ?? "Minimize to tray",
+                    Value = CloseAction.MinimizeToTray,
+                    IsPrimary = true
+                },
+                new ChoiceOption<CloseAction>
+                {
+                    Text = L["Dialog_CloseAction_Exit"] ?? "Exit",
+                    Value = CloseAction.Exit
+                }
+            ],
+            cancelText: L["Common_Cancel"] ?? "Cancel",
+            checkBoxText: L["Dialog_CloseAction_Remember"] ?? "Remember my choice");
+    }
+
+    #endregion
+
     #region Playlist Dialogs (Overlay)
 
     /// <summary>
     /// Диалог создания нового плейлиста.
-    /// Включает PlaylistEditorControl и опциональный переключатель синхронизации.
     /// </summary>
-    /// <returns>Результат создания, или <c>null</c> при отмене.</returns>
     public async Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync()
     {
         var host = _getDialogHost();
@@ -256,11 +332,7 @@ public sealed class DialogService
 
     /// <summary>
     /// Диалог удаления плейлиста.
-    /// Предлагает удалить только локально или также из YouTube.
     /// </summary>
-    /// <param name="playlist">Удаляемый плейлист.</param>
-    /// <param name="isAuthenticated">Авторизован ли пользователь (влияет на доступность опции «удалить из облака»).</param>
-    /// <returns>Выбранный вариант удаления, или <c>null</c> при отмене.</returns>
     public async Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(
         Playlist playlist, bool isAuthenticated)
     {
@@ -283,8 +355,6 @@ public sealed class DialogService
     /// <summary>
     /// Диалог «Добавить трек в плейлист» — список плейлистов с чекбоксами.
     /// </summary>
-    /// <param name="track">Трек для добавления.</param>
-    /// <returns>Список ID плейлистов. Пустой при отмене.</returns>
     public async Task<List<string>> ShowAddToPlaylistDialogAsync(TrackInfo track)
     {
         var host = _getDialogHost();
@@ -309,17 +379,13 @@ public sealed class DialogService
     }
 
     /// <summary>
-    /// Диалог редактирования плейлиста: название, обложка, описание, цвет, синхронизация.
-    /// Загружает до 200 треков для CoverPicker (выбор мозаики из обложек треков).
+    /// Диалог редактирования плейлиста.
     /// </summary>
-    /// <param name="playlist">Редактируемый плейлист.</param>
-    /// <returns>Результат редактирования, или <c>null</c> при отмене.</returns>
     public async Task<EditPlaylistResult?> ShowEditPlaylistDialogAsync(Playlist playlist)
     {
         var host = _getDialogHost();
         var tcs = new TaskCompletionSource<EditPlaylistResult?>();
 
-        // Загружаем треки для CoverPicker (мозаика из обложек)
         IReadOnlyList<TrackInfo>? tracks = null;
         try
         {
@@ -353,13 +419,8 @@ public sealed class DialogService
     #region Sync Dialogs (Overlay)
 
     /// <summary>
-    /// Диалог массовой синхронизации: выбор плейлистов + разрешение конфликтов.
-    /// Включает поиск, глобальные шаблоны действий и копирование ссылок.
+    /// Диалог массовой синхронизации.
     /// </summary>
-    /// <param name="items">Плейлисты с YouTube для выбора.</param>
-    /// <param name="existingLocalNames">Имена локальных плейлистов — для определения конфликтов.</param>
-    /// <param name="trackCounts">Словарь {YouTubePlaylistId → кол-во треков} (опционально).</param>
-    /// <returns>Список решений (Skip-элементы исключены). Пустой при отмене.</returns>
     public async Task<List<SyncDecision>> ShowSyncSelectionAsync(
         IEnumerable<PlaylistSearchResult> items,
         ISet<string> existingLocalNames,
@@ -384,10 +445,8 @@ public sealed class DialogService
     }
 
     /// <summary>
-    /// Диалог синхронизации одного плейлиста: preview различий + выбор стратегии.
+    /// Диалог синхронизации одного плейлиста.
     /// </summary>
-    /// <param name="preview">Снимок различий между локальным и облачным состоянием.</param>
-    /// <returns>Опции синхронизации, или <c>null</c> при отмене.</returns>
     public async Task<PlaylistSyncOptions?> ShowPlaylistSyncDialogAsync(
         PlaylistSyncPreview preview)
     {
@@ -413,11 +472,8 @@ public sealed class DialogService
 
     /// <summary>
     /// Диалог ожидания bot detection cooldown.
-    /// 
     /// <para><b>МОДАЛЬНЫЙ:</b> блокирует ВСЁ окно включая TopBar.</para>
-    /// <para>Синглтон — повторные вызовы обновляют существующий диалог.</para>
     /// </summary>
-    /// <param name="waitTime">Начальное время ожидания.</param>
     public async Task ShowBotDetectionCooldownAsync(TimeSpan waitTime)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -464,8 +520,7 @@ public sealed class DialogService
     /// Диалог ошибки недоступности стрима.
     /// <para><b>МОДАЛЬНЫЙ:</b> блокирует ВСЁ окно.</para>
     /// </summary>
-    /// <param name="exception">Исключение с деталями ошибки.</param>
-    public async Task ShowStreamUnavailableAsync(StreamUnavailableException exception)
+    public static async Task ShowStreamUnavailableAsync(StreamUnavailableException exception)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -482,7 +537,7 @@ public sealed class DialogService
     /// Диалог общей ошибки воспроизведения.
     /// <para><b>МОДАЛЬНЫЙ:</b> блокирует ВСЁ окно.</para>
     /// </summary>
-    public async Task ShowPlaybackErrorAsync(
+    public static async Task ShowPlaybackErrorAsync(
         string videoId, string errorMessage, Exception? exception = null)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -498,9 +553,7 @@ public sealed class DialogService
 
     /// <summary>
     /// Диалог требования авторизации.
-    /// Показывается как overlay — некритичная ошибка.
     /// </summary>
-    /// <param name="exception">Исключение с типом требуемой авторизации.</param>
     public Task ShowLoginRequiredAsync(LoginRequiredException exception) =>
         ShowInfoAsync(
             L["Dialog_Login_Title"],
@@ -509,3 +562,9 @@ public sealed class DialogService
 
     #endregion
 }
+
+/// <summary>
+/// Результат диалога выбора: выбранное значение + состояние чекбокса.
+/// </summary>
+/// <typeparam name="T">Тип выбранного значения.</typeparam>
+public sealed record ChoiceResult<T>(T Value, bool IsChecked);

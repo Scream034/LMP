@@ -283,7 +283,7 @@ public class SyncItemViewModel : ReactiveObject
     public List<SyncActionOption> AvailableActions { get; }
     [Reactive] public SyncActionOption? SelectedOption { get; set; }
     public MergeAction SelectedAction => SelectedOption?.Action ?? MergeAction.Skip;
-    public LocalizationService L => LocalizationService.Instance;
+    public static LocalizationService L => LocalizationService.Instance;
 
     /// <summary>
     /// Команда копирования YouTube-ссылки в буфер обмена.

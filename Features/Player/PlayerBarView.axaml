@@ -210,18 +210,53 @@
                     Orientation="Horizontal"
                     Spacing="2">
 
-                    <!-- Shuffle -->
-                    <Button
-                        Width="40" Height="40"
-                        Classes="playback-btn"
-                        Classes.active="{Binding ShuffleEnabled}"
-                        Command="{Binding ShuffleQueueCommand}"
-                        CornerRadius="20"
-                        ToolTip.Tip="{Binding ShuffleTooltip}"
-                        ToolTip.Placement="Top"
-                        ToolTip.VerticalOffset="-6">
-                        <mi:MaterialIcon Width="18" Height="18" Kind="Shuffle" />
-                    </Button>
+                    <!-- Shuffle: ЛКМ = shuffle now, ПКМ = toggle auto-shuffle -->
+                    <Panel>
+                        <Button
+                            x:Name="ShuffleButton"
+                            Width="40" Height="40"
+                            Classes="playback-btn"
+                            Classes.active="{Binding IsShuffleAnimating}"
+                            Classes.auto-enabled="{Binding AutoShuffleEnabled}"
+                            Command="{Binding ShuffleQueueCommand}"
+                            CornerRadius="20"
+                            ToolTip.Tip="{Binding ShuffleTooltip}"
+                            ToolTip.Placement="Top"
+                            ToolTip.VerticalOffset="-6"
+                            PointerPressed="OnShuffleButtonPressed">
+                            <Panel>
+                                <mi:MaterialIcon Width="18" Height="18" Kind="Shuffle" />
+                                <!-- Индикатор auto-shuffle (точка) -->
+                                <Ellipse
+                                    Width="6" Height="6"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Bottom"
+                                    Margin="0,0,4,4"
+                                    Fill="{DynamicResource AccentBrush}"
+                                    IsVisible="{Binding AutoShuffleEnabled}" />
+                            </Panel>
+                        </Button>
+                        <!-- Shuffle Hint Popup -->
+                        <Popup
+                            HorizontalOffset="-30"
+                            IsLightDismissEnabled="False"
+                            IsOpen="{Binding IsShuffleHintVisible}"
+                            Placement="Top"
+                            PlacementTarget="{Binding #ShuffleButton}"
+                            VerticalOffset="-8">
+                            <Border Classes="mode-hint"
+                                Classes.visible="{Binding IsShuffleHintVisible}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <mi:MaterialIcon Width="14" Height="14"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Kind="Shuffle" />
+                                    <TextBlock FontSize="12" FontWeight="SemiBold"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Text="{Binding ShuffleHintText}" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Panel>
 
                     <!-- Previous -->
                     <Button

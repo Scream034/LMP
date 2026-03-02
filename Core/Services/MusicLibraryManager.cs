@@ -28,28 +28,40 @@ public class MusicLibraryManager : ReactiveObject
 
     #region Likes
 
+    /// <summary>
+    /// Переключает состояние лайка с синхронизацией YouTube.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Исправление double-toggle:</b></para>
+    /// <para>Раньше: определяли newStatus, отправляли в YouTube, затем вызывали ToggleLikeAsync
+    /// который делал ещё один toggle → состояние не менялось.</para>
+    /// <para>Теперь: используем SetLikeStateAsync с явным целевым состоянием.</para>
+    /// </remarks>
     public async Task ToggleLikeAsync(TrackInfo track, CancellationToken ct = default)
     {
+        // Получаем канонический объект из registry для консистентного состояния
+        var canonical = _library.GetTrack(track.Id) ?? track;
+        
+        // Определяем ЦЕЛЕВОЕ состояние ДО любых операций
+        bool targetLikedState = !canonical.IsLiked;
+
         if (_auth.IsAuthenticated)
         {
             try
             {
-                bool newStatus = !track.IsLiked;
-                await _youtube.LikeTrackAsync(track.Id, newStatus);
-                await _library.ToggleLikeAsync(track, ct);
-                Log.Info($"[Sync] Track {track.Id} liked={newStatus} on YouTube.");
+                // Сначала синхронизируем с YouTube
+                await _youtube.LikeTrackAsync(track.Id, targetLikedState);
+                Log.Info($"[Sync] Track {track.Id} liked={targetLikedState} synced to YouTube");
             }
             catch (Exception ex)
             {
-                Log.Error($"[Sync] Failed to sync like: {ex.Message}");
-                // Всё равно переключаем локально
-                await _library.ToggleLikeAsync(track, ct);
+                Log.Error($"[Sync] Failed to sync like to YouTube: {ex.Message}");
+                // Продолжаем с локальным обновлением даже при ошибке YouTube
             }
         }
-        else
-        {
-            await _library.ToggleLikeAsync(track, ct);
-        }
+
+        // Устанавливаем КОНКРЕТНОЕ состояние (не toggle!) — избегаем double-toggle
+        await _library.SetLikeStateAsync(track, targetLikedState, ct);
     }
 
     public async Task SyncLikedTracksAsync(CancellationToken ct = default)
@@ -189,7 +201,7 @@ public class MusicLibraryManager : ReactiveObject
 
             // Filter YouTube track IDs and extract raw IDs
             var rawVideoIds = new List<string>(trackIds.Count);
-            var localTrackIds = new List<string>(trackIds.Count); // parallel list for DB updates
+            var localTrackIds = new List<string>(trackIds.Count);
             for (int i = 0; i < trackIds.Count; i++)
             {
                 if (trackIds[i].StartsWith("yt_"))
@@ -208,15 +220,13 @@ public class MusicLibraryManager : ReactiveObject
             localPl.SyncMode = PlaylistSyncMode.TwoWaySync;
             await _library.AddOrUpdatePlaylistAsync(localPl, ct);
 
-            // If tracks were included in create, we don't have setVideoIds from create response.
-            // Fetch them in background for future removal support.
+            // Fetch setVideoIds in background
             if (rawVideoIds.Count > 0)
             {
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        // Small delay to let YouTube process the playlist
                         await Task.Delay(1000);
 
                         var remoteItems = await _youtube.GetPlaylistItemsWithSetVideoIdAsync(ytId);
@@ -255,7 +265,6 @@ public class MusicLibraryManager : ReactiveObject
 
         await _library.AddOrUpdateTrackAsync(track, ct);
 
-        // BUG 2 FIX: Check DB instead of transient TrackIds
         bool alreadyInPlaylist = await _library.IsTrackInPlaylistAsync(track.Id, playlistId, ct);
         if (!alreadyInPlaylist)
             await _library.AddTrackToPlaylistAsync(track, playlistId, ct);
@@ -269,7 +278,6 @@ public class MusicLibraryManager : ReactiveObject
             {
                 var setVideoId = await _youtube.AddToPlaylistAsync(playlist.YoutubeId, track.Id);
 
-                // Persist setVideoId for future removal support (BUG 3)
                 if (!string.IsNullOrEmpty(setVideoId))
                 {
                     await _library.UpdateSetVideoIdAsync(playlistId, track.Id, setVideoId, ct);
@@ -287,7 +295,6 @@ public class MusicLibraryManager : ReactiveObject
     {
         var playlist = await _library.GetPlaylistAsync(playlistId, ct);
 
-        // Grab setVideoId BEFORE removing from local DB
         string? setVideoId = null;
         bool needsYoutubeSync = playlist != null
             && playlist.SyncMode == PlaylistSyncMode.TwoWaySync
@@ -298,7 +305,6 @@ public class MusicLibraryManager : ReactiveObject
         {
             setVideoId = await _library.GetSetVideoIdAsync(playlistId, trackId, ct);
 
-            // On-demand fetch if setVideoId not in local DB
             if (string.IsNullOrEmpty(setVideoId))
             {
                 Log.Info($"[Sync] No cached setVideoId for {trackId}, fetching from YouTube...");
@@ -325,7 +331,6 @@ public class MusicLibraryManager : ReactiveObject
                             }
                         }
 
-                        // Batch update all setVideoIds in DB
                         await _library.UpdateSetVideoIdsAsync(playlistId, mappings, ct);
 
                         setVideoId = targetSetVideoId;
@@ -379,7 +384,6 @@ public class MusicLibraryManager : ReactiveObject
         var pl = await _library.GetPlaylistAsync(playlistId, ct);
         if (pl == null) return;
 
-        // BUG 2 FIX: Read track IDs from DB
         var trackIds = await _library.GetPlaylistTrackIdsAsync(playlistId, ct);
 
         var copy = new Playlist
@@ -402,7 +406,6 @@ public class MusicLibraryManager : ReactiveObject
         var target = await _library.GetPlaylistAsync(targetId, ct);
         if (source == null || target == null || !target.IsLocal) return false;
 
-        // BUG 2 FIX: Read track IDs from DB
         var sourceTrackIds = await _library.GetPlaylistTrackIdsAsync(sourceId, ct);
         var targetTrackIds = await _library.GetPlaylistTrackIdsAsync(targetId, ct);
         var existing = new HashSet<string>(targetTrackIds, StringComparer.Ordinal);
