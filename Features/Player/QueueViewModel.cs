@@ -16,7 +16,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly TrackViewModelFactory _vmFactory;
-    private readonly IDialogService _dialog;
+    private readonly DialogService _dialog;
     private readonly MusicLibraryManager _manager;
 
     private bool _isMovingInternally;
@@ -61,7 +61,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     public QueueViewModel(
         AudioEngine audio,
         DownloadService downloads,
-        IDialogService dialog,
+        DialogService dialog,
         MusicLibraryManager manager,
         TrackViewModelFactory vmFactory)
     {

@@ -7,6 +7,7 @@ namespace LMP.Core.Services;
 /// <summary>
 /// Извлекает доминантный цвет из обложек для градиентных фонов.
 /// Алгоритм: загрузить → resize 50x50 → фильтрация по L → вес по S → усреднение.
+/// Поддерживает HTTP/HTTPS URL и локальные файлы.
 /// </summary>
 public sealed class DominantColorService
 {
@@ -31,6 +32,7 @@ public sealed class DominantColorService
     /// <summary>
     /// Получает доминантный цвет из изображения.
     /// Кэшируется в памяти по URL.
+    /// Поддерживает HTTP/HTTPS URL и локальные файлы.
     /// </summary>
     public async Task<Color?> GetDominantColorAsync(string? imageUrl, CancellationToken ct = default)
     {
@@ -64,44 +66,69 @@ public sealed class DominantColorService
     }
 
     /// <summary>
-    /// Загружает изображение через disk-cache ImageCacheService
-    /// и декодирует напрямую через SkiaSharp (без Avalonia Bitmap).
+    /// Загружает изображение и извлекает доминантный цвет.
+    /// Поддерживает HTTP/HTTPS URL и локальные файлы.
     /// </summary>
     private async Task<Color?> ExtractColorAsync(string imageUrl, CancellationToken ct)
     {
-        // Путь к файлу на диске через рефлексию hash-метода ImageCacheService
-        // Или загружаем сами напрямую
         byte[]? imageData = null;
 
-        // Пробуем загрузить из disk-cache ImageCacheService
-        // ImageCacheService хранит файлы в G.Folder.ImageCache с именем = SHA256(url)[..32]
-        var diskKey = GetDiskCacheKey(imageUrl);
-        var diskPath = Path.Combine(G.Folder.ImageCache, diskKey);
-
-        if (File.Exists(diskPath))
+        // ═══ ЛОКАЛЬНЫЙ ФАЙЛ ═══
+        if (IsLocalPath(imageUrl))
         {
-            imageData = await File.ReadAllBytesAsync(diskPath, ct);
+            var localPath = ResolveLocalPath(imageUrl);
+            if (localPath != null && File.Exists(localPath))
+            {
+                try
+                {
+                    imageData = await File.ReadAllBytesAsync(localPath, ct);
+                    Log.Debug($"[DominantColor] Loaded from local file: {localPath[..Math.Min(60, localPath.Length)]}");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[DominantColor] Failed to read local file: {ex.Message}");
+                    return null;
+                }
+            }
+            else
+            {
+                Log.Warn($"[DominantColor] Local file not found: {imageUrl[..Math.Min(60, imageUrl.Length)]}");
+                return null;
+            }
         }
+        // ═══ HTTP/HTTPS URL ═══
         else
         {
-            // Сначала попросим ImageCacheService загрузить (это создаст файл на диске)
-            var bitmap = await _imageCache.GetImageAsync(imageUrl, ImageQuality.Low, ct);
+            // Пробуем загрузить из disk-cache ImageCacheService
+            var diskKey = GetDiskCacheKey(imageUrl);
+            var diskPath = Path.Combine(G.Folder.ImageCache, diskKey);
 
-            // Теперь файл должен быть на диске
             if (File.Exists(diskPath))
             {
                 imageData = await File.ReadAllBytesAsync(diskPath, ct);
             }
             else
             {
-                // Fallback: скачиваем сами
-                try
+                // Сначала попросим ImageCacheService загрузить (это создаст файл на диске)
+                var bitmap = await _imageCache.GetImageAsync(imageUrl, ImageQuality.Low, ct);
+
+                // Теперь файл должен быть на диске
+                if (File.Exists(diskPath))
                 {
-                    imageData = await _http.GetByteArrayAsync(imageUrl, ct);
+                    imageData = await File.ReadAllBytesAsync(diskPath, ct);
                 }
-                catch
+                else
                 {
-                    return null;
+                    // Fallback: скачиваем сами
+                    try
+                    {
+                        imageData = await _http.GetByteArrayAsync(imageUrl, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[DominantColor] HTTP download failed: {ex.Message}");
+                        return null;
+                    }
                 }
             }
         }
@@ -128,6 +155,42 @@ public sealed class DominantColorService
 
             return (Color?)AnalyzePixels(resized);
         }, ct);
+    }
+
+    /// <summary>
+    /// Проверяет, является ли URL локальным путём.
+    /// </summary>
+    private static bool IsLocalPath(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+
+        // file:// URI
+        if (url.StartsWith(Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Абсолютный путь Windows (C:\...) или Unix (/home/...)
+        if (Path.IsPathRooted(url))
+            return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Преобразует file:// URI или абсолютный путь в локальный путь.
+    /// </summary>
+    private static string? ResolveLocalPath(string url)
+    {
+        if (url.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Uri.TryCreate(url, UriKind.Absolute, out var fileUri))
+                return fileUri.LocalPath;
+            return null;
+        }
+
+        if (Path.IsPathRooted(url))
+            return url;
+
+        return null;
     }
 
     /// <summary>

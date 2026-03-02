@@ -34,19 +34,6 @@ class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
 
-        // ═══════════════════════════════════════════════════════════════
-        // КРИТИЧНО: Регистрируем обработчики исключений ДО всего остального.
-        //
-        // SocketsHttpHandler (HTTP/2 + TLS) может выбросить IOException 
-        // в SslStream.EnsureFullTlsFrameAsync на IO completion thread
-        // при отмене HTTP запросов (seek, epoch reset, dispose).
-        // Это known .NET runtime behavior — исключение невозможно поймать
-        // в user code, потому что оно происходит внутри runtime.
-        //
-        // Без этих обработчиков:
-        // - Debug: отладчик останавливается на first-chance exception  
-        // - Release: приложение крашится с необработанным исключением
-        // ═══════════════════════════════════════════════════════════════
         SetupGlobalExceptionHandlers();
 
         try
@@ -66,8 +53,8 @@ class Program
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
-            // ═══ ЭТАП 5: Eager services ═══
-            InitializeEagerServices();
+            // ═══ ЭТАП 5: КРИТИЧНО — Мигрировать БД ДО создания сервисов ═══
+            MigrateDatabaseSync();
 
             // ═══ ЭТАП 6: Avalonia ═══
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
@@ -75,6 +62,31 @@ class Program
         catch (Exception ex)
         {
             Log.Fatal($"Global crash: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+
+    /// <summary>
+    /// Синхронно выполняет миграцию БД ДО старта Avalonia и создания сервисов.
+    /// Гарантирует что NotificationService и LibraryService найдут готовую схему.
+    /// </summary>
+    private static void MigrateDatabaseSync()
+    {
+        try
+        {
+            var dbFactory = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>();
+            using var ctx = dbFactory.CreateDbContext();
+
+            ctx.Database.EnsureCreated();
+            ctx.MigrateSchemaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
+            ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+            Log.Info("[DB] Schema migration complete");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[DB] Migration failed: {ex.Message}");
+            throw;
         }
     }
 
@@ -183,33 +195,6 @@ class Program
 #endif
             .UseReactiveUI();
 
-    private static void InitializeEagerServices()
-    {
-        try
-        {
-            var orchestrator = Services.GetRequiredService<PlaybackErrorOrchestrator>();
-            Log.Info("[Startup] PlaybackErrorOrchestrator ready");
-
-            var notifications = Services.GetRequiredService<NotificationService>();
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await notifications.InitializeAsync();
-                    Log.Info("[Startup] NotificationService history loaded");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"[Startup] NotificationService.InitializeAsync failed: {ex.Message}");
-                }
-            });
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Startup] Eager service initialization failed: {ex.Message}");
-        }
-    }
-
     private static void ConfigureServices(IServiceCollection services)
     {
         Log.Info("Configuring services...");
@@ -252,12 +237,31 @@ class Program
         services.AddSingleton<YoutubeProvider>();
         services.AddSingleton<YoutubeUserDataService>();
         services.AddSingleton<MusicLibraryManager>();
-        services.AddSingleton<IDialogService, DialogService>();
-        services.AddSingleton<IClipboardService, ClipboardService>();
+
+        services.AddSingleton<DialogHostViewModel>();
+
+        services.AddSingleton(sp =>
+        {
+            var auth = sp.GetRequiredService<CookieAuthService>();
+            var notifications = sp.GetRequiredService<NotificationService>();
+
+            // Lazy accessor — избегаем циклической зависимости
+            // MainWindowViewModel создаётся позже, чем DialogService
+            DialogHostViewModel GetDialogHost()
+            {
+                var mainWindow = sp.GetRequiredService<MainWindowViewModel>();
+                return mainWindow.DialogHost;
+            }
+
+            return new DialogService(auth, notifications, GetDialogHost);
+        });
 
         services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));
         services.AddSingleton<SigCipherDecryptor>();
         services.AddSingleton<NTokenDecryptor>();
+
+        services.AddSingleton<PlaylistSyncService>();
+        services.AddSingleton<PlaylistEditService>();
 
         // === Caching ===
         services.AddSingleton<SearchCacheService>();
@@ -287,7 +291,6 @@ class Program
         services.AddTransient<QueueViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<PlaylistViewModel>();
-        services.AddTransient<MergeConflictViewModel>();
         services.AddTransient<SyncSelectionViewModel>();
         services.AddSingleton<TrackViewModelFactory>();
 

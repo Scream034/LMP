@@ -187,32 +187,52 @@ public sealed class BitmapAssetValueConverter : IValueConverter
     {
         if (value is string uriStr && !string.IsNullOrEmpty(uriStr))
         {
+            // 1. HTTP/HTTPS — пропускаем (обрабатывается AsyncImageLoader)
             if (uriStr.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 return null;
 
-            if (uriStr.StartsWith("avares://"))
+            try
             {
-                try
+                // 2. avares:// — ресурсы Avalonia
+                if (uriStr.StartsWith("avares://"))
                 {
                     var uri = new Uri(uriStr);
-                    if (!AssetLoader.Exists(uri)) return null;
-
-                    using var stream = AssetLoader.Open(uri);
-                    return new Bitmap(stream);
-                }
-                catch (Exception)
-                {
+                    if (AssetLoader.Exists(uri))
+                    {
+                        using var stream = AssetLoader.Open(uri);
+                        return new Bitmap(stream);
+                    }
                     return null;
                 }
+
+                // 3. file:// URI — конвертируем в локальный путь
+                if (uriStr.StartsWith(Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Uri.TryCreate(uriStr, UriKind.Absolute, out var fileUri))
+                    {
+                        uriStr = fileUri.LocalPath;
+                    }
+                }
+
+                // 4. Локальный путь к файлу
+                if (Path.IsPathRooted(uriStr) && File.Exists(uriStr))
+                {
+                    // ВАЖНО: Используем FileStream с FileShare.Read чтобы не блокировать файл
+                    using var stream = new FileStream(uriStr, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    return new Bitmap(stream);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[BitmapConverter] Failed to load image '{uriStr}': {ex.Message}");
+                return null;
             }
         }
         return null;
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        throw new NotImplementedException();
-    }
+        => throw new NotImplementedException();
 }
 
 public sealed class StringStartsWithConverter : IValueConverter
@@ -223,15 +243,21 @@ public sealed class StringStartsWithConverter : IValueConverter
     {
         if (value is string s && parameter is string prefix)
         {
-            return s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            bool negate = false;
+            if (prefix.StartsWith('!'))
+            {
+                negate = true;
+                prefix = prefix[1..];
+            }
+
+            bool result = s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            return negate ? !result : result;
         }
         return false;
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        throw new NotImplementedException();
-    }
+        => throw new NotImplementedException();
 }
 
 public sealed class WebUrlConverter : IValueConverter
@@ -257,8 +283,8 @@ public sealed class ProgressToWidthConverter : IMultiValueConverter
 {
     public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
     {
-        if (values.Count >= 2 && 
-            values[0] is double progress && 
+        if (values.Count >= 2 &&
+            values[0] is double progress &&
             values[1] is double containerWidth)
         {
             return Math.Max(0, containerWidth * progress);
@@ -296,8 +322,8 @@ public sealed class RepeatModeIconConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        return value is RepeatMode mode && mode == RepeatMode.RepeatOne 
-            ? MaterialIconKind.RepeatOne 
+        return value is RepeatMode mode && mode == RepeatMode.RepeatOne
+            ? MaterialIconKind.RepeatOne
             : MaterialIconKind.Repeat;
     }
 
@@ -379,7 +405,7 @@ public sealed class BoolToFontWeightConverter : IValueConverter
         return FontWeight.Normal;
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) 
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotImplementedException();
 }
 
@@ -404,7 +430,7 @@ public sealed class BoolToIconConverter : IValueConverter
         return MaterialIconKind.Help; // fallback
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) 
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotImplementedException();
 }
 
@@ -427,7 +453,7 @@ public sealed class WindowButtonVisibilityConverter : IValueConverter
         return true;
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) 
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotImplementedException();
 }
 

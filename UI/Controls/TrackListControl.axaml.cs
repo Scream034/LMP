@@ -397,7 +397,7 @@ public partial class TrackListControl : UserControl
 
             if (change.Property == ItemsProperty)
             {
-                Dispatcher.UIThread.Post(() => CheckInitialLoad(), DispatcherPriority.Background);
+                Dispatcher.UIThread.Post(CheckInitialLoad, DispatcherPriority.Background);
             }
         }
     }

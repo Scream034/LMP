@@ -1,151 +1,302 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:d="using:LMP.UI.Dialogs"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             xmlns:asyncImage="using:AsyncImageLoader"
-             x:Class="LMP.UI.Controls.PlaylistEditorControl"
-             x:DataType="d:PlaylistEditorViewModel"
-             x:CompileBindings="True">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="using:LMP.UI.Dialogs"
+    xmlns:controls="using:LMP.UI.Controls"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    xmlns:asyncImage="using:AsyncImageLoader"
+    x:Class="LMP.UI.Controls.PlaylistEditorControl"
+    x:DataType="d:PlaylistEditorViewModel"
+    x:CompileBindings="True">
 
-    <StackPanel Spacing="16">
+    <StackPanel Spacing="14">
 
         <!-- ═══ Name ═══ -->
-        <StackPanel Spacing="6">
+        <StackPanel Spacing="5">
             <TextBlock Text="{Binding L[EditPlaylist_Name]}"
-                       FontSize="13" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                FontSize="13" FontWeight="SemiBold"
+                Foreground="{DynamicResource TextSecondaryBrush}" />
             <TextBox Text="{Binding Name, Mode=TwoWay}"
-                     Watermark="{Binding L[Library_PlaylistNameHint]}" />
+                Watermark="{Binding L[Library_PlaylistNameHint]}" />
         </StackPanel>
 
-        <!-- ═══ Thumbnail URL + Preview ═══ -->
-        <StackPanel Spacing="6">
+        <!-- ═══ Description ═══ -->
+        <StackPanel Spacing="5">
+            <TextBlock Text="{Binding L[EditPlaylist_Description]}"
+                FontSize="13" FontWeight="SemiBold"
+                Foreground="{DynamicResource TextSecondaryBrush}" />
+            <TextBox Text="{Binding Description, Mode=TwoWay}"
+                Watermark="{Binding L[EditPlaylist_DescriptionHint]}"
+                AcceptsReturn="True"
+                TextWrapping="Wrap"
+                MinHeight="48"
+                MaxHeight="80"
+                FontSize="12" />
+        </StackPanel>
+
+        <!-- ═══ Thumbnail Section ═══ -->
+        <StackPanel Spacing="5">
             <TextBlock Text="{Binding L[EditPlaylist_Cover]}"
-                       FontSize="13" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextSecondaryBrush}" />
-            <Grid ColumnDefinitions="*, Auto">
-                <TextBox Grid.Column="0"
-                         Text="{Binding ThumbnailUrl, Mode=TwoWay}"
-                         Watermark="https://..." />
-                <Border Grid.Column="1"
-                        Width="40" Height="40"
-                        CornerRadius="6" ClipToBounds="True"
-                        Margin="8,0,0,0"
-                        Background="{DynamicResource BgSkeletonBrush}">
-                    <Panel>
-                        <mi:MaterialIcon Kind="ImageOutline"
-                                         Width="20" Height="20"
-                                         Foreground="{DynamicResource TextMutedBrush}"
-                                         HorizontalAlignment="Center"
-                                         VerticalAlignment="Center"
-                                         IsVisible="{Binding !HasThumbnailPreview}" />
-                        <Image asyncImage:ImageLoader.Source="{Binding ThumbnailPreviewUrl}"
-                               Stretch="UniformToFill"
-                               Width="40" Height="40"
-                               IsVisible="{Binding HasThumbnailPreview}" />
-                    </Panel>
-                </Border>
-            </Grid>
+                FontSize="13" FontWeight="SemiBold"
+                Foreground="{DynamicResource TextSecondaryBrush}" />
+
+            <Border Background="{DynamicResource BgElevatedBrush}"
+                CornerRadius="8"
+                Padding="12">
+                <StackPanel Spacing="10">
+
+                    <!-- Переключатель вкладок -->
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                        IsVisible="{Binding ShowCoverModeSwitch}">
+                        <Button Padding="10,5" FontSize="11" CornerRadius="12"
+                            Command="{Binding SetCoverModeUrl}"
+                            Classes.ghost-btn="{Binding !IsCoverModeUrl}"
+                            Classes.accent="{Binding IsCoverModeUrl}"
+                            Classes.accent-base="{Binding IsCoverModeUrl}">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <mi:MaterialIcon Kind="Link" Width="13" Height="13" />
+                                <TextBlock Text="URL" FontSize="11" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button Padding="10,5" FontSize="11" CornerRadius="12"
+                            Command="{Binding SetCoverModeFromTracks}"
+                            IsVisible="{Binding HasTracksCoverOption}"
+                            Classes.ghost-btn="{Binding !IsCoverModeFromTracks}"
+                            Classes.accent="{Binding IsCoverModeFromTracks}"
+                            Classes.accent-base="{Binding IsCoverModeFromTracks}">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <mi:MaterialIcon Kind="ImageMultipleOutline" Width="13" Height="13" />
+                                <TextBlock Text="{Binding L[CoverPicker_Tab]}" FontSize="11" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button Padding="10,5" FontSize="11" CornerRadius="12"
+                            Command="{Binding SetCoverModeFile}"
+                            Classes.ghost-btn="{Binding !IsCoverModeFile}"
+                            Classes.accent="{Binding IsCoverModeFile}"
+                            Classes.accent-base="{Binding IsCoverModeFile}">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <mi:MaterialIcon Kind="FileImageOutline" Width="13" Height="13" />
+                                <TextBlock Text="{Binding L[CoverPicker_FileTab]}" FontSize="11" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- ═══ URL ═══ -->
+                    <Grid ColumnDefinitions="*, Auto"
+                        IsVisible="{Binding IsCoverModeUrl}">
+                        <TextBox Grid.Column="0"
+                            Text="{Binding ThumbnailUrl, Mode=TwoWay}"
+                            Watermark="https://..."
+                            FontSize="12" />
+                        <Border Grid.Column="1"
+                            Width="36" Height="36"
+                            CornerRadius="6" ClipToBounds="True"
+                            Margin="8,0,0,0"
+                            Background="{DynamicResource BgSkeletonBrush}">
+                            <Panel>
+                                <mi:MaterialIcon Kind="ImageOutline"
+                                    Width="18" Height="18"
+                                    Foreground="{DynamicResource TextMutedBrush}"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding !HasThumbnailPreview}" />
+                                <!-- HTTP URL → AsyncImageLoader -->
+                                <Image asyncImage:ImageLoader.Source="{Binding ThumbnailPreviewUrl}"
+                                    Stretch="UniformToFill"
+                                    Width="36" Height="36"
+                                    IsVisible="{Binding IsPreviewHttp}" />
+                                <!-- Local file → Bitmap напрямую -->
+                                <Image Source="{Binding LocalPreviewBitmap}"
+                                    Stretch="UniformToFill"
+                                    Width="36" Height="36"
+                                    IsVisible="{Binding IsPreviewLocal}" />
+                            </Panel>
+                        </Border>
+                    </Grid>
+
+                    <!-- ═══ Из треков ═══ -->
+                    <Border IsVisible="{Binding IsCoverModeFromTracks}"
+                        MaxHeight="220">
+                        <controls:PlaylistCoverPicker DataContext="{Binding CoverPicker}" />
+                    </Border>
+
+                    <!-- ═══ Файл ═══ -->
+                    <StackPanel IsVisible="{Binding IsCoverModeFile}" Spacing="8">
+                        <Grid ColumnDefinitions="*, Auto">
+                            <TextBox Grid.Column="0"
+                                Text="{Binding SelectedFilePath, Mode=OneWay}"
+                                IsReadOnly="True"
+                                Watermark="{Binding L[CoverPicker_FileHint]}"
+                                FontSize="12" />
+                            <Button Grid.Column="1"
+                                Command="{Binding SelectFileCommand}"
+                                Padding="8,6"
+                                Margin="8,0,0,0"
+                                ToolTip.Tip="{Binding L[CoverPicker_BrowseFile]}">
+                                <mi:MaterialIcon Kind="FolderOpen"
+                                    Width="18" Height="18" />
+                            </Button>
+                        </Grid>
+                        <!-- Превью выбранного файла -->
+                        <Border Width="80" Height="80"
+                            CornerRadius="6" ClipToBounds="True"
+                            Background="{DynamicResource BgSkeletonBrush}"
+                            HorizontalAlignment="Left"
+                            IsVisible="{Binding IsPreviewLocal}">
+                            <Image Source="{Binding LocalPreviewBitmap}"
+                                Stretch="UniformToFill"
+                                Width="80" Height="80" />
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ═══ Кнопка загрузки обложки в YouTube ═══ -->
+                    <!-- Показывается для TwoWaySync плейлистов когда есть обложка -->
+                    <Button Command="{Binding UploadThumbnailCommand}"
+                        IsVisible="{Binding ShowUploadThumbnailButton}"
+                        Padding="8,6"
+                        HorizontalAlignment="Left"
+                        Margin="0,4,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Panel>
+                                <mi:MaterialIcon Kind="CloudUpload" Width="14" Height="14"
+                                    IsVisible="{Binding !IsRecalculatingColor}" />
+                                <mi:MaterialIcon Kind="Loading" Width="14" Height="14"
+                                    IsVisible="{Binding IsRecalculatingColor}"
+                                    Classes="spinning" />
+                            </Panel>
+                            <TextBlock Text="{Binding L[EditPlaylist_UploadThumbnail]}"
+                                FontSize="12" />
+                        </StackPanel>
+                    </Button>
+
+                </StackPanel>
+            </Border>
         </StackPanel>
 
-        <!-- ═══ Custom Color + Preview swatch ═══ -->
-        <StackPanel Spacing="6">
+        <!-- ═══ Custom Color ═══ -->
+        <StackPanel Spacing="5">
             <TextBlock Text="{Binding L[EditPlaylist_Color]}"
-                       FontSize="13" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                FontSize="13" FontWeight="SemiBold"
+                Foreground="{DynamicResource TextSecondaryBrush}" />
             <Grid ColumnDefinitions="*, Auto">
                 <TextBox Grid.Column="0"
-                         Text="{Binding CustomColor, Mode=TwoWay}"
-                         Watermark="#FF6B35" />
+                    Text="{Binding CustomColor, Mode=TwoWay}"
+                    Watermark="#FF6B35"
+                    FontSize="12" />
                 <Border Grid.Column="1"
-                        Width="32" Height="32"
-                        CornerRadius="6"
-                        Margin="8,0,0,0"
-                        BorderBrush="{DynamicResource BgHighlightBrush}"
-                        BorderThickness="1"
-                        Background="{Binding ColorPreviewBrush}" />
+                    Width="32" Height="32"
+                    CornerRadius="6"
+                    Margin="8,0,0,0"
+                    BorderBrush="{DynamicResource BgHighlightBrush}"
+                    BorderThickness="1"
+                    Background="{Binding ColorPreviewBrush}" />
             </Grid>
             <TextBlock Text="{Binding L[EditPlaylist_ColorHint]}"
-                       FontSize="11"
-                       Foreground="{DynamicResource TextMutedBrush}" />
+                FontSize="11"
+                Foreground="{DynamicResource TextMutedBrush}" />
+        </StackPanel>
+
+        <!-- ═══ Computed Color (readonly + кнопка пересчёта) ═══ -->
+        <StackPanel Spacing="5">
+            <TextBlock Text="{Binding L[EditPlaylist_ComputedColor]}"
+                FontSize="13" FontWeight="SemiBold"
+                Foreground="{DynamicResource TextSecondaryBrush}" />
+            <Grid ColumnDefinitions="*, Auto, Auto">
+                <!-- Вычисленный цвет (readonly) -->
+                <TextBox Grid.Column="0"
+                    Text="{Binding ComputedColor, Mode=OneWay}"
+                    IsReadOnly="True"
+                    Watermark="{Binding L[EditPlaylist_ComputedColorNone]}"
+                    FontSize="12"
+                    Foreground="{DynamicResource TextMutedBrush}" />
+
+                <!-- Превью вычисленного цвета -->
+                <Border Grid.Column="1"
+                    Width="32" Height="32"
+                    CornerRadius="6"
+                    Margin="8,0,0,0"
+                    BorderBrush="{DynamicResource BgHighlightBrush}"
+                    BorderThickness="1"
+                    Background="{Binding ComputedColorPreviewBrush}" />
+
+                <!-- Кнопка пересчёта из обложки -->
+                <Button Grid.Column="2"
+                    Command="{Binding RecalculateColorCommand}"
+                    Padding="6"
+                    Margin="4,0,0,0"
+                    ToolTip.Tip="{Binding L[EditPlaylist_RecalculateColor]}">
+                    <Panel>
+                        <mi:MaterialIcon Kind="Refresh" Width="18" Height="18"
+                            IsVisible="{Binding !IsRecalculatingColor}" />
+                        <mi:MaterialIcon Kind="Loading" Width="18" Height="18"
+                            IsVisible="{Binding IsRecalculatingColor}"
+                            Classes="spinning" />
+                    </Panel>
+                </Button>
+            </Grid>
+            <TextBlock Text="{Binding L[EditPlaylist_ComputedColorHint]}"
+                FontSize="11"
+                Foreground="{DynamicResource TextMutedBrush}" />
         </StackPanel>
 
         <!-- ═══ YouTube Sync Section ═══ -->
         <Border Background="{DynamicResource BgElevatedBrush}"
-                CornerRadius="8" Padding="14,12"
-                IsVisible="{Binding ShowSyncSection}">
+            CornerRadius="8" Padding="14,12"
+            IsVisible="{Binding ShowSyncSection}">
             <StackPanel Spacing="10">
-
-                <!-- Toggle row -->
                 <Grid ColumnDefinitions="Auto, *, Auto">
-                    <mi:MaterialIcon Grid.Column="0"
-                                     Kind="CloudSync"
-                                     Width="20" Height="20"
-                                     Foreground="{DynamicResource AccentBrush}"
-                                     VerticalAlignment="Center"
-                                     Margin="0,0,10,0" />
+                    <mi:MaterialIcon Grid.Column="0" Kind="CloudSync"
+                        Width="20" Height="20"
+                        Foreground="{DynamicResource AccentBrush}"
+                        VerticalAlignment="Center" Margin="0,0,10,0" />
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                         <TextBlock Text="{Binding L[EditPlaylist_Sync]}"
-                                   FontSize="13" FontWeight="SemiBold" />
+                            FontSize="13" FontWeight="SemiBold" />
                         <TextBlock Text="{Binding L[EditPlaylist_SyncDesc]}"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   TextWrapping="Wrap" />
+                            FontSize="11"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            TextWrapping="Wrap" />
                     </StackPanel>
                     <ToggleSwitch Grid.Column="2"
-                                  IsChecked="{Binding IsSyncedToCloud, Mode=TwoWay}"
-                                  IsEnabled="{Binding IsAuthenticated}"
-                                  VerticalAlignment="Center"
-                                  Margin="12,0,0,0" />
+                        IsChecked="{Binding IsSyncedToCloud, Mode=TwoWay}"
+                        IsEnabled="{Binding IsAuthenticated}"
+                        VerticalAlignment="Center" Margin="12,0,0,0" />
                 </Grid>
 
-                <!-- Active sync indicator (когда уже привязан) -->
                 <Border Padding="10,6" CornerRadius="4"
-                        IsVisible="{Binding HasYoutubeBinding}">
+                    IsVisible="{Binding HasYoutubeBinding}">
                     <Border.Background>
                         <SolidColorBrush Color="{DynamicResource AccentColor}" Opacity="0.1" />
                     </Border.Background>
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <mi:MaterialIcon Kind="CheckCircleOutline"
-                                         Width="14" Height="14"
-                                         Foreground="{DynamicResource AccentBrush}"
-                                         VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding L[EditPlaylist_SyncActive]}"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource AccentBrush}"
-                                   VerticalAlignment="Center" />
+                        <mi:MaterialIcon Kind="CheckCircleOutline" Width="14" Height="14"
+                            Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding L[EditPlaylist_SyncActive]}" FontSize="11"
+                            Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Border>
 
-                <!-- Not authenticated warning (toggle отключён) -->
                 <Border Padding="10,6" CornerRadius="4"
-                        IsVisible="{Binding !IsAuthenticated}">
+                    IsVisible="{Binding !IsAuthenticated}">
                     <Border.Background>
                         <SolidColorBrush Color="Orange" Opacity="0.1" />
                     </Border.Background>
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <mi:MaterialIcon Kind="AlertOutline"
-                                         Width="14" Height="14"
-                                         Foreground="Orange"
-                                         VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding L[EditPlaylist_LoginRequired]}"
-                                   FontSize="11"
-                                   Foreground="Orange"
-                                   VerticalAlignment="Center"
-                                   TextWrapping="Wrap" />
+                        <mi:MaterialIcon Kind="AlertOutline" Width="14" Height="14"
+                            Foreground="Orange" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding L[EditPlaylist_LoginRequired]}" FontSize="11"
+                            Foreground="Orange" VerticalAlignment="Center" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
-
             </StackPanel>
         </Border>
 
-        <!-- ═══ Validation Error ═══ -->
+        <!-- ═══ Validation Error / Success Message ═══ -->
         <TextBlock Text="{Binding ErrorMessage}"
-                   Foreground="{DynamicResource SystemError}"
-                   IsVisible="{Binding HasErrors}"
-                   FontSize="13" FontWeight="SemiBold"
-                   TextWrapping="Wrap"
-                   Margin="0,4,0,0" />
-
+            Foreground="{DynamicResource SystemError}"
+            IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+            FontSize="13" FontWeight="SemiBold"
+            TextWrapping="Wrap" Margin="0,4,0,0" />
     </StackPanel>
 </UserControl>

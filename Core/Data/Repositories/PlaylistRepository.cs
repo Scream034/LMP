@@ -88,29 +88,42 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
         var existing = await ctx.Playlists.FirstOrDefaultAsync(p => p.Id == playlist.Id, ct);
-        var entity = MapToEntity(playlist);
 
         if (existing != null)
         {
-            // BUG 1 DIAG: Log what we're about to write
             Log.Debug($"[PlaylistRepo] UpsertAsync UPDATE id={playlist.Id}: " +
                        $"SyncMode={playlist.SyncMode}({(int)playlist.SyncMode}), " +
                        $"YoutubeId={playlist.YoutubeId ?? "null"}, " +
-                       $"Name={playlist.StoredName}, " +
-                       $"existing.SyncMode={existing.SyncMode}, " +
-                       $"existing.YoutubeId={existing.YoutubeId ?? "null"}");
+                       $"Name={playlist.StoredName}");
 
-            entity.CreatedAt = existing.CreatedAt;
-            ctx.Entry(existing).CurrentValues.SetValues(entity);
+            // ═══ FIX: Attach entity и помечаем как Modified ═══
+            // С NoTracking нужно явно сказать EF что entity изменён
 
-            // BUG 1 DIAG: Verify entity state after SetValues
-            Log.Debug($"[PlaylistRepo] After SetValues: " +
+            var entry = ctx.Entry(existing);
+            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+
+            existing.Name = playlist.StoredName;
+            existing.YoutubeId = playlist.YoutubeId;
+            existing.Author = playlist.Author;
+            existing.ThumbnailUrl = playlist.ThumbnailUrl;
+            existing.CustomColor = playlist.CustomColor;
+            existing.ComputedColor = playlist.ComputedColor;
+            existing.Description = playlist.Description;
+            existing.SyncMode = (int)playlist.SyncMode;
+            existing.UpdatedAt = DateTime.UtcNow;
+
+            ctx.Playlists.Update(existing);
+
+            Log.Debug($"[PlaylistRepo] After Update(): " +
                        $"SyncMode={existing.SyncMode}, " +
-                       $"YoutubeId={existing.YoutubeId ?? "null"}");
+                       $"YoutubeId={existing.YoutubeId ?? "null"}, " +
+                       $"State={entry.State}");
         }
         else
         {
+            var entity = MapToEntity(playlist);
             entity.CreatedAt = DateTime.UtcNow;
+            entity.UpdatedAt = DateTime.UtcNow;
             ctx.Playlists.Add(entity);
 
             Log.Debug($"[PlaylistRepo] UpsertAsync INSERT id={playlist.Id}: " +
@@ -120,7 +133,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
         await ctx.SaveChangesAsync(ct);
 
-        // BUG 1 DIAG: Read-back verification
+        // Read-back verification
         var verify = await ctx.Playlists
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.Id == playlist.Id, ct);
@@ -401,6 +414,10 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
 
     #region Mapping
 
+    /// <summary>
+    /// Entity → Domain Model.
+    /// Включает все поля: ComputedColor, Description.
+    /// </summary>
     private static Playlist MapToModel(PlaylistEntity e) => new()
     {
         Id = e.Id,
@@ -409,18 +426,27 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         Author = e.Author,
         ThumbnailUrl = e.ThumbnailUrl,
         CustomColor = e.CustomColor,
+        ComputedColor = e.ComputedColor,
+        Description = e.Description,
         SyncMode = (PlaylistSyncMode)e.SyncMode,
         UpdatedAt = e.UpdatedAt
     };
 
+    /// <summary>
+    /// Domain Model → Entity.
+    /// Включает все поля: ComputedColor, Description.
+    /// Использует StoredName напрямую чтобы избежать computed property Name.
+    /// </summary>
     private static PlaylistEntity MapToEntity(Playlist m) => new()
     {
         Id = m.Id,
-        Name = m.StoredName,  // BUG 1 FIX: Use StoredName directly to avoid computed property
+        Name = m.StoredName,
         YoutubeId = m.YoutubeId,
         Author = m.Author,
         ThumbnailUrl = m.ThumbnailUrl,
         CustomColor = m.CustomColor,
+        ComputedColor = m.ComputedColor,
+        Description = m.Description,
         SyncMode = (int)m.SyncMode,
         UpdatedAt = DateTime.UtcNow
     };

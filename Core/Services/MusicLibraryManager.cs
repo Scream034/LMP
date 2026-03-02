@@ -1,5 +1,4 @@
 ﻿using LMP.Core.Models;
-using LMP.Core.Youtube.Music;
 using ReactiveUI;
 
 namespace LMP.Core.Services;
@@ -106,9 +105,10 @@ public class MusicLibraryManager : ReactiveObject
     /// Создаёт плейлист локально и опционально в YouTube.
     /// </summary>
     public async Task<Playlist> CreatePlaylistAsync(
-        string name,
-        PlaylistSyncMode mode,
-        CancellationToken ct = default)
+      string name,
+      PlaylistSyncMode mode,
+      IReadOnlyList<string>? initialTrackIds = null,
+      CancellationToken ct = default)
     {
         var newPlaylist = await _library.CreatePlaylistAsync(name, ct);
         newPlaylist.SyncMode = mode;
@@ -117,7 +117,21 @@ public class MusicLibraryManager : ReactiveObject
         {
             try
             {
-                var ytId = await _youtube.CreatePlaylistAsync(name);
+                // Extract raw video IDs for YouTube API
+                List<string>? rawVideoIds = null;
+                if (initialTrackIds is { Count: > 0 })
+                {
+                    rawVideoIds = new List<string>(initialTrackIds.Count);
+                    for (int i = 0; i < initialTrackIds.Count; i++)
+                    {
+                        var id = initialTrackIds[i];
+                        if (id.StartsWith("yt_"))
+                            rawVideoIds.Add(id[3..]);
+                    }
+                    if (rawVideoIds.Count == 0) rawVideoIds = null;
+                }
+
+                var ytId = await _youtube.CreatePlaylistAsync(name, rawVideoIds);
                 newPlaylist.YoutubeId = ytId;
             }
             catch (Exception ex)
@@ -161,7 +175,7 @@ public class MusicLibraryManager : ReactiveObject
     #region Playlist Operations
 
     public async Task UploadPlaylistToAccountAsync(
-        string localPlaylistId, CancellationToken ct = default)
+       string localPlaylistId, CancellationToken ct = default)
     {
         if (!_auth.IsAuthenticated) return;
 
@@ -170,7 +184,23 @@ public class MusicLibraryManager : ReactiveObject
 
         try
         {
-            var ytId = await _youtube.CreatePlaylistAsync(localPl.Name);
+            // Read track IDs from DB
+            var trackIds = await _library.GetPlaylistTrackIdsAsync(localPlaylistId, ct);
+
+            // Filter YouTube track IDs and extract raw IDs
+            var rawVideoIds = new List<string>(trackIds.Count);
+            var localTrackIds = new List<string>(trackIds.Count); // parallel list for DB updates
+            for (int i = 0; i < trackIds.Count; i++)
+            {
+                if (trackIds[i].StartsWith("yt_"))
+                {
+                    rawVideoIds.Add(trackIds[i][3..]);
+                    localTrackIds.Add(trackIds[i]);
+                }
+            }
+
+            // Create playlist with all tracks in one request
+            var ytId = await _youtube.CreatePlaylistAsync(localPl.Name, rawVideoIds.Count > 0 ? rawVideoIds : null);
             if (string.IsNullOrEmpty(ytId))
                 throw new InvalidOperationException("YouTube returned empty playlist ID.");
 
@@ -178,41 +208,38 @@ public class MusicLibraryManager : ReactiveObject
             localPl.SyncMode = PlaylistSyncMode.TwoWaySync;
             await _library.AddOrUpdatePlaylistAsync(localPl, ct);
 
-            // BUG 2 FIX: Read track IDs from DB instead of transient TrackIds list
-            var trackIds = await _library.GetPlaylistTrackIdsAsync(localPlaylistId, ct);
-
-            // Фоновая загрузка треков
-            _ = Task.Run(async () =>
+            // If tracks were included in create, we don't have setVideoIds from create response.
+            // Fetch them in background for future removal support.
+            if (rawVideoIds.Count > 0)
             {
-                int uploaded = 0;
-                for (int i = 0; i < trackIds.Count; i++)
+                _ = Task.Run(async () =>
                 {
-                    var trackId = trackIds[i];
-                    if (!trackId.StartsWith("yt_")) continue;
-
-                    var setVideoId = await _youtube.AddToPlaylistAsync(ytId, trackId);
-
-                    // Persist setVideoId for future removal support (BUG 3)
-                    if (!string.IsNullOrEmpty(setVideoId))
+                    try
                     {
-                        try
+                        // Small delay to let YouTube process the playlist
+                        await Task.Delay(1000);
+
+                        var remoteItems = await _youtube.GetPlaylistItemsWithSetVideoIdAsync(ytId);
+                        if (remoteItems.Count > 0)
                         {
-                            await _library.UpdateSetVideoIdAsync(
-                                localPlaylistId, trackId, setVideoId);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Debug($"[Sync] Failed to save setVideoId: {ex.Message}");
+                            var mappings = new List<(string TrackId, string SetVideoId)>(remoteItems.Count);
+                            for (int i = 0; i < remoteItems.Count; i++)
+                            {
+                                var item = remoteItems[i];
+                                mappings.Add(("yt_" + item.VideoId, item.SetVideoId));
+                            }
+                            await _library.UpdateSetVideoIdsAsync(localPlaylistId, mappings);
+                            Log.Info($"[Sync] Persisted {mappings.Count} setVideoIds for uploaded playlist {ytId}");
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"[Sync] Failed to fetch setVideoIds after upload: {ex.Message}");
+                    }
+                }, CancellationToken.None);
+            }
 
-                    uploaded++;
-
-                    // Rate limiting
-                    await Task.Delay(uploaded % 5 == 0 ? 1000 : 300);
-                }
-                Log.Info($"[Sync] Uploaded {uploaded} tracks to {ytId}");
-            }, CancellationToken.None);
+            Log.Info($"[Sync] Uploaded playlist '{localPl.Name}' with {rawVideoIds.Count} tracks to {ytId}");
         }
         catch (Exception ex)
         {
@@ -271,7 +298,7 @@ public class MusicLibraryManager : ReactiveObject
         {
             setVideoId = await _library.GetSetVideoIdAsync(playlistId, trackId, ct);
 
-            // BUG 3 FIX: On-demand fetch if setVideoId not in local DB
+            // On-demand fetch if setVideoId not in local DB
             if (string.IsNullOrEmpty(setVideoId))
             {
                 Log.Info($"[Sync] No cached setVideoId for {trackId}, fetching from YouTube...");
@@ -282,7 +309,6 @@ public class MusicLibraryManager : ReactiveObject
 
                     if (items.Count > 0)
                     {
-                        // Build mappings and persist all setVideoIds for future use
                         var mappings = new List<(string TrackId, string SetVideoId)>(items.Count);
                         string? targetSetVideoId = null;
 
@@ -321,13 +347,11 @@ public class MusicLibraryManager : ReactiveObject
         {
             if (!string.IsNullOrEmpty(setVideoId))
             {
-                // Fire-and-forget YouTube removal
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _youtube.RemoveFromPlaylistAsync(
-                            playlist!.YoutubeId!, trackId, setVideoId);
+                        await _youtube.RemoveFromPlaylistAsync(playlist!.YoutubeId!, setVideoId);
                         Log.Info($"[Sync] Removed track {trackId} from YouTube playlist {playlist.YoutubeId}");
                     }
                     catch (Exception ex)

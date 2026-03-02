@@ -607,14 +607,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         _bufferTimer = null;
     }
 
-    private void StartPositionTimer()
-    {
-        _positionTimer?.Dispose();
-        _positionTimer = new Timer(
-            _ => _events.RaisePositionChanged(Position),
-            null, 0, (int)_options.PositionUpdateInterval.TotalMilliseconds);
-    }
-
     /// <summary>
     /// Запускает position timer с задержкой первого тика.
     /// Используется после seek — даёт время decoder'у наполнить буфер

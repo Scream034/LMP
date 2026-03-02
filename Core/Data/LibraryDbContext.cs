@@ -37,6 +37,8 @@ public class LibraryDbContext(DbContextOptions<LibraryDbContext> options) : DbCo
             entity.Property(e => e.Id).HasMaxLength(64);
             entity.Property(e => e.Name).HasMaxLength(256);
             entity.Property(e => e.CustomColor).HasMaxLength(16);
+            entity.Property(e => e.ComputedColor).HasMaxLength(16);
+            entity.Property(e => e.Description).HasMaxLength(2000);
         });
 
         // === PlaylistTrack (Junction Table) ===

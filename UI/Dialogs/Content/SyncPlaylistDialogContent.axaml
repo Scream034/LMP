@@ -1,0 +1,203 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dialogs="using:LMP.UI.Dialogs"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             x:Class="LMP.UI.Dialogs.Content.SyncPlaylistDialogContent"
+             x:DataType="dialogs:SyncPlaylistDialogViewModel">
+
+    <Border Background="{DynamicResource BgPrimaryBrush}"
+            BorderBrush="{DynamicResource BgHighlightBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="24"
+            Width="560"
+            MinHeight="420"
+            MaxHeight="680">
+
+        <Grid RowDefinitions="Auto, *, Auto">
+
+            <!-- Header -->
+            <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,16">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon Kind="CloudSync" Width="24" Height="24"
+                                     Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock Text="{Binding L[Dialog_SyncPlaylist_Title]}"
+                               FontSize="20" FontWeight="Bold" />
+                </StackPanel>
+                <TextBlock Text="{Binding L[Playlist_SyncDialogSubtitle]}"
+                           FontSize="12"
+                           Foreground="{DynamicResource TextMutedBrush}" />
+            </StackPanel>
+
+            <!-- Content -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                          Padding="0,0,6,0">
+                <StackPanel Spacing="16">
+
+                    <!-- Diff Preview -->
+                    <Border Background="{DynamicResource BgElevatedBrush}"
+                            CornerRadius="8" Padding="14,12">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="{Binding L[Playlist_SyncDifferences]}"
+                                       FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                            <!-- Название diff -->
+                            <Grid ColumnDefinitions="Auto, *, *"
+                                  IsVisible="{Binding HasNameDiff}">
+                                <mi:MaterialIcon Grid.Column="0" Kind="FormatTitle"
+                                                 Width="16" Height="16" Margin="0,0,8,0"
+                                                 Foreground="{DynamicResource TextMutedBrush}"
+                                                 VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="1" Spacing="1" Margin="0,0,8,0">
+                                    <TextBlock Text="{Binding L[Playlist_SyncField_Local]}"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource TextMutedBrush}" />
+                                    <TextBlock Text="{Binding Preview.LocalName}"
+                                               FontSize="12" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Spacing="1">
+                                    <TextBlock Text="{Binding L[Playlist_SyncField_Cloud]}"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource TextMutedBrush}" />
+                                    <TextBlock Text="{Binding Preview.CloudName}"
+                                               FontSize="12" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Описание diff -->
+                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                        IsVisible="{Binding HasDescDiff}">
+                                <mi:MaterialIcon Kind="TextBoxOutline"
+                                                 Width="16" Height="16"
+                                                 Foreground="{DynamicResource TextMutedBrush}"
+                                                 VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding L[Playlist_SyncDescChanged]}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+
+                            <!-- Треки diff -->
+                            <StackPanel Spacing="4"
+                                        IsVisible="{Binding HasTrackDiff}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <mi:MaterialIcon Kind="MusicNote"
+                                                     Width="16" Height="16"
+                                                     Foreground="{DynamicResource TextMutedBrush}"
+                                                     VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding TrackDiffSummary}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Нет различий -->
+                            <TextBlock Text="{Binding L[Playlist_SyncNoChanges]}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextMutedBrush}"
+                                       IsVisible="{Binding !Preview.HasAnyDifference}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Strategy selector -->
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="{Binding L[Playlist_SyncStrategy]}"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <ComboBox SelectedIndex="{Binding SelectedStrategyIndex}"
+                                  HorizontalAlignment="Stretch">
+                            <ComboBoxItem>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <mi:MaterialIcon Kind="SwapHorizontal" Width="16" Height="16" />
+                                    <TextBlock Text="{Binding L[Playlist_SyncStrategy_Merge]}" />
+                                </StackPanel>
+                            </ComboBoxItem>
+                            <ComboBoxItem>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <mi:MaterialIcon Kind="CloudDownload" Width="16" Height="16" />
+                                    <TextBlock Text="{Binding L[Playlist_SyncStrategy_ReplaceLocal]}" />
+                                </StackPanel>
+                            </ComboBoxItem>
+                            <ComboBoxItem>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <mi:MaterialIcon Kind="CloudUpload" Width="16" Height="16" />
+                                    <TextBlock Text="{Binding L[Playlist_SyncStrategy_ReplaceCloud]}" />
+                                </StackPanel>
+                            </ComboBoxItem>
+                        </ComboBox>
+
+                        <!-- Описание стратегии -->
+                        <TextBlock Text="{Binding StrategyDescription}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+
+                    <!-- Field checkboxes -->
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="{Binding L[Playlist_SyncFields]}"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                        <Border Background="{DynamicResource BgElevatedBrush}"
+                                CornerRadius="8" Padding="14,10">
+                            <StackPanel Spacing="8">
+                                <CheckBox IsChecked="{Binding SyncName}"
+                                          IsEnabled="{Binding HasNameDiff}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <mi:MaterialIcon Kind="FormatTitle" Width="14" Height="14" />
+                                        <TextBlock Text="{Binding L[Playlist_SyncField_Name]}" />
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <CheckBox IsChecked="{Binding SyncDescription}"
+                                          IsEnabled="{Binding HasDescDiff}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <mi:MaterialIcon Kind="TextBoxOutline" Width="14" Height="14" />
+                                        <TextBlock Text="{Binding L[Playlist_SyncField_Description]}" />
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <CheckBox IsChecked="{Binding SyncThumbnail}"
+                                          IsEnabled="{Binding CanSyncThumbnail}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <mi:MaterialIcon Kind="ImageOutline" Width="14" Height="14" />
+                                        <TextBlock Text="{Binding L[Playlist_SyncField_Thumbnail]}" />
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <CheckBox IsChecked="{Binding SyncTracks}"
+                                          IsEnabled="{Binding HasTrackDiff}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <mi:MaterialIcon Kind="MusicNote" Width="14" Height="14" />
+                                        <TextBlock Text="{Binding L[Playlist_SyncField_Tracks]}" />
+                                    </StackPanel>
+                                </CheckBox>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Buttons -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal"
+                        HorizontalAlignment="Right" Spacing="12"
+                        Margin="0,16,0,0">
+                <Button Content="{Binding L[Common_Cancel]}"
+                        Command="{Binding CancelCommand}"
+                        Background="Transparent" />
+                <Button Command="{Binding SyncCommand}"
+                        Classes="accent accent-base">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <mi:MaterialIcon Kind="Sync" Width="16" Height="16" />
+                        <TextBlock Text="{Binding L[Playlist_SyncButton]}" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

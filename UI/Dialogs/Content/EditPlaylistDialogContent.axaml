@@ -1,0 +1,45 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dialogs="using:LMP.UI.Dialogs"
+             xmlns:controls="using:LMP.UI.Controls"
+             x:Class="LMP.UI.Dialogs.Content.EditPlaylistDialogContent"
+             x:DataType="dialogs:EditPlaylistDialogViewModel">
+
+    <Border Background="{DynamicResource BgPrimaryBrush}"
+            BorderBrush="{DynamicResource BgHighlightBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="24"
+            Width="600"
+            MinHeight="510"
+            MaxHeight="780">
+
+        <Grid RowDefinitions="Auto, *, Auto">
+
+            <!-- Title -->
+            <TextBlock Grid.Row="0"
+                       Text="{Binding L[EditPlaylist_Title]}"
+                       FontSize="20" FontWeight="Bold"
+                       Margin="0,0,0,16" />
+
+            <!-- Editor -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          Padding="0,0,6,0">
+                <controls:PlaylistEditorControl DataContext="{Binding Editor}" />
+            </ScrollViewer>
+
+            <!-- Buttons -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal"
+                        HorizontalAlignment="Right" Spacing="12"
+                        Margin="0,16,0,0">
+                <Button Content="{Binding L[Common_Cancel]}"
+                        Command="{Binding CancelCommand}"
+                        Background="Transparent" />
+                <Button Content="{Binding L[Common_Apply]}"
+                        Command="{Binding SaveCommand}"
+                        Classes="accent accent-base" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

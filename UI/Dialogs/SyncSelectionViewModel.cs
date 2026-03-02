@@ -1,4 +1,6 @@
-﻿using LMP.Core.Services;
+﻿using LMP.Core.Helpers;
+using LMP.Core.Models;
+using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
@@ -10,140 +12,327 @@ using System.Reactive.Linq;
 
 namespace LMP.UI.Dialogs;
 
-// ═══ Models ═══
+public enum MergeAction { Skip, Merge, Duplicate }
 
-/// <summary>
-/// Решение по одному плейлисту из объединённого диалога синхронизации.
-/// Заменяет старые SyncSelection + MergeDecision двумя отдельными диалогами.
-/// </summary>
 public sealed record SyncDecision(PlaylistSearchResult Playlist, MergeAction Action);
 
-/// <summary>
-/// Вариант действия для ComboBox в диалоге.
-/// </summary>
 public sealed record SyncActionOption(MergeAction Action, string DisplayName)
 {
     public override string ToString() => DisplayName;
 }
 
-// ═══ ViewModel ═══
-
 public class SyncSelectionViewModel : ViewModelBase
 {
+    private readonly List<SyncItemViewModel> _allItems = [];
+    private readonly List<SyncItemViewModel> _conflictingItems = [];
+    private readonly List<SyncItemViewModel> _nonConflictingItems = [];
+
+    // Флаг для предотвращения рекурсии при смене шаблона
+    private bool _suppressTemplateSync;
+
     public ObservableCollection<SyncItemViewModel> Items { get; } = [];
 
-    [Reactive] public string SummaryText { get; private set; } = "";
+    // ═══ Глобальные шаблоны (замена Toggles) ═══
 
-    public ReactiveCommand<Unit, List<SyncDecision>> ConfirmCommand { get; }
-    public ReactiveCommand<Unit, List<SyncDecision>> CancelCommand { get; }
-    public ReactiveCommand<Unit, Unit> SelectAllCommand { get; }
-    public ReactiveCommand<Unit, Unit> DeselectAllCommand { get; }
+    public List<SyncActionOption> ConflictTemplates { get; }
+    public List<SyncActionOption> NewTemplates { get; }
+
+    [Reactive] public SyncActionOption SelectedConflictTemplate { get; set; }
+    [Reactive] public SyncActionOption SelectedNewTemplate { get; set; }
+
+    // ═══ Статистика ═══
+
+    [Reactive] public string TotalSummary { get; private set; } = "";
+    [Reactive] public string SelectedSummary { get; private set; } = "";
+    [Reactive] public string SearchQuery { get; set; } = "";
+
+    // ═══ Команды ═══
+
+    public ReactiveCommand<Unit, Unit> ConfirmCommand { get; }
+    public ReactiveCommand<Unit, Unit> CancelCommand { get; }
 
     /// <summary>
-    /// Объединённый диалог: выбор плейлистов + разрешение конфликтов в одном окне.
+    /// Callback для закрытия диалога с результатом.
     /// </summary>
-    /// <param name="playlists">Плейлисты с YouTube для импорта.</param>
-    /// <param name="existingLocalNames">Имена локальных плейлистов — для определения конфликтов.</param>
+    public Action<List<SyncDecision>>? OnResult { get; set; }
+
     public SyncSelectionViewModel(
+        NotificationService notifications,
         IEnumerable<PlaylistSearchResult> playlists,
-        ISet<string> existingLocalNames)
+        ISet<string> existingLocalNames,
+        IReadOnlyDictionary<string, int>? trackCounts = null)
     {
+        var l = LocalizationService.Instance;
+
+        // Инициализация списков шаблонов
+        ConflictTemplates =
+        [
+            new SyncActionOption(MergeAction.Merge, l["Sync_Action_Merge"]),
+            new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_CreateNew"]),
+            new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
+        ];
+
+        NewTemplates =
+        [
+            new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_Import"]),
+            new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
+        ];
+
+        // Дефолтные шаблоны (как было раньше: Merge для конфликтов, Import для новых)
+        SelectedConflictTemplate = ConflictTemplates[0];
+        SelectedNewTemplate = NewTemplates[0];
+
+        // ═══ Создание элементов ═══
         foreach (var p in playlists)
         {
             var hasConflict = existingLocalNames.Contains(p.Title);
-            Items.Add(new SyncItemViewModel(p, hasConflict));
+            int trackCount = 0;
+            trackCounts?.TryGetValue(p.Id.Value, out trackCount);
+
+            var item = new SyncItemViewModel(p, hasConflict, notifications, trackCount);
+
+            // Сразу применяем дефолтный шаблон к элементу
+            item.SelectedOption = hasConflict
+                ? item.AvailableActions.First(a => a.Action == SelectedConflictTemplate.Action)
+                : item.AvailableActions.First(a => a.Action == SelectedNewTemplate.Action);
+
+            _allItems.Add(item);
+            Items.Add(item);
+
+            if (hasConflict) _conflictingItems.Add(item);
+            else _nonConflictingItems.Add(item);
         }
 
-        // Confirm: собираем решения (Skip = не импортировать)
+        // ═══ Команды ═══
         ConfirmCommand = CreateCommand(ReactiveCommand.Create(() =>
-            Items.Where(x => x.SelectedAction != MergeAction.Skip)
+        {
+            var result = _allItems.Where(x => x.SelectedAction != MergeAction.Skip)
                 .Select(x => new SyncDecision(x.Original, x.SelectedAction))
-                .ToList()));
-
-        CancelCommand = CreateCommand(ReactiveCommand.Create(
-            () => new List<SyncDecision>()));
-
-        SelectAllCommand = CreateCommand(ReactiveCommand.Create(() =>
-        {
-            foreach (var item in Items)
-                item.SelectedOption = item.AvailableActions
-                    .FirstOrDefault(a => a.Action != MergeAction.Skip)
-                    ?? item.AvailableActions[0];
+                .ToList();
+            OnResult?.Invoke(result);
         }));
 
-        DeselectAllCommand = CreateCommand(ReactiveCommand.Create(() =>
+        CancelCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            foreach (var item in Items)
-                item.SelectedOption = item.AvailableActions
-                    .FirstOrDefault(a => a.Action == MergeAction.Skip)
-                    ?? item.AvailableActions[^1];
+            OnResult?.Invoke(new List<SyncDecision>());
         }));
 
-        // Обновляем счётчик при изменении выбора любого элемента
-        foreach (var item in Items)
+        // ═══ Подписки на элементы: обновление статистики ═══
+        foreach (var item in _allItems)
         {
             item.WhenAnyValue(x => x.SelectedOption)
-                .Subscribe(_ => UpdateSummary())
+                .Subscribe(_ =>
+                {
+                    UpdateSelectedSummary();
+                    SyncTemplatesFromItems();
+                })
                 .DisposeWith(Disposables);
         }
 
-        UpdateSummary();
+        // ═══ Изменение шаблона пользователем ═══
+        this.WhenAnyValue(x => x.SelectedConflictTemplate)
+            .Skip(1)
+            .Subscribe(template =>
+            {
+                if (_suppressTemplateSync) return;
+                _suppressTemplateSync = true;
+                foreach (var item in _conflictingItems)
+                {
+                    item.SelectedOption = item.AvailableActions.First(a => a.Action == template.Action);
+                }
+                _suppressTemplateSync = false;
+                UpdateSelectedSummary();
+            }).DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.SelectedNewTemplate)
+            .Skip(1)
+            .Subscribe(template =>
+            {
+                if (_suppressTemplateSync) return;
+                _suppressTemplateSync = true;
+                foreach (var item in _nonConflictingItems)
+                {
+                    item.SelectedOption = item.AvailableActions.First(a => a.Action == template.Action);
+                }
+                _suppressTemplateSync = false;
+                UpdateSelectedSummary();
+            }).DisposeWith(Disposables);
+
+        // ═══ Поиск ═══
+        this.WhenAnyValue(x => x.SearchQuery)
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .DistinctUntilChanged()
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => ApplyFilter())
+            .DisposeWith(Disposables);
+
+        ApplyFilter();
+        UpdateTotalSummary();
+        UpdateSelectedSummary();
     }
 
-    private void UpdateSummary()
+    /// <summary>
+    /// Если пользователь вручную поменял элемент, проверяем, не сбился ли шаблон.
+    /// (Если все элементы группы одинаковые - ставим этот шаблон, иначе ничего не делаем).
+    /// </summary>
+    private void SyncTemplatesFromItems()
     {
-        var selected = Items.Count(x => x.SelectedAction != MergeAction.Skip);
-        var conflicts = Items.Count(x => x.HasConflict && x.SelectedAction != MergeAction.Skip);
+        if (_suppressTemplateSync) return;
+        _suppressTemplateSync = true;
 
-        SummaryText = conflicts > 0
-            ? $"{selected}/{Items.Count} • {string.Format(SL["Sync_ConflictsCount"], conflicts)}"
-            : $"{selected}/{Items.Count}";
+        if (_conflictingItems.Count > 0)
+        {
+            var firstAction = _conflictingItems[0].SelectedAction;
+            if (_conflictingItems.All(x => x.SelectedAction == firstAction))
+            {
+                SelectedConflictTemplate = ConflictTemplates.First(x => x.Action == firstAction);
+            }
+        }
+
+        if (_nonConflictingItems.Count > 0)
+        {
+            var firstAction = _nonConflictingItems[0].SelectedAction;
+            if (_nonConflictingItems.All(x => x.SelectedAction == firstAction))
+            {
+                SelectedNewTemplate = NewTemplates.First(x => x.Action == firstAction);
+            }
+        }
+
+        _suppressTemplateSync = false;
+    }
+
+    private void UpdateTotalSummary()
+    {
+        var totalPlaylists = _allItems.Count;
+        var totalConflicts = _conflictingItems.Count;
+        var totalTracks = _allItems.Sum(x => x.TrackCount);
+
+        var parts = new List<string>(3) { SL.GetPlural("Library_PlaylistWord", totalPlaylists) };
+        if (totalConflicts > 0) parts.Add(string.Format(SL["Sync_ConflictsCount"], totalConflicts));
+        if (totalTracks > 0) parts.Add($"~{SL.GetPlural("Library_TrackWord", totalTracks)}");
+
+        TotalSummary = string.Join(" • ", parts);
+    }
+
+    private void UpdateSelectedSummary()
+    {
+        var selectedItems = _allItems.Where(x => x.SelectedAction != MergeAction.Skip).ToList();
+        var selectedCount = selectedItems.Count;
+        var selectedConflicts = selectedItems.Count(x => x.HasConflict);
+        var selectedNonConflicts = selectedCount - selectedConflicts;
+        var selectedTracks = selectedItems.Sum(x => x.TrackCount);
+
+        if (selectedCount == 0)
+        {
+            SelectedSummary = SL["Sync_NoneSelected"] ?? "0 выбрано";
+            return;
+        }
+
+        var main = string.Format(SL["Sync_SelectedDetails"], selectedCount, selectedConflicts, selectedNonConflicts);
+        SelectedSummary = selectedTracks > 0 ? $"{main} • ~{SL.GetPlural("Library_TrackWord", selectedTracks)}" : main;
+    }
+
+    private void ApplyFilter()
+    {
+        var query = SearchQuery?.Trim() ?? "";
+        List<SyncItemViewModel> desired;
+
+        if (string.IsNullOrEmpty(query))
+        {
+            desired = _allItems.OrderByDescending(x => x.HasConflict).ToList();
+            foreach (var item in _allItems) item.IsHighlighted = false;
+        }
+        else
+        {
+            desired = _allItems.OrderByDescending(x => IsMatch(x, query)).ThenByDescending(x => x.HasConflict).ToList();
+            foreach (var item in _allItems) item.IsHighlighted = IsMatch(item, query);
+        }
+
+        for (int i = 0; i < desired.Count; i++)
+        {
+            int currentIndex = Items.IndexOf(desired[i]);
+            if (currentIndex != i && currentIndex >= 0)
+                Items.Move(currentIndex, i);
+        }
+    }
+
+    private static bool IsMatch(SyncItemViewModel item, string query)
+    {
+        return item.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               (!string.IsNullOrEmpty(item.Author) && item.Author.Contains(query, StringComparison.OrdinalIgnoreCase));
     }
 }
 
-// ═══ Item ViewModel ═══
-
 public class SyncItemViewModel : ReactiveObject
 {
+    private readonly NotificationService? _notifications;
+
     public PlaylistSearchResult Original { get; }
     public bool HasConflict { get; }
-
     public string Name => Original.Title;
     public string Author => Original.Author?.ChannelTitle ?? "";
-    public string? ThumbnailUrl => Original.Thumbnails.FirstOrDefault()?.Url;
+    public string? ThumbnailUrl => Original.Thumbnails.Count > 0 ? Original.Thumbnails[0].Url : null;
+    public bool HasThumbnail => !string.IsNullOrEmpty(ThumbnailUrl);
+    public int TrackCount { get; }
+    public bool HasTrackCount => TrackCount > 0;
 
-    /// <summary>Доступные действия (зависят от наличия конфликта).</summary>
+    public string FormattedTrackCount => HasTrackCount
+        ? LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount) : "";
+
+    [Reactive] public bool IsHighlighted { get; set; }
     public List<SyncActionOption> AvailableActions { get; }
-
     [Reactive] public SyncActionOption? SelectedOption { get; set; }
-
-    /// <summary>Текущее выбранное действие (для логики).</summary>
     public MergeAction SelectedAction => SelectedOption?.Action ?? MergeAction.Skip;
-
-    /// <summary>Для биндинга локализации в DataTemplate.</summary>
     public LocalizationService L => LocalizationService.Instance;
 
-    public SyncItemViewModel(PlaylistSearchResult original, bool hasConflict)
+    /// <summary>
+    /// Команда копирования YouTube-ссылки в буфер обмена.
+    /// </summary>
+    public ReactiveCommand<Unit, Unit> CopyLinkCommand { get; }
+
+    public SyncItemViewModel(
+        PlaylistSearchResult original,
+        bool hasConflict,
+        NotificationService notifications,
+        int trackCount = 0)
     {
         Original = original;
         HasConflict = hasConflict;
+        TrackCount = trackCount;
+        _notifications = notifications;
 
         var l = LocalizationService.Instance;
-
         AvailableActions = hasConflict
-            ?
-            [
+            ? [
                 new SyncActionOption(MergeAction.Merge, l["Sync_Action_Merge"]),
                 new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_CreateNew"]),
                 new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
             ]
-            :
-            [
+            : [
                 new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_Import"]),
                 new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
             ];
 
-        // Дефолт: Import/Merge (первый элемент, не Skip)
-        SelectedOption = AvailableActions[0];
+        // ═══ Команда копирования ссылки ═══
+        CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            try
+            {
+                var url = $"https://music.youtube.com/playlist?list={Original.Id.Value}";
+
+                await Clipboard.SetTextAsync(url);
+
+                // Показываем toast-уведомление о копировании
+                await _notifications.ShowToastAsync(
+                    titleKey: "Sync_LinkCopied",
+                    messageKey: "Sync_LinkCopied",
+                    severity: NotificationSeverity.Success,
+                    durationMs: 2000);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[SyncItem] Copy link failed: {ex.Message}");
+            }
+        });
     }
 }

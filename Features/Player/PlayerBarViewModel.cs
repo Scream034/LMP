@@ -7,6 +7,7 @@ using Avalonia;
 using Avalonia.Media;
 using Avalonia.Threading;
 using LMP.Core.Audio;
+using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -26,7 +27,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int HintDisplayDurationMs = 1500;
     private const int CopyHighlightDurationMs = 800;
     private const int PositionUpdateThrottleMs = 50;
-    private const int BufferUpdateIntervalMs = 300;
     private const int TrackResetMinDurationMs = 300;
     private const int FallbackPositionIntervalMs = 500;
 
@@ -36,7 +36,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
-    private readonly IClipboardService _clipboard;
     private readonly YoutubeProvider _youtube;
     private readonly MusicLibraryManager _musicManager;
 
@@ -290,13 +289,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public PlayerBarViewModel(
         AudioEngine audio,
         LibraryService library,
-        IClipboardService clipboard,
         YoutubeProvider youtube,
         MusicLibraryManager musicManager)
     {
         _audio = audio;
         _library = library;
-        _clipboard = clipboard;
         _youtube = youtube;
         _musicManager = musicManager;
 
@@ -589,7 +586,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         {
             if (CurrentTrack?.Url != null)
             {
-                await _clipboard.SetTextAsync(CurrentTrack.Url);
+                await Clipboard.SetTextAsync(CurrentTrack.Url);
                 ShowCopyHint();
             }
         }, this.WhenAnyValue(x => x.HasTrack)));
@@ -639,23 +636,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         // может быть precision difference после seek
         BufferedRanges = state.Ranges;
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
-    }
-
-    private static bool RangesEqual(
-        IReadOnlyList<(double Start, double End)> a,
-        IReadOnlyList<(double Start, double End)> b)
-    {
-        if (ReferenceEquals(a, b)) return true;
-        if (a.Count != b.Count) return false;
-
-        for (int i = 0; i < a.Count; i++)
-        {
-            if (Math.Abs(a[i].Start - b[i].Start) > 0.001 ||
-                Math.Abs(a[i].End - b[i].End) > 0.001)
-                return false;
-        }
-
-        return true;
     }
 
     private void ForceUpdateBufferProgress()

@@ -88,7 +88,30 @@ public sealed class LocalizationService : INotifyPropertyChanged
             using var stream = AssetLoader.Open(uri);
             using var reader = new StreamReader(stream);
             var json = reader.ReadToEnd();
-            _resources = JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? [];
+            
+            // ═══ КРИТИЧНО: Валидация структуры ═══
+            var deserialized = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+            if (deserialized == null)
+            {
+                throw new InvalidOperationException("Deserialization returned null");
+            }
+
+            // Проверяем что все значения — строки, а не объекты
+            var invalidKeys = deserialized.Where(kv => kv.Value is not JsonElement element || element.ValueKind != JsonValueKind.String).ToList();
+            
+            if (invalidKeys.Count > 0)
+            {
+                var firstInvalid = invalidKeys.First();
+                throw new InvalidOperationException(
+                    $"Invalid localization structure: key '{firstInvalid.Key}' contains {firstInvalid.Value.GetType().Name} instead of string. " +
+                    $"Expected flat Dictionary<string, string>.");
+            }
+
+            // Безопасно конвертируем
+            _resources = deserialized.ToDictionary(
+                kv => kv.Key,
+                kv => ((JsonElement)kv.Value).GetString() ?? string.Empty
+            );
             
             Log.Info($"✓ Loaded {langCode}.json ({_resources.Count} keys)");
         }

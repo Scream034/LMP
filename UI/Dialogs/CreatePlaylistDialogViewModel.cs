@@ -1,5 +1,4 @@
 using System.Reactive;
-using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -10,34 +9,36 @@ public sealed class CreatePlaylistDialogViewModel : ViewModelBase
 {
     public PlaylistEditorViewModel Editor { get; }
 
-    /// <summary>
-    /// Синхронизировать с YouTube Music.
-    /// </summary>
     [Reactive] public bool SyncToCloud { get; set; }
-
-    /// <summary>
-    /// Показывать ли переключатель синхронизации.
-    /// </summary>
     public bool ShowSyncToggle { get; }
 
-    public ReactiveCommand<Unit, CreatePlaylistResult?> ConfirmCommand { get; }
-    public ReactiveCommand<Unit, CreatePlaylistResult?> CancelCommand { get; }
+    /// <summary>
+    /// Callback для закрытия диалога с результатом.
+    /// </summary>
+    public Action<CreatePlaylistResult?>? OnResult { get; set; }
+
+    public ReactiveCommand<Unit, Unit> ConfirmCommand { get; }
+    public ReactiveCommand<Unit, Unit> CancelCommand { get; }
 
     public CreatePlaylistDialogViewModel(bool isAuthenticated = false)
     {
         Editor = PlaylistEditorViewModel.ForCreate();
         ShowSyncToggle = isAuthenticated;
-        SyncToCloud = isAuthenticated; // По умолчанию вкл. если аутентифицирован
+        SyncToCloud = isAuthenticated;
 
-        ConfirmCommand = CreateCommand(ReactiveCommand.Create(
-            () => (CreatePlaylistResult?)new CreatePlaylistResult(
+        ConfirmCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            var result = new CreatePlaylistResult(
                 Name: Editor.ToResult().Name,
-                SyncToCloud: SyncToCloud),
-            Editor.CanSave));
+                SyncToCloud: SyncToCloud);
+            OnResult?.Invoke(result);
+        }, Editor.CanSave));
 
-        CancelCommand = CreateCommand(ReactiveCommand.Create(
-            () => (CreatePlaylistResult?)null));
+        CancelCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            OnResult?.Invoke(null);
+        }));
     }
 }
 
-public sealed record CreatePlaylistResult(in string Name, in bool SyncToCloud);
+public sealed record CreatePlaylistResult(string Name, bool SyncToCloud);

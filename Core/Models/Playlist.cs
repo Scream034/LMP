@@ -1,7 +1,6 @@
 ﻿using System.Text.Json.Serialization;
 using LMP.Core.Services;
-// Для IBatchItem
-using LMP.Core.Youtube.Search; // Для ISearchResult
+using LMP.Core.Youtube.Search;
 
 namespace LMP.Core.Models;
 
@@ -41,6 +40,21 @@ public class Playlist : IBatchItem, ISearchResult
 
     public string? ThumbnailUrl { get; set; }
     public string? CustomColor { get; set; }
+
+    /// <summary>
+    /// Автоматически вычисленный доминантный цвет из обложки.
+    /// Формат: #RRGGBB. Пересчитывается при смене обложки.
+    /// Используется как fallback когда CustomColor не задан.
+    /// </summary>
+    public string? ComputedColor { get; set; }
+
+    /// <summary>
+    /// Эффективный цвет для градиента хедера.
+    /// Приоритет: CustomColor → ComputedColor → null (будет вычислен из обложки).
+    /// </summary>
+    [JsonIgnore]
+    public string? EffectiveColor => CustomColor ?? ComputedColor;
+
     public string? Author { get; set; }
     public string? Description { get; set; }
 

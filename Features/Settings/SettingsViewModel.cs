@@ -37,7 +37,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private readonly ImageCacheService _imageCache;
     private readonly ThemeManagerService _themeManager;
     private readonly CookieAuthService _auth;
-    private readonly IDialogService _dialog;
+    private readonly DialogService _dialog;
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
 
@@ -189,7 +189,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ImageCacheService imageCache,
         ThemeManagerService themeManager,
         CookieAuthService auth,
-        IDialogService dialog,
+        DialogService dialog,
         AudioEngine audio,
         YoutubeProvider youtube)
     {

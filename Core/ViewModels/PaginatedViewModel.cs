@@ -68,7 +68,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         var filterPredicate = this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.TaskpoolScheduler)
-            .Select(query => BuildFilterPredicate(query))
+            .Select(BuildFilterPredicate)
             .StartWith(BuildFilterPredicate(FilterQuery));
 
         _sourceList.Connect()

@@ -6,93 +6,92 @@ using Avalonia.Threading;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Videos;
-using LMP.UI.Dialogs;
 using LMP.Core.Youtube.Search;
+using LMP.UI.Dialogs;
+using LMP.UI.Dialogs.Content;
+using LMP.Features.Shell;
 
 namespace LMP.Core.Services;
 
-public interface IDialogService
+/// <summary>
+/// Централизованный сервис для показа диалоговых окон.
+/// 
+/// <para><b>Архитектура:</b></para>
+/// <list type="bullet">
+///   <item><b>Overlay-диалоги</b> — рендерятся через DialogHost поверх контента,
+///     но ПОД TopBar и PlayerBar. TopBar, уведомления и кнопки окна остаются активными.
+///     Навигация блокируется автоматически.</item>
+///   <item><b>Модальные окна</b> — BotDetection и StreamUnavailable.
+///     Блокируют ВСЁ приложение. Используются только для критичных ошибок.</item>
+/// </list>
+/// 
+/// <para><b>Паттерн для overlay-диалогов:</b></para>
+/// <code>
+/// 1. Создать Content/ViewModel с callback'ом (OnResult / OnClose)
+/// 2. Установить callback → tcs.TrySetResult() + dialogHost.CloseDialog()
+/// 3. Вызвать dialogHost.ShowAsync() (fire-and-forget)
+/// 4. await tcs.Task для получения результата
+/// </code>
+/// 
+/// <para><b>Почему два шага (TCS + ShowAsync):</b></para>
+/// <para>ShowAsync ожидает закрытия диалога, но нам нужен типизированный результат.
+/// TCS позволяет получить конкретный тип (bool, string?, List и т.д.)
+/// независимо от generic-параметра ShowAsync.</para>
+/// </summary>
+public sealed class DialogService
 {
-    Task<bool> ConfirmAsync(string title, string message);
-    Task<bool> ConfirmAsync(string title, string message, string confirmText, string cancelText);
-    Task<string?> SelectFolderAsync(string? startPath = null);
-    Task ShowInfoAsync(string title, string message);
-    Task ShowInfoAsync(string title, string message, string buttonText);
-    Task<string?> ShowInputAsync(string title, string prompt, string? watermark = null);
-    Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated);
+    private static LocalizationService L => LocalizationService.Instance;
+
+    private readonly CookieAuthService _authService;
+    private readonly NotificationService _notifications;
+    private readonly Func<DialogHostViewModel> _getDialogHost;
 
     /// <summary>
-    /// Объединённый диалог синхронизации: выбор плейлистов + разрешение конфликтов.
-    /// Возвращает список решений (Skip-элементы исключены).
+    /// Активный диалог BotDetection — синглтон для предотвращения дублей.
     /// </summary>
-    Task<List<SyncDecision>> ShowSyncSelectionAsync(
-        IEnumerable<PlaylistSearchResult> items,
-        ISet<string> existingLocalNames);
-
-    /// <summary>
-    /// Диалог «Добавить трек в плейлист» — список плейлистов с CheckBox'ами.
-    /// Возвращает список ID плейлистов, в которые нужно добавить трек. Пустой = отмена.
-    /// </summary>
-    Task<List<string>> ShowAddToPlaylistDialogAsync(TrackInfo track);
-
-    /// <summary>
-    /// Диалог редактирования плейлиста: название, обложка, цвет, синхронизация.
-    /// Возвращает null при отмене.
-    /// </summary>
-    Task<EditPlaylistResult?> ShowEditPlaylistDialogAsync(Playlist playlist);
-
-    /// <summary>
-    /// Показывает диалог ожидания bot detection cooldown.
-    /// </summary>
-    Task ShowBotDetectionCooldownAsync(TimeSpan waitTime);
-
-    /// <summary>
-    /// Показывает диалог ошибки недоступности стрима.
-    /// </summary>
-    Task ShowStreamUnavailableAsync(StreamUnavailableException exception);
-
-    /// <summary>
-    /// Показывает диалог общей ошибки воспроизведения.
-    /// </summary>
-    Task ShowPlaybackErrorAsync(string videoId, string errorMessage, Exception? exception = null);
-
-    /// <summary>
-    /// Показывает диалог требования авторизации.
-    /// </summary>
-    Task ShowLoginRequiredAsync(LoginRequiredException exception);
-
-    Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync();
-}
-
-public sealed class DialogService : IDialogService
-{
-    private static readonly LocalizationService L = LocalizationService.Instance;
-
-    private readonly CookieAuthService? _authService;
-
-    // Синглтоны для диалогов, которые не должны дублироваться
     private BotDetectionDialog? _activeBotDetectionDialog;
     private readonly Lock _botDetectionLock = new();
 
-    public DialogService(CookieAuthService? authService)
+    /// <param name="authService">Сервис авторизации — для проверки состояния входа в YouTube.</param>
+    /// <param name="notifications">Сервис уведомлений — для toast-сообщений внутри диалогов синхронизации.</param>
+    /// <param name="clipboard">Сервис буфера обмена — для копирования ссылок в диалогах.</param>
+    /// <param name="getDialogHost">
+    /// Lazy accessor для DialogHostViewModel.
+    /// Используется <c>Func</c> вместо прямой инъекции из-за циклической зависимости:
+    /// DialogService создаётся раньше MainWindowViewModel.
+    /// </param>
+    public DialogService(
+        CookieAuthService authService,
+        NotificationService notifications,
+        Func<DialogHostViewModel> getDialogHost)
     {
         _authService = authService;
+        _notifications = notifications;
+        _getDialogHost = getDialogHost;
     }
 
+    #region Helpers
+
+    /// <summary>
+    /// Получает главное окно если оно загружено и видимо.
+    /// Используется только для модальных диалогов (BotDetection, StreamUnavailable).
+    /// </summary>
     private static Window? GetMainWindow()
     {
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = desktop.MainWindow;
             if (window is { IsLoaded: true, IsVisible: true })
-            {
                 return window;
-            }
         }
         return null;
     }
 
-    private static async Task<T?> ShowDialogSafeAsync<T>(Window dialog, Window owner)
+    /// <summary>
+    /// Безопасный показ модального Window-based диалога.
+    /// Включает Task.Yield() для корректной работы с Avalonia event loop.
+    /// </summary>
+    private static async Task<T?> ShowModalSafeAsync<T>(Window dialog, Window owner)
     {
         try
         {
@@ -101,127 +100,324 @@ public sealed class DialogService : IDialogService
         }
         catch (Exception ex)
         {
-            Log.Error($"[Dialog] Error showing dialog: {ex.Message}");
+            Log.Error($"[Dialog] Modal dialog error: {ex.Message}");
             return default;
         }
     }
 
-    #region Basic Dialogs
+    #endregion
 
-    public async Task<string?> ShowInputAsync(string title, string prompt, string? watermark = null)
+    #region Basic Dialogs (Overlay)
+
+    /// <summary>
+    /// Показывает диалог подтверждения (Yes/No, OK/Cancel).
+    /// </summary>
+    /// <param name="title">Заголовок.</param>
+    /// <param name="message">Текст сообщения.</param>
+    /// <param name="confirmText">Текст кнопки подтверждения.</param>
+    /// <param name="cancelText">Текст кнопки отмены.</param>
+    /// <returns><c>true</c> если подтверждено, <c>false</c> если отменено.</returns>
+    public async Task<bool> ConfirmAsync(
+        string title, string message,
+        string confirmText, string cancelText)
     {
-        return await Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            var window = GetMainWindow();
-            if (window == null) return null;
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<bool>();
 
-            var dialog = new InputDialog
+        var content = new ConfirmDialogContent(
+            title, message, confirmText, cancelText,
+            onResult: result =>
             {
-                DialogTitle = title,
-                PromptMessage = prompt
-            };
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            });
 
-            if (!string.IsNullOrEmpty(watermark))
-                dialog.Watermark = watermark;
-
-            return await ShowDialogSafeAsync<string>(dialog, window);
-        });
+        _ = host.ShowAsync<object>(content);
+        return await tcs.Task;
     }
 
-    public async Task<bool> ConfirmAsync(string title, string message, string confirmText, string cancelText)
+    /// <summary>
+    /// Показывает диалог подтверждения со стандартными кнопками OK / Cancel.
+    /// </summary>
+    public Task<bool> ConfirmAsync(string title, string message) =>
+        ConfirmAsync(title, message, L["Common_OK"], L["Common_Cancel"]);
+
+    /// <summary>
+    /// Показывает информационный диалог с одной кнопкой.
+    /// </summary>
+    /// <param name="title">Заголовок.</param>
+    /// <param name="message">Текст сообщения.</param>
+    /// <param name="buttonText">Текст кнопки закрытия.</param>
+    public async Task ShowInfoAsync(string title, string message, string buttonText)
     {
-        return await Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            var window = GetMainWindow();
-            if (window == null) return false;
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<object?>();
 
-            var dialog = new ConfirmDialog
+        var content = new InfoDialogContent(
+            title, message, buttonText,
+            onClose: () =>
             {
-                DialogTitle = title,
-                Message = message,
-                ConfirmText = confirmText,
-                CancelText = cancelText
-            };
+                tcs.TrySetResult(null);
+                host.CloseDialog();
+            });
 
-            var result = await ShowDialogSafeAsync<bool?>(dialog, window);
-            return result == true;
-        });
+        _ = host.ShowAsync<object>(content);
+        await tcs.Task;
     }
 
-    public async Task<bool> ConfirmAsync(string title, string message) =>
-        await ConfirmAsync(title, message, L["Common_OK"], L["Common_Cancel"]);
+    /// <summary>
+    /// Показывает информационный диалог со стандартной кнопкой OK.
+    /// </summary>
+    public Task ShowInfoAsync(string title, string message) =>
+        ShowInfoAsync(title, message, L["Common_OK"]);
 
+    /// <summary>
+    /// Показывает диалог ввода текста.
+    /// </summary>
+    /// <param name="title">Заголовок.</param>
+    /// <param name="prompt">Подсказка над полем ввода.</param>
+    /// <param name="watermark">Placeholder в поле ввода.</param>
+    /// <returns>Введённый текст, или <c>null</c> при отмене.</returns>
+    public async Task<string?> ShowInputAsync(
+        string title, string prompt, string? watermark = null)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<string?>();
+
+        var content = new InputDialogContent(
+            title, prompt,
+            watermark ?? L["Input_Watermark"],
+            onResult: result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            });
+
+        _ = host.ShowAsync<object>(content);
+        return await tcs.Task;
+    }
+
+    /// <summary>
+    /// Показывает системный диалог выбора папки.
+    /// Это единственный диалог использующий нативный OS picker.
+    /// </summary>
+    /// <param name="startPath">Начальный путь (опционально).</param>
+    /// <returns>Выбранный путь, или <c>null</c> при отмене.</returns>
     public async Task<string?> SelectFolderAsync(string? startPath = null)
     {
         return await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = GetMainWindow();
             if (window == null) return null;
+
             var storage = window.StorageProvider;
-            IStorageFolder? suggestedStartLocation = null;
+            IStorageFolder? suggested = null;
+
             if (!string.IsNullOrEmpty(startPath) && Directory.Exists(startPath))
-                suggestedStartLocation = await storage.TryGetFolderFromPathAsync(startPath);
+                suggested = await storage.TryGetFolderFromPathAsync(startPath);
 
             var result = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions
             {
                 Title = L["Dialog_SelectDownloadFolder_Title"],
-                SuggestedStartLocation = suggestedStartLocation,
+                SuggestedStartLocation = suggested,
                 AllowMultiple = false
             });
+
             return result.Count > 0 ? result[0].Path.LocalPath : null;
         });
     }
 
-    public async Task ShowInfoAsync(string title, string message, string buttonText)
+    #endregion
+
+    #region Playlist Dialogs (Overlay)
+
+    /// <summary>
+    /// Диалог создания нового плейлиста.
+    /// Включает PlaylistEditorControl и опциональный переключатель синхронизации.
+    /// </summary>
+    /// <returns>Результат создания, или <c>null</c> при отмене.</returns>
+    public async Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync()
     {
-        await Dispatcher.UIThread.InvokeAsync(async () =>
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<CreatePlaylistResult?>();
+
+        var vm = new CreatePlaylistDialogViewModel(_authService.IsAuthenticated)
         {
-            var window = GetMainWindow();
-            if (window == null) return;
-            var dialog = new InfoDialog { DialogTitle = title, Message = message, ButtonText = buttonText };
-            await ShowDialogSafeAsync<object>(dialog, window);
-        });
+            OnResult = result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
     }
 
-    public async Task ShowInfoAsync(string title, string message) =>
-        await ShowInfoAsync(title, message, L["Common_OK"]);
+    /// <summary>
+    /// Диалог удаления плейлиста.
+    /// Предлагает удалить только локально или также из YouTube.
+    /// </summary>
+    /// <param name="playlist">Удаляемый плейлист.</param>
+    /// <param name="isAuthenticated">Авторизован ли пользователь (влияет на доступность опции «удалить из облака»).</param>
+    /// <returns>Выбранный вариант удаления, или <c>null</c> при отмене.</returns>
+    public async Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(
+        Playlist playlist, bool isAuthenticated)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<DeletePlaylistResult?>();
+
+        var vm = new DeletePlaylistDialogViewModel(playlist, isAuthenticated)
+        {
+            OnResult = result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
+    }
+
+    /// <summary>
+    /// Диалог «Добавить трек в плейлист» — список плейлистов с чекбоксами.
+    /// </summary>
+    /// <param name="track">Трек для добавления.</param>
+    /// <returns>Список ID плейлистов. Пустой при отмене.</returns>
+    public async Task<List<string>> ShowAddToPlaylistDialogAsync(TrackInfo track)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<List<string>>();
+
+        var library = Microsoft.Extensions.DependencyInjection
+            .ServiceProviderServiceExtensions
+            .GetRequiredService<LibraryService>(Program.Services);
+        var playlists = await library.GetAllPlaylistsAsync();
+
+        var vm = new AddToPlaylistDialogViewModel(track, playlists)
+        {
+            OnResult = result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
+    }
+
+    /// <summary>
+    /// Диалог редактирования плейлиста: название, обложка, описание, цвет, синхронизация.
+    /// Загружает до 200 треков для CoverPicker (выбор мозаики из обложек треков).
+    /// </summary>
+    /// <param name="playlist">Редактируемый плейлист.</param>
+    /// <returns>Результат редактирования, или <c>null</c> при отмене.</returns>
+    public async Task<EditPlaylistResult?> ShowEditPlaylistDialogAsync(Playlist playlist)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<EditPlaylistResult?>();
+
+        // Загружаем треки для CoverPicker (мозаика из обложек)
+        IReadOnlyList<TrackInfo>? tracks = null;
+        try
+        {
+            var library = Microsoft.Extensions.DependencyInjection
+                .ServiceProviderServiceExtensions
+                .GetRequiredService<LibraryService>(Program.Services);
+            var loaded = await library.GetPlaylistTracksAsync(playlist.Id, limit: 200);
+            if (loaded.Count > 0) tracks = loaded;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[DialogService] CoverPicker tracks load failed: {ex.Message}");
+        }
+
+        var vm = new EditPlaylistDialogViewModel(
+            playlist, _authService.IsAuthenticated, tracks)
+        {
+            OnResult = result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
+    }
 
     #endregion
 
-    #region Sync Dialogs
+    #region Sync Dialogs (Overlay)
 
+    /// <summary>
+    /// Диалог массовой синхронизации: выбор плейлистов + разрешение конфликтов.
+    /// Включает поиск, глобальные шаблоны действий и копирование ссылок.
+    /// </summary>
+    /// <param name="items">Плейлисты с YouTube для выбора.</param>
+    /// <param name="existingLocalNames">Имена локальных плейлистов — для определения конфликтов.</param>
+    /// <param name="trackCounts">Словарь {YouTubePlaylistId → кол-во треков} (опционально).</param>
+    /// <returns>Список решений (Skip-элементы исключены). Пустой при отмене.</returns>
     public async Task<List<SyncDecision>> ShowSyncSelectionAsync(
         IEnumerable<PlaylistSearchResult> items,
-        ISet<string> existingLocalNames)
+        ISet<string> existingLocalNames,
+        IReadOnlyDictionary<string, int>? trackCounts = null)
     {
-        return await Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            var window = GetMainWindow();
-            if (window == null) return new List<SyncDecision>();
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<List<SyncDecision>>();
 
-            var vm = new SyncSelectionViewModel(items, existingLocalNames);
-            var dialog = new SyncSelectionDialog { DataContext = vm };
-            var result = await ShowDialogSafeAsync<List<SyncDecision>>(dialog, window);
-            return result ?? new List<SyncDecision>();
-        });
+        var vm = new SyncSelectionViewModel(
+            _notifications,
+            items, existingLocalNames, trackCounts)
+        {
+            OnResult = result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
     }
 
-    public async Task<DeletePlaylistResult?> ShowDeletePlaylistDialogAsync(Playlist playlist, bool isAuthenticated)
+    /// <summary>
+    /// Диалог синхронизации одного плейлиста: preview различий + выбор стратегии.
+    /// </summary>
+    /// <param name="preview">Снимок различий между локальным и облачным состоянием.</param>
+    /// <returns>Опции синхронизации, или <c>null</c> при отмене.</returns>
+    public async Task<PlaylistSyncOptions?> ShowPlaylistSyncDialogAsync(
+        PlaylistSyncPreview preview)
     {
-        return await Dispatcher.UIThread.InvokeAsync(async () =>
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<PlaylistSyncOptions?>();
+
+        var vm = new SyncPlaylistDialogViewModel(preview)
         {
-            var window = GetMainWindow();
-            if (window == null) return null;
-            var vm = new DeletePlaylistDialogViewModel(playlist, isAuthenticated);
-            var dialog = new DeletePlaylistDialog { DataContext = vm };
-            return await ShowDialogSafeAsync<DeletePlaylistResult?>(dialog, window);
-        });
+            OnResult = result =>
+            {
+                tcs.TrySetResult(result);
+                host.CloseDialog(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
     }
 
     #endregion
 
-    #region Bot Detection / Stream Errors
+    #region Critical Dialogs (Modal Windows)
 
+    /// <summary>
+    /// Диалог ожидания bot detection cooldown.
+    /// 
+    /// <para><b>МОДАЛЬНЫЙ:</b> блокирует ВСЁ окно включая TopBar.</para>
+    /// <para>Синглтон — повторные вызовы обновляют существующий диалог.</para>
+    /// </summary>
+    /// <param name="waitTime">Начальное время ожидания.</param>
     public async Task ShowBotDetectionCooldownAsync(TimeSpan waitTime)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -231,17 +427,14 @@ public sealed class DialogService : IDialogService
 
             lock (_botDetectionLock)
             {
-                // Если диалог уже открыт — обновляем его, не создаём новый
-                if (_activeBotDetectionDialog != null && _activeBotDetectionDialog.IsVisible)
+                if (_activeBotDetectionDialog is { IsVisible: true })
                 {
-                    // Обновляем таймер существующего диалога
                     _activeBotDetectionDialog.UpdateCountdown(
                         VideoController.GetRemainingCooldown(),
                         VideoController.CooldownDuration);
                     return;
                 }
 
-                // Создаём новый диалог
                 _activeBotDetectionDialog = new BotDetectionDialog
                 {
                     DialogTitle = L["Dialog_BotDetection_Title"],
@@ -255,7 +448,7 @@ public sealed class DialogService : IDialogService
 
             try
             {
-                await ShowDialogSafeAsync<bool?>(_activeBotDetectionDialog, window);
+                await ShowModalSafeAsync<bool?>(_activeBotDetectionDialog, window);
             }
             finally
             {
@@ -267,6 +460,11 @@ public sealed class DialogService : IDialogService
         });
     }
 
+    /// <summary>
+    /// Диалог ошибки недоступности стрима.
+    /// <para><b>МОДАЛЬНЫЙ:</b> блокирует ВСЁ окно.</para>
+    /// </summary>
+    /// <param name="exception">Исключение с деталями ошибки.</param>
     public async Task ShowStreamUnavailableAsync(StreamUnavailableException exception)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -276,12 +474,16 @@ public sealed class DialogService : IDialogService
 
             var dialog = new StreamUnavailableDialog();
             dialog.ConfigureForException(exception);
-
-            await ShowDialogSafeAsync<object>(dialog, window);
+            await ShowModalSafeAsync<object>(dialog, window);
         });
     }
 
-    public async Task ShowPlaybackErrorAsync(string videoId, string errorMessage, Exception? exception = null)
+    /// <summary>
+    /// Диалог общей ошибки воспроизведения.
+    /// <para><b>МОДАЛЬНЫЙ:</b> блокирует ВСЁ окно.</para>
+    /// </summary>
+    public async Task ShowPlaybackErrorAsync(
+        string videoId, string errorMessage, Exception? exception = null)
     {
         await Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -290,77 +492,20 @@ public sealed class DialogService : IDialogService
 
             var dialog = new StreamUnavailableDialog();
             dialog.ConfigureForError(videoId, errorMessage, exception);
-
-            await ShowDialogSafeAsync<object>(dialog, window);
+            await ShowModalSafeAsync<object>(dialog, window);
         });
     }
 
-    public async Task ShowLoginRequiredAsync(LoginRequiredException exception)
-    {
-        await Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            var window = GetMainWindow();
-            if (window == null) return;
-
-            var L = LocalizationService.Instance;
-            var dialog = new InfoDialog
-            {
-                DialogTitle = L["Dialog_Login_Title"],
-                Message = L[exception.GetLocalizationKey()],
-                ButtonText = L["Common_OK"]
-            };
-
-            await ShowDialogSafeAsync<object>(dialog, window);
-        });
-    }
-
-    #endregion
-
-    #region Playlists
-
-    public async Task<CreatePlaylistResult?> ShowCreatePlaylistDialogAsync()
-    {
-        var owner = GetMainWindow();
-        if (owner == null) return null;
-
-        var isAuthenticated = _authService?.IsAuthenticated == true;
-        var vm = new CreatePlaylistDialogViewModel(isAuthenticated);
-        var dialog = new CreatePlaylistDialog(vm);
-
-        // ShowDialog<T> блокирует до Close(result)
-        return await dialog.ShowDialog<CreatePlaylistResult?>(owner);
-    }
-
-    public async Task<List<string>> ShowAddToPlaylistDialogAsync(TrackInfo track)
-    {
-        return await Dispatcher.UIThread.InvokeAsync(async () =>
-        {
-            var window = GetMainWindow();
-            if (window == null) return new List<string>();
-
-            var library = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
-                .GetRequiredService<LibraryService>(Program.Services);
-            var playlists = await library.GetAllPlaylistsAsync();
-
-            var vm = new AddToPlaylistDialogViewModel(track, playlists);
-            var dialog = new AddToPlaylistDialog { DataContext = vm };
-            var result = await ShowDialogSafeAsync<List<string>>(dialog, window);
-            return result ?? new List<string>();
-        });
-    }
-
-    public async Task<EditPlaylistResult?> ShowEditPlaylistDialogAsync(Playlist playlist)
-    {
-        var owner = GetMainWindow();
-        if (owner == null) return null;
-
-        var isAuthenticated = _authService?.IsAuthenticated == true;
-        var vm = new EditPlaylistDialogViewModel(playlist, isAuthenticated);
-        var dialog = new EditPlaylistDialog(vm);
-
-        // ShowDialog<T> блокирует до Close(result)
-        return await dialog.ShowDialog<EditPlaylistResult?>(owner);
-    }
+    /// <summary>
+    /// Диалог требования авторизации.
+    /// Показывается как overlay — некритичная ошибка.
+    /// </summary>
+    /// <param name="exception">Исключение с типом требуемой авторизации.</param>
+    public Task ShowLoginRequiredAsync(LoginRequiredException exception) =>
+        ShowInfoAsync(
+            L["Dialog_Login_Title"],
+            L[exception.GetLocalizationKey()],
+            L["Common_OK"]);
 
     #endregion
 }

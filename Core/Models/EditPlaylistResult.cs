@@ -10,6 +10,17 @@ public sealed class EditPlaylistResult
     public string? CustomColor { get; set; }
 
     /// <summary>
+    /// Описание плейлиста. null = не менялось.
+    /// </summary>
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// Вычисленный из обложки цвет (если был пересчитан в диалоге).
+    /// null = не пересчитывался, оставляем как есть.
+    /// </summary>
+    public string? ComputedColor { get; set; }
+
+    /// <summary>
     /// Изменение синхронизации с YouTube.
     /// null = пользователь не трогал переключатель.
     /// true = хочет привязать к облаку.

@@ -18,7 +18,7 @@ public sealed class TrackItemViewModel : ViewModelBase
     private readonly AudioEngine _audio;
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
-    private readonly IDialogService _dialog;
+    private readonly DialogService _dialog;
 
     private readonly ObservableAsPropertyHelper<bool> _isLiked;
     private readonly ObservableAsPropertyHelper<bool> _isDownloaded;
@@ -117,7 +117,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         DownloadService downloads,
         MusicLibraryManager manager,
         LibraryService library,
-        IDialogService dialog,
+        DialogService dialog,
         Action<TrackInfo>? onPlay = null)
     {
         Track = track;

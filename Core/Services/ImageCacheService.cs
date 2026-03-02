@@ -130,6 +130,10 @@ public sealed class ImageCacheService : IDisposable
     {
         if (_isDisposed || string.IsNullOrEmpty(url)) return null;
 
+        if (!url.StartsWith(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            return null;
+
         var memoryKey = GetMemoryCacheKey(url, decodeWidth);
 
         // 1. Memory cache (с AddRef)
