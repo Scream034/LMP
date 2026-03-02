@@ -2,6 +2,11 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia">
 
+    <!-- Убираем обводку фокуса -->
+    <Style Selector="Control:focus-visible">
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+    </Style>
+
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- LISTBOX / LISTBOXITEM                                               -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
@@ -466,11 +471,11 @@
         <Setter Property="Template">
             <ControlTemplate TargetType="MenuItem">
                 <Border Name="PART_LayoutRoot"
-                        Background="Transparent"
-                        BorderBrush="Transparent"
-                        BorderThickness="1"
-                        CornerRadius="6"
-                        Padding="{TemplateBinding Padding}">
+                    Background="Transparent"
+                    BorderBrush="Transparent"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="{TemplateBinding Padding}">
                     <Border.Transitions>
                         <Transitions>
                             <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
@@ -480,27 +485,27 @@
                     <Grid ColumnDefinitions="24, *, Auto">
                         <!-- Icon -->
                         <ContentPresenter Name="PART_IconPresenter"
-                                          Content="{TemplateBinding Icon}"
-                                          Width="16" Height="16"
-                                          HorizontalAlignment="Left"
-                                          VerticalAlignment="Center" />
+                            Content="{TemplateBinding Icon}"
+                            Width="16" Height="16"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center" />
 
                         <!-- Header -->
                         <ContentPresenter Name="PART_HeaderPresenter"
-                                          Grid.Column="1"
-                                          Content="{TemplateBinding Header}"
-                                          VerticalAlignment="Center"
-                                          HorizontalAlignment="Left"
-                                          RecognizesAccessKey="True" />
+                            Grid.Column="1"
+                            Content="{TemplateBinding Header}"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Left"
+                            RecognizesAccessKey="True" />
 
                         <!-- Input Gesture Text -->
                         <TextBlock Name="PART_InputGestureText"
-                                   Grid.Column="2"
-                                   Text="{TemplateBinding InputGesture}"
-                                   Margin="16,0,0,0"
-                                   VerticalAlignment="Center"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   FontSize="12" />
+                            Grid.Column="2"
+                            Text="{TemplateBinding InputGesture}"
+                            Margin="16,0,0,0"
+                            VerticalAlignment="Center"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            FontSize="12" />
                     </Grid>
                 </Border>
             </ControlTemplate>
@@ -571,9 +576,44 @@
         </Setter>
     </Style>
 
-    <!-- Убираем обводку фокуса -->
-    <Style Selector="Control:focus-visible">
-        <Setter Property="FocusAdorner" Value="{x:Null}" />
+    <!-- ═══════════════════════════════════════════════════════════════════════════ -->
+    <!-- SPINNING ANIMATION - для иконок загрузки (Kind="Loading" Classes="spinning") -->
+    <!-- Работает с MaterialIcon и любым Control                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Вариант для MaterialIcon (основной) -->
+    <Style Selector="mi|MaterialIcon.spinning">
+        <Setter Property="RenderTransformOrigin" Value="50%, 50%" />
+        <Setter Property="RenderTransform">
+            <RotateTransform />
+        </Setter>
+        <Style.Animations>
+            <Animation Duration="0:0:0.8" IterationCount="Infinite">
+                <KeyFrame Cue="0%">
+                    <Setter Property="RotateTransform.Angle" Value="0" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="RotateTransform.Angle" Value="360" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
     </Style>
 
+    <!-- Вариант для Border (если понадобится) -->
+    <Style Selector="Border.spinning">
+        <Setter Property="RenderTransformOrigin" Value="50%, 50%" />
+        <Setter Property="RenderTransform">
+            <RotateTransform />
+        </Setter>
+        <Style.Animations>
+            <Animation Duration="0:0:0.8" IterationCount="Infinite">
+                <KeyFrame Cue="0%">
+                    <Setter Property="RotateTransform.Angle" Value="0" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="RotateTransform.Angle" Value="360" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
 </Styles>

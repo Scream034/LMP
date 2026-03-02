@@ -23,11 +23,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
     private readonly MusicLibraryManager _manager;
-    private readonly IDialogService _dialog;
+    private readonly DialogService _dialog;
     private readonly TrackViewModelFactory _vmFactory;
     private readonly DominantColorService _dominantColor;
-    private readonly YoutubeProvider _youtube;
     private readonly MainWindowViewModel _mainWindow;
+    private readonly PlaylistEditService _editService;
+    private readonly PlaylistSyncService _syncService;
 
     private readonly EventHandler<string> _languageChangedHandler;
 
@@ -45,12 +46,24 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     private volatile bool _isSuspended;
 
+    /// <summary>
+    /// Текущий объект плейлиста, загруженный из БД.
+    /// Хранится для доступа к ComputedColor/EffectiveColor при градиенте.
+    /// </summary>
+    private Core.Models.Playlist? _currentPlaylist;
+
     #endregion
 
     #region Properties
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
+
+    /// <summary>
+    /// Описание плейлиста. Отображается в хедере под названием.
+    /// </summary>
+    [Reactive] public string? Description { get; private set; }
+
     [Reactive] public int TrackCount { get; private set; }
     [Reactive] public TimeSpan TotalDuration { get; private set; }
     [Reactive] public string FormattedDuration { get; set; } = "";
@@ -64,6 +77,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     [Reactive] public bool IsPlayingThisPlaylist { get; private set; }
     [Reactive] public bool IsShuffleActive { get; private set; }
     [Reactive] public bool IsDownloadingActive { get; private set; }
+
+    /// <summary>
+    /// Идёт ли синхронизация/обновление плейлиста.
+    /// Используется для блокировки кнопки RefreshPlaylist.
+    /// </summary>
+    [Reactive] public bool IsSyncing { get; private set; }
 
     [Reactive] public bool CanReorderItems { get; private set; }
 
@@ -111,11 +130,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
-        IDialogService dialog,
+        DialogService dialog,
         TrackViewModelFactory vmFactory,
         DominantColorService dominantColor,
-        YoutubeProvider youtube,
-        MainWindowViewModel mainWindow)
+        MainWindowViewModel mainWindow,
+        PlaylistSyncService syncService,
+        PlaylistEditService editService)
     {
         _audio = audio;
         _downloads = downloads;
@@ -123,8 +143,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         _dialog = dialog;
         _vmFactory = vmFactory;
         _dominantColor = dominantColor;
-        _youtube = youtube;
         _mainWindow = mainWindow;
+        _syncService = syncService;
+        _editService = editService;
 
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
@@ -159,8 +180,14 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             await LoadPlaylistAsync(_currentPlaylistId);
         }));
 
+        // RefreshPlaylistCommand: canExecute = IsCloud && !IsSyncing
+        var canRefresh = this.WhenAnyValue(
+            x => x.IsCloud,
+            x => x.IsSyncing,
+            (isCloud, isSyncing) => isCloud && !isSyncing);
+
         RefreshPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
-            () => LoadPlaylistAsync(_currentPlaylistId)));
+            RefreshPlaylistAsync, canRefresh));
 
         ShufflePlayCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShufflePlayAsync, hasTracks));
         DownloadAllCommand = CreateCommand(ReactiveCommand.CreateFromTask(DownloadAllAsync, hasTracks));
@@ -337,8 +364,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var playlist = await LibService.GetPlaylistAsync(playlistId);
         if (playlist == null) return;
 
+        // Сохраняем ссылку на текущий плейлист для доступа к ComputedColor/EffectiveColor
+        _currentPlaylist = playlist;
+
         PlaylistName = playlist.Name;
         ThumbnailUrl = playlist.ThumbnailUrl;
+        Description = playlist.Description;
         CanEdit = playlist.IsEditable;
         IsCloud = playlist.IsFromAccount;
         IsReadOnly = !playlist.IsEditable;
@@ -360,252 +391,146 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     #endregion
 
-    #region Edit Playlist
+    #region Edit Playlist — delegated to PlaylistEditService
 
+    /// <summary>
+    /// Edit playlist using centralized PlaylistEditService.
+    /// After successful edit, reloads playlist header data.
+    /// </summary>
     private async Task EditPlaylistAsync()
     {
-        var playlist = await LibService.GetPlaylistAsync(_currentPlaylistId);
-        if (playlist == null) return;
+        var result = await _editService.EditPlaylistAsync(
+            _currentPlaylistId,
+            _mainWindow.LockNavigation,
+            _mainWindow.UnlockNavigation);
 
-        var result = await _dialog.ShowEditPlaylistDialogAsync(playlist);
-        if (result == null) return;
-
-        // ═══ Определяем что изменилось ═══
-
-        var newName = result.Name?.Trim();
-        bool nameChanged = !string.IsNullOrWhiteSpace(newName)
-                        && !string.Equals(newName, playlist.Name, StringComparison.Ordinal);
-        bool thumbnailChanged = !string.Equals(
-            result.ThumbnailUrl, playlist.ThumbnailUrl, StringComparison.Ordinal);
-        bool colorChanged = !string.Equals(
-            result.CustomColor, playlist.CustomColor, StringComparison.Ordinal);
-        bool syncChanged = result.SyncToCloud.HasValue
-                        && result.SyncToCloud.Value != playlist.IsFromAccount;
-
-        if (!nameChanged && !thumbnailChanged && !colorChanged && !syncChanged)
-            return;
-
-        bool localChanged = false;
-
-        // ═══ STEP 1: Обработка изменения синхронизации ═══
-
-        if (syncChanged)
+        if (result is { Changed: true })
         {
-            bool wantsSync = result.SyncToCloud!.Value;
-
-            if (wantsSync && !playlist.IsFromAccount)
-            {
-                // Привязка к облаку
-                localChanged |= await TryLinkToCloudAsync(playlist);
-            }
-            else if (!wantsSync && playlist.IsFromAccount)
-            {
-                // Отвязка от облака
-                localChanged |= await TryUnlinkFromCloudAsync(playlist);
-            }
-        }
-
-        // ═══ STEP 2: Переименование ═══
-
-        if (nameChanged)
-        {
-            // Если плейлист привязан к облаку — синхронизируем название
-            if (playlist.IsFromAccount && !string.IsNullOrEmpty(playlist.YoutubeId))
-            {
-                _mainWindow.LockNavigation(SL["Playlist_Renaming"] ?? "Renaming...");
-                try
-                {
-                    await _youtube.RenamePlaylistAsync(playlist.YoutubeId, newName!);
-                    playlist.Name = newName!;
-                    localChanged = true;
-                    Log.Info($"[Playlist] Renamed on YouTube: {playlist.YoutubeId} → '{newName}'");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"[Playlist] YouTube rename failed: {ex.Message}");
-                    await _dialog.ShowInfoAsync(
-                        SL["Dialog_Error_Title"] ?? "Error",
-                        string.Format(
-                            SL["Playlist_RenameCloudFailed"]
-                                ?? "Failed to rename on YouTube:\n{0}\n\nLocal name was not changed.",
-                            ex.Message));
-                    // НЕ применяем переименование
-                }
-                finally
-                {
-                    _mainWindow.UnlockNavigation();
-                }
-            }
-            else
-            {
-                // Локальный плейлист — просто меняем
-                playlist.Name = newName!;
-                localChanged = true;
-            }
-        }
-
-        // ═══ STEP 3: Thumbnail (только локально) ═══
-
-        if (thumbnailChanged)
-        {
-            if (!string.IsNullOrWhiteSpace(result.ThumbnailUrl))
-            {
-                if (PlaylistEditorViewModel.IsValidUri(result.ThumbnailUrl))
-                {
-                    playlist.ThumbnailUrl = result.ThumbnailUrl;
-                    localChanged = true;
-                }
-                else
-                {
-                    Log.Warn($"[Playlist] Invalid thumbnail URL: {result.ThumbnailUrl}");
-                    await _dialog.ShowInfoAsync(
-                        SL["Dialog_Warning_Title"] ?? "Warning",
-                        SL["Error_InvalidThumbnailUrl"]
-                            ?? "Invalid image URL. Thumbnail was not updated.");
-                }
-            }
-            else
-            {
-                playlist.ThumbnailUrl = null;
-                localChanged = true;
-            }
-        }
-
-        // ═══ STEP 4: Color (только локально) ═══
-
-        if (colorChanged)
-        {
-            playlist.CustomColor = result.CustomColor;
-            localChanged = true;
-        }
-
-        // ═══ STEP 5: Сохранение ═══
-
-        if (localChanged)
-        {
-            playlist.UpdatedAt = DateTime.Now;
-            Log.Info($"[Playlist] Saving: SyncMode={playlist.SyncMode}, YoutubeId={playlist.YoutubeId ?? "null"}, Name={playlist.Name}");
-            await LibService.AddOrUpdatePlaylistAsync(playlist);
-
-            // Verify save
-            var verify = await LibService.GetPlaylistAsync(_currentPlaylistId);
-            Log.Info($"[Playlist] Verified: SyncMode={verify?.SyncMode}, YoutubeId={verify?.YoutubeId ?? "null"}");
-
+            // Reload playlist header to reflect changes
+            // (name, thumbnail, description, sync status, gradient)
             await LoadPlaylistAsync(_currentPlaylistId);
-        }
-    }
-
-    /// <summary>
-    /// Привязывает локальный плейлист к YouTube Music.
-    /// </summary>
-    private async Task<bool> TryLinkToCloudAsync(Core.Models.Playlist playlist)
-    {
-        _mainWindow.LockNavigation(
-            SL["Playlist_LinkingToCloud"] ?? "Linking to YouTube Music...");
-        try
-        {
-            var ytId = await _youtube.CreatePlaylistAsync(playlist.Name);
-
-            if (string.IsNullOrEmpty(ytId))
-            {
-                await _dialog.ShowInfoAsync(
-                    SL["Dialog_Error_Title"] ?? "Error",
-                    SL["Playlist_CloudCreateFailed"]
-                        ?? "Could not create playlist in YouTube Music.");
-                return false;
-            }
-
-            playlist.YoutubeId = ytId;
-            playlist.SyncMode = PlaylistSyncMode.TwoWaySync;
-
-            Log.Info($"[Playlist] Linked to YouTube: {ytId}");
-
-            // Load track IDs from DB (playlist.TrackIds may be empty — it's JsonIgnore)
-            var trackIds = await LibService.GetPlaylistTrackIdsAsync(_currentPlaylistId);
-            if (trackIds.Count > 0)
-            {
-                _ = UploadTracksInBackgroundAsync(ytId, trackIds);
-            }
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Playlist] Cloud link failed: {ex.Message}");
-            await _dialog.ShowInfoAsync(
-                SL["Dialog_Error_Title"] ?? "Error",
-                string.Format(
-                    SL["Playlist_CloudLinkFailed"]
-                        ?? "Failed to link to YouTube Music:\n{0}",
-                    ex.Message));
-            return false;
-        }
-        finally
-        {
-            _mainWindow.UnlockNavigation();
-        }
-    }
-
-    /// <summary>
-    /// Отвязывает плейлист от YouTube Music (локальная копия становится независимой).
-    /// </summary>
-    private async Task<bool> TryUnlinkFromCloudAsync(Core.Models.Playlist playlist)
-    {
-        var confirm = await _dialog.ConfirmAsync(
-            SL["Dialog_Confirm_Title"] ?? "Confirm",
-            SL["Playlist_UnlinkConfirm"]
-                ?? "Unlink this playlist from YouTube Music?\n\n" +
-                   "The playlist will remain in your YouTube account, " +
-                   "but local changes will no longer sync.",
-            SL["Playlist_Unlink"] ?? "Unlink",
-            SL["Button_Cancel"] ?? "Cancel");
-
-        if (!confirm) return false;
-
-        playlist.SyncMode = PlaylistSyncMode.LocalOnly;
-        playlist.YoutubeId = null;
-
-        Log.Info($"[Playlist] Unlinked from YouTube: {playlist.Id}");
-        return true;
-    }
-
-    /// <summary>
-    /// Фоновая загрузка треков в облачный плейлист.
-    /// </summary>
-    private async Task UploadTracksInBackgroundAsync(string youtubePlaylistId, List<string> trackIds)
-    {
-        if (trackIds.Count == 0) return;
-
-        try
-        {
-            int uploaded = 0;
-            for (int i = 0; i < trackIds.Count; i++)
-            {
-                if (!trackIds[i].StartsWith("yt_")) continue;
-
-                await _youtube.AddToPlaylistAsync(youtubePlaylistId, trackIds[i]);
-                uploaded++;
-
-                // Rate limiting
-                await Task.Delay(uploaded % 5 == 0 ? 1000 : 300);
-            }
-
-            Log.Info($"[Playlist] Uploaded {uploaded} tracks to YouTube playlist {youtubePlaylistId}");
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Playlist] Background upload failed: {ex.Message}");
         }
     }
 
     #endregion
 
+    /// <summary>
+    /// Синхронизирует плейлист с YouTube через централизованный PlaylistSyncService.
+    /// 
+    /// <para><b>Алгоритм:</b></para>
+    /// <list type="number">
+    ///   <item>Блокирует кнопку (IsSyncing = true)</item>
+    ///   <item>Делегирует в PlaylistSyncService.SyncWithDialogAsync()</item>
+    ///   <item>PlaylistSyncService строит diff, показывает диалог, применяет стратегию</item>
+    ///   <item>После успешной синхронизации перезагружает данные плейлиста</item>
+    ///   <item>При ошибке показывает уведомление</item>
+    /// </list>
+    /// </summary>
+    private async Task RefreshPlaylistAsync()
+    {
+        if (IsSyncing || !IsCloud) return;
+
+        IsSyncing = true;
+        _mainWindow.LockNavigation(SL["Playlist_SyncInProgress"] ?? "Syncing...");
+
+        try
+        {
+            var result = await _syncService.SyncWithDialogAsync(_currentPlaylistId);
+
+            if (result == null)
+            {
+                // Пользователь отменил
+                return;
+            }
+
+            if (result.Success)
+            {
+                InvalidateAllTracksCache();
+                await LoadPlaylistAsync(_currentPlaylistId);
+
+                // Toast вместо диалога
+                if (result.TracksAddedLocally > 0 || result.TracksAddedToCloud > 0 ||
+                    result.TracksRemovedLocally > 0 || result.TracksRemovedFromCloud > 0 ||
+                    result.MetadataChanged)
+                {
+                    // Инжектируем NotificationService через DI
+                    var notifications = Microsoft.Extensions.DependencyInjection
+                        .ServiceProviderServiceExtensions
+                        .GetRequiredService<NotificationService>(Program.Services);
+
+                    await notifications.ShowToastAsync(
+                        titleKey: "Playlist_SyncComplete_Toast_Title",
+                        messageKey: "Playlist_SyncSuccess_Details",
+                        messageArgs: new object[]
+                        {
+                        result.TracksAddedLocally,
+                        result.TracksAddedToCloud,
+                        result.TracksRemovedLocally,
+                        result.TracksRemovedFromCloud
+                        },
+                        severity: NotificationSeverity.Success,
+                        durationMs: 4000);
+
+                    NotificationService.PlaySuccessSound();
+                }
+            }
+            else
+            {
+                // Ошибка синхронизации — ОСТАВИТЬ диалог (критичная ошибка)
+                await _dialog.ShowInfoAsync(
+                    SL["Dialog_Error_Title"] ?? "Error",
+                    result.ErrorMessage ?? SL["Playlist_SyncFailed"] ?? "Sync failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Playlist] Sync error: {ex.Message}");
+
+            // КРИТИЧНАЯ ошибка — ОСТАВИТЬ диалог
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Error_Title"] ?? "Error",
+                ex.Message);
+        }
+        finally
+        {
+            IsSyncing = false;
+            _mainWindow.UnlockNavigation();
+        }
+    }
+
     #region Private Methods
 
+    /// <summary>
+    /// Загружает градиент хедера с учётом приоритета цветов:
+    /// CustomColor → ComputedColor → доминантный из обложки → null.
+    /// 
+    /// <para>При вычислении доминантного цвета из обложки сохраняет его
+    /// как ComputedColor в БД, чтобы при следующей загрузке не пересчитывать.</para>
+    /// </summary>
     private async Task LoadHeaderGradientAsync()
     {
         try
         {
+            // ═══ STEP 1: Попробовать использовать EffectiveColor (CustomColor ?? ComputedColor) ═══
+            if (_currentPlaylist?.EffectiveColor is { } effectiveColorStr)
+            {
+                try
+                {
+                    var effectiveColor = Color.Parse(effectiveColorStr);
+                    await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        HeaderBackground = DominantColorService.CreateHeaderGradient(effectiveColor);
+                    });
+                    return;
+                }
+                catch (FormatException)
+                {
+                    Log.Warn($"[Playlist] Invalid EffectiveColor: {effectiveColorStr}");
+                    // Продолжаем — попробуем вычислить из обложки
+                }
+            }
+
+            // ═══ STEP 2: Вычислить из обложки ═══
             if (string.IsNullOrEmpty(ThumbnailUrl))
             {
                 await SetHeaderBackgroundAsync(null);
@@ -621,12 +546,20 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
             var dominantColor = await _dominantColor.GetDominantColorAsync(ThumbnailUrl);
 
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            if (dominantColor != null)
             {
-                HeaderBackground = dominantColor != null
-                    ? DominantColorService.CreateHeaderGradient(dominantColor.Value)
-                    : null;
-            });
+                // Сохраняем вычисленный цвет в БД для последующего использования
+                _ = SaveComputedColorAsync(dominantColor.Value);
+
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    HeaderBackground = DominantColorService.CreateHeaderGradient(dominantColor.Value);
+                });
+            }
+            else
+            {
+                await SetHeaderBackgroundAsync(null);
+            }
         }
         catch (HttpRequestException ex)
         {
@@ -650,6 +583,32 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         {
             Log.Warn($"[Playlist] Gradient error: {ex.Message}");
             await SetHeaderBackgroundAsync(null);
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет вычисленный доминантный цвет в поле ComputedColor плейлиста.
+    /// Выполняется тихо — ошибка сохранения не влияет на отображение.
+    /// </summary>
+    private async Task SaveComputedColorAsync(Color color)
+    {
+        if (_currentPlaylist == null) return;
+
+        var colorHex = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+
+        // Не сохраняем если уже совпадает
+        if (string.Equals(_currentPlaylist.ComputedColor, colorHex, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            _currentPlaylist.ComputedColor = colorHex;
+            await LibService.AddOrUpdatePlaylistAsync(_currentPlaylist);
+            Log.Debug($"[Playlist] ComputedColor saved: {colorHex} for {_currentPlaylistId}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Playlist] Failed to save ComputedColor: {ex.Message}");
         }
     }
 
@@ -821,6 +780,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             _trackChangeSub?.Dispose();
 
             InvalidateAllTracksCache();
+            _currentPlaylist = null;
         }
 
         base.Dispose(disposing);

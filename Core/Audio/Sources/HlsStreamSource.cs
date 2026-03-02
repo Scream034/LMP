@@ -353,7 +353,7 @@ public sealed partial class HlsStreamSource : IAudioSource
 
     private static string ResolveUrl(string baseUrl, string relativeUrl)
     {
-        if (relativeUrl.StartsWith("http://") || relativeUrl.StartsWith("https://"))
+        if (relativeUrl.StartsWith(Uri.UriSchemeHttp) || relativeUrl.StartsWith(Uri.UriSchemeHttps))
             return relativeUrl;
 
         return new Uri(new Uri(baseUrl), relativeUrl).ToString();

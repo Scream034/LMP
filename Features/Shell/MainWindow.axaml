@@ -245,9 +245,10 @@
             </StackPanel>
         </Grid>
 
-        <!-- ═══ MAIN CONTENT ═══ -->
+        <!-- ═══ MAIN CONTENT (обновить секцию Grid.Row="1") ═══ -->
         <Border Grid.Row="1" Background="{DynamicResource BgPrimaryBrush}" ClipToBounds="True">
             <Panel>
+                <!-- Страницы контента -->
                 <TransitioningContentControl Content="{Binding CurrentPage}"
                     IsTransitionReversed="False">
                     <TransitioningContentControl.PageTransition>
@@ -281,6 +282,7 @@
                     </TransitioningContentControl.ContentTemplate>
                 </TransitioningContentControl>
 
+                <!-- Navigation Lock Overlay (сетевые операции) -->
                 <Border IsVisible="{Binding IsNavigationLocked}" Background="#60000000"
                     IsHitTestVisible="True">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="24">
@@ -303,6 +305,12 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ═══ Dialog Host (ZIndex: 900) — над контентом, под TopBar ═══ -->
+                <shell:DialogHost DataContext="{Binding DialogHost}"
+                    ZIndex="900"
+                    IsVisible="{Binding HasActiveDialog}" />
+
+                <!-- Toast Overlay (ZIndex: 1000) -->
                 <notifications:ToastOverlay DataContext="{Binding ToastOverlay}" ZIndex="1000" />
             </Panel>
         </Border>

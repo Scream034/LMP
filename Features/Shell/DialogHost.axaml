@@ -1,0 +1,93 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:shell="using:LMP.Features.Shell"
+    xmlns:content="using:LMP.UI.Dialogs.Content"
+    xmlns:dialogs="using:LMP.UI.Dialogs"
+    x:Class="LMP.Features.Shell.DialogHost"
+    x:DataType="shell:DialogHostViewModel">
+
+    <UserControl.Styles>
+        <!-- Анимация появления диалога -->
+        <Style Selector="Border.dialog-backdrop">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.dialog-backdrop.visible">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- Анимация контента -->
+        <Style Selector="ContentControl.dialog-content">
+            <Setter Property="RenderTransform">
+                <ScaleTransform ScaleX="0.95" ScaleY="0.95" />
+            </Setter>
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.2"
+                        Easing="CubicEaseOut" />
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="ContentControl.dialog-content.visible">
+            <Setter Property="RenderTransform">
+                <ScaleTransform ScaleX="1" ScaleY="1" />
+            </Setter>
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+    </UserControl.Styles>
+
+    <!-- Полупрозрачный backdrop -->
+    <Border Background="#80000000"
+        IsHitTestVisible="True"
+        Classes="dialog-backdrop"
+        Classes.visible="{Binding HasActiveDialog}">
+
+        <!-- Центрированный контейнер диалога -->
+        <ContentControl Content="{Binding CurrentDialog}"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            MaxWidth="700"
+            MaxHeight="800"
+            Margin="24"
+            Classes="dialog-content"
+            Classes.visible="{Binding HasActiveDialog}"
+            RenderTransformOrigin="0.5,0.5">
+
+            <!-- DataTemplates для всех типов диалогов -->
+            <ContentControl.DataTemplates>
+
+                <!-- ViewModel-based dialogs: DataTemplate → Content UserControl -->
+                <DataTemplate DataType="{x:Type dialogs:DeletePlaylistDialogViewModel}">
+                    <content:DeletePlaylistDialogContent />
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type dialogs:AddToPlaylistDialogViewModel}">
+                    <content:AddToPlaylistDialogContent />
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type dialogs:CreatePlaylistDialogViewModel}">
+                    <content:CreatePlaylistDialogContent />
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type dialogs:EditPlaylistDialogViewModel}">
+                    <content:EditPlaylistDialogContent />
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type dialogs:SyncSelectionViewModel}">
+                    <content:SyncSelectionDialogContent />
+                </DataTemplate>
+
+                <DataTemplate DataType="{x:Type dialogs:SyncPlaylistDialogViewModel}">
+                    <content:SyncPlaylistDialogContent />
+                </DataTemplate>
+
+            </ContentControl.DataTemplates>
+        </ContentControl>
+    </Border>
+</UserControl>

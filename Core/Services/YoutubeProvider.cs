@@ -353,34 +353,15 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public async Task RemoveFromPlaylistAsync(string playlistId, string videoId, string setVideoId)
-    {
-        if (AuthService?.IsAuthenticated != true) return;
-
-        ThrowIfInCooldown();
-
-        try
-        {
-            var rawId = ExtractRawIdSpan(videoId).ToString();
-            await _youtube.Music.RemoveFromPlaylistAsync(playlistId, rawId, setVideoId);
-            Log.Info($"[Music] Removed item {setVideoId} from playlist {playlistId}");
-        }
-        catch (BotDetectionException) { throw; }
-        catch (Exception ex)
-        {
-            Log.Error($"[Music] Failed to remove from playlist: {ex.Message}");
-            throw;
-        }
-    }
-
     /// <summary>
-    /// Создаёт плейлист в YouTube Music аккаунте.
+    /// Creates a playlist in YouTube account. Optionally adds tracks in a single request.
     /// </summary>
-    /// <param name="title">Название плейлиста.</param>
-    /// <param name="description">Описание (опционально).</param>
-    /// <returns>YouTube ID созданного плейлиста.</returns>
-    /// <exception cref="InvalidOperationException">Если пользователь не аутентифицирован.</exception>
-    public async Task<string?> CreatePlaylistAsync(string title, string description = "")
+    /// <param name="title">Playlist title.</param>
+    /// <param name="videoIds">Optional raw video IDs to add immediately.</param>
+    /// <returns>YouTube playlist ID.</returns>
+    public async Task<string?> CreatePlaylistAsync(
+        string title,
+        IReadOnlyList<string>? videoIds = null)
     {
         if (AuthService?.IsAuthenticated != true)
             throw new InvalidOperationException(
@@ -390,7 +371,7 @@ public partial class YoutubeProvider : IDisposable
 
         try
         {
-            var ytId = await _youtube.Music.CreatePlaylistAsync(title, description);
+            var ytId = await _youtube.Mutations.CreatePlaylistAsync(title, videoIds);
             Log.Info($"[Music] Created playlist '{title}' → YT ID: {ytId}");
             return ytId;
         }
@@ -403,11 +384,187 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Переименовывает плейлист в YouTube Music аккаунте.
+    /// Adds a single track to a playlist. Returns setVideoId.
+    /// </summary>
+    public async Task<string?> AddToPlaylistAsync(string playlistId, string trackId)
+    {
+        if (AuthService?.IsAuthenticated != true) return null;
+        try
+        {
+            var rawId = ExtractRawIdSpan(trackId).ToString();
+            var setVideoIds = await _youtube.Mutations.AddTracksAsync(playlistId, [rawId]);
+            var result = setVideoIds.Count > 0 ? setVideoIds[0] : null;
+            if (!string.IsNullOrEmpty(result))
+                Log.Debug($"[Music] Added {rawId} to {playlistId}, setVideoId={result}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to add to playlist: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Batch adds tracks to a playlist in a single request.
+    /// </summary>
+    /// <param name="playlistId">YouTube playlist ID.</param>
+    /// <param name="trackIds">Track IDs (with or without yt_ prefix).</param>
+    /// <returns>setVideoId for each track (null if individual track failed).</returns>
+    public async Task<List<string?>> AddTracksToPlaylistAsync(
+        string playlistId, IReadOnlyList<string> trackIds)
+    {
+        if (AuthService?.IsAuthenticated != true) return [];
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            // Extract raw IDs
+            var rawIds = new List<string>(trackIds.Count);
+            for (int i = 0; i < trackIds.Count; i++)
+                rawIds.Add(ExtractRawIdSpan(trackIds[i]).ToString());
+
+            var result = await _youtube.Mutations.AddTracksAsync(playlistId, rawIds);
+            Log.Info($"[Music] Batch added {trackIds.Count} tracks to {playlistId}");
+            return result;
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to batch add to playlist: {ex.Message}");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Removes a single track from a playlist by setVideoId.
+    /// </summary>
+    public async Task RemoveFromPlaylistAsync(string playlistId, string setVideoId)
+    {
+        if (AuthService?.IsAuthenticated != true) return;
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            await _youtube.Mutations.RemoveTracksAsync(playlistId, [setVideoId]);
+            Log.Info($"[Music] Removed item {setVideoId} from playlist {playlistId}");
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to remove from playlist: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Batch removes tracks from a playlist by setVideoIds.
+    /// </summary>
+    public async Task RemoveTracksFromPlaylistAsync(
+        string playlistId, IReadOnlyList<string> setVideoIds)
+    {
+        if (AuthService?.IsAuthenticated != true) return;
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            await _youtube.Mutations.RemoveTracksAsync(playlistId, setVideoIds);
+            Log.Info($"[Music] Batch removed {setVideoIds.Count} tracks from {playlistId}");
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to batch remove from playlist: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Обновляет описание плейлиста на YouTube Music.
+    /// Использует ACTION_SET_PLAYLIST_DESCRIPTION через edit_playlist API.
     /// </summary>
     /// <param name="playlistId">YouTube ID плейлиста.</param>
-    /// <param name="newTitle">Новое название.</param>
-    /// <exception cref="InvalidOperationException">Если не аутентифицирован.</exception>
+    /// <param name="description">Новое описание (пустая строка для очистки).</param>
+    public async Task EditPlaylistDescriptionAsync(string playlistId, string description)
+    {
+        if (string.IsNullOrWhiteSpace(playlistId))
+            throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
+
+        if (AuthService?.IsAuthenticated != true)
+            throw new InvalidOperationException(
+                "Cannot edit cloud playlist: user is not authenticated.");
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            await _youtube.Mutations.SetPlaylistDescriptionAsync(playlistId, description);
+            Log.Info($"[Music] Updated description for playlist {playlistId}");
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to update playlist description {playlistId}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Загружает обложку плейлиста на YouTube Music через Scotty Upload Protocol.
+    /// 
+    /// <para><b>Алгоритм (3 шага):</b></para>
+    /// <list type="number">
+    ///   <item>Initiate: POST /playlist_image_upload с X-Goog-Upload-Command: start → upload_url</item>
+    ///   <item>Upload: POST бинарных данных → scottyEncryptedBlobId</item>
+    ///   <item>Apply: edit_playlist с ACTION_SET_CUSTOM_THUMBNAIL + blobId</item>
+    /// </list>
+    /// 
+    /// <para><b>Поддерживаемые форматы:</b> JPEG, PNG (рекомендуется квадрат или 16:9, макс. 20MB)</para>
+    /// </summary>
+    /// <param name="playlistId">YouTube ID плейлиста.</param>
+    /// <param name="imageData">Бинарные данные изображения (PNG/JPEG).</param>
+    /// <param name="mimeType">MIME-тип: "image/jpeg" или "image/png" (по умолчанию JPEG).</param>
+    /// <returns>true если обложка успешно установлена.</returns>
+    public async Task<bool> UploadPlaylistThumbnailAsync(
+        string playlistId,
+        byte[] imageData,
+        string mimeType = "image/jpeg")
+    {
+        if (string.IsNullOrWhiteSpace(playlistId))
+            throw new ArgumentException("Playlist ID cannot be empty.", nameof(playlistId));
+
+        if (AuthService?.IsAuthenticated != true)
+            throw new InvalidOperationException(
+                "Cannot upload thumbnail: user is not authenticated.");
+
+        ThrowIfInCooldown();
+
+        try
+        {
+            var result = await _youtube.Mutations.UploadPlaylistThumbnailAsync(
+                playlistId, imageData, mimeType);
+
+            if (result)
+            {
+                Log.Info($"[Music] Thumbnail uploaded for playlist {playlistId}");
+            }
+
+            return result;
+        }
+        catch (BotDetectionException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Error($"[Music] Failed to upload thumbnail for playlist {playlistId}: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Renames a playlist in YouTube account.
+    /// </summary>
     public async Task RenamePlaylistAsync(string playlistId, string newTitle)
     {
         if (string.IsNullOrWhiteSpace(playlistId))
@@ -421,7 +578,7 @@ public partial class YoutubeProvider : IDisposable
 
         try
         {
-            await _youtube.Music.RenamePlaylistAsync(playlistId, newTitle);
+            await _youtube.Mutations.RenamePlaylistAsync(playlistId, newTitle);
             Log.Info($"[Music] Renamed playlist {playlistId} → '{newTitle}'");
         }
         catch (BotDetectionException) { throw; }
@@ -433,9 +590,8 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Удаляет плейлист из YouTube Music аккаунта.
+    /// Deletes a playlist from YouTube account.
     /// </summary>
-    /// <param name="playlistId">YouTube ID плейлиста.</param>
     public async Task DeletePlaylistAsync(string playlistId)
     {
         if (string.IsNullOrWhiteSpace(playlistId))
@@ -449,7 +605,7 @@ public partial class YoutubeProvider : IDisposable
 
         try
         {
-            await _youtube.Music.DeletePlaylistAsync(playlistId);
+            await _youtube.Mutations.DeletePlaylistAsync(playlistId);
             Log.Info($"[Music] Deleted playlist {playlistId} from YouTube");
         }
         catch (BotDetectionException) { throw; }
@@ -461,28 +617,10 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Добавляет трек в плейлист YouTube Music. Возвращает setVideoId если доступен.
+    /// Fetches playlist tracks with setVideoId for sync/removal.
+    /// Returns RemoteTrackInfo with videoId, setVideoId, position.
     /// </summary>
-    public async Task<string?> AddToPlaylistAsync(string playlistId, string trackId)
-    {
-        if (AuthService?.IsAuthenticated != true) return null;
-        try
-        {
-            var rawId = ExtractRawIdSpan(trackId).ToString();
-            return await _youtube.Music.AddToPlaylistAsync(playlistId, rawId);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Music] Failed to add to playlist: {ex.Message}");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Fetches playlist content from YouTube Music with setVideoId for each track.
-    /// Used for on-demand resolution of setVideoIds needed for track removal.
-    /// </summary>
-    public async Task<List<PlaylistVideoData>> GetPlaylistItemsWithSetVideoIdAsync(
+    public async Task<List<RemoteTrackInfo>> GetPlaylistItemsWithSetVideoIdAsync(
         string youtubePlaylistId, CancellationToken ct = default)
     {
         if (AuthService?.IsAuthenticated != true) return [];
@@ -491,7 +629,10 @@ public partial class YoutubeProvider : IDisposable
 
         try
         {
-            var items = await _youtube.Music.GetPlaylistVideosAsync(youtubePlaylistId, ct);
+            // Sync visitor data to sync controller
+            _youtube.Sync.VisitorData = _youtube.Music.GetVisitorData();
+
+            var items = await _youtube.Sync.GetPlaylistTracksAsync(youtubePlaylistId, ct);
             Log.Info($"[Music] Fetched {items.Count} items with setVideoIds for playlist {youtubePlaylistId}");
             return items;
         }
@@ -1012,8 +1153,8 @@ public partial class YoutubeProvider : IDisposable
 
         if (YoutubePlaylistRegex.IsMatch(query)) return QueryType.Playlist;
         if (YoutubeVideoRegex.IsMatch(query) ||
-            query.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            query.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            query.StartsWith(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+            query.StartsWith(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
             return QueryType.DirectUrl;
         }

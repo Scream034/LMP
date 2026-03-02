@@ -1,18 +1,19 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="using:LMP.UI.Dialogs"
-        xmlns:mi="using:Material.Icons.Avalonia"
-        x:Class="LMP.UI.Dialogs.AddToPlaylistDialog"
-        x:DataType="d:AddToPlaylistDialogViewModel"
-        Title="{Binding L[AddToPlaylist_Title]}"
-        Width="420" Height="540"
-        WindowStartupLocation="CenterOwner"
-        SystemDecorations="BorderOnly"
-        CanResize="False"
-        Background="{DynamicResource BgPrimaryBrush}">
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dialogs="using:LMP.UI.Dialogs"
+             xmlns:mi="using:Material.Icons.Avalonia"
+             x:Class="LMP.UI.Dialogs.Content.AddToPlaylistDialogContent"
+             x:DataType="dialogs:AddToPlaylistDialogViewModel">
 
-    <Border BorderBrush="{DynamicResource BgHighlightBrush}" BorderThickness="1"
-            CornerRadius="8" Padding="24">
+    <Border Background="{DynamicResource BgPrimaryBrush}"
+            BorderBrush="{DynamicResource BgHighlightBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="24"
+            Width="500"
+            MinHeight="500"
+            MaxHeight="800">
+
         <Grid RowDefinitions="Auto, Auto, Auto, *, Auto, Auto">
 
             <!-- Title -->
@@ -45,7 +46,7 @@
             <ScrollViewer Grid.Row="3">
                 <ItemsControl ItemsSource="{Binding FilteredPlaylists}">
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="d:PlaylistCheckItem">
+                        <DataTemplate x:DataType="dialogs:PlaylistCheckItem">
                             <Border Margin="0,0,0,4" Padding="8,10" CornerRadius="6"
                                     Background="{DynamicResource BgElevatedBrush}">
                                 <Grid ColumnDefinitions="Auto, *, Auto">
@@ -89,4 +90,4 @@
             </StackPanel>
         </Grid>
     </Border>
-</Window>
+</UserControl>

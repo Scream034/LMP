@@ -1,6 +1,5 @@
 using System.Reactive;
 using LMP.Core.Models;
-using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI;
 
@@ -10,25 +9,34 @@ public sealed class EditPlaylistDialogViewModel : ViewModelBase
 {
     public PlaylistEditorViewModel Editor { get; }
 
-    public ReactiveCommand<Unit, EditPlaylistResult?> SaveCommand { get; }
-    public ReactiveCommand<Unit, EditPlaylistResult?> CancelCommand { get; }
+    /// <summary>
+    /// Callback для закрытия диалога с результатом.
+    /// </summary>
+    public Action<EditPlaylistResult?>? OnResult { get; set; }
 
-    public EditPlaylistDialogViewModel(Playlist playlist, bool isAuthenticated)
+    public ReactiveCommand<Unit, Unit> SaveCommand { get; }
+    public ReactiveCommand<Unit, Unit> CancelCommand { get; }
+
+    public EditPlaylistDialogViewModel(
+        Playlist playlist,
+        bool isAuthenticated,
+        IReadOnlyList<TrackInfo>? playlistTracks = null)
     {
-        Editor = PlaylistEditorViewModel.ForEdit(playlist, isAuthenticated);
+        Editor = PlaylistEditorViewModel.ForEdit(playlist, isAuthenticated, playlistTracks);
 
         SaveCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             var result = Editor.ToResult();
 
-            // Записываем изменение синхронизации только если пользователь реально переключил toggle
             if (Editor.SyncStateChanged)
                 result.SyncToCloud = Editor.IsSyncedToCloud;
 
-            return (EditPlaylistResult?)result;
+            OnResult?.Invoke(result);
         }, Editor.CanSave));
 
-        CancelCommand = CreateCommand(ReactiveCommand.Create(
-            () => (EditPlaylistResult?)null));
+        CancelCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            OnResult?.Invoke(null);
+        }));
     }
 }

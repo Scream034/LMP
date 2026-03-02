@@ -19,6 +19,12 @@ public static class DatabaseExtensions
             "Playlists", "CustomColor", "TEXT", ct);
 
         await AddColumnIfNotExistsAsync(context,
+            "Playlists", "ComputedColor", "TEXT", ct);
+
+        await AddColumnIfNotExistsAsync(context,
+            "Playlists", "Description", "TEXT", ct);
+
+        await AddColumnIfNotExistsAsync(context,
             "PlaylistTracks", "SetVideoId", "TEXT", ct);
 
         Log.Info("[DB] Schema migration complete");

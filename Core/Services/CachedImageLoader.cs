@@ -5,8 +5,10 @@ namespace LMP.Core.Services;
 
 /// <summary>
 /// Адаптер для AsyncImageLoader с автоматическим управлением refCount.
-/// ВАЖНО: AsyncImageLoader НЕ вызывает Dispose на возвращённых Bitmap,
-/// поэтому мы полагаемся на RefCounting в ImageCacheService.
+/// 
+/// <para><b>ВАЖНО:</b> принимает только HTTP/HTTPS URL.
+/// Локальные пути и невалидные строки отклоняются для предотвращения
+/// мусорных сетевых запросов (например, hex-хеши парсящиеся как URI).</para>
 /// </summary>
 public sealed class CachedImageLoader : IAsyncImageLoader
 {
@@ -21,7 +23,13 @@ public sealed class CachedImageLoader : IAsyncImageLoader
 
     public async Task<Bitmap?> ProvideImageAsync(string url)
     {
-        if (string.IsNullOrEmpty(url) || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(url))
+            return null;
+
+        // Строгая проверка: только http:// и https://
+        // url.StartsWith("http") пропустит "httpfoo://..." — проверяем явно
+        if (!url.StartsWith(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
             return null;
 
         // GetImageAsync уже вызывает AddRef() внутри

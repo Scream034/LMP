@@ -24,13 +24,7 @@ public class MainWindowViewModel : ViewModelBase
     private readonly IServiceProvider _services;
 
     // ═══ VERSION INFO ═══
-
-    /// <summary>
-    /// Видимость версии. По умолчанию true — показываем сразу.
-    /// Пользователь может скрыть кликом на лого.
-    /// </summary>
     [Reactive] public bool IsVersionInfoVisible { get; set; } = true;
-
     public static string VersionDisplay => G.Build.DisplayVersion;
     public static string GitHashDisplay => G.Build.GitHash;
 
@@ -47,12 +41,7 @@ public class MainWindowViewModel : ViewModelBase
     // ═══ NAVIGATION ═══
     [Reactive] public ViewModelBase? CurrentPage { get; private set; }
     [Reactive] public PlayerBarViewModel PlayerBar { get; private set; }
-
-    /// <summary>
-    /// Текущая страница. Пустая строка при старте — первый Navigate не блокируется.
-    /// </summary>
     [Reactive] public string CurrentPageName { get; private set; } = "";
-
     [Reactive] public bool IsNavigationLocked { get; private set; }
     [Reactive] public string NavigationLockReason { get; private set; } = "";
 
@@ -61,11 +50,12 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public NotificationPanelViewModel NotificationPanel { get; private set; }
     [Reactive] public ToastOverlayViewModel ToastOverlay { get; private set; }
 
+    // ═══ DIALOG HOST ═══
     /// <summary>
-    /// Задержка перед запуском тяжёлой инициализации страницы (ms).
-    /// Даёт время CrossFade-анимации (150ms) отработать без фризов.
-    /// Страница рендерит лёгкий скелетон/каркас за это время.
+    /// Контейнер для overlay-диалогов (над контентом, под TopBar).
     /// </summary>
+    [Reactive] public DialogHostViewModel DialogHost { get; private set; }
+
     private const int DeferredLoadDelayMs = 180;
 
     public ReactiveCommand<string, Unit> NavigateCommand { get; }
@@ -75,7 +65,8 @@ public class MainWindowViewModel : ViewModelBase
         PlayerBarViewModel playerBar,
         NotificationButtonViewModel notificationButton,
         NotificationPanelViewModel notificationPanel,
-        ToastOverlayViewModel toastOverlay)
+        ToastOverlayViewModel toastOverlay,
+        DialogHostViewModel dialogHost) // ← Добавить параметр
     {
         Log.Info("MainWindowViewModel constructor started.");
 
@@ -84,6 +75,7 @@ public class MainWindowViewModel : ViewModelBase
         NotificationButton = notificationButton;
         NotificationPanel = notificationPanel;
         ToastOverlay = toastOverlay;
+        DialogHost = dialogHost; // ← Сохранить
 
         UpdateCommitsDisplay();
 
@@ -93,7 +85,6 @@ public class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(L));
         };
 
-        // Toggle версии — клик на лого
         ToggleVersionInfoCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             IsVersionInfoVisible = !IsVersionInfoVisible;
@@ -101,11 +92,15 @@ public class MainWindowViewModel : ViewModelBase
 
         OpenGitHubCommand = CreateCommand(ReactiveCommand.Create(OpenGitHub));
 
-        var canNavigate = this.WhenAnyValue(x => x.IsNavigationLocked, locked => !locked);
+        // Навигация заблокирована если IsNavigationLocked ИЛИ есть активный диалог
+        var canNavigate = this.WhenAnyValue(
+            x => x.IsNavigationLocked,
+            x => x.DialogHost.HasActiveDialog,
+            (locked, hasDialog) => !locked && !hasDialog);
 
         NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
         {
-            if (!IsNavigationLocked)
+            if (!IsNavigationLocked && !DialogHost.HasActiveDialog)
             {
                 Navigate(pageName);
             }
@@ -113,7 +108,6 @@ public class MainWindowViewModel : ViewModelBase
 
         Navigate("Home");
 
-        // Фоновая валидация авторизации при старте
         _ = ValidateAuthOnStartupAsync();
 
         Log.Info("MainWindowViewModel initialized.");
@@ -153,21 +147,9 @@ public class MainWindowViewModel : ViewModelBase
         finally { UnlockNavigation(); }
     }
 
-    /// <summary>
-    /// Навигация с отложенной инициализацией (Deferred Loading).
-    /// 
-    /// Порядок действий:
-    /// 1. Создаём ViewModel через DI (конструктор ЛЁГКИЙ — только DI, команды, свойства).
-    /// 2. Устанавливаем CurrentPage → TransitioningContentControl начинает CrossFade (150ms).
-    /// 3. Страница рендерит пустой каркас/скелетон (IsContentReady=false).
-    /// 4. Через DeferredLoadDelayMs (180ms) вызываем OnNavigatedToAsync() → тяжёлая загрузка.
-    /// 5. По завершении загрузки страница переключает скелетон на реальный контент.
-    /// 
-    /// Результат: анимация всегда плавная, независимо от тяжести страницы.
-    /// </summary>
     private void Navigate(string pageName)
     {
-        if (IsNavigationLocked) return;
+        if (IsNavigationLocked || DialogHost.HasActiveDialog) return;
 
         if (CurrentPageName == pageName)
         {
@@ -181,7 +163,6 @@ public class MainWindowViewModel : ViewModelBase
         var oldPage = CurrentPage;
         var oldPageName = CurrentPageName;
 
-        // Создаём ViewModel — конструктор должен быть лёгким (без загрузки данных)
         ViewModelBase? newPage = pageName switch
         {
             "Home" => _services.GetRequiredService<HomeViewModel>(),
@@ -198,35 +179,26 @@ public class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // Устанавливаем страницу СРАЗУ — CrossFade начинается, страница рендерит скелетон
         CurrentPage = newPage;
         CurrentPageName = pageName;
 
         sw.Stop();
         Log.Info($"Page '{pageName}' VM created in {sw.ElapsedMilliseconds}ms, scheduling deferred init...");
 
-        // Отложенная инициализация: даём CrossFade отработать, затем загружаем данные
         _ = DeferredInitAsync(newPage, pageName);
 
-        // Dispose старой страницы с задержкой (чтобы CrossFade доиграл)
         if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
         {
             _ = DisposePageDelayedAsync(disposable, oldPageName);
         }
     }
 
-    /// <summary>
-    /// Ждёт завершения CrossFade-анимации, затем запускает тяжёлую инициализацию страницы.
-    /// Если пользователь уже переключился на другую страницу — пропускаем.
-    /// </summary>
     private async Task DeferredInitAsync(ViewModelBase page, string pageName)
     {
         try
         {
-            // Ждём пока CrossFade-анимация отработает
             await Task.Delay(DeferredLoadDelayMs);
 
-            // Проверяем что страница всё ещё актуальна (пользователь мог переключиться)
             if (CurrentPage != page)
             {
                 Log.Debug($"[Navigation] Page '{pageName}' is no longer current, skipping deferred init");
@@ -271,7 +243,7 @@ public class MainWindowViewModel : ViewModelBase
 
     public void NavigateToPlaylist(string playlistId)
     {
-        if (IsNavigationLocked) return;
+        if (IsNavigationLocked || DialogHost.HasActiveDialog) return;
 
         Log.Info($"Navigating to Playlist: {playlistId}");
 
@@ -312,25 +284,14 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Фоновая проверка авторизации при запуске.
-    /// 
-    /// Порядок:
-    /// 1. Профиль УЖЕ восстановлен из auth.json в конструкторе CookieAuthService
-    ///    → пользователь сразу видит своё имя/аватар (без ожидания сети).
-    /// 2. Эта задача проверяет валидность сессии в фоне.
-    /// 3. При ошибке — toast-уведомление, профиль остаётся кэшированным.
-    /// </summary>
     private async Task ValidateAuthOnStartupAsync()
     {
         try
         {
-            // Даём UI полностью загрузиться
             await Task.Delay(2000);
 
             var auth = _services.GetRequiredService<CookieAuthService>();
 
-            // Проверяем ошибку загрузки профиля с диска
             if (auth.HasProfileLoadError)
             {
                 Log.Warn("[Auth] Profile load error detected on startup");
@@ -349,7 +310,6 @@ public class MainWindowViewModel : ViewModelBase
 
             if (!auth.IsAuthenticated) return;
 
-            // Валидация сессии
             var (isValid, error) = await auth.ValidateSessionAsync();
 
             if (!isValid)

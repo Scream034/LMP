@@ -258,7 +258,8 @@
                                                         VerticalAlignment="Center" />
                                                 </Border>
 
-                                                <!-- Thumbnail с QualityImage -->
+                                                <!-- Thumbnail с QualityImage (поддерживает http,
+                                                file, avares, локальные пути) -->
                                                 <Image
                                                     controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                                     controls:QualityImage.Quality="High"
@@ -287,7 +288,8 @@
                                                     <mi:MaterialIcon Kind="CloudCheck" Width="13"
                                                         Height="13"
                                                         Foreground="{DynamicResource TextMutedBrush}"
-                                                        IsVisible="{Binding IsSynced}" />
+                                                        IsVisible="{Binding IsSynced}"
+                                                        ToolTip.Tip="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Library_CloudSyncTooltip]}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Button>

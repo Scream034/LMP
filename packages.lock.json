@@ -44,17 +44,6 @@
           "Avalonia.X11": "11.3.9"
         }
       },
-      "Avalonia.Diagnostics": {
-        "type": "Direct",
-        "requested": "[11.3.9, )",
-        "resolved": "11.3.9",
-        "contentHash": "d2XGagyYZvFGv6adGrEzCNyoF+6Pfl+YU9zfUE4XyYBMw1zQcv2TBL6nRduZnqlCovf+zJZnNHA8cqpvwWJp7Q==",
-        "dependencies": {
-          "Avalonia": "11.3.9",
-          "Avalonia.Controls.ColorPicker": "11.3.9",
-          "Avalonia.Themes.Simple": "11.3.9"
-        }
-      },
       "Avalonia.Fonts.Inter": {
         "type": "Direct",
         "requested": "[11.3.9, )",
@@ -111,18 +100,6 @@
         "requested": "[2.2.2, )",
         "resolved": "2.2.2",
         "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
-      },
-      "HotAvalonia": {
-        "type": "Direct",
-        "requested": "[3.1.0, )",
-        "resolved": "3.1.0",
-        "contentHash": "31ppkXIyD+PppUyZ0oqUjaP3I6fJDkl2w95EHGN22xxh/P54hNpEiwDsAT1KPKtUMJoGtxRE5EZcc04kia42Eg==",
-        "dependencies": {
-          "Avalonia.Markup.Xaml.Loader": "11.0.0",
-          "HotAvalonia.Core": "3.1.0",
-          "HotAvalonia.Extensions": "3.1.0",
-          "HotAvalonia.Fody": "3.1.0"
-        }
       },
       "Jint": {
         "type": "Direct",
@@ -237,15 +214,6 @@
         "resolved": "11.3.2",
         "contentHash": "qHDToxto1e3hci5YqbG9n0Ty8mlp3zBUN5wT66wKqaDVzXyQ0do3EnRILd4Ke9jpvsktaPpgE0YjEk7hornryQ=="
       },
-      "Avalonia.Controls.ColorPicker": {
-        "type": "Transitive",
-        "resolved": "11.3.9",
-        "contentHash": "AVn/h8R/jhlHLIImECZnCTpcrcRo319J7y2gJ/YU4ELMaCsRTmWY3dxlRyBDbyCukURTupGmsPy6gb7XEYbWow==",
-        "dependencies": {
-          "Avalonia": "11.3.9",
-          "Avalonia.Remote.Protocol": "11.3.9"
-        }
-      },
       "Avalonia.FreeDesktop": {
         "type": "Transitive",
         "resolved": "11.3.9",
@@ -253,14 +221,6 @@
         "dependencies": {
           "Avalonia": "11.3.9",
           "Tmds.DBus.Protocol": "0.21.2"
-        }
-      },
-      "Avalonia.Markup.Xaml.Loader": {
-        "type": "Transitive",
-        "resolved": "11.0.0",
-        "contentHash": "SDcf5qvleyTb0R24vzZBhFJV9ONlGz0ftOBRxXiSy7R6c513Rjnae0IImuUXSIj+Bmn8AjU6x9eDFRJO78pYVA==",
-        "dependencies": {
-          "Avalonia": "11.0.0"
         }
       },
       "Avalonia.Native": {
@@ -288,14 +248,6 @@
           "SkiaSharp": "2.88.9",
           "SkiaSharp.NativeAssets.Linux": "2.88.9",
           "SkiaSharp.NativeAssets.WebAssembly": "2.88.9"
-        }
-      },
-      "Avalonia.Themes.Simple": {
-        "type": "Transitive",
-        "resolved": "11.3.9",
-        "contentHash": "BicF6GQJJs6sI5+GcuTujnUdMijVyBpD3QD9O9ZpqkSSDE3vyZFbRZb5MyCBlPu/LxPANnKoTW95erlpYIICTw==",
-        "dependencies": {
-          "Avalonia": "11.3.9"
         }
       },
       "Avalonia.Win32": {
@@ -390,8 +342,8 @@
       },
       "Fody": {
         "type": "Transitive",
-        "resolved": "6.9.2",
-        "contentHash": "YBHobPGogb0vYhGYIxn/ndWqTjNWZveDi5jdjrcshL2vjwU3gQGyDeI7vGgye+2rAM5fGRvlLgNWLW3DpviS/w=="
+        "resolved": "6.8.0",
+        "contentHash": "hfZ/f8Mezt8aTkgv9nsvFdYoQ809/AqwsJlOGOPYIfBcG2aAIG3v3ex9d8ZqQuFYyMoucjRg4eKy3VleeGodKQ=="
       },
       "HarfBuzzSharp": {
         "type": "Transitive",
@@ -421,24 +373,6 @@
         "type": "Transitive",
         "resolved": "8.3.1.1",
         "contentHash": "UsJtQsfAJoFDZrXc4hCUfRPMqccfKZ0iumJ/upcUjz/cmsTgVFGNEL5yaJWmkqsuFYdMWbj/En5/kS4PFl9hBA=="
-      },
-      "HotAvalonia.Core": {
-        "type": "Transitive",
-        "resolved": "3.1.0",
-        "contentHash": "E4Q+Wm7kp5XyEWRLshRcoxgHShyMO3J8QcdoyDZfXMukuR+9FqXnEFrcStn2igDo/TIo/6wVOMNbv8Cu4FI5hg=="
-      },
-      "HotAvalonia.Extensions": {
-        "type": "Transitive",
-        "resolved": "3.1.0",
-        "contentHash": "RhDF4CFDHZi5GKBFJLw2mLwh0TieKO/JlJa8yohnK0dhh5B8gEr3b512zlDUXpQKZIVvTPRwNm4CwgczlxH37A=="
-      },
-      "HotAvalonia.Fody": {
-        "type": "Transitive",
-        "resolved": "3.1.0",
-        "contentHash": "xmbLwsK+SQOZcFFGeXcjkWBddVZ1Cql4oOJkO7/mcDiCO/kjY7UeP0+hsnXICfiBfiFGNh1XYiwbAZiONWL5kw==",
-        "dependencies": {
-          "Fody": "6.9.2"
-        }
       },
       "Humanizer.Core": {
         "type": "Transitive",

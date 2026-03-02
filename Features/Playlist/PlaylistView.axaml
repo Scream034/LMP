@@ -76,101 +76,18 @@
                                     VerticalAlignment="Center"
                                     IsVisible="{Binding ThumbnailUrl, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
 
-                                <!-- Web Image -->
+                                <!-- Обложка -->
                                 <Image
                                     controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                     controls:QualityImage.Quality="High"
                                     Stretch="UniformToFill"
-                                    IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
-
-                                <!-- Asset Image -->
-                                <Image
-                                    Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
-                                    Stretch="UniformToFill"
-                                    IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
+                                    IsVisible="{Binding ThumbnailUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             </Panel>
                         </Border>
 
-                        <!-- INFO & ACTIONS -->
-                        <Grid Grid.Column="1" Margin="32,0,0,0" RowDefinitions="*, Auto">
-                            <StackPanel Grid.Row="0" VerticalAlignment="Bottom"
-                                Margin="0,0,0,24">
-                                <TextBlock Text="{Binding PlaylistName}"
-                                    FontSize="42" FontWeight="Black"
-                                    Foreground="{DynamicResource TextPrimaryBrush}"
-                                    Margin="0,0,0,8"
-                                    TextWrapping="Wrap" MaxLines="2"
-                                    ClipToBounds="False" />
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <TextBlock Text="{Binding FormattedTrackCount}"
-                                        FontWeight="SemiBold"
-                                        Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="•"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding FormattedDuration}"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-                                </StackPanel>
-                            </StackPanel>
-
-                            <StackPanel Grid.Row="1"
-                                Orientation="Horizontal" Spacing="12"
-                                VerticalAlignment="Center">
-                                <Button Classes="playback-btn-main accent-base"
-                                    Command="{Binding PlayAllCommand}"
-                                    Width="48" Height="48" CornerRadius="24"
-                                    ToolTip.Tip="{Binding L[Player_Play]}">
-                                    <Panel>
-                                        <mi:MaterialIcon Kind="Play" Width="26" Height="26"
-                                            IsVisible="{Binding !IsPlayingThisPlaylist}" />
-                                        <mi:MaterialIcon Kind="Pause" Width="26" Height="26"
-                                            IsVisible="{Binding IsPlayingThisPlaylist}" />
-                                    </Panel>
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding ShufflePlayCommand}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
-                                    <mi:MaterialIcon Kind="ShuffleVariant" Width="20"
-                                        Height="20"
-                                        Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding AddToQueueCommand}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Queue_Add]}">
-                                    <mi:MaterialIcon Kind="PlaylistPlus" Width="20"
-                                        Height="20" />
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding DownloadAllCommand}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Playlist_DownloadAll]}">
-                                    <mi:MaterialIcon Kind="Download" Width="20" Height="20"
-                                        Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding RefreshPlaylistCommand}"
-                                    IsVisible="{Binding IsCloud}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Playlist_SyncWithCloud]}">
-                                    <mi:MaterialIcon Kind="Sync" Width="20" Height="20" />
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding EditPlaylistCommand}"
-                                    IsVisible="{Binding CanEdit}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[EditPlaylist_Title]}">
-                                    <mi:MaterialIcon Kind="Pencil" Width="20" Height="20" />
-                                </Button>
-                                <Border Width="1" Height="24"
-                                    Background="{DynamicResource BgHighlightBrush}"
-                                    Margin="8,0" />
-                                <controls:FilterBar
-                                    FilterText="{Binding FilterQuery}"
-                                    Watermark="{Binding L[Search_LocalFilterTitle]}"
-                                    Width="220" />
-                            </StackPanel>
-                        </Grid>
+                        <!-- INFO & ACTIONS (shared template) -->
+                        <ContentControl Grid.Column="1" Content="{Binding}"
+                            ContentTemplate="{StaticResource PlaylistHeaderInfoTemplate}" />
                     </Grid>
                 </Viewbox>
             </Border>
@@ -200,72 +117,9 @@
                             </Border>
                         </Border>
 
-                        <!-- INFO & ACTIONS (дублируем для Liked) -->
-                        <Grid Grid.Column="1" Margin="32,0,0,0" RowDefinitions="*, Auto">
-                            <StackPanel Grid.Row="0" VerticalAlignment="Bottom"
-                                Margin="0,0,0,24">
-                                <TextBlock Text="{Binding PlaylistName}"
-                                    FontSize="42" FontWeight="Black"
-                                    Foreground="{DynamicResource TextPrimaryBrush}"
-                                    Margin="0,0,0,8"
-                                    TextWrapping="Wrap" MaxLines="2"
-                                    ClipToBounds="False" />
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <TextBlock Text="{Binding FormattedTrackCount}"
-                                        FontWeight="SemiBold"
-                                        Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="•"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding FormattedDuration}"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-                                </StackPanel>
-                            </StackPanel>
-
-                            <StackPanel Grid.Row="1"
-                                Orientation="Horizontal" Spacing="12"
-                                VerticalAlignment="Center">
-                                <Button Classes="playback-btn-main accent-base"
-                                    Command="{Binding PlayAllCommand}"
-                                    Width="48" Height="48" CornerRadius="24"
-                                    ToolTip.Tip="{Binding L[Player_Play]}">
-                                    <Panel>
-                                        <mi:MaterialIcon Kind="Play" Width="26" Height="26"
-                                            IsVisible="{Binding !IsPlayingThisPlaylist}" />
-                                        <mi:MaterialIcon Kind="Pause" Width="26" Height="26"
-                                            IsVisible="{Binding IsPlayingThisPlaylist}" />
-                                    </Panel>
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding ShufflePlayCommand}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
-                                    <mi:MaterialIcon Kind="ShuffleVariant" Width="20"
-                                        Height="20"
-                                        Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding AddToQueueCommand}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Queue_Add]}">
-                                    <mi:MaterialIcon Kind="PlaylistPlus" Width="20"
-                                        Height="20" />
-                                </Button>
-                                <Button Classes="playback-btn"
-                                    Command="{Binding DownloadAllCommand}"
-                                    Width="40" Height="40" CornerRadius="20"
-                                    ToolTip.Tip="{Binding L[Playlist_DownloadAll]}">
-                                    <mi:MaterialIcon Kind="Download" Width="20" Height="20"
-                                        Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
-                                </Button>
-                                <Border Width="1" Height="24"
-                                    Background="{DynamicResource BgHighlightBrush}"
-                                    Margin="8,0" />
-                                <controls:FilterBar
-                                    FilterText="{Binding FilterQuery}"
-                                    Watermark="{Binding L[Search_LocalFilterTitle]}"
-                                    Width="220" />
-                            </StackPanel>
-                        </Grid>
+                        <!-- INFO & ACTIONS (same shared template — no duplication!) -->
+                        <ContentControl Grid.Column="1" Content="{Binding}"
+                            ContentTemplate="{StaticResource PlaylistHeaderInfoTemplate}" />
                     </Grid>
                 </Viewbox>
             </Border>
@@ -293,4 +147,130 @@
             EnableReordering="{Binding CanReorderItems}"
             MoveItemCommand="{Binding MoveItemCommand}" />
     </Grid>
+
+    <!-- ═══ SHARED TEMPLATE: Playlist Header Info & Actions ═══ -->
+    <UserControl.Resources>
+        <DataTemplate x:Key="PlaylistHeaderInfoTemplate" x:DataType="vm:PlaylistViewModel">
+            <Grid Margin="32,0,0,0" RowDefinitions="*, Auto">
+                <StackPanel Grid.Row="0" VerticalAlignment="Bottom"
+                    Margin="0,0,0,24">
+
+                    <!-- Название и Описание на одной линии -->
+                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,0,0,4">
+
+                        <!-- Название плейлиста -->
+                        <!-- Padding снизу и ClipToBounds=False спасают от обрезки выносных
+                        элементов шрифта -->
+                        <TextBlock Text="{Binding PlaylistName}"
+                            FontSize="42" FontWeight="Black"
+                            Foreground="{DynamicResource TextPrimaryBrush}"
+                            TextWrapping="NoWrap"
+                            TextTrimming="CharacterEllipsis"
+                            MaxLines="1"
+                            MaxWidth="550"
+                            VerticalAlignment="Bottom"
+                            ClipToBounds="False"
+                            Padding="0,0,0,6"
+                            Margin="0,0,0,-6" />
+
+                        <!-- Описание (приглушённый, на той же визуальной линии) -->
+                        <TextBlock Text="{Binding Description}"
+                            FontSize="14"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            TextWrapping="NoWrap"
+                            TextTrimming="CharacterEllipsis"
+                            MaxLines="1"
+                            MaxWidth="250"
+                            VerticalAlignment="Bottom"
+                            Margin="0,0,0,6"
+                            IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+
+                    <!-- Статистика -->
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                        <TextBlock Text="{Binding FormattedTrackCount}"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock Text="•"
+                            Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <TextBlock Text="{Binding FormattedDuration}"
+                            Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <!-- Cloud sync indicator with tooltip -->
+                        <mi:MaterialIcon Kind="CloudCheck" Width="14" Height="14"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            IsVisible="{Binding IsCloud}"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="{Binding L[Library_CloudSyncTooltip]}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Кнопки действий -->
+                <StackPanel Grid.Row="1"
+                    Orientation="Horizontal" Spacing="12"
+                    VerticalAlignment="Center">
+                    <Button Classes="playback-btn-main accent-base"
+                        Command="{Binding PlayAllCommand}"
+                        Width="48" Height="48" CornerRadius="24"
+                        ToolTip.Tip="{Binding L[Player_Play]}">
+                        <Panel>
+                            <mi:MaterialIcon Kind="Play" Width="26" Height="26"
+                                IsVisible="{Binding !IsPlayingThisPlaylist}" />
+                            <mi:MaterialIcon Kind="Pause" Width="26" Height="26"
+                                IsVisible="{Binding IsPlayingThisPlaylist}" />
+                        </Panel>
+                    </Button>
+                    <Button Classes="playback-btn"
+                        Command="{Binding ShufflePlayCommand}"
+                        Width="40" Height="40" CornerRadius="20"
+                        ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
+                        <mi:MaterialIcon Kind="ShuffleVariant" Width="20"
+                            Height="20"
+                            Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                    </Button>
+                    <Button Classes="playback-btn"
+                        Command="{Binding AddToQueueCommand}"
+                        Width="40" Height="40" CornerRadius="20"
+                        ToolTip.Tip="{Binding L[Queue_Add]}">
+                        <mi:MaterialIcon Kind="PlaylistPlus" Width="20"
+                            Height="20" />
+                    </Button>
+                    <Button Classes="playback-btn"
+                        Command="{Binding DownloadAllCommand}"
+                        Width="40" Height="40" CornerRadius="20"
+                        ToolTip.Tip="{Binding L[Playlist_DownloadAll]}">
+                        <mi:MaterialIcon Kind="Download" Width="20" Height="20"
+                            Foreground="{Binding IsDownloadingActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
+                    </Button>
+                    <!-- Кнопка синхронизации: disabled во время IsSyncing, спиннер -->
+                    <Button Classes="playback-btn"
+                        Command="{Binding RefreshPlaylistCommand}"
+                        IsVisible="{Binding IsCloud}"
+                        Width="40" Height="40" CornerRadius="20"
+                        ToolTip.Tip="{Binding L[Playlist_SyncWithCloud]}">
+                        <Panel>
+                            <mi:MaterialIcon Kind="Sync" Width="20" Height="20"
+                                IsVisible="{Binding !IsSyncing}" />
+                            <mi:MaterialIcon Kind="Loading" Width="20" Height="20"
+                                IsVisible="{Binding IsSyncing}"
+                                Classes="spinning" />
+                        </Panel>
+                    </Button>
+                    <Button Classes="playback-btn"
+                        Command="{Binding EditPlaylistCommand}"
+                        IsVisible="{Binding CanEdit}"
+                        Width="40" Height="40" CornerRadius="20"
+                        ToolTip.Tip="{Binding L[EditPlaylist_Title]}">
+                        <mi:MaterialIcon Kind="Pencil" Width="20" Height="20" />
+                    </Button>
+                    <Border Width="1" Height="24"
+                        Background="{DynamicResource BgHighlightBrush}"
+                        Margin="8,0" />
+                    <controls:FilterBar
+                        FilterText="{Binding FilterQuery}"
+                        Watermark="{Binding L[Search_LocalFilterTitle]}"
+                        Width="220" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
 </UserControl>

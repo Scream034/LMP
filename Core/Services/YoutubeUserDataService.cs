@@ -105,7 +105,9 @@ public partial class YoutubeUserDataService
 
     public async Task<string> CreatePlaylistAsync(string title, string description = "")
     {
-        return await _provider.CreatePlaylistAsync(title, description)
+        // Description is no longer supported via WEB client mutations.
+        // Title-only creation via PlaylistMutationController.
+        return await _provider.CreatePlaylistAsync(title)
             ?? throw new InvalidOperationException("YouTube API returned null playlist ID.");
     }
 

@@ -21,8 +21,13 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
     [Reactive] public string FilterQuery { get; set; } = "";
     [Reactive] public string SummaryText { get; private set; } = "";
 
-    public ReactiveCommand<Unit, List<string>> ConfirmCommand { get; }
-    public ReactiveCommand<Unit, List<string>> CancelCommand { get; }
+    /// <summary>
+    /// Callback для закрытия диалога с результатом.
+    /// </summary>
+    public Action<List<string>>? OnResult { get; set; }
+
+    public ReactiveCommand<Unit, Unit> ConfirmCommand { get; }
+    public ReactiveCommand<Unit, Unit> CancelCommand { get; }
 
     public AddToPlaylistDialogViewModel(TrackInfo track, IEnumerable<Playlist> playlists)
     {
@@ -41,7 +46,6 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
             _allItems.Add(item);
         }
 
-        // Filter with debounce
         this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -56,11 +60,13 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
                 if (_allItems[i].IsChecked && !_allItems[i].WasAlreadyIn)
                     result.Add(_allItems[i].PlaylistId);
             }
-            return result;
+            OnResult?.Invoke(result);
         }));
 
-        CancelCommand = CreateCommand(ReactiveCommand.Create(
-            () => new List<string>()));
+        CancelCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            OnResult?.Invoke(new List<string>());
+        }));
 
         ApplyFilter();
         UpdateSummary();
@@ -73,7 +79,6 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
         var query = FilterQuery?.Trim() ?? "";
         bool hasQuery = query.Length > 0;
 
-        // Collect matching items
         var matched = new List<PlaylistCheckItem>(_allItems.Count);
         for (int i = 0; i < _allItems.Count; i++)
         {
@@ -83,7 +88,6 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
             matched.Add(item);
         }
 
-        // Sort: checked first, then alphabetical
         matched.Sort(static (a, b) =>
         {
             if (a.IsChecked != b.IsChecked)

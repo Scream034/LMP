@@ -749,4 +749,97 @@
         <Setter Property="Opacity" Value="0.4" />
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SYNC TOGGLE — Toggle-кнопки фильтрации в диалоге синхронизации    -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Chip-style toggle: скруглённые, с иконкой.                         -->
+    <!-- Unchecked: ghost-стиль (прозрачный фон, мягкая обводка).           -->
+    <!-- Checked: акцентный фон.                                            -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="ToggleButton.sync-toggle">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ToggleButton">
+                <Border
+                    Name="PART_Border"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="{TemplateBinding CornerRadius}"
+                    Padding="{TemplateBinding Padding}">
+                    <ContentPresenter
+                        Name="PART_ContentPresenter"
+                        Background="Transparent"
+                        Foreground="{TemplateBinding Foreground}"
+                        HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                        VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                        Content="{TemplateBinding Content}"
+                        ContentTemplate="{TemplateBinding ContentTemplate}" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- Hover (unchecked) -->
+    <Style Selector="ToggleButton.sync-toggle:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- Checked: акцентный стиль -->
+    <Style Selector="ToggleButton.sync-toggle:checked">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ToggleButton.sync-toggle:checked:pointerover">
+        <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+
+    <!-- Checked: иконка и текст наследуют AccentButtonTextBrush -->
+    <Style Selector="ToggleButton.sync-toggle:checked mi|MaterialIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="ToggleButton.sync-toggle:checked TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- Fluent override для ToggleButton -->
+    <Style Selector="ToggleButton.sync-toggle /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="ToggleButton.sync-toggle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="ToggleButton.sync-toggle:checked /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style
+        Selector="ToggleButton.sync-toggle:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+    </Style>
+    <Style Selector="ToggleButton.sync-toggle TextBlock">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
 </Styles>

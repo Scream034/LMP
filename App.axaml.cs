@@ -106,12 +106,23 @@ public partial class App : Application
             }
             _splash?.SetProgress(50);
 
+            // ═══ КРИТИЧНО: NotificationService после LibraryService ═══
+            var notifications = Program.Services.GetRequiredService<NotificationService>();
+            await notifications.InitializeAsync();
+            Log.Info("[Startup] NotificationService history loaded");
+            _splash?.SetProgress(55);
+
+            // ═══ PlaybackErrorOrchestrator после NotificationService ═══
+            var orchestrator = Program.Services.GetRequiredService<PlaybackErrorOrchestrator>();
+            Log.Info("[Startup] PlaybackErrorOrchestrator ready");
+            _splash?.SetProgress(60);
+
             // ─── Image Cache ───
             _splash?.UpdateStatus(L["Splash_PreparingImages"]);
             var imageCache = await Task.Run(() =>
                 Program.Services.GetRequiredService<ImageCacheService>());
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
-            _splash?.SetProgress(60);
+            _splash?.SetProgress(70);
 
             // ─── YouTube Provider ───
             _splash?.UpdateStatus(L["Splash_ConnectingYouTube"]);

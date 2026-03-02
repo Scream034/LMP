@@ -1,0 +1,50 @@
+<!-- UI/Dialogs/Content/InputDialogContent.axaml -->
+
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:content="using:LMP.UI.Dialogs.Content"
+             x:Class="LMP.UI.Dialogs.Content.InputDialogContent"
+             x:DataType="content:InputDialogContent">
+
+    <Border Background="{DynamicResource BgSecondaryBrush}"
+            BorderBrush="{DynamicResource BgHighlightBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="24"
+            MinWidth="480"
+            MaxWidth="600">
+
+        <StackPanel Spacing="16">
+
+            <TextBlock Text="{Binding Title}"
+                       FontSize="18" FontWeight="Bold"
+                       Foreground="{DynamicResource TextPrimaryBrush}" />
+
+            <TextBlock Text="{Binding Prompt}"
+                       Foreground="{DynamicResource TextSecondaryBrush}"
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding Prompt, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+            <TextBox x:Name="InputTextBox"
+                     MinHeight="80"
+                     MaxHeight="150"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     Watermark="{Binding Watermark}"
+                     VerticalContentAlignment="Top"
+                     Padding="12" />
+
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="12">
+                <Button Content="{Binding CancelText}"
+                        Command="{Binding CancelCommand}"
+                        MinWidth="90" />
+                <Button Content="{Binding ConfirmText}"
+                        Command="{Binding ConfirmCommand}"
+                        MinWidth="90"
+                        Classes="accent accent-base" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

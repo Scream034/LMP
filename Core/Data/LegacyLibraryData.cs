@@ -39,6 +39,7 @@ internal class LegacyPlaylist
         ETag = ETag,
         CreatedAt = CreatedAt,
         UpdatedAt = UpdatedAt
+        // ComputedColor = null — будет вычислен при первом открытии
     };
 }
 

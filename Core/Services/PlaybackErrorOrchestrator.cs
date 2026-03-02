@@ -14,7 +14,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 {
     private readonly YoutubeProvider _youtube;
     private readonly AudioEngine _audioEngine;
-    private readonly IDialogService _dialogService;
+    private readonly DialogService _dialogService;
     private readonly NotificationService _notificationService;
     private readonly LibraryService _libraryService;
 
@@ -40,7 +40,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     public PlaybackErrorOrchestrator(
     YoutubeProvider youtube,
     AudioEngine audioEngine,
-    IDialogService dialogService,
+    DialogService dialogService,
     NotificationService notificationService,
     LibraryService libraryService)
     {
@@ -115,7 +115,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     {
         Log.Warn($"[Orchestrator] Bot detection: {exception.FormatRemainingTime()}");
 
-        await InvokeOnUIAsync(() => _audioEngine.Stop());
+        await InvokeOnUIAsync(_audioEngine.Stop);
 
         // BotDetection — единственный случай, где модальный диалог оправдан
         // (есть таймер обратного отсчёта)

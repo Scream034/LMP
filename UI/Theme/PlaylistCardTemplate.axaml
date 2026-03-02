@@ -79,69 +79,47 @@
                                         Margin="0,0,0,10">
                                         <Panel Background="{DynamicResource BgHighlightBrush}">
 
-                                            <!-- Liked Playlist: Heart Icon -->
-                                            <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
-                                                Foreground="{DynamicResource AccentBrush}"
+                                            <!-- Placeholder Icon (если нет обложки) -->
+                                            <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
+                                                Height="64"
+                                                Foreground="{DynamicResource TextMutedBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
-                                                IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
+                                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter='invert'}" />
 
-                                            <!-- YouTube Playlist без обложки: PlaylistMusic Icon -->
-                                            <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
-                                                Height="64"
-                                                Foreground="{DynamicResource TextMutedBrush}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center">
-                                                <mi:MaterialIcon.IsVisible>
-                                                    <MultiBinding
-                                                        Converter="{x:Static BoolConverters.And}">
-                                                        <Binding Path="ThumbnailUrl"
-                                                            Converter="{StaticResource NullToVisible}"
-                                                            ConverterParameter="invert" />
-                                                        <Binding Path="Id"
-                                                            Converter="{StaticResource StringStartsWithConverter}"
-                                                            ConverterParameter="yt_" />
-                                                    </MultiBinding>
-                                                </mi:MaterialIcon.IsVisible>
-                                            </mi:MaterialIcon>
-
-                                            <!-- Локальный плейлист без обложки: Fallback PlaylistMusic Icon -->
-                                            <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
-                                                Height="64"
-                                                Foreground="{DynamicResource TextMutedBrush}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center">
-                                                <mi:MaterialIcon.IsVisible>
-                                                    <MultiBinding
-                                                        Converter="{x:Static BoolConverters.And}">
-                                                        <!-- Нет ThumbnailUrl -->
-                                                        <Binding Path="ThumbnailUrl"
-                                                            Converter="{StaticResource NullToVisible}"
-                                                            ConverterParameter="invert" />
-                                                        <!-- Не liked -->
-                                                        <Binding Path="Id"
-                                                            Converter="{StaticResource StringStartsWithConverter}"
-                                                            ConverterParameter="!liked" />
-                                                        <!-- Не yt_ -->
-                                                        <Binding Path="Id"
-                                                            Converter="{StaticResource StringStartsWithConverter}"
-                                                            ConverterParameter="!yt_" />
-                                                    </MultiBinding>
-                                                </mi:MaterialIcon.IsVisible>
-                                            </mi:MaterialIcon>
-
-                                            <!-- High Quality Web Image -->
+                                            <!-- 1. HTTP URL (Web) -->
                                             <Image
                                                 controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                                 controls:QualityImage.Quality="High"
                                                 Stretch="UniformToFill"
                                                 IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
 
-                                            <!-- Asset Image -->
+                                            <!-- 2. Local File / avares (Всё остальное что не http и
+                                            не null) -->
                                             <Image
                                                 Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
-                                                Stretch="UniformToFill"
-                                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='avares'}" />
+                                                Stretch="UniformToFill">
+                                                <Image.IsVisible>
+                                                    <MultiBinding
+                                                        Converter="{x:Static BoolConverters.And}">
+                                                        <!-- Есть URL -->
+                                                        <Binding Path="ThumbnailUrl"
+                                                            Converter="{StaticResource NullToVisible}" />
+                                                        <!-- И это НЕ http -->
+                                                        <Binding Path="ThumbnailUrl"
+                                                            Converter="{StaticResource StringStartsWithConverter}"
+                                                            ConverterParameter="!http" />
+                                                    </MultiBinding>
+                                                </Image.IsVisible>
+                                            </Image>
+
+                                            <!-- Liked Playlist Heart (поверх обложки или вместо) -->
+                                            <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
+                                                Foreground="{DynamicResource AccentBrush}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
+
                                         </Panel>
                                     </Border>
 
