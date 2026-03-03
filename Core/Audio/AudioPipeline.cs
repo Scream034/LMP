@@ -339,6 +339,14 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// <summary>
     /// Строит <see cref="AudioStreamInfo"/> с РЕАЛЬНЫМ битрейтом (не нормализованным).
     /// 
+    /// <para><b>Приоритет контейнера:</b></para>
+    /// <list type="number">
+    ///   <item>Определяется по кодеку SOURCE (не cacheEntry!) — гарантирует корректность 
+    ///     при переключении качества (WebM→Mp4 и обратно)</item>
+    ///   <item>CacheEntry.Format используется только если source — <see cref="Sources.LocalFileSource"/>
+    ///     (т.е. играем из полного кэша, контейнер совпадает с записью)</item>
+    /// </list>
+    /// 
     /// <para><b>Приоритет битрейта:</b></para>
     /// <list type="number">
     ///   <item><paramref name="bitrateHint"/> — явно переданный при Play (РЕАЛЬНЫЙ, например 134)</item>
@@ -354,44 +362,50 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// </summary>
     private static AudioStreamInfo BuildStreamInfo(IAudioSource source, string? trackId, int bitrateHint)
     {
+        // Кэш-запись используется ТОЛЬКО для bitrate fallback и IsFromCache
+        // Контейнер определяется по РЕАЛЬНОМУ source, не по cacheEntry.
+        // Причина: При переключении WebM→Mp4 cacheEntry может быть от старого WebM кэша,
+        // а source уже Mp4. Стало: "Mp4/Aac/49kbps".
         var cacheEntry = !string.IsNullOrEmpty(trackId)
             ? AudioSourceFactory.FindAnyCachedTrack(trackId)?.Entry
             : null;
 
-        string container = cacheEntry?.Format.ToString() ?? source.Codec switch
+        // КОНТЕЙНЕР: определяем по source, не по cacheEntry
+        // Для LocalFileSource (полный кэш) — используем cacheEntry.Format (source не знает формат).
+        // Для CachingStreamSource (стриминг) — используем кодек source (реальный формат потока).
+        string container;
+        if (source is Sources.LocalFileSource && cacheEntry != null)
         {
-            AudioCodec.Opus => "WebM",
-            AudioCodec.Aac => "Mp4",
-            _ => "Unknown"
-        };
+            // LocalFileSource играет из полного кэша — контейнер совпадает с записью
+            container = cacheEntry.Format.ToString();
+        }
+        else
+        {
+            // CachingStreamSource или другой — определяем по кодеку (реальный формат)
+            container = source.Codec switch
+            {
+                AudioCodec.Opus => "WebM",
+                AudioCodec.Aac => "Mp4",
+                _ => "Unknown"
+            };
+        }
 
-        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ — ПРИОРИТЕТ ═══
-        // Каждый источник содержит реальный (не нормализованный) битрейт.
-        // Порядок приоритета:
-        // 1. bitrateHint > 0: явно передан из AudioEngine (реальный из YouTube API)
-        // 2. cacheEntry.Bitrate: реальный битрейт, сохранённый при создании CacheEntry
-        // 3. source.Bitrate: реальный битрейт из CachingStreamSource (поле _bitrate)
-        // 4. Fallback: только для LocalFileSource без метаданных кэша
+        // БИТРЕЙТ: приоритетная цепочка
         int bitrate;
         if (bitrateHint > 0)
         {
-            // Приоритет 1: Явно указан при вызове Play (РЕАЛЬНЫЙ битрейт)
             bitrate = bitrateHint;
         }
         else if (cacheEntry is { Bitrate: > 0 })
         {
-            // Приоритет 2: Из кэш-метаданных (РЕАЛЬНЫЙ битрейт)
             bitrate = cacheEntry.Bitrate;
         }
         else if (source is Sources.CachingStreamSource { Bitrate: > 0 } cachingSource)
         {
-            // Приоритет 3: Из source напрямую (РЕАЛЬНЫЙ битрейт из конструктора)
             bitrate = cachingSource.Bitrate;
         }
         else
         {
-            // Приоритет 4: Fallback — только для LocalFileSource без кэш-метаданных
-            // Это нормально: локальный файл без CacheEntry не содержит bitrate в metadata.
             bitrate = source.Codec == AudioCodec.Opus ? 128 : 96;
         }
 
@@ -400,7 +414,7 @@ public sealed class AudioPipeline : IAsyncDisposable
             TrackId = trackId ?? "",
             Container = container,
             Codec = source.Codec.ToString(),
-            Bitrate = bitrate, // ← РЕАЛЬНЫЙ битрейт (например, 134), НЕ нормализованный
+            Bitrate = bitrate,
             SampleRate = source.SampleRate > 0 ? source.SampleRate : DefaultSampleRate,
             Channels = source.Channels > 0 ? source.Channels : DefaultChannels,
             DurationMs = source.DurationMs,
@@ -643,7 +657,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                         continue;
                     }
 
-                    // ═══ POST-SEEK TIMESTAMP SKIP ═══
+                    // POST-SEEK TIMESTAMP SKIP
                     // WebM cue points имеют шаг ~10-30 секунд.
                     // Seek к 3s → cue point 0ms → парсер начинает с 0ms.
                     // Пропускаем фреймы до целевого timestamp.
@@ -839,7 +853,7 @@ public sealed class AudioPipeline : IAsyncDisposable
             catch { }
         }
 
-        // ═══ Backend: зависит от ownership ═══
+        // Backend: зависит от ownership
         if (_ownsBackend)
         {
             // Owned backend — полный dispose (waveOutClose)

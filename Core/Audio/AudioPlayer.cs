@@ -189,7 +189,14 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>
     /// Запускает воспроизведение. Неблокирующий вызов.
     /// </summary>
-    public void Play(string url, string? trackId = null, int bitrateHint = 0)
+    /// <param name="url">URL аудио потока.</param>
+    /// <param name="trackId">ID трека.</param>
+    /// <param name="bitrateHint">Битрейт (kbps).</param>
+    /// <param name="seekPosition">
+    /// Позиция для atomic seek-before-play. null = начать с начала.
+    /// Используется при переключении качества для бесшовного перехода.
+    /// </param>
+    public void Play(string url, string? trackId = null, int bitrateHint = 0, TimeSpan? seekPosition = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -199,14 +206,15 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         // Optimistic UI update
         SetState(PlayerState.Loading);
 
-        _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session));
+        _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session, seekPosition));
     }
 
     /// <summary>
     /// Async версия Play для обратной совместимости.
     /// Возвращает Task который завершается когда воспроизведение началось или ошибка.
     /// </summary>
-    public Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0, CancellationToken ct = default)
+    public Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0,
+        CancellationToken ct = default, TimeSpan? seekPosition = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -239,7 +247,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             tcs.TrySetCanceled(ct);
         });
 
-        Play(url, trackId, bitrateHint);
+        Play(url, trackId, bitrateHint, seekPosition);
 
         return tcs.Task;
     }
@@ -423,7 +431,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     private async Task HandlePlayAsync(PlayCommand cmd)
     {
-        Log.Info($"[AudioPlayer] Play: {cmd.TrackId ?? "unknown"}, bitrate hint: {cmd.BitrateHint}");
+        Log.Info($"[AudioPlayer] Play: {cmd.TrackId ?? "unknown"}, bitrate hint: {cmd.BitrateHint}" +
+                 (cmd.SeekPosition.HasValue ? $", seek: {cmd.SeekPosition.Value.TotalSeconds:F1}s" : ""));
 
         SetState(PlayerState.Loading);
 
@@ -439,7 +448,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         try
         {
             // ═══ Создаём pipeline с SHARED backend ═══
-            // Reinitialize внутри: fast path (~0ms) если формат совпадает
             var pipeline = await AudioPipeline.CreateAsync(
                 cmd.Url,
                 cmd.TrackId,
@@ -466,6 +474,29 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 await replaced.DisposeAsync();
             }
 
+            // ═══ ATOMIC SEEK-BEFORE-PLAY ═══
+            // При переключении качества: seek выполняется ДО старта backend.
+            // Decoder начинает ��екодировать с правильной позиции,
+            // backend не слышит артефактов с позиции 0.
+            if (cmd.SeekPosition is { TotalMilliseconds: > 0 } seekPos)
+            {
+                // PrepareForSeek устанавливает skip frames counter для codec warmup
+                long seekMs = (long)seekPos.TotalMilliseconds;
+                pipeline.PrepareForSeek(seekMs);
+
+                // Seek в source — перемещает read pointer к нужному сегменту
+                bool seekOk = await pipeline.Source.SeekAsync(seekMs, _lifetimeCts.Token);
+                if (seekOk)
+                {
+                    // Обновляем position counter для корректного Position reporting
+                    long targetSamples = (long)(seekMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
+                    pipeline.SetDecodedSamplesPosition(targetSamples);
+
+                    Log.Debug($"[AudioPlayer] Pre-play seek to {seekMs}ms");
+                }
+            }
+
+            // ═══ Запускаем decoder — он декодирует с правильной позиции (после seek) ═══
             pipeline.StartDecoding(
                 CreateUrlRefresher(),
                 _options,
@@ -487,6 +518,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
+            // ═══ Backend стартует — PCM buffer содержит данные с ПРАВИЛЬНОЙ позиции ═══
             pipeline.Start();
             StartTimers();
             SetState(PlayerState.Playing);
@@ -501,11 +533,10 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch (Youtube.Exceptions.StreamUnavailableException ex)
         {
-            // Специальная обработка StreamUnavailableException — пробрасываем наверх
             Log.Error($"[AudioPlayer] Play failed: {ex.Message}", ex);
             SetState(PlayerState.Error);
             _events.RaiseError(new AudioPlayerError(ex.Message, ex));
-            throw; // Пробрасываем для обработки в AudioEngine
+            throw;
         }
         catch (Exception ex)
         {

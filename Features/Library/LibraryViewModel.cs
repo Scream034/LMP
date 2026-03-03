@@ -39,12 +39,6 @@ public sealed class LibraryViewModel : ViewModelBase
     private CancellationTokenSource? _statsAnimCts;
     private bool _isDisposed;
     private bool _eventsSubscribed;
-
-    /// <summary>Задержка между анимациями появления карточек (мс).</summary>
-    private const int StaggerDelayMs = 40;
-    /// <summary>Сколько элементов анимировать с задержкой (остальные мгновенно).</summary>
-    private const int MaxStaggeredItems = 12;
-
     private int _prevPlaylistCount;
     private int _prevTrackCount;
 

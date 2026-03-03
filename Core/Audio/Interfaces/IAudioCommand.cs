@@ -11,11 +11,27 @@ public interface IAudioCommand
     int SessionId { get; }
 }
 
+/// <summary>
+/// Команда воспроизведения.
+/// </summary>
+/// <param name="Url">URL аудио потока.</param>
+/// <param name="TrackId">ID трека для обновления URL (опционально).</param>
+/// <param name="BitrateHint">Битрейт (kbps). 0 = определить автоматически.</param>
+/// <param name="SessionId">Уникальный ID сессии.</param>
+/// <param name="SeekPosition">
+/// Позиция для seek ПЕРЕД стартом воспроизведения (atomic seek-before-play).
+/// null = начать с начала трека.
+/// 
+/// <para><b>Зачем:</b> При переключении качества (SwitchQualityAsync) нужно
+/// начать воспроизведение с текущей позиции, а не с начала. Без этого поля
+/// между PlayAsync и SeekAsync слышен артефакт — 16-300ms звука с позиции 0.</para>
+/// </param>
 public sealed record PlayCommand(
     string Url,
     string? TrackId,
     int BitrateHint,
-    int SessionId) : IAudioCommand;
+    int SessionId,
+    TimeSpan? SeekPosition = null) : IAudioCommand;
 
 public sealed record StopCommand(int SessionId) : IAudioCommand;
 

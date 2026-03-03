@@ -213,9 +213,6 @@ namespace SharpJaad.AAC.Sbr
                 {
                     for (n = 0; n < 4; n++)
                     {
-                        // БЫЛО: Array.Copy(...) - вызывает RankException
-                        // Array.Copy(adj.G_lim_boost[l], 0, sbr._G_temp_prev, 2 * 5 * ch + 5 * n + 0, sbr._M);
-
                         // СТАЛО: Ручное копирование в 3D массив
                         for (int k = 0; k < sbr._M; k++)
                         {
@@ -230,10 +227,6 @@ namespace SharpJaad.AAC.Sbr
 
                 for (i = sbr._t_E[ch, l]; i < sbr._t_E[ch, l + 1]; i++)
                 {
-                    /* load new values into ringbuffer */
-                    // БЫЛО: Array.Copy(...)
-                    // Array.Copy(adj.G_lim_boost[l], 0, sbr._G_temp_prev, 2 * 5 * ch + 5 * sbr._GQ_ringbuf_index[ch] + 0, sbr._M);
-
                     // СТАЛО:
                     int ri = sbr._GQ_ringbuf_index[ch];
                     for (int k = 0; k < sbr._M; k++)

@@ -143,8 +143,6 @@ public sealed class PlaylistEditService
                 {
                     Log.Error($"[PlaylistEdit] Ошибка переименования на YouTube: {ex.Message}");
 
-                    // БЫЛО: await _dialog.ShowInfoAsync(...)
-                    // СТАЛО: Toast-уведомление
                     await _notifications.ShowToastAsync(
                         titleKey: "Dialog_Error_Title",
                         messageKey: "Playlist_RenameCloudFailed",
@@ -181,8 +179,6 @@ public sealed class PlaylistEditService
                 {
                     Log.Warn($"[PlaylistEdit] Невалидный путь обложки: {result.ThumbnailUrl}");
 
-                    // БЫЛО: await _dialog.ShowInfoAsync(...)
-                    // СТАЛО: Toast-уведомление
                     await _notifications.ShowToastAsync(
                         titleKey: "Dialog_Warning_Title",
                         messageKey: "Error_InvalidThumbnailUrl",
@@ -331,8 +327,6 @@ public sealed class PlaylistEditService
 
             if (string.IsNullOrEmpty(ytId))
             {
-                // БЫЛО: await _dialog.ShowInfoAsync(...)
-                // СТАЛО: Toast
                 await _notifications.ShowToastAsync(
                     titleKey: "Dialog_Error_Title",
                     messageKey: "Playlist_CloudCreateFailed",
@@ -394,8 +388,6 @@ public sealed class PlaylistEditService
         {
             Log.Error($"[PlaylistEdit] Ошибка привязки к облаку: {ex.Message}");
 
-            // БЫЛО: await _dialog.ShowInfoAsync(...)
-            // СТАЛО: Toast
             await _notifications.ShowToastAsync(
                 titleKey: "Dialog_Error_Title",
                 messageKey: "Playlist_CloudLinkFailed",

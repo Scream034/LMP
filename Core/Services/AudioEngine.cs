@@ -87,6 +87,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private bool _volumeInitialized;
     private CancellationTokenSource? _smoothVolumeCts;
 
+    /// <summary>
+    /// Минимальный интервал между переключениями качества (мс).
+    /// Предотвращает rate limiting YouTube при быстрых переключениях.
+    /// </summary>
+    private const int QualitySwitchCooldownMs = 2000;
+
+    /// <summary>
+    /// Время последнего переключения качества.
+    /// </summary>
+    private DateTime _lastQualitySwitchTime = DateTime.MinValue;
+
     #endregion
 
     #region Playback State
@@ -439,9 +450,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
         {
             OnErrorOccurred?.Invoke(exception);
-#pragma warning disable CS0618 // Type or member is obsolete
             OnError?.Invoke(exception.Message);
-#pragma warning restore CS0618
         }
         else
         {
@@ -449,9 +458,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
                 OnErrorOccurred?.Invoke(exception);
-#pragma warning disable CS0618 // Type or member is obsolete
                 OnError?.Invoke(exception.Message);
-#pragma warning restore CS0618
             });
         }
     }
@@ -1010,6 +1017,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (CurrentTrack == null) return;
 
+        // ═══ DEBOUNCE: Не переключать чаще чем раз в 2 секунды ═══
+        var now = DateTime.UtcNow;
+        var elapsed = (now - _lastQualitySwitchTime).TotalMilliseconds;
+        if (elapsed < QualitySwitchCooldownMs)
+        {
+            int waitMs = QualitySwitchCooldownMs - (int)elapsed;
+            Log.Debug($"[AudioEngine] Quality switch debounced, waiting {waitMs}ms");
+            await Task.Delay(waitMs);
+        }
+        _lastQualitySwitchTime = DateTime.UtcNow;
+
         var pos = CurrentPosition;
         var track = CurrentTrack;
 
@@ -1035,50 +1053,45 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 _player.Stop();
                 track.StreamUrl = "";
 
-                var streamInfo = await _youtube.RefreshStreamUrlAsync(track, true, CancellationToken.None);
+                var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None)
+                              ?? await _youtube.RefreshStreamUrlAsync(track, true, CancellationToken.None);
+
                 if (streamInfo == null)
                 {
-#pragma warning disable CS0618 // Type or member is obsolete
                     RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
-#pragma warning restore CS0618
                     return;
                 }
 
-                // ═══ Используем РЕАЛЬНЫЙ битрейт из YouTube API ═══
-                // streamInfo.Value.Bitrate — реальный битрейт выбранного стрима (например, 134).
-                // Передаём его в PlayAsync чтобы StreamInfo содержал реальный битрейт.
+                if (Volatile.Read(ref _session) != session) return;
+
                 var realBitrate = streamInfo.Value.Bitrate;
                 track.TransientBitrate = realBitrate;
 
-                await _player.PlayAsync(streamInfo.Value.Url, track.Id, realBitrate, CancellationToken.None);
+                // ═══ ATOMIC SEEK-BEFORE-PLAY ═══
+                // Передаём seekPosition в PlayAsync — seek выполнится ДО старта backend.
+                // Это устраняет артефакт "щётка": 16-300ms звука с позиции 0
+                // перед seek к правильной позиции.
+                //   await _player.PlayAsync(url, trackId, bitrate, seekPosition: pos);
+                //   ← Seek ДО старта backend, звук сразу с правильной позиции
+                TimeSpan? seekPosition = pos.TotalSeconds > 1 ? pos : null;
 
-                if (pos.TotalSeconds > 1)
-                {
-                    await WaitForPlayerReadyAsync(TimeSpan.FromSeconds(2));
-                    await _player.SeekAsync(pos);
-                }
+                await _player.PlayAsync(
+                    streamInfo.Value.Url,
+                    track.Id,
+                    realBitrate,
+                    CancellationToken.None,
+                    seekPosition: seekPosition);
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Debug("[AudioEngine] Quality switch cancelled");
             }
             catch (Exception ex)
             {
                 Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
-#pragma warning disable CS0618 // Type or member is obsolete
                 RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
-#pragma warning restore CS0618
             }
         });
-    }
-
-    private async Task WaitForPlayerReadyAsync(TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-
-        while (DateTime.UtcNow < deadline)
-        {
-            if (_player.State is PlaybackState.Playing or PlaybackState.Paused)
-                return;
-
-            await Task.Delay(50);
-        }
     }
 
     #endregion

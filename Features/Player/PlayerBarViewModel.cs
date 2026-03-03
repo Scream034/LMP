@@ -315,7 +315,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         OnLibraryInitialized();
 
-        // ═══ ПОДПИСКИ НА PlayerControlService ═══
+        // ПОДПИСКИ НА PlayerControlService
         // Эти работают ВСЕГДА, даже в suspend — легковесные обновления состояния
 
         _playerControl.PlaybackStateObservable
@@ -367,13 +367,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => UpdateQueueState())
             .DisposeWith(Disposables);
 
-        // ═══ ForceSync: мягкое восстановление без TrackReset ═══
+        // ForceSync: мягкое восстановление без TrackReset
         _playerControl.ForceSyncObservable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => HandleForceSync())
             .DisposeWith(Disposables);
 
-        // ═══ ПОДПИСКИ НА AudioEngine (heavy updates, учитывают suspend) ═══
+        // ПОДПИСКИ НА AudioEngine (heavy updates, учитывают suspend)
 
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                h => _audio.OnSeekCompleted += h,
@@ -502,7 +502,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             })
             .DisposeWith(Disposables);
 
-        // ═══ КОМАНДЫ ═══
+        // КОМАНДЫ
         var canNavigate = this.WhenAnyValue(
             x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
             (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
@@ -631,7 +631,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (!HasTrack || CurrentTrack == null)
             return;
 
-        // ═══ 1. Снимаем зависшие guard-флаги ═══
+        // 1. Снимаем зависшие guard-флаги
         if (IsTrackResetting)
         {
             IsTrackResetting = false;
@@ -645,12 +645,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             Log.Debug("[PlayerBar] ForceSync: cleared stale IsSeekBusy");
         }
 
-        // ═══ 2. Восстанавливаем позицию ═══
+        // 2. Восстанавливаем позицию
         var pos = _audio.CurrentPosition;
         Position = pos;
         PositionSeconds = pos.TotalSeconds;
 
-        // ═══ 3. Восстанавливаем длительность ═══
+        // 3. Восстанавливаем длительность
         var dur = _audio.TotalDuration;
         if (dur.TotalSeconds > 0)
         {
@@ -658,10 +658,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
             DurationSeconds = dur.TotalSeconds;
         }
 
-        // ═══ 4. Восстанавливаем буфер ═══
+        // 4. Восстанавливаем буфер
         ForceUpdateBufferProgress();
 
-        // ═══ 5. Восстанавливаем StreamInfo из кэша ═══
+        // 5. Восстанавливаем StreamInfo из кэша
         // Не пересобираем вручную — используем последний валидный текст
         // который был сохранён в UpdateStreamInfo при получении AudioStreamInfo
         if (!string.IsNullOrEmpty(_lastValidStreamInfo))
@@ -670,7 +670,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             ShowStreamInfo = true;
         }
 
-        // ═══ 6. Восстанавливаем like-статус ═══
+        // 6. Восстанавливаем like-статус
         var storedTrack = _library.GetTrack(CurrentTrack.Id);
         if (storedTrack != null)
         {
@@ -678,7 +678,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             CurrentTrack.IsLiked = storedTrack.IsLiked;
         }
 
-        // ═══ 7. Поднимаем PropertyChanged для UI ═══
+        // 7. Поднимаем PropertyChanged для UI
         this.RaisePropertyChanged(nameof(DurationTooltip));
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(SafeAuthor));
@@ -960,7 +960,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (info.IsValid)
         {
             StreamInfo = info.FormatDisplay;
-            _lastValidStreamInfo = info.FormatDisplay;  // ← кэшируем
+            _lastValidStreamInfo = info.FormatDisplay;
 
             if (!_isSuspended)
             {
@@ -969,10 +969,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 this.RaisePropertyChanged(nameof(DurationTooltip));
             }
 
+            // Используем НОРМАЛИЗОВАННОЕ сравнение
+            int normalizedInfoBitrate = AudioConstants.NormalizeBitrate(info.Bitrate);
+
             foreach (var f in AvailableFormats)
             {
+                int normalizedFormatBitrate = AudioConstants.NormalizeBitrate((int)f.Bitrate);
+
                 f.IsActive = string.Equals(f.Codec, info.Codec, StringComparison.OrdinalIgnoreCase) &&
-                             (int)f.Bitrate == info.Bitrate;
+                             normalizedInfoBitrate == normalizedFormatBitrate;
             }
 
             if (IsTrackResetting)
@@ -1186,14 +1191,24 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
             AvailableFormats.Clear();
 
+            // Нормализуем текущий битрейт ДО цикла
+            int normalizedCurrentBitrate = AudioConstants.NormalizeBitrate(currentBitrate);
+
             foreach (var f in formats)
             {
-                f.IsDownloaded = cachedFormats.Any(cached =>
-                    string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
-                    Math.Abs((int)f.Bitrate - cached.Bitrate) <= 10);
+                // Нормализуем битрейт формата для IsDownloaded
+                int normalizedFormatBitrate = AudioConstants.NormalizeBitrate((int)f.Bitrate);
 
+                f.IsDownloaded = cachedFormats.Any(cached =>
+                {
+                    int normalizedCachedBitrate = AudioConstants.NormalizeBitrate(cached.Bitrate);
+                    return string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
+                           normalizedFormatBitrate == normalizedCachedBitrate;
+                });
+
+                // Используем НОРМАЛИЗОВАННОЕ сравнение для IsActive
                 f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
-                             Math.Abs((int)f.Bitrate - currentBitrate) <= 10;
+                             normalizedFormatBitrate == normalizedCurrentBitrate;
 
                 AvailableFormats.Add(f);
             }
