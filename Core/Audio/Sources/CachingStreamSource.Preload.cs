@@ -38,22 +38,53 @@ public sealed partial class CachingStreamSource
         {
             try
             {
-                // Асинхронная проверка suspend вместо блокирующей ManualResetEventSlim.Wait()
-                while (!_suspendGate.IsSet && !ct.IsCancellationRequested)
+                bool isSuspended = !_suspendGate.IsSet;
+
+                if (isSuspended)
                 {
-                    await Task.Delay(100, ct);
+                    // ═══ SUSPEND MODE: Только critical read-ahead ═══
+                    // Гарантирует что при автосмене трека в фоне
+                    // чанки вокруг текущей позиции будут загружены
+                    int current = Volatile.Read(ref _currentChunk);
+                    var epochAtStart = Interlocked.Read(ref _downloadEpoch);
+                    var downloadToken = CurrentDownloadToken;
+
+                    // Загружаем 2-3 чанка вперёд — достаточно для бесперебойного
+                    // воспроизведения, но не нагружаем сеть
+                    int criticalAhead = Math.Min(3, _config.ReadAheadChunks);
+
+                    for (int i = 0; i <= criticalAhead; i++)
+                    {
+                        if (ct.IsCancellationRequested) break;
+                        if (Interlocked.Read(ref _downloadEpoch) != epochAtStart) break;
+
+                        int idx = current + i;
+                        if (idx >= _totalChunks) break;
+
+                        if (!IsChunkAvailable(idx) && !_activeDownloads.ContainsKey(idx))
+                        {
+                            _ = SafeEnsureChunkAsync(idx, downloadToken);
+                        }
+                    }
+
+                    // Ждём resume или timeout — проверяем каждые 200ms
+                    try
+                    {
+                        await Task.Delay(200, ct);
+                    }
+                    catch (OperationCanceledException) { break; }
+
+                    continue;
                 }
 
+                // ═══ NORMAL MODE: Полный preload ═══
                 await Task.Delay(_config.PreloadIntervalMs, ct);
 
-                if (_cacheEntry.IsComplete)
-                    break;
+                if (_cacheEntry.IsComplete) break;
 
-                // ═══ КРИТИЧНО: Захватываем epoch И token атомарно ═══
-                var epochAtStart = Interlocked.Read(ref _downloadEpoch);
-                var downloadToken = CurrentDownloadToken;
-
-                int current = Volatile.Read(ref _currentChunk);
+                var epochNormal = Interlocked.Read(ref _downloadEpoch);
+                var tokenNormal = CurrentDownloadToken;
+                int currentNormal = Volatile.Read(ref _currentChunk);
                 int pending = _activeDownloads.Count;
 
                 if (pending >= _config.MaxConcurrentDownloads)
@@ -62,25 +93,20 @@ public sealed partial class CachingStreamSource
                     continue;
                 }
 
-                // ── Preload ahead ──
                 bool activePreload = false;
                 int chunksAhead = 0;
 
                 for (int i = 0; i <= _config.ReadAheadChunks
                          && pending < _config.MaxConcurrentDownloads; i++)
                 {
-                    // Проверяем что epoch не сменился (seek произошёл)
-                    if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
+                    if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
                     {
                         Log.Debug("[CachingSource] Preload: epoch changed, re-evaluating");
                         break;
                     }
 
-                    int idx = current + i;
-
-                    // Проверка границ — не выходим за пределы файла
-                    if (idx >= _totalChunks)
-                        break;
+                    int idx = currentNormal + i;
+                    if (idx >= _totalChunks) break;
 
                     if (IsChunkAvailable(idx))
                     {
@@ -88,26 +114,20 @@ public sealed partial class CachingStreamSource
                     }
                     else if (!_activeDownloads.ContainsKey(idx))
                     {
-                        _ = SafeEnsureChunkAsync(idx, downloadToken);
+                        _ = SafeEnsureChunkAsync(idx, tokenNormal);
                         pending++;
                         activePreload = true;
                         await Task.Delay(50, ct);
                     }
                 }
 
-                // Если epoch сменился, пропускаем остальное
-                if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
-                {
-                    Log.Debug("[CachingSource] Preload: epoch changed during preload ahead, re-evaluating");
+                if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
                     continue;
-                }
 
-                if (!activePreload)
-                    idleCycles++;
-                else
-                    idleCycles = 0;
+                if (!activePreload) idleCycles++;
+                else idleCycles = 0;
 
-                // ── Background fill ──
+                // Background fill
                 bool canBackgroundFill =
                     !activePreload
                     && idleCycles >= _config.BackgroundFillIdleCycles
@@ -118,24 +138,23 @@ public sealed partial class CachingStreamSource
 
                 if (canBackgroundFill)
                 {
-                    // Ещё раз проверяем epoch
-                    if (Interlocked.Read(ref _downloadEpoch) != epochAtStart)
+                    if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
                         continue;
 
-                    int? target = FindNearestMissingChunk(current);
+                    int? target = FindNearestMissingChunk(currentNormal);
 
                     if (target.HasValue
                         && target.Value < _totalChunks
                         && !IsChunkAvailable(target.Value)
                         && !_activeDownloads.ContainsKey(target.Value))
                     {
-                        _ = SafeEnsureChunkAsync(target.Value, downloadToken);
+                        _ = SafeEnsureChunkAsync(target.Value, tokenNormal);
                         _backgroundChunksLoaded++;
                         await Task.Delay(_config.BackgroundFillIntervalMs, ct);
                     }
                 }
 
-                // ── Progress reporting ──
+                // Progress reporting
                 int progress = (int)_cacheEntry.DownloadProgress;
                 if (progress / 25 > lastReportedProgress / 25)
                 {
@@ -144,18 +163,12 @@ public sealed partial class CachingStreamSource
                     lastReportedProgress = progress;
                 }
 
-                // ── RAM eviction ──
+                // RAM eviction
                 if (_ramChunks.Count > _config.MaxRamChunks)
                     ReleaseRamBuffers();
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch
-            {
-                // Подавляем ошибки в фоновом цикле
-            }
+            catch (OperationCanceledException) { break; }
+            catch { }
         }
     }
 

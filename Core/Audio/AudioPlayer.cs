@@ -26,6 +26,12 @@ public sealed class AudioPlayerOptions
 /// <para>Все публичные методы неблокирующие — они только отправляют команды в очередь.
 /// Обработка идёт строго последовательно в фоновом потоке.</para>
 /// 
+/// <para><b>Shared Backend:</b></para>
+/// <para>NAudioBackend (WaveOutEvent) создаётся ОДИН РАЗ при создании AudioPlayer
+/// и переиспользуется между треками через <see cref="IPlaybackBackend.Reinitialize"/>.
+/// Это исключает дорогостоящие kernel-вызовы waveOutClose/waveOutOpen при каждой
+/// смене трека, что критично когда приложение в фоне (ОС деприоритезирует потоки).</para>
+/// 
 /// <para><b>Thread Safety:</b></para>
 /// <para>Все публичные методы потокобезопасны. Внутреннее состояние защищено
 /// через actor model (single reader channel).</para>
@@ -39,6 +45,12 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     private readonly Channel<IAudioCommand> _commandChannel;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Task _commandProcessorTask;
+
+    /// <summary>
+    /// Shared backend — создаётся один раз, переиспользуется между треками.
+    /// Уничтожается только при dispose самого AudioPlayer.
+    /// </summary>
+    private readonly IPlaybackBackend _sharedBackend;
 
     // Atomic pipeline swap
     private volatile AudioPipeline? _activePipeline;
@@ -140,9 +152,34 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             FullMode = BoundedChannelFullMode.DropOldest
         });
 
+        // ═══ Shared backend: создаём ОДИН РАЗ при старте ═══
+        // waveOutOpen() вызывается здесь, когда окно активно и потоки имеют полный приоритет.
+        // При смене треков backend переиспользуется через Reinitialize() —
+        // fast path (~0ms) если формат совпадает (Opus 48kHz → Opus 48kHz).
+        _sharedBackend = CreateSharedBackend(_options);
+
         _commandProcessorTask = Task.Run(ProcessCommandsAsync);
 
-        Log.Info("[AudioPlayer] Created with actor model");
+        Log.Info("[AudioPlayer] Created with actor model + shared backend");
+    }
+
+    /// <summary>
+    /// Создаёт shared backend. Вызывается из конструктора.
+    /// </summary>
+    private static IPlaybackBackend CreateSharedBackend(AudioPlayerOptions options)
+    {
+        if (options.UseNullBackend)
+            return new Backends.NullAudioBackend();
+
+        try
+        {
+            return new Backends.NAudioBackend();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioPlayer] NAudio creation failed: {ex.Message}, using NullBackend");
+            return new Backends.NullAudioBackend();
+        }
     }
 
     #endregion
@@ -244,20 +281,39 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Async версия Stop.
+    /// Использует event-based ожидание вместо busy-wait.
     /// </summary>
     public async Task StopAsync()
     {
         if (_state == PlayerState.Idle || _state == PlayerState.Disposed) return;
 
         int session = Interlocked.Increment(ref _sessionId);
+
+        // Event-based ожидание вместо spin-wait
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnState(PlaybackState state)
+        {
+            if (state == PlaybackState.Stopped)
+            {
+                _events.StateChanged -= OnState;
+                tcs.TrySetResult(true);
+            }
+        }
+
+        _events.StateChanged += OnState;
+
         await _commandChannel.Writer.WriteAsync(new StopCommand(session));
 
-        // Ждём перехода в Idle
-        int waitCount = 0;
-        while (_state != PlayerState.Idle && _state != PlayerState.Disposed && waitCount < 100)
+        // Ждём перехода в Stopped с таймаутом
+        try
         {
-            await Task.Delay(10);
-            waitCount++;
+            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException)
+        {
+            _events.StateChanged -= OnState;
+            Log.Warn("[AudioPlayer] StopAsync timeout");
         }
     }
 
@@ -371,6 +427,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         SetState(PlayerState.Loading);
 
+        // ═══ Dispose старого pipeline — backend НЕ уничтожается (shared) ═══
         var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
         if (oldPipeline != null)
         {
@@ -381,12 +438,15 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         try
         {
+            // ═══ Создаём pipeline с SHARED backend ═══
+            // Reinitialize внутри: fast path (~0ms) если формат совпадает
             var pipeline = await AudioPipeline.CreateAsync(
                 cmd.Url,
                 cmd.TrackId,
                 cmd.BitrateHint,
                 CreateUrlRefresher(),
                 _options,
+                _sharedBackend,
                 _lifetimeCts.Token);
 
             int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
@@ -462,11 +522,17 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         StopTimers();
 
+        // Pipeline dispose — backend НЕ уничтожается (shared)
         var pipeline = Interlocked.Exchange(ref _activePipeline, null);
         if (pipeline != null)
         {
             await pipeline.DisposeAsync();
         }
+
+        // Останавливаем shared backend (Pause, не Dispose)
+        // На случай если pipeline уже был null, но backend ещё играл
+        _sharedBackend.Stop();
+        _sharedBackend.Flush();
 
         _currentTrackId = null;
 
@@ -761,6 +827,9 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch { }
 
+        // Shared backend уничтожается ПОСЛЕДНИМ — после всех pipeline
+        _sharedBackend.Dispose();
+
         _lifetimeCts.Dispose();
 
         GC.SuppressFinalize(this);
@@ -779,6 +848,9 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             await _commandProcessorTask.WaitAsync(TimeSpan.FromSeconds(2));
         }
         catch { }
+
+        // Shared backend уничтожается ПОСЛЕДНИМ
+        _sharedBackend.Dispose();
 
         _lifetimeCts.Dispose();
 

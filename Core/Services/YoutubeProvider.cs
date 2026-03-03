@@ -763,24 +763,37 @@ public partial class YoutubeProvider : IDisposable
                     {
                         var url = selectedStream.Url;
                         var size = selectedStream.Size.Bytes;
-                        var bitrate = (int)selectedStream.Bitrate.KiloBitsPerSecond;
+
+                        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ ИЗ YOUTUBE ═══
+                        // YouTube передаёт битрейт в Bitrate.KiloBitsPerSecond.
+                        // Это НЕ всегда круглое число: может быть 134.2 kbps.
+                        // Округляем до целого, но НЕ нормализуем.
+                        var bitrate = (int)Math.Round(selectedStream.Bitrate.KiloBitsPerSecond);
+
                         var container = selectedStream.Container.Name;
                         var codec = DetermineCodec(container, selectedStream);
 
                         sw.Stop();
+
+                        // ═══ ЛОГ — ПОКАЗЫВАЕМ РЕАЛЬНЫЙ БИТРЕЙТ ═══
                         NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps in {sw.ElapsedMilliseconds}ms");
 
+                        // ═══ КЭШ — ИСПОЛЬЗУЕТ НОРМАЛИЗОВАННЫЙ КЛЮЧ ═══
+                        // CacheStreamUrl внутри вызывает BuildCacheKey → нормализация.
+                        // НО сохраняет РЕАЛЬНЫЙ битрейт (bitrate=134) в StreamCacheEntry.
                         CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
 
+                        // ═══ ОБНОВЛЯЕМ TRACK — РЕАЛЬНЫЙ БИТРЕЙТ ═══
                         track.StreamUrl = url;
                         track.TransientContainer = container;
                         track.TransientSize = size;
                         track.CachedCodec = codec;
-                        track.CachedBitrate = bitrate;
+                        track.CachedBitrate = bitrate;        // ← РЕАЛЬНЫЙ битрейт
                         track.CachedContainer = container;
                         track.IsHlsOnly = false;
                         track.HlsManifestUrl = null;
 
+                        // ═══ ВОЗВРАЩАЕМ РЕАЛЬНЫЙ БИТРЕЙТ ═══
                         return (url, size, bitrate, codec, container);
                     }
                 }

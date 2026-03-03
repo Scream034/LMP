@@ -6,11 +6,9 @@ namespace LMP.Core.Audio.Interfaces;
 public interface IPlaybackBackend : IDisposable
 {
     /// <summary>
-    /// Инициализирует аудио устройство.
+    /// Первичная инициализация backend.
+    /// Создаёт аудио-устройство и запускает fill loop.
     /// </summary>
-    /// <param name="sampleRate">Частота дискретизации.</param>
-    /// <param name="channels">Количество каналов.</param>
-    /// <param name="dataCallback">Callback для запроса PCM данных.</param>
     void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback);
 
     /// <summary>Запускает воспроизведение.</summary>
@@ -24,6 +22,19 @@ public interface IPlaybackBackend : IDisposable
     /// перехода к новой позиции без проигрывания устаревших данных.
     /// </summary>
     void Flush();
+
+    /// <summary>
+    /// Переинициализирует backend для нового трека.
+    /// 
+    /// <para><b>Fast path</b> (формат совпадает): обновляет callback, flush буферов. ~0ms.</para>
+    /// <para><b>Slow path</b> (формат изменился): пересоздаёт аудио-устройство. ~50-200ms.</para>
+    /// <para><b>First call</b> (Initialize не вызывался): делегирует к Initialize.</para>
+    /// 
+    /// <para>Используется shared backend pattern: один backend на весь AudioPlayer,
+    /// переиспользуется между треками для исключения дорогостоящих kernel-вызовов
+    /// waveOutClose/waveOutOpen при каждой смене трека.</para>
+    /// </summary>
+    void Reinitialize(int sampleRate, int channels, AudioDataCallback dataCallback);
 
     /// <summary>Громкость (0.0 - 1.0).</summary>
     float Volume { get; set; }

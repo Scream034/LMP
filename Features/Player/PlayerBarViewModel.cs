@@ -18,8 +18,13 @@ namespace LMP.Features.Player;
 
 /// <summary>
 /// ViewModel для нижней панели управления плеером (Player Bar).
-/// Координирует UI с движком AudioEngine, управляет состоянием воспроизведения,
-/// очередью, ползунками громкости и времени.
+/// 
+/// <para><b>Синхронизация при Suspend/Resume:</b></para>
+/// <list type="bullet">
+///   <item>Критичные свойства (IsPlaying, RepeatMode, CurrentTrack) обновляются ВСЕГДА</item>
+///   <item>Тяжёлые обновления (позиция, буфер, скорость) — только когда окно видимо</item>
+///   <item>При Resume: ForceSyncObservable восстанавливает позицию/буфер без TrackReset</item>
+/// </list>
 /// </summary>
 public sealed class PlayerBarViewModel : ViewModelBase
 {
@@ -41,6 +46,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private readonly LibraryService _library;
     private readonly YoutubeProvider _youtube;
     private readonly MusicLibraryManager _musicManager;
+    private readonly PlayerControlService _playerControl;
 
     private readonly DispatcherTimer _speedUpdateTimer;
     private readonly DispatcherTimer _fallbackPositionTimer;
@@ -61,6 +67,18 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private DateTime _trackResetStartTime;
     private string? _pendingStreamInfoTrackId;
     private long _seekBusyStartTicks;
+
+    /// <summary>
+    /// Id последнего обработанного трека. Предотвращает повторный BeginTrackReset
+    /// при ForceSync когда трек не менялся.
+    /// </summary>
+    private string? _lastHandledTrackId;
+
+    /// <summary>
+    /// Последний валидный StreamInfo текст. Кэшируется для восстановления при ForceSync,
+    /// чтобы не пересобирать строку вручную из отдельных полей AudioEngine.
+    /// </summary>
+    private string _lastValidStreamInfo = "";
 
     #endregion
 
@@ -179,25 +197,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Properties - Repeat & Shuffle
 
-    /// <summary>
-    /// Визуальная анимация shuffle (кратковременная подсветка при нажатии ЛКМ).
-    /// НЕ персистентное состояние.
-    /// </summary>
     [Reactive] public bool IsShuffleAnimating { get; private set; }
-
-    /// <summary>
-    /// Автоматическое перемешивание при старте очереди.
-    /// Персистентное состояние из настроек. Переключается по ПКМ.
-    /// </summary>
     [Reactive] public bool AutoShuffleEnabled { get; private set; }
-
     [Reactive] public RepeatMode RepeatMode { get; set; }
     [Reactive] public bool IsRepeatHintVisible { get; private set; }
     [Reactive] public string RepeatHintText { get; private set; } = "";
-
-    /// <summary>
-    /// Подсказка для shuffle (показывается при toggle auto-shuffle).
-    /// </summary>
     [Reactive] public bool IsShuffleHintVisible { get; private set; }
     [Reactive] public string ShuffleHintText { get; private set; } = "";
 
@@ -225,7 +229,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     #region Properties - Tooltips
 
     public string ShuffleTooltip => AutoShuffleEnabled
-        ? SL["Player_Shuffle_AutoEnabled"] 
+        ? SL["Player_Shuffle_AutoEnabled"]
         : SL["Player_Shuffle_AutoDisabled"];
 
     public static string PreviousTooltip => SL["Player_Previous"];
@@ -279,17 +283,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> PlayPauseCommand { get; }
     public ReactiveCommand<Unit, Unit> PreviousCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
-    
-    /// <summary>
-    /// ЛКМ: однократное перемешивание очереди.
-    /// </summary>
     public ReactiveCommand<Unit, Unit> ShuffleQueueCommand { get; }
-    
-    /// <summary>
-    /// ПКМ: toggle auto-shuffle (сохраняется в настройках).
-    /// </summary>
     public ReactiveCommand<Unit, Unit> ToggleAutoShuffleCommand { get; }
-    
     public ReactiveCommand<Unit, Unit> ToggleRepeatCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleMuteCommand { get; }
@@ -305,42 +300,80 @@ public sealed class PlayerBarViewModel : ViewModelBase
         AudioEngine audio,
         LibraryService library,
         YoutubeProvider youtube,
-        MusicLibraryManager musicManager)
+        MusicLibraryManager musicManager,
+        PlayerControlService playerControl)
     {
         _audio = audio;
         _library = library;
         _youtube = youtube;
         _musicManager = musicManager;
+        _playerControl = playerControl;
 
-        Log.Debug("[PlayerBar] Created, initializing settings...");
+        Log.Debug("[PlayerBar] Created, initializing...");
 
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
 
-        // ═══ ИСПРАВЛЕНИЕ БАГА ВОССТАНОВЛЕНИЯ НАСТРОЕК ═══
-        // Вызываем инициализацию немедленно, так как LibraryService
-        // уже загрузил настройки при старте приложения.
-        // Раньше мы ждали события OnInitialized, которое мы пропускали (Race Condition).
         OnLibraryInitialized();
 
-        // AUDIO ENGINE EVENTS
-        Observable.FromEvent<Action<bool, bool>, (bool Playing, bool Paused)>(
-                h => (p, u) => h((p, u)),
-                h => _audio.OnPlaybackStateChanged += h,
-                h => _audio.OnPlaybackStateChanged -= h)
+        // ═══ ПОДПИСКИ НА PlayerControlService ═══
+        // Эти работают ВСЕГДА, даже в suspend — легковесные обновления состояния
+
+        _playerControl.PlaybackStateObservable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(state =>
             {
-                SyncPlaybackState(state.Playing, state.Paused);
+                IsPlaying = state.IsPlaying;
+                IsPaused = state.IsPaused;
                 this.RaisePropertyChanged(nameof(PlayPauseTooltip));
             })
             .DisposeWith(Disposables);
 
-        Observable.FromEvent(
-                h => _audio.OnQueueChanged += h,
-                h => _audio.OnQueueChanged -= h)
+        _playerControl.CurrentTrackObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(HandleTrackChanged)
+            .DisposeWith(Disposables);
+
+        _playerControl.RepeatModeObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(mode =>
+            {
+                RepeatMode = mode;
+                this.RaisePropertyChanged(nameof(RepeatTooltip));
+            })
+            .DisposeWith(Disposables);
+
+        _playerControl.ShuffleEnabledObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(enabled =>
+            {
+                AutoShuffleEnabled = enabled;
+                this.RaisePropertyChanged(nameof(ShuffleTooltip));
+            })
+            .DisposeWith(Disposables);
+
+        _playerControl.IsLoadingObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(loading =>
+            {
+                IsLoading = loading;
+                IsSeekBusy = loading;
+                if (!_isSuspended)
+                    this.RaisePropertyChanged(nameof(DurationTooltip));
+            })
+            .DisposeWith(Disposables);
+
+        _playerControl.QueueCountObservable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ => UpdateQueueState())
             .DisposeWith(Disposables);
+
+        // ═══ ForceSync: мягкое восстановление без TrackReset ═══
+        _playerControl.ForceSyncObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => HandleForceSync())
+            .DisposeWith(Disposables);
+
+        // ═══ ПОДПИСКИ НА AudioEngine (heavy updates, учитывают suspend) ═══
 
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                h => _audio.OnSeekCompleted += h,
@@ -384,13 +417,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DistinctUntilChanged()
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(HandleMaxVolumeChanged)
-            .DisposeWith(Disposables);
-
-        Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
-                h => _audio.OnTrackChanged += h,
-                h => _audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(HandleTrackChanged)
             .DisposeWith(Disposables);
 
         Observable.FromEvent<Action<AudioStreamInfo>, AudioStreamInfo>(
@@ -442,33 +468,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.RepeatMode)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(RepeatTooltip)))
-            .DisposeWith(Disposables);
-
-        this.WhenAnyValue(x => x.IsLiked)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(LikeTooltip)))
-            .DisposeWith(Disposables);
-
         this.WhenAnyValue(x => x.CurrentTrackIndex, x => x.TotalTracksInQueue)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(TrackNumberTooltip)))
-            .DisposeWith(Disposables);
-
-        this.WhenAnyValue(x => x.AutoShuffleEnabled)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(ShuffleTooltip)))
-            .DisposeWith(Disposables);
-
-        Observable.FromEvent<Action<bool>, bool>(
-                h => _audio.OnLoadingStateChanged += h,
-                h => _audio.OnLoadingStateChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(loading =>
-            {
-                IsLoading = loading;
-                IsSeekBusy = loading;
-                if (!_isSuspended)
-                    this.RaisePropertyChanged(nameof(DurationTooltip));
-            })
             .DisposeWith(Disposables);
 
         // TIMERS
@@ -486,7 +487,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                try { await _audio.PlayNextAsync(); }
+                try { await _playerControl.NextAsync(); }
                 finally { IsNavigating = false; }
             })
             .DisposeWith(Disposables);
@@ -496,20 +497,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ =>
             {
-                try { await _audio.PlayPreviousAsync(); }
+                try { await _playerControl.PreviousAsync(); }
                 finally { IsNavigating = false; }
             })
             .DisposeWith(Disposables);
 
-        // COMMANDS
+        // ═══ КОМАНДЫ ═══
         var canNavigate = this.WhenAnyValue(
             x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
             (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
 
-        PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
-        {
-            await _audio.SetPlaybackStateAsync(!_audio.IsPlaying);
-        }, this.WhenAnyValue(x => x.HasTrack)));
+        PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+            async () => await _playerControl.PlayPauseAsync(),
+            this.WhenAnyValue(x => x.HasTrack)));
 
         NextCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
@@ -527,12 +527,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
             x => x.HasQueueToShuffle, x => x.IsLoading,
             (hasTracks, loading) => hasTracks && !loading);
 
-        // ЛКМ: Однократное перемешивание с визуальной анимацией
         ShuffleQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            _audio.ShuffleQueue();
-            
-            // Визуальная анимация (кратковременная подсветка)
+            _playerControl.ShuffleQueue();
+
             IsShuffleAnimating = true;
             Observable.Timer(TimeSpan.FromMilliseconds(ShuffleAnimationDurationMs))
                 .ObserveOn(RxApp.MainThreadScheduler)
@@ -540,26 +538,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 .DisposeWith(Disposables);
         }, canShuffle));
 
-        // ПКМ: Toggle auto-shuffle (сохраняется в настройках)
         ToggleAutoShuffleCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            AutoShuffleEnabled = !AutoShuffleEnabled;
-            _library.UpdateSettings(s => s.ShuffleEnabled = AutoShuffleEnabled);
-            _audio.ShuffleEnabled = AutoShuffleEnabled;
-            
+            _playerControl.ToggleAutoShuffle();
             ShowShuffleHint();
         }));
 
         ToggleRepeatCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            RepeatMode = RepeatMode switch
-            {
-                RepeatMode.None => RepeatMode.All,
-                RepeatMode.All => RepeatMode.One,
-                _ => RepeatMode.None
-            };
-            _audio.RepeatMode = RepeatMode;
-            _library.UpdateSettings(s => s.RepeatMode = RepeatMode);
+            _playerControl.ToggleRepeat();
             ShowRepeatModeHint();
         }));
 
@@ -609,6 +596,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
             BeginTrackReset();
             await _audio.SwitchQualityAsync(option.Container, (int)option.Bitrate);
         }));
+
+        Log.Info("[PlayerBar] Initialization complete");
     }
 
     internal void RegisterView(PlayerBarView view)
@@ -617,6 +606,90 @@ public sealed class PlayerBarViewModel : ViewModelBase
     }
 
     #endregion
+
+    /// <summary>
+    /// Мягкая синхронизация состояния при восстановлении из трея.
+    /// 
+    /// <para><b>Что восстанавливает:</b></para>
+    /// <list type="bullet">
+    ///   <item>Снимает зависшие флаги IsTrackResetting / IsSeekBusy</item>
+    ///   <item>Позиция и длительность из AudioEngine</item>
+    ///   <item>Буфер из AudioEngine</item>
+    ///   <item>StreamInfo из кэша (не пересобирает вручную)</item>
+    ///   <item>Like-статус из БД</item>
+    /// </list>
+    /// 
+    /// <para><b>Что НЕ делает:</b></para>
+    /// <list type="bullet">
+    ///   <item>НЕ вызывает BeginTrackReset</item>
+    ///   <item>НЕ пересобирает StreamInfo из отдельных полей</item>
+    ///   <item>НЕ очищает AvailableFormats</item>
+    /// </list>
+    /// </summary>
+    private void HandleForceSync()
+    {
+        if (!HasTrack || CurrentTrack == null)
+            return;
+
+        // ═══ 1. Снимаем зависшие guard-флаги ═══
+        if (IsTrackResetting)
+        {
+            IsTrackResetting = false;
+            Log.Debug("[PlayerBar] ForceSync: cleared stale IsTrackResetting");
+        }
+
+        if (IsSeekBusy)
+        {
+            IsSeekBusy = false;
+            Volatile.Write(ref _seekBusyStartTicks, 0L);
+            Log.Debug("[PlayerBar] ForceSync: cleared stale IsSeekBusy");
+        }
+
+        // ═══ 2. Восстанавливаем позицию ═══
+        var pos = _audio.CurrentPosition;
+        Position = pos;
+        PositionSeconds = pos.TotalSeconds;
+
+        // ═══ 3. Восстанавливаем длительность ═══
+        var dur = _audio.TotalDuration;
+        if (dur.TotalSeconds > 0)
+        {
+            Duration = dur;
+            DurationSeconds = dur.TotalSeconds;
+        }
+
+        // ═══ 4. Восстанавливаем буфер ═══
+        ForceUpdateBufferProgress();
+
+        // ═══ 5. Восстанавливаем StreamInfo из кэша ═══
+        // Не пересобираем вручную — используем последний валидный текст
+        // который был сохранён в UpdateStreamInfo при получении AudioStreamInfo
+        if (!string.IsNullOrEmpty(_lastValidStreamInfo))
+        {
+            StreamInfo = _lastValidStreamInfo;
+            ShowStreamInfo = true;
+        }
+
+        // ═══ 6. Восстанавливаем like-статус ═══
+        var storedTrack = _library.GetTrack(CurrentTrack.Id);
+        if (storedTrack != null)
+        {
+            IsLiked = storedTrack.IsLiked;
+            CurrentTrack.IsLiked = storedTrack.IsLiked;
+        }
+
+        // ═══ 7. Поднимаем PropertyChanged для UI ═══
+        this.RaisePropertyChanged(nameof(DurationTooltip));
+        this.RaisePropertyChanged(nameof(SafeTitle));
+        this.RaisePropertyChanged(nameof(SafeAuthor));
+        this.RaisePropertyChanged(nameof(SafeThumbnail));
+        this.RaisePropertyChanged(nameof(LikeTooltip));
+        this.RaisePropertyChanged(nameof(PlayPauseTooltip));
+
+        UpdateQueueState();
+
+        Log.Debug($"[PlayerBar] ForceSync: pos={FormatTime(pos)}, dur={FormatTime(Duration)}, buf={BufferProgressPercent:F0}%, stream={StreamInfo}");
+    }
 
     #region Buffer Progress
 
@@ -734,13 +807,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
             _lastVolumeBeforeMute = 50;
         }
 
-        // Синхронизируем состояние визуальных кнопок с базой данных
-        AutoShuffleEnabled = settings.ShuffleEnabled;
-        RepeatMode = settings.RepeatMode;
-        
-        // Синхронизируем движок
-        _audio.ShuffleEnabled = AutoShuffleEnabled;
-        _audio.RepeatMode = RepeatMode;
+        AutoShuffleEnabled = _playerControl.ShuffleEnabled;
+        RepeatMode = _playerControl.RepeatMode;
+
         _audio.SetVolumeInstant(Volume);
 
         _isInitialized = true;
@@ -771,8 +840,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Log.Info($"[PlayerBar] MaxVolume changed: {oldMax} -> {newMax}");
     }
 
+    /// <summary>
+    /// Обрабатывает смену трека.
+    /// 
+    /// <para><b>Защита от ложного TrackReset:</b></para>
+    /// <para>Сравнивает Id нового трека с _lastHandledTrackId.
+    /// Если трек тот же — пропускает BeginTrackReset (это ForceSync или повторное событие).</para>
+    /// </summary>
     private void HandleTrackChanged(TrackInfo? track)
     {
+        string? newTrackId = track?.Id;
+        bool isNewTrack = newTrackId != _lastHandledTrackId;
+        _lastHandledTrackId = newTrackId;
+
         CurrentTrack = track;
         HasTrack = track != null;
 
@@ -781,17 +861,29 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(SafeThumbnail));
         this.RaisePropertyChanged(nameof(PlayPauseTooltip));
 
-        _lastDownloadedBytes = 0;
-        AvailableFormats.Clear();
-
         if (track != null)
         {
-            _pendingStreamInfoTrackId = track.Id;
+            if (isNewTrack)
+            {
+                _lastDownloadedBytes = 0;
+                _lastValidStreamInfo = "";  // ← сбрасываем кэш StreamInfo
+                AvailableFormats.Clear();
+                _pendingStreamInfoTrackId = track.Id;
 
-            BeginTrackReset();
+                BeginTrackReset();
 
-            Duration = track.Duration;
-            DurationSeconds = Duration.TotalSeconds > 0 ? Duration.TotalSeconds : 1;
+                Duration = track.Duration;
+                DurationSeconds = Duration.TotalSeconds > 0 ? Duration.TotalSeconds : 1;
+
+                ShowStreamInfo = true;
+                StreamInfo = SL["Player_StreamInfo_Loading"];
+
+                Log.Debug($"[PlayerBar] New track: {track.Id}");
+            }
+            else
+            {
+                Log.Debug($"[PlayerBar] Same track event skipped: {track.Id}");
+            }
 
             var storedTrack = _library.GetTrack(track.Id);
             IsLiked = storedTrack?.IsLiked ?? track.IsLiked;
@@ -802,13 +894,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 BufferedRanges = [(0.0, 1.0)];
                 IsFullyBuffered = true;
             }
-
-            ShowStreamInfo = true;
-            StreamInfo = SL["Player_StreamInfo_Loading"];
         }
         else
         {
             _pendingStreamInfoTrackId = null;
+            _lastDownloadedBytes = 0;
+            _lastValidStreamInfo = "";  // ← сбрасываем кэш StreamInfo
+            AvailableFormats.Clear();
             Duration = TimeSpan.Zero;
             DurationSeconds = 1;
             ShowStreamInfo = false;
@@ -856,12 +948,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(TrackNumberTooltip));
     }
 
-    private void SyncPlaybackState(bool isPlaying, bool isPaused)
-    {
-        IsPlaying = isPlaying;
-        IsPaused = isPaused;
-    }
-
     private void UpdateStreamInfo(AudioStreamInfo info)
     {
         if (CurrentTrack == null)
@@ -874,6 +960,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (info.IsValid)
         {
             StreamInfo = info.FormatDisplay;
+            _lastValidStreamInfo = info.FormatDisplay;  // ← кэшируем
 
             if (!_isSuspended)
             {
@@ -1202,8 +1289,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(SafeTitle));
         this.RaisePropertyChanged(nameof(TrackNumberTooltip));
         this.RaisePropertyChanged(nameof(DurationTooltip));
-        
-        // Обновляем XAML биндинги
+
         this.RaisePropertyChanged(nameof(L));
     }
 
@@ -1231,6 +1317,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         if (_viewRef?.TryGetTarget(out var view) == true)
             view.OnSuspend();
+
+        Log.Debug("[PlayerBar] Suspended (heavy updates paused, state sync active)");
     }
 
     protected override void OnResume()
@@ -1240,20 +1328,14 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _fallbackPositionTimer.Start();
         _speedUpdateTimer.Start();
 
-        var realDur = _audio.TotalDuration;
-        if (realDur.TotalSeconds > 0)
-        {
-            Duration = realDur;
-            DurationSeconds = Duration.TotalSeconds;
-
-            this.RaisePropertyChanged(nameof(DurationTooltip));
-        }
-
-        FallbackPositionUpdate();
-        ForceUpdateBufferProgress();
+        // NOTE: Основная синхронизация происходит через HandleForceSync()
+        // который вызывается из PlayerControlService.ForceSyncObservable.
+        // Здесь только запускаем таймеры.
 
         if (_viewRef?.TryGetTarget(out var view) == true)
             view.OnResume();
+
+        Log.Debug("[PlayerBar] Resumed");
     }
 
     protected override void Dispose(bool disposing)

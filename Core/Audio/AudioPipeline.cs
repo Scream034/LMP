@@ -13,13 +13,20 @@ namespace LMP.Core.Audio;
 /// 
 /// <para><b>Lifecycle:</b></para>
 /// <list type="number">
-///   <item><see cref="CreateAsync"/> — создаёт source, decoder, backend, PCM buffer</item>
-///   <item><see cref="StartDecoding"/> — запускает decoder loop (фоновый Task)</item>
+///   <item><see cref="CreateAsync(string, string?, int, Func{CancellationToken, Task{string?}}?, AudioPlayerOptions, IPlaybackBackend, CancellationToken)"/>
+///     — создаёт source, decoder, переиспользует shared backend</item>
+///   <item><see cref="StartDecoding"/> — запускает decoder loop (выделенный поток)</item>
 ///   <item><see cref="Start"/> — запускает backend (NAudio playback)</item>
 ///   <item><see cref="StopDecodingAsync"/> — останавливает decoder loop (для seek)</item>
 ///   <item><see cref="Flush"/> — очищает PCM buffer и backend buffer</item>
-///   <item><see cref="DisposeAsync"/> — освобождает все ресурсы</item>
+///   <item><see cref="DisposeAsync"/> — освобождает source, decoder, buffers.
+///     Shared backend НЕ уничтожается.</item>
 /// </list>
+/// 
+/// <para><b>Shared Backend:</b></para>
+/// <para>Pipeline НЕ владеет backend'ом при <c>ownsBackend=false</c>.
+/// Backend переиспользуется между треками через <see cref="IPlaybackBackend.Reinitialize"/>
+/// в фабричном методе. При dispose pipeline только останавливает и flush'ит backend.</para>
 /// </summary>
 public sealed class AudioPipeline : IAsyncDisposable
 {
@@ -32,6 +39,12 @@ public sealed class AudioPipeline : IAsyncDisposable
     private readonly float[] _decodeBuffer;
     private readonly AudioStreamInfo _streamInfo;
     private readonly CancellationTokenSource _lifetimeCts;
+
+    /// <summary>
+    /// true = backend создан этим pipeline и будет уничтожен при dispose.
+    /// false = backend shared (принадлежит AudioPlayer), только stop+flush при dispose.
+    /// </summary>
+    private readonly bool _ownsBackend;
 
     private CancellationTokenSource? _decoderCts;
     private Task? _decoderTask;
@@ -75,7 +88,8 @@ public sealed class AudioPipeline : IAsyncDisposable
         LockFreeRingBuffer<float> pcmBuffer,
         float[] decodeBuffer,
         AudioStreamInfo streamInfo,
-        CancellationTokenSource lifetimeCts)
+        CancellationTokenSource lifetimeCts,
+        bool ownsBackend)
     {
         _source = source;
         _decoder = decoder;
@@ -84,12 +98,93 @@ public sealed class AudioPipeline : IAsyncDisposable
         _decodeBuffer = decodeBuffer;
         _streamInfo = streamInfo;
         _lifetimeCts = lifetimeCts;
+        _ownsBackend = ownsBackend;
     }
 
     #endregion
 
     #region Factory
 
+    /// <summary>
+    /// Создаёт pipeline с SHARED backend (рекомендуемый путь).
+    /// Backend переиспользуется через <see cref="IPlaybackBackend.Reinitialize"/>
+    /// и НЕ уничтожается при dispose pipeline.
+    /// </summary>
+    /// <param name="sharedBackend">Shared backend из AudioPlayer. 
+    /// Reinitialize вызывается автоматически — fast path (~0ms) если формат совпадает,
+    /// slow path (~50-200ms) если sampleRate/channels изменились.</param>
+    public static async Task<AudioPipeline> CreateAsync(
+        string url,
+        string? trackId,
+        int bitrateHint,
+        Func<CancellationToken, Task<string?>>? urlRefresher,
+        AudioPlayerOptions options,
+        IPlaybackBackend sharedBackend,
+        CancellationToken ct)
+    {
+        var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        IAudioSource? source = null;
+        IAudioDecoder? decoder = null;
+        float[]? decodeBuffer = null;
+
+        try
+        {
+            source = await AudioSourceFactory.CreateAsync(
+                url,
+                Http.SharedHttpClient.Instance,
+                urlRefresher,
+                trackId,
+                bitrateHint,
+                options.StreamingConfig,
+                lifetimeCts.Token);
+
+            if (!await source.InitializeAsync(lifetimeCts.Token))
+                throw new Exceptions.AudioSourceException("Failed to initialize audio source");
+
+            decoder = CreateDecoder(source);
+
+            // Размер буфера — степень двойки для LockFreeRingBuffer
+            int rawSize = decoder.SampleRate * decoder.Channels * BufferSizeSeconds;
+            int bufferSize = RoundUpToPowerOf2(rawSize);
+            var pcmBuffer = new LockFreeRingBuffer<float>(bufferSize);
+
+            decodeBuffer = ArrayPool<float>.Shared.Rent(DecoderBufferFrames * decoder.Channels);
+
+            var streamInfo = BuildStreamInfo(source, trackId, bitrateHint);
+
+            var pipeline = new AudioPipeline(
+                source, decoder, sharedBackend, pcmBuffer, decodeBuffer,
+                streamInfo, lifetimeCts, ownsBackend: false);
+
+            // Reinitialize backend для нового трека
+            // Fast path если формат совпадает (обычно Opus 48kHz/2ch → Opus 48kHz/2ch)
+            sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
+
+            Log.Info($"[AudioPipeline] Created (shared backend): {streamInfo.FormatDisplay}");
+
+            return pipeline;
+        }
+        catch (Youtube.Exceptions.StreamUnavailableException)
+        {
+            CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
+
+            if (ex is Exceptions.AudioSourceException)
+                throw;
+
+            throw new Exceptions.AudioSourceException("Failed to initialize audio source", ex);
+        }
+    }
+
+    /// <summary>
+    /// Создаёт pipeline с СОБСТВЕННЫМ backend (legacy, для обратной совместимости).
+    /// Backend уничтожается при dispose pipeline.
+    /// </summary>
     public static async Task<AudioPipeline> CreateAsync(
         string url,
         string? trackId,
@@ -122,7 +217,6 @@ public sealed class AudioPipeline : IAsyncDisposable
             decoder = CreateDecoder(source);
             backend = CreateBackend(options);
 
-            // Размер буфера — степень двойки для LockFreeRingBuffer
             int rawSize = decoder.SampleRate * decoder.Channels * BufferSizeSeconds;
             int bufferSize = RoundUpToPowerOf2(rawSize);
             var pcmBuffer = new LockFreeRingBuffer<float>(bufferSize);
@@ -132,11 +226,12 @@ public sealed class AudioPipeline : IAsyncDisposable
             var streamInfo = BuildStreamInfo(source, trackId, bitrateHint);
 
             var pipeline = new AudioPipeline(
-                source, decoder, backend, pcmBuffer, decodeBuffer, streamInfo, lifetimeCts);
+                source, decoder, backend, pcmBuffer, decodeBuffer,
+                streamInfo, lifetimeCts, ownsBackend: true);
 
             backend.Initialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
 
-            Log.Info($"[AudioPipeline] Created: {streamInfo.FormatDisplay}");
+            Log.Info($"[AudioPipeline] Created (owned backend): {streamInfo.FormatDisplay}");
 
             return pipeline;
         }
@@ -156,6 +251,32 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Cleanup при ошибке для shared backend — НЕ dispose'ит backend.
+    /// </summary>
+    private static void CleanupOnErrorPartial(
+        IAudioSource? source,
+        IAudioDecoder? decoder,
+        float[]? decodeBuffer,
+        CancellationTokenSource lifetimeCts)
+    {
+        try
+        {
+            decoder?.Dispose();
+            source?.Dispose();
+            if (decodeBuffer != null)
+                ArrayPool<float>.Shared.Return(decodeBuffer);
+            lifetimeCts.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioPipeline] Cleanup error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Cleanup при ошибке для owned backend — dispose'ит backend.
+    /// </summary>
     private static void CleanupOnError(
         IAudioSource? source,
         IAudioDecoder? decoder,
@@ -215,6 +336,22 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Строит <see cref="AudioStreamInfo"/> с РЕАЛЬНЫМ битрейтом (не нормализованным).
+    /// 
+    /// <para><b>Приоритет битрейта:</b></para>
+    /// <list type="number">
+    ///   <item><paramref name="bitrateHint"/> — явно переданный при Play (РЕАЛЬНЫЙ, например 134)</item>
+    ///   <item><see cref="CacheEntry.Bitrate"/> — из метаданных кэша (РЕАЛЬНЫЙ)</item>
+    ///   <item><see cref="Sources.CachingStreamSource.Bitrate"/> — из source (РЕАЛЬНЫЙ)</item>
+    ///   <item>Fallback 128/96 — только для <see cref="Sources.LocalFileSource"/> без кэш-метаданных</item>
+    /// </list>
+    /// 
+    /// <para><b>ВАЖНО:</b> Нормализация (134→128) применяется ТОЛЬКО в
+    /// <see cref="AudioSourceFactory.BuildCacheKey"/> для ключа кэша.
+    /// StreamInfo всегда содержит РЕАЛЬНЫЙ битрейт для корректного отображения в UI
+    /// и предотвращения бесконечного цикла переключения качества.</para>
+    /// </summary>
     private static AudioStreamInfo BuildStreamInfo(IAudioSource source, string? trackId, int bitrateHint)
     {
         var cacheEntry = !string.IsNullOrEmpty(trackId)
@@ -228,15 +365,42 @@ public sealed class AudioPipeline : IAsyncDisposable
             _ => "Unknown"
         };
 
-        int bitrate = bitrateHint > 0 ? bitrateHint
-            : cacheEntry?.Bitrate ?? (source.Codec == AudioCodec.Opus ? 128 : 96);
+        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ — ПРИОРИТЕТ ═══
+        // Каждый источник содержит реальный (не нормализованный) битрейт.
+        // Порядок приоритета:
+        // 1. bitrateHint > 0: явно передан из AudioEngine (реальный из YouTube API)
+        // 2. cacheEntry.Bitrate: реальный битрейт, сохранённый при создании CacheEntry
+        // 3. source.Bitrate: реальный битрейт из CachingStreamSource (поле _bitrate)
+        // 4. Fallback: только для LocalFileSource без метаданных кэша
+        int bitrate;
+        if (bitrateHint > 0)
+        {
+            // Приоритет 1: Явно указан при вызове Play (РЕАЛЬНЫЙ битрейт)
+            bitrate = bitrateHint;
+        }
+        else if (cacheEntry is { Bitrate: > 0 })
+        {
+            // Приоритет 2: Из кэш-метаданных (РЕАЛЬНЫЙ битрейт)
+            bitrate = cacheEntry.Bitrate;
+        }
+        else if (source is Sources.CachingStreamSource { Bitrate: > 0 } cachingSource)
+        {
+            // Приоритет 3: Из source напрямую (РЕАЛЬНЫЙ битрейт из конструктора)
+            bitrate = cachingSource.Bitrate;
+        }
+        else
+        {
+            // Приоритет 4: Fallback — только для LocalFileSource без кэш-метаданных
+            // Это нормально: локальный файл без CacheEntry не содержит bitrate в metadata.
+            bitrate = source.Codec == AudioCodec.Opus ? 128 : 96;
+        }
 
         return new AudioStreamInfo
         {
             TrackId = trackId ?? "",
             Container = container,
             Codec = source.Codec.ToString(),
-            Bitrate = bitrate,
+            Bitrate = bitrate, // ← РЕАЛЬНЫЙ битрейт (например, 134), НЕ нормализованный
             SampleRate = source.SampleRate > 0 ? source.SampleRate : DefaultSampleRate,
             Channels = source.Channels > 0 ? source.Channels : DefaultChannels,
             DurationMs = source.DurationMs,
@@ -259,6 +423,15 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Decoder Loop
 
+    /// <summary>
+    /// Запускает decoder loop на ВЫДЕЛЕННОМ потоке с повышенным приоритетом.
+    /// 
+    /// <para><b>Почему не Task.Run:</b></para>
+    /// <para>ThreadPool потоки деприоритезируются ОС когда приложение свёрнуто
+    /// (EcoQoS на Windows 11, THREAD_PRIORITY_IDLE для фоновых процессов).
+    /// Выделенный поток с <see cref="ThreadPriority.AboveNormal"/> сохраняет
+    /// приоритет и гарантирует бесперебойное декодирование.</para>
+    /// </summary>
     public void StartDecoding(
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
@@ -275,11 +448,41 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         var token = _decoderCts.Token;
 
-        _decoderTask = Task.Run(
-            () => DecoderLoopAsync(urlRefresher, options, onTrackEnded, onError, token),
-            token);
+        // TaskCompletionSource для отслеживания завершения потока
+        var tcs = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Log.Debug("[AudioPipeline] Decoder started");
+        var trackIdShort = _streamInfo.TrackId?.Length > 8
+            ? _streamInfo.TrackId[..8]
+            : _streamInfo.TrackId ?? "?";
+
+        var decoderThread = new Thread(() =>
+        {
+            try
+            {
+                DecoderLoopAsync(urlRefresher, options, onTrackEnded, onError, token)
+                    .GetAwaiter().GetResult();
+                tcs.TrySetResult(null);
+            }
+            catch (OperationCanceledException)
+            {
+                tcs.TrySetCanceled();
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        })
+        {
+            Name = $"Decoder-{trackIdShort}",
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal
+        };
+
+        decoderThread.Start();
+        _decoderTask = tcs.Task;
+
+        Log.Debug("[AudioPipeline] Decoder started (dedicated thread)");
     }
 
     public async Task StopDecodingAsync(TimeSpan timeout)
@@ -317,12 +520,27 @@ public sealed class AudioPipeline : IAsyncDisposable
     }
 
     private async Task DecoderLoopAsync(
-    Func<CancellationToken, Task<string?>>? urlRefresher,
-    AudioPlayerOptions options,
-    Action? onTrackEnded,
-    Action<Exception>? onError,
-    CancellationToken ct)
+        Func<CancellationToken, Task<string?>>? urlRefresher,
+        AudioPlayerOptions options,
+        Action? onTrackEnded,
+        Action<Exception>? onError,
+        CancellationToken ct)
     {
+        // Устанавливаем SustainedLowLatency на время декодирования.
+        // Это предотвращает Gen2 blocking GC, который замораживает
+        // fill loop и вызывает buffer underrun.
+        var previousLatencyMode = System.Runtime.GCSettings.LatencyMode;
+
+        try
+        {
+            System.Runtime.GCSettings.LatencyMode =
+                System.Runtime.GCLatencyMode.SustainedLowLatency;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[AudioPipeline] Could not set GC latency mode: {ex.Message}");
+        }
+
         int retryCount = 0;
         int backoffCount = 0;
         const int MaxYieldBeforeDelay = 4;
@@ -466,6 +684,12 @@ public sealed class AudioPipeline : IAsyncDisposable
             Log.Error($"[AudioPipeline] Decoder fatal: {ex.Message}", ex);
             onError?.Invoke(ex);
         }
+        finally
+        {
+            // Восстанавливаем предыдущий режим GC
+            try { System.Runtime.GCSettings.LatencyMode = previousLatencyMode; }
+            catch { }
+        }
     }
 
     private async Task DrainBufferAsync(CancellationToken ct)
@@ -494,7 +718,7 @@ public sealed class AudioPipeline : IAsyncDisposable
     {
         if (_disposed) return;
 
-        // Backend.Stop() теперь неблокирующий — не ждём
+        // Backend.Stop() содержит micro fade-out для предотвращения щелчков
         _backend.Stop();
 
         Log.Debug("[AudioPipeline] Backend stopped");
@@ -537,9 +761,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// </remarks>
     public void PrepareForSeek(long targetMs = -1)
     {
-        // AAC: segment-based seek даёт keyframe сразу → codec warmup через DecodeWithReset не нужен.
-        // Warmup происходит через _seekTargetMs (decode-but-don't-write).
-        // Opus: cue point seek может попасть между keyframes → нужен explicit reset.
         int skipFrames = _source.Codec == AudioCodec.Opus
             ? SkipFramesAfterSeekOpus
             : 0;
@@ -557,6 +778,13 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Audio Callback
 
+    /// <summary>
+    /// Callback вызываемый fill loop из NAudioBackend.
+    /// Читает PCM данные из ring buffer и возвращает количество прочитанных фреймов.
+    /// 
+    /// <para>Если буфер пуст — заполняет тишиной. Это предотвращает щелчки
+    /// при buffer underrun (например, при старте трека когда decoder ещё не заполнил буфер).</para>
+    /// </summary>
     private int AudioCallback(Span<float> buffer)
     {
         if (_disposed)
@@ -611,7 +839,29 @@ public sealed class AudioPipeline : IAsyncDisposable
             catch { }
         }
 
-        _backend.Dispose();
+        // ═══ Backend: зависит от ownership ═══
+        if (_ownsBackend)
+        {
+            // Owned backend — полный dispose (waveOutClose)
+            _backend.Dispose();
+        }
+        else
+        {
+            // Shared backend — только stop + flush, НЕ dispose.
+            // Stop() содержит micro fade-out для предотвращения щелчков.
+            // Backend продолжит жить для следующего трека.
+            try
+            {
+                _backend.Stop();
+                _backend.Flush();
+            }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                Log.Debug($"[AudioPipeline] Backend stop/flush on dispose: {ex.Message}");
+            }
+        }
+
         _decoder.Dispose();
         await _source.DisposeAsync();
 

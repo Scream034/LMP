@@ -283,6 +283,7 @@ class Program
 
         // === Other Services ===
         services.AddSingleton<DominantColorService>();
+        services.AddSingleton<PlayerControlService>();
 
         // === ViewModels ===
         services.AddTransient<HomeViewModel>();

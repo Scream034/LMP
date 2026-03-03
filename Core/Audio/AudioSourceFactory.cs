@@ -18,6 +18,12 @@ namespace LMP.Core.Audio;
 ///   <item>Полный дисковый кэш → <see cref="LocalFileSource"/></item>
 ///   <item>Частичный кэш или онлайн → <see cref="CachingStreamSource"/></item>
 /// </list>
+/// 
+/// <para><b>ВАЖНО — Битрейт vs Ключ кэша:</b></para>
+/// <para><see cref="BuildCacheKey"/> использует **нормализованный** битрейт (134→128)
+/// для группировки близких битрейтов в один cache bucket.
+/// НО все методы возвращают **реальный** битрейт (134) для корректного отображения
+/// в UI и логах.</para>
 /// </summary>
 public static class AudioSourceFactory
 {
@@ -61,10 +67,30 @@ public static class AudioSourceFactory
     }
 
     /// <summary>
-    /// Строит уникальный ключ кэша: trackId + формат + нормализованный битрейт.
+    /// Строит уникальный ключ кэша: trackId + формат + **нормализованный** битрейт.
+    /// 
+    /// <para><b>ЕДИНСТВЕННЫЙ ИСТОЧНИК ИСТИНЫ</b> для генерации cache key.
+    /// Используется в <see cref="CreateAsync"/> и <see cref="Cache.AudioCacheManager"/>.</para>
+    /// 
+    /// <para><b>Почему нормализация:</b></para>
+    /// <para>YouTube возвращает битрейты вроде 127, 134, 131 kbps для одного формата.
+    /// Без нормализации один трек дублировался бы в кэше с ключами:
+    /// <c>track_WebM_127</c>, <c>track_WebM_134</c>, <c>track_WebM_131</c>.
+    /// Нормализация (см. <see cref="AudioConstants.NormalizeBitrate"/>) группирует
+    /// 127-134 → 128, экономя ~60% места в кэше.</para>
     /// </summary>
+    /// <param name="trackId">ID трека.</param>
+    /// <param name="format">Формат контейнера (WebM, Mp4, etc).</param>
+    /// <param name="bitrate">Реальный битрейт в kbps (например, 134).</param>
+    /// <returns>
+    /// Нормализованный ключ кэша, например: <c>yt_o5hD5w2kE_I_WebM_128</c>
+    /// (134 kbps нормализован → 128).
+    /// </returns>
     public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
     {
+        // ═══ НОРМАЛИЗАЦИЯ — ТОЛЬКО ДЛЯ КЛЮЧА ═══
+        // BuildCacheKey использует NormalizeBitrate для группировки.
+        // НО возвращаемый битрейт из CreateAsync — РЕАЛЬНЫЙ (не нормализованный).
         int normalizedBitrate = NormalizeBitrate(bitrate);
         return $"{trackId}_{format}_{normalizedBitrate}";
     }
@@ -72,6 +98,10 @@ public static class AudioSourceFactory
     /// <summary>
     /// Ищет полностью закэшированный трек любого формата/битрейта.
     /// </summary>
+    /// <returns>
+    /// Кортеж (Path, CacheEntry) где CacheEntry.Bitrate — **реальный** битрейт
+    /// из метаданных кэша (например, 134), не нормализованный.
+    /// </returns>
     public static (string Path, CacheEntry Entry)? FindAnyCachedTrack(string trackId)
     {
         if (_globalCacheManager == null) return null;
@@ -92,9 +122,22 @@ public static class AudioSourceFactory
     /// <param name="httpClient">HTTP клиент для загрузки.</param>
     /// <param name="urlRefresher">Callback обновления протухшего URL.</param>
     /// <param name="trackId">ID трека.</param>
-    /// <param name="bitrateHint">Битрейт (kbps). 0 = определить автоматически.</param>
+    /// <param name="bitrateHint">
+    /// Реальный битрейт (kbps), НЕ нормализованный.
+    /// Используется для:
+    /// <list type="bullet">
+    ///   <item>Генерации ключа кэша (нормализуется внутри <see cref="BuildCacheKey"/>)</item>
+    ///   <item>Логирования реального битрейта</item>
+    ///   <item>Создания <see cref="CachingStreamSource"/> с реальным битрейтом</item>
+    /// </list>
+    /// 0 = определить автоматически из кэша или URL.
+    /// </param>
     /// <param name="config">Конфигурация стриминга. null = текущий глобальный профиль.</param>
     /// <param name="ct">Токен отмены.</param>
+    /// <returns>
+    /// Аудио источник. Если вернули <see cref="LocalFileSource"/> из кэша,
+    /// реальный битрейт берётся из <c>CacheEntry.Bitrate</c> (НЕ нормализованный).
+    /// </returns>
     public static async Task<IAudioSource> CreateAsync(
         string url,
         HttpClient httpClient,
@@ -119,6 +162,9 @@ public static class AudioSourceFactory
             var cached = FindAnyCachedTrack(trackId);
             if (cached != null)
             {
+                // ═══ РЕАЛЬНЫЙ БИТРЕЙТ ИЗ КЭША ═══
+                // CacheEntry.Bitrate содержит РЕАЛЬНЫЙ битрейт (134), не нормализованный.
+                // AudioCacheManager сохраняет оригинальный битрейт при создании entry.
                 Log.Info($"[AudioSourceFactory] Using cached: {trackId} " +
                          $"({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
                 return new LocalFileSource(cached.Value.Path);
@@ -145,7 +191,16 @@ public static class AudioSourceFactory
         var (contentLength, codec, detectedBitrate) =
             await GetStreamInfoAsync(url, format, httpClient, ct);
 
+        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ — НЕ НОРМАЛИЗУЕМ ═══
+        // finalBitrate используется для:
+        // 1. BuildCacheKey (внутри него нормализация)
+        // 2. Логирования (показываем РЕАЛЬНЫЙ битрейт)
+        // 3. CachingStreamSource (сохраняет РЕАЛЬНЫЙ битрейт в metadata)
         int finalBitrate = bitrateHint > 0 ? bitrateHint : detectedBitrate;
+        
+        // ═══ КЛЮЧ КЭША — НОРМАЛИЗОВАННЫЙ ═══
+        // BuildCacheKey внутри вызывает NormalizeBitrate(finalBitrate).
+        // Например: finalBitrate=134 → cacheKey содержит "128".
         string cacheKey = BuildCacheKey(trackId, format, finalBitrate);
 
         // ── Проверяем точный кэш ──
@@ -159,8 +214,12 @@ public static class AudioSourceFactory
             }
         }
 
+        // ═══ ЛОГ — ПОКАЗЫВАЕМ РЕАЛЬНЫЙ БИТРЕЙТ ═══
         Log.Info($"[AudioSourceFactory] Streaming {format}/{codec}/{finalBitrate}kbps: {cacheKey}");
 
+        // ═══ CACHINGSOURCE — РЕАЛЬНЫЙ БИТРЕЙТ ═══
+        // CachingStreamSource получает finalBitrate (134), не нормализованный.
+        // Он сохранит 134 в CacheEntry.Bitrate при завершении загрузки.
         return new CachingStreamSource(
             cacheKey, trackId, url, contentLength, format, codec,
             finalBitrate, httpClient, _globalCacheManager, config, urlRefresher);
@@ -169,6 +228,9 @@ public static class AudioSourceFactory
     /// <summary>
     /// Возвращает информацию о кэше для трека.
     /// </summary>
+    /// <returns>
+    /// <see cref="CacheEntry"/> с **реальным** битрейтом (не нормализованным).
+    /// </returns>
     public static CacheEntry? GetCacheInfo(string trackId) =>
         _globalCacheManager?.FindBestCache(trackId);
 
@@ -310,6 +372,10 @@ public static class AudioSourceFactory
             contentLength = 100 * 1024 * 1024; // 100MB fallback
 
         var codec = GetCodecForFormat(format);
+        
+        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ ИЗ URL ═══
+        // ExtractBitrateFromUrl возвращает РЕАЛЬНЫЙ битрейт из YouTube URL
+        // (например, 134000 → 134 kbps). НЕ нормализуем.
         int bitrate = ExtractBitrateFromUrl(url);
 
         if (bitrate == 0)
@@ -333,6 +399,8 @@ public static class AudioSourceFactory
         try
         {
             var query = System.Web.HttpUtility.ParseQueryString(new Uri(url).Query);
+            // YouTube передаёт битрейт в битах/сек (например, 134000).
+            // Конвертируем в kbps БЕЗ округления: 134000 / 1000 = 134 kbps.
             return int.TryParse(query["bitrate"], out var br) ? br / 1000 : 0;
         }
         catch { return 0; }

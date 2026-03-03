@@ -92,6 +92,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     #region Playback State
 
     private float _normalizationFactor = 1.0f;
+    private volatile bool _isSuspended;
 
     #endregion
 
@@ -245,6 +246,43 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
+    #region ViewModelBase
+
+    /// <summary>
+    /// Окно свёрнуто — приостанавливаем фоновую загрузку.
+    /// НЕ приостанавливаем воспроизведение!
+    /// </summary>
+    protected override void OnSuspend()
+    {
+        _isSuspended = true;
+
+        var pipeline = _player.GetActivePipeline();
+        if (pipeline?.Source is Audio.Sources.CachingStreamSource cachingSource)
+        {
+            cachingSource.Suspend();
+        }
+
+        Log.Debug("[AudioEngine] Suspended (background downloads paused)");
+    }
+
+    /// <summary>
+    /// Окно развёрнуто — возобновляем фоновую загрузку.
+    /// </summary>
+    protected override void OnResume()
+    {
+        _isSuspended = false;
+
+        var pipeline = _player.GetActivePipeline();
+        if (pipeline?.Source is Audio.Sources.CachingStreamSource cachingSource)
+        {
+            cachingSource.Resume();
+        }
+
+        Log.Debug("[AudioEngine] Resumed (background downloads active)");
+    }
+
+    #endregion
+
     #region Internal Playback
 
     /// <summary>
@@ -268,13 +306,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         _normalizationFactor = 1.0f;
 
-        // Останавливаем через StopAsync — ждём реальной остановки pipeline
         await _player.StopAsync();
 
-        // Проверяем сессию после async stop
         if (Volatile.Read(ref _session) != session) return;
 
-        // Обновляем UI
         RaiseOnUI(() =>
         {
             CurrentTrack = track;
@@ -290,17 +325,26 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (Volatile.Read(ref _session) != session) return;
 
             await _player.PlayAsync(streamUrl, track.Id, bitrateHint, CancellationToken.None);
+
+            // ═══ ИСПРАВЛЕНИЕ: Применяем suspend к новому source если окно свёрнуто ═══
+            if (_isSuspended)
+            {
+                var pipeline = _player.GetActivePipeline();
+                if (pipeline?.Source is Audio.Sources.CachingStreamSource cachingSource)
+                {
+                    // Suspend только background fill, НЕ critical read-ahead
+                    cachingSource.Suspend();
+                }
+            }
+
             AddToHistory(track);
         }
         catch (OperationCanceledException)
         {
-            // Отмена — не ошибка, просто выходим
             Log.Debug("[AudioEngine] PlayCurrentIndex cancelled");
         }
         catch (Exception ex)
         {
-            // ВСЕ ИСКЛЮЧЕНИЯ → OnErrorOccurred
-            // Оркестратор решит что делать (диалог, toast, skip)
             Log.Error($"[AudioEngine] Play error: {ex.GetType().Name}: {ex.Message}");
             RaiseError(ex);
         }
@@ -308,7 +352,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>
     /// Резолвит URL стрима для трека.
+    /// 
+    /// <para><b>Возвращает РЕАЛЬНЫЙ битрейт</b> (например, 134 kbps), не нормализованный.
+    /// Нормализация (134→128) применяется только внутри <see cref="AudioSourceFactory.BuildCacheKey"/>
+    /// для ключа кэша.</para>
+    /// 
+    /// <para><b>Сохраняет битрейт в <see cref="TrackInfo.TransientBitrate"/></b>
+    /// для корректного resume из tray. При следующем вызове <c>ResolveStreamUrlAsync</c>
+    /// битрейт уже известен и не теряется.</para>
     /// </summary>
+    /// <returns>
+    /// Кортеж (Url, Bitrate) где Bitrate — **реальный** битрейт из YouTube API
+    /// или из CacheEntry (не нормализованный).
+    /// </returns>
     /// <exception cref="BotDetectionException">При rate limiting.</exception>
     /// <exception cref="StreamUnavailableException">При недоступности стрима.</exception>
     /// <exception cref="LoginRequiredException">При требовании авторизации.</exception>
@@ -317,25 +373,50 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         string? streamUrl = track.StreamUrl;
         int bitrateHint = track.TransientBitrate;
 
-        // ВСЕГДА проверяем кэш первым
+        // ═══ ПРИОРИТЕТ 1: ПОЛНЫЙ КЭШ ═══
+        // FindAnyCachedTrack возвращает CacheEntry с РЕАЛЬНЫМ битрейтом.
         var cached = AudioSourceFactory.FindAnyCachedTrack(track.Id);
         if (cached != null)
         {
-            Log.Debug($"[AudioEngine] Using cache: {cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps");
-            return ("", cached.Value.Entry.Bitrate);
+            // ═══ Сохраняем реальный битрейт из кэша в track ═══
+            // Это гарантирует что при resume из tray или пересоздании pipeline
+            // track.TransientBitrate содержит реальный битрейт (134), не 0.
+            var cachedBitrate = cached.Value.Entry.Bitrate;
+            track.TransientBitrate = cachedBitrate;
+
+            Log.Debug($"[AudioEngine] Using cache: {cached.Value.Entry.Format}/{cachedBitrate}kbps");
+            return ("", cachedBitrate);
         }
 
+        // ═══ ПРИОРИТЕТ 2: ОБНОВЛЕНИЕ URL ═══
         if (string.IsNullOrEmpty(streamUrl))
         {
-            // Может выбросить BotDetectionException, StreamUnavailableException, LoginRequiredException
+            // RefreshStreamUrlAsync возвращает РЕАЛЬНЫЙ битрейт из YouTube API
+            // (например, KiloBitsPerSecond = 134.2 → округляется до 134)
             var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None);
 
             if (streamInfo == null)
                 throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
 
             streamUrl = streamInfo.Value.Url;
+
+            // ═══ ВСЕГДА сохраняем реальный битрейт в track ═══
+            // Раньше сохраняли только при bitrateHint <= 0, что приводило к потере
+            // битрейта при resume из tray (bitrateHint=0 → fallback 128).
+            // Теперь: streamInfo.Bitrate — это реальный битрейт из YouTube (134),
+            // который мы ВСЕГДА записываем в track для будущих вызовов.
             if (bitrateHint <= 0)
+            {
                 bitrateHint = streamInfo.Value.Bitrate;
+            }
+
+            // Сохраняем реальный битрейт в track БЕЗУСЛОВНО.
+            // Это необходимо для:
+            // 1. Resume из tray: track.TransientBitrate будет 134, не 0
+            // 2. Quality switch UI: сравнение PreferredBitrate vs StreamInfo.Bitrate
+            //    не вызовет бесконечный цикл (оба = 134)
+            // 3. Повторный Play того же трека: bitrateHint передастся корректно
+            track.TransientBitrate = bitrateHint;
         }
 
         return (streamUrl ?? "", bitrateHint);
@@ -358,7 +439,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
         {
             OnErrorOccurred?.Invoke(exception);
+#pragma warning disable CS0618 // Type or member is obsolete
             OnError?.Invoke(exception.Message);
+#pragma warning restore CS0618
         }
         else
         {
@@ -366,7 +449,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
                 OnErrorOccurred?.Invoke(exception);
+#pragma warning disable CS0618 // Type or member is obsolete
                 OnError?.Invoke(exception.Message);
+#pragma warning restore CS0618
             });
         }
     }
@@ -868,7 +953,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (Vector.IsHardwareAccelerated && samples.Length >= Vector<float>.Count)
         {
             var maxVec = Vector<float>.Zero;
-            // var signMask = new Vector<float>(-0f); // Для абсолютного значения
 
             var vectors = MemoryMarshal.Cast<float, Vector<float>>(samples);
 
@@ -954,11 +1038,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 var streamInfo = await _youtube.RefreshStreamUrlAsync(track, true, CancellationToken.None);
                 if (streamInfo == null)
                 {
+#pragma warning disable CS0618 // Type or member is obsolete
                     RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
+#pragma warning restore CS0618
                     return;
                 }
 
-                await _player.PlayAsync(streamInfo.Value.Url, track.Id, bitrate, CancellationToken.None);
+                // ═══ Используем РЕАЛЬНЫЙ битрейт из YouTube API ═══
+                // streamInfo.Value.Bitrate — реальный битрейт выбранного стрима (например, 134).
+                // Передаём его в PlayAsync чтобы StreamInfo содержал реальный битрейт.
+                var realBitrate = streamInfo.Value.Bitrate;
+                track.TransientBitrate = realBitrate;
+
+                await _player.PlayAsync(streamInfo.Value.Url, track.Id, realBitrate, CancellationToken.None);
 
                 if (pos.TotalSeconds > 1)
                 {
@@ -969,7 +1061,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             catch (Exception ex)
             {
                 Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
+#pragma warning disable CS0618 // Type or member is obsolete
                 RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
+#pragma warning restore CS0618
             }
         });
     }

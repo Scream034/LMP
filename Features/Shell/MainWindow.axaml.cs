@@ -1,4 +1,6 @@
-﻿using Avalonia;
+﻿using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
@@ -7,7 +9,9 @@ using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
+using LMP.Features.Player;
 using Microsoft.Extensions.DependencyInjection;
+using ReactiveUI;
 
 namespace LMP.Features.Shell;
 
@@ -26,19 +30,9 @@ public partial class MainWindow : Window
     private DateTime _lastCleanupTime = DateTime.MinValue;
     private const int MinCleanupIntervalMs = 30_000;
 
-    /// <summary>
-    /// Ссылка на TrayIcon, определённый в App.axaml через TrayIcon.Icons.
-    /// Avalonia управляет его lifecycle — мы только переключаем IsVisible и Menu.
-    /// </summary>
     private TrayIcon? _trayIcon;
-
-    /// <summary>
-    /// True = пользователь выбрал "Выход" из трея или подтвердил закрытие.
-    /// Предотвращает рекурсивный перехват OnClosing.
-    /// </summary>
     private bool _forceClose;
 
-    // Ссылки на пункты меню для обновления текста и состояния
     private NativeMenuItem? _playPauseItem;
     private NativeMenuItem? _nextItem;
     private NativeMenuItem? _prevItem;
@@ -48,10 +42,12 @@ public partial class MainWindow : Window
     private NativeMenuItem? _cleanMemItem;
     private NativeMenuItem? _exitItem;
 
+    private PlayerControlService? _playerControl;
+    
     /// <summary>
-    /// Кэш состояния HasTrack для обновления enabled пунктов меню трея.
+    /// Подписки на PlayerControlService (работают независимо от suspend).
     /// </summary>
-    private bool _lastHasTrack;
+    private CompositeDisposable? _traySubscriptions;
 
     #endregion
 
@@ -90,10 +86,6 @@ public partial class MainWindow : Window
 
     #region Minimize Handling
 
-    /// <summary>
-    /// Обрабатывает нажатие кнопки минимизации.
-    /// Если MinimizeToTray=true — сворачивает в трей вместо панели задач.
-    /// </summary>
     private void HandleMinimizeClick()
     {
         try
@@ -117,34 +109,13 @@ public partial class MainWindow : Window
 
     #region Tray Icon
 
-    /// <summary>
-    /// Находит TrayIcon из App.axaml TrayIcon.Icons и настраивает контекстное меню.
-    /// 
-    /// <para><b>Почему через App.axaml:</b></para>
-    /// <para>TrayIcon созданный через <c>new TrayIcon()</c> в code-behind ненадёжно
-    /// подхватывает иконку на всех платформах. TrayIcon.Icons в XAML — рекомендованный
-    /// подход Avalonia, который корректно работает с WindowIcon на Windows, Linux и macOS.</para>
-    /// 
-    /// <para><b>Меню:</b></para>
-    /// <list type="bullet">
-    ///   <item>📌 Show — восстановить окно</item>
-    ///   <item>─────────</item>
-    ///   <item>▶ Play / ⏸ Pause — управление воспроизведением (disabled если нет трека)</item>
-    ///   <item>⏭ Next (disabled если нет трека)</item>
-    ///   <item>⏮ Previous (disabled если нет трека)</item>
-    ///   <item>🔁 Repeat — циклическое переключение (disabled если нет трека)</item>
-    ///   <item>─────────</item>
-    ///   <item>📋 Queue — перейти к очереди</item>
-    ///   <item>🧹 Clear Memory — очистить кэши + GC</item>
-    ///   <item>─────────</item>
-    ///   <item>❌ Exit — выход</item>
-    /// </list>
-    /// </summary>
     private void SetupTrayIcon()
     {
         try
         {
-            // Находим TrayIcon определённый в App.axaml
+            _playerControl = Program.Services.GetRequiredService<PlayerControlService>();
+            _traySubscriptions = new CompositeDisposable();
+
             var icons = TrayIcon.GetIcons(Application.Current!);
             if (icons == null || icons.Count == 0)
             {
@@ -153,55 +124,51 @@ public partial class MainWindow : Window
             }
 
             _trayIcon = icons[0];
-
-            // Загружаем иконку программно (App.axaml не может использовать avares для Icon)
             LoadTrayIconImage();
 
             var L = LocalizationService.Instance;
 
-            // ═══ Контекстное меню ═══
             var menu = new NativeMenu();
 
-            _showItem = new NativeMenuItem($"📌  {L["Tray_Show"] ?? "Show"}");
+            _showItem = new NativeMenuItem($"●  {L["Tray_Show"] ?? "Show"}");
             _showItem.Click += (_, _) => RestoreFromTray();
             menu.Add(_showItem);
 
             menu.Add(new NativeMenuItemSeparator());
 
-            // Управление воспроизведением — по умолчанию disabled
-            _playPauseItem = new NativeMenuItem($"▶  {L["Tray_Play"] ?? "Play"}");
+            _playPauseItem = new NativeMenuItem($"►  {L["Tray_Play"] ?? "Play"}");
             _playPauseItem.IsEnabled = false;
-            _playPauseItem.Click += (_, _) => OnTrayPlayPause();
+            _playPauseItem.Click += (_, _) => _ = _playerControl?.PlayPauseAsync();
             menu.Add(_playPauseItem);
 
-            _nextItem = new NativeMenuItem($"⏭  {L["Tray_Next"] ?? "Next"}");
+            _nextItem = new NativeMenuItem($"»  {L["Tray_Next"] ?? "Next"}");
             _nextItem.IsEnabled = false;
-            _nextItem.Click += (_, _) => OnTrayNext();
+            _nextItem.Click += (_, _) => _ = _playerControl?.NextAsync();
             menu.Add(_nextItem);
 
-            _prevItem = new NativeMenuItem($"⏮  {L["Tray_Previous"] ?? "Previous"}");
+            _prevItem = new NativeMenuItem($"«  {L["Tray_Previous"] ?? "Previous"}");
             _prevItem.IsEnabled = false;
-            _prevItem.Click += (_, _) => OnTrayPrevious();
+            _prevItem.Click += (_, _) => _ = _playerControl?.PreviousAsync();
             menu.Add(_prevItem);
 
-            _repeatItem = new NativeMenuItem($"🔁  {L["Tray_Repeat"] ?? "Repeat"}");
+            _repeatItem = new NativeMenuItem($"↻  {L["Tray_Repeat"] ?? "Repeat"}");
             _repeatItem.IsEnabled = false;
-            _repeatItem.Click += (_, _) => OnTrayRepeat();
+            _repeatItem.Click += (_, _) => _playerControl?.ToggleRepeat();
             menu.Add(_repeatItem);
 
             menu.Add(new NativeMenuItemSeparator());
 
-            _queueItem = new NativeMenuItem($"📋  {L["Tray_Queue"] ?? "Queue"}");
+            _queueItem = new NativeMenuItem($"≡  {L["Tray_Queue"] ?? "Queue"}");
             _queueItem.Click += (_, _) => OnTrayGoToQueue();
             menu.Add(_queueItem);
 
-            _cleanMemItem = new NativeMenuItem($"🧹  {L["Tray_ClearMemory"] ?? "Clear Memory"}");
+            _cleanMemItem = new NativeMenuItem($"⟳  {L["Tray_ClearMemory"] ?? "Clear Memory"}");
             _cleanMemItem.Click += (_, _) => OnTrayClearMemory();
             menu.Add(_cleanMemItem);
 
             menu.Add(new NativeMenuItemSeparator());
 
-            _exitItem = new NativeMenuItem($"❌  {L["Tray_Exit"] ?? "Exit"}");
+            _exitItem = new NativeMenuItem($"×  {L["Tray_Exit"] ?? "Exit"}");
             _exitItem.Click += (_, _) =>
             {
                 _forceClose = true;
@@ -210,15 +177,12 @@ public partial class MainWindow : Window
             menu.Add(_exitItem);
 
             _trayIcon.Menu = menu;
-
-            // Клик по иконке — восстановить окно
             _trayIcon.Clicked += (_, _) => RestoreFromTray();
 
-            // Подписка на смену языка
             LocalizationService.Instance.LanguageChanged += OnTrayLanguageChanged;
 
-            // Подписка на состояние воспроизведения
-            SubscribeToPlaybackState();
+            // ═══ РЕАКТИВНЫЕ ПОДПИСКИ (работают ВСЕГДА, даже в tray) ═══
+            SubscribeToPlayerControl();
 
             Log.Info("[Tray] Tray icon configured successfully");
         }
@@ -230,9 +194,46 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Загружает иконку для TrayIcon из ресурсов приложения.
-    /// Пробует несколько форматов в порядке приоритета.
+    /// Подписывается на реактивные потоки PlayerControlService.
+    /// Эти подписки работают НЕЗАВИСИМО от suspend состояния окна.
     /// </summary>
+    private void SubscribeToPlayerControl()
+    {
+        if (_playerControl == null || _traySubscriptions == null) return;
+
+        // IsPlaying → обновляем текст Play/Pause
+        _playerControl.IsPlayingObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(isPlaying => UpdatePlayPauseMenuText(isPlaying))
+            .DisposeWith(_traySubscriptions);
+
+        // CurrentTrack → обновляем tooltip и enabled состояние
+        _playerControl.CurrentTrackObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(track =>
+            {
+                bool hasTrack = track != null;
+
+                if (_trayIcon != null)
+                {
+                    _trayIcon.ToolTipText = track != null
+                        ? $"{track.Title} — {track.Author}"
+                        : "Lite Music Player";
+                }
+
+                UpdatePlaybackItemsEnabled(hasTrack);
+            })
+            .DisposeWith(_traySubscriptions);
+
+        // RepeatMode → обновляем текст Repeat
+        _playerControl.RepeatModeObservable
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => UpdateRepeatMenuText())
+            .DisposeWith(_traySubscriptions);
+
+        Log.Debug("[Tray] Subscribed to PlayerControlService observables");
+    }
+
     private void LoadTrayIconImage()
     {
         if (_trayIcon == null) return;
@@ -263,80 +264,16 @@ public partial class MainWindow : Window
             }
         }
 
-        // Fallback: использовать иконку самого окна
         if (Icon != null)
         {
             _trayIcon.Icon = Icon;
             Log.Debug("[Tray] Using window icon as fallback");
-        }
-        else
-        {
-            Log.Warn("[Tray] No icon loaded — tray will use system default");
         }
     }
 
     #endregion
 
     #region Tray Menu Actions
-
-    private void OnTrayPlayPause()
-    {
-        try
-        {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-            _ = audio.SetPlaybackStateAsync(!audio.IsPlaying);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Tray] PlayPause error: {ex.Message}");
-        }
-    }
-
-    private void OnTrayNext()
-    {
-        try
-        {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-            _ = audio.PlayNextAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Tray] Next error: {ex.Message}");
-        }
-    }
-
-    private void OnTrayPrevious()
-    {
-        try
-        {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-            _ = audio.PlayPreviousAsync();
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Tray] Previous error: {ex.Message}");
-        }
-    }
-
-    private void OnTrayRepeat()
-    {
-        try
-        {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-            audio.RepeatMode = audio.RepeatMode switch
-            {
-                RepeatMode.None => RepeatMode.All,
-                RepeatMode.All => RepeatMode.One,
-                RepeatMode.One => RepeatMode.None,
-                _ => RepeatMode.None
-            };
-            UpdateRepeatMenuText();
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Tray] Repeat error: {ex.Message}");
-        }
-    }
 
     private void OnTrayGoToQueue()
     {
@@ -354,63 +291,13 @@ public partial class MainWindow : Window
     private static void OnTrayClearMemory()
     {
         Log.Info("[Tray] Manual memory cleanup requested");
-        PerformCleanup();
+        PerformCleanup(aggressive: true);
     }
 
     #endregion
 
     #region Tray State Updates
 
-    /// <summary>
-    /// Подписывается на AudioEngine для обновления:
-    /// - Play/Pause текст
-    /// - Tooltip (название трека)
-    /// - Enabled состояние пунктов управления (HasTrack)
-    /// </summary>
-    private void SubscribeToPlaybackState()
-    {
-        try
-        {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-
-            // Playback state → Play/Pause текст
-            audio.OnPlaybackStateChanged += (isPlaying, _) =>
-            {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => UpdatePlayPauseMenuText(isPlaying));
-            };
-
-            // Track changed → tooltip + enabled
-            audio.OnTrackChanged += track =>
-            {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    bool hasTrack = track != null;
-
-                    if (_trayIcon != null)
-                    {
-                        _trayIcon.ToolTipText = track != null
-                            ? $"{track.Title} — {track.Author}"
-                            : "Lite Music Player";
-                    }
-
-                    // Обновляем enabled состояние пунктов управления
-                    if (hasTrack != _lastHasTrack)
-                    {
-                        _lastHasTrack = hasTrack;
-                        UpdatePlaybackItemsEnabled(hasTrack);
-                    }
-                });
-            };
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[Tray] Could not subscribe to playback state: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Включает/выключает пункты меню управления воспроизведением.
-    /// </summary>
     private void UpdatePlaybackItemsEnabled(bool enabled)
     {
         if (_playPauseItem != null) _playPauseItem.IsEnabled = enabled;
@@ -423,65 +310,51 @@ public partial class MainWindow : Window
     {
         if (_playPauseItem == null) return;
         var L = LocalizationService.Instance;
+        
         _playPauseItem.Header = isPlaying
-            ? $"⏸  {L["Tray_Pause"] ?? "Pause"}"
-            : $"▶  {L["Tray_Play"] ?? "Play"}";
+            ? $"‖  {L["Tray_Pause"] ?? "Pause"}"
+            : $"►  {L["Tray_Play"] ?? "Play"}";
     }
 
     private void UpdateRepeatMenuText()
     {
-        if (_repeatItem == null) return;
+        if (_repeatItem == null || _playerControl == null) return;
 
-        try
+        var L = LocalizationService.Instance;
+        var repeatMode = _playerControl.RepeatMode;
+
+        _repeatItem.Header = repeatMode switch
         {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-            var L = LocalizationService.Instance;
-
-            _repeatItem.Header = audio.RepeatMode switch
-            {
-                RepeatMode.None => $"🔁  {L["Tray_Repeat"] ?? "Repeat"}",
-                RepeatMode.All => $"🔁  ✓ {L["Tray_RepeatAll"] ?? "Repeat All"}",
-                RepeatMode.One => $"🔂  ✓ {L["Tray_RepeatOne"] ?? "Repeat One"}",
-                _ => $"🔁  {L["Tray_Repeat"] ?? "Repeat"}"
-            };
-        }
-        catch { }
+            RepeatMode.None => $"↻  {L["Tray_Repeat"] ?? "Repeat"}",
+            RepeatMode.All => $"↻• {L["Tray_RepeatAll"] ?? "All"}",
+            RepeatMode.One => $"↺• {L["Tray_RepeatOne"] ?? "One"}",
+            _ => $"↻  {L["Tray_Repeat"] ?? "Repeat"}"
+        };
     }
 
     private void OnTrayLanguageChanged(object? sender, string e)
     {
         var L = LocalizationService.Instance;
 
-        if (_showItem != null) _showItem.Header = $"📌  {L["Tray_Show"] ?? "Show"}";
-        if (_nextItem != null) _nextItem.Header = $"⏭  {L["Tray_Next"] ?? "Next"}";
-        if (_prevItem != null) _prevItem.Header = $"⏮  {L["Tray_Previous"] ?? "Previous"}";
-        if (_queueItem != null) _queueItem.Header = $"📋  {L["Tray_Queue"] ?? "Queue"}";
-        if (_cleanMemItem != null) _cleanMemItem.Header = $"🧹  {L["Tray_ClearMemory"] ?? "Clear Memory"}";
-        if (_exitItem != null) _exitItem.Header = $"❌  {L["Tray_Exit"] ?? "Exit"}";
+        if (_showItem != null) _showItem.Header = $"●  {L["Tray_Show"] ?? "Show"}";
+        if (_nextItem != null) _nextItem.Header = $"»  {L["Tray_Next"] ?? "Next"}";
+        if (_prevItem != null) _prevItem.Header = $"«  {L["Tray_Previous"] ?? "Previous"}";
+        if (_queueItem != null) _queueItem.Header = $"≡  {L["Tray_Queue"] ?? "Queue"}";
+        if (_cleanMemItem != null) _cleanMemItem.Header = $"⟳  {L["Tray_ClearMemory"] ?? "Clear Memory"}";
+        if (_exitItem != null) _exitItem.Header = $"×  {L["Tray_Exit"] ?? "Exit"}";
 
-        // Play/Pause и Repeat зависят от состояния
-        try
+        if (_playerControl != null)
         {
-            var audio = Program.Services.GetRequiredService<AudioEngine>();
-            UpdatePlayPauseMenuText(audio.IsPlaying);
+            UpdatePlayPauseMenuText(_playerControl.IsPlaying);
             UpdateRepeatMenuText();
         }
-        catch { }
 
-        // Обновляем tooltip
-        if (_trayIcon != null)
+        if (_trayIcon != null && _playerControl != null)
         {
-            try
-            {
-                var audio = Program.Services.GetRequiredService<AudioEngine>();
-                _trayIcon.ToolTipText = audio.CurrentTrack != null
-                    ? $"{audio.CurrentTrack.Title} — {audio.CurrentTrack.Author}"
-                    : "Lite Music Player";
-            }
-            catch
-            {
-                _trayIcon.ToolTipText = "Lite Music Player";
-            }
+            var track = _playerControl.CurrentTrack;
+            _trayIcon.ToolTipText = track != null
+                ? $"{track.Title} — {track.Author}"
+                : "Lite Music Player";
         }
     }
 
@@ -489,9 +362,6 @@ public partial class MainWindow : Window
 
     #region Tray Show/Hide
 
-    /// <summary>
-    /// Скрывает окно и показывает иконку в трее.
-    /// </summary>
     private void MinimizeToTray()
     {
         if (_trayIcon != null)
@@ -501,7 +371,6 @@ public partial class MainWindow : Window
 
         Hide();
 
-        // Broadcast suspend для экономии ресурсов
         _isMinimized = true;
         ViewModelBase.BroadcastSuspend();
         MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(30));
@@ -512,6 +381,7 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Восстанавливает окно из трея.
+    /// Вызывает ForceSync для синхронизации состояния PlayerBar с текущим состоянием воспроизведения.
     /// </summary>
     private void RestoreFromTray()
     {
@@ -524,12 +394,15 @@ public partial class MainWindow : Window
             _trayIcon.IsVisible = false;
         }
 
-        // Resume
         if (_isMinimized)
         {
             _isMinimized = false;
             CancelCleanup();
             MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(5));
+            
+            // ═══ КРИТИЧНО: Принудительная синхронизация перед Resume ═══
+            _playerControl?.ForceSync();
+            
             ViewModelBase.BroadcastResume();
         }
 
@@ -539,29 +412,31 @@ public partial class MainWindow : Window
     private void DisposeTrayIcon()
     {
         LocalizationService.Instance.LanguageChanged -= OnTrayLanguageChanged;
-
+        
+        _traySubscriptions?.Dispose();
+        _traySubscriptions = null;
+        
         if (_trayIcon != null)
         {
             _trayIcon.IsVisible = false;
-            // Не вызываем Dispose — TrayIcon управляется через App.axaml TrayIcons
-            _trayIcon = null;
         }
+        
+        _trayIcon = null;
+        _playerControl = null;
     }
 
     #endregion
 
     #region Close Handling
 
-    /// <summary>
-    /// Перехватывает закрытие окна и применяет настройку CloseAction.
-    /// </summary>
     protected override async void OnClosing(WindowClosingEventArgs e)
     {
         if (_forceClose)
         {
-            // При реальном закрытии — скрываем TrayIcon
             if (_trayIcon != null)
+            {
                 _trayIcon.IsVisible = false;
+            }
 
             base.OnClosing(e);
             return;
@@ -585,15 +460,14 @@ public partial class MainWindow : Window
             case CloseAction.Exit:
             default:
                 if (_trayIcon != null)
+                {
                     _trayIcon.IsVisible = false;
+                }
                 base.OnClosing(e);
                 break;
         }
     }
 
-    /// <summary>
-    /// Показывает диалог "Что сделать при закрытии?" через универсальный ChoiceDialog.
-    /// </summary>
     private async Task HandleAskCloseAsync()
     {
         var dialog = Program.Services.GetRequiredService<DialogService>();
@@ -631,30 +505,17 @@ public partial class MainWindow : Window
         HandleWindowStateChanged(state);
     }
 
-    /// <summary>
-    /// Обрабатывает смену состояния окна.
-    /// 
-    /// <para><b>FIX Maximize:</b> При SystemDecorations="BorderOnly" + ExtendClientAreaToDecorationsHint
-    /// Avalonia не учитывает WorkingArea. Вручную выставляем Margin на корневой Grid.</para>
-    /// 
-    /// <para><b>Minimize to Tray:</b> Если MinimizeToTray=true, при сворачивании через
-    /// системную кнопку (не нашу) или Alt+F9 — перехватываем и уходим в трей.</para>
-    /// </summary>
     private void HandleWindowStateChanged(WindowState state)
     {
-        // Maximize fix
         UpdateMaximizePadding(state);
 
-        // Maximize/Restore icon toggle
         var maximizeIcon = this.FindControl<Border>("MaximizeIcon");
         var restoreIcon = this.FindControl<Grid>("RestoreIcon");
         if (maximizeIcon != null) maximizeIcon.IsVisible = state != WindowState.Maximized;
         if (restoreIcon != null) restoreIcon.IsVisible = state == WindowState.Maximized;
 
-        // Minimize
         if (state == WindowState.Minimized)
         {
-            // Проверяем MinimizeToTray для системного сворачивания
             try
             {
                 var library = Program.Services.GetRequiredService<LibraryService>();
@@ -680,14 +541,14 @@ public partial class MainWindow : Window
             _isMinimized = false;
             CancelCleanup();
             MemoryDiagnostics.Instance.SetMonitoringInterval(TimeSpan.FromSeconds(5));
+            
+            // ═══ Синхронизация при разворачивании ═══
+            _playerControl?.ForceSync();
+            
             ViewModelBase.BroadcastResume();
         }
     }
 
-    /// <summary>
-    /// При максимизации добавляет Margin к корневому Grid равный размеру
-    /// области занятой панелью задач. Предотвращает перекрытие панели задач.
-    /// </summary>
     private void UpdateMaximizePadding(WindowState state)
     {
         var rootGrid = this.Content as Avalonia.Controls.Grid;
@@ -752,39 +613,65 @@ public partial class MainWindow : Window
                     return;
 
                 _lastCleanupTime = now;
-                PerformCleanup();
+                PerformCleanup(aggressive: false);
             }
             catch (OperationCanceledException) { }
         });
     }
 
-    private static void PerformCleanup()
+    private static void PerformCleanup(bool aggressive = false)
     {
-        Log.Info("[Memory] Cleanup");
-
         _ = Task.Run(() =>
         {
             try
             {
-                var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
-                imageCache.ClearMemoryCache();
+                bool isPlaying;
+                try
+                {
+                    var playerControl = Program.Services.GetRequiredService<PlayerControlService>();
+                    isPlaying = playerControl.IsPlaying || playerControl.IsLoading;
+                }
+                catch
+                {
+                    isPlaying = false;
+                }
 
-                var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
-                vmFactory.CleanupCache();
+                try
+                {
+                    var imageCache = Program.Services.GetRequiredService<ImageCacheService>();
+                    imageCache.ClearMemoryCache();
 
-                var registry = Program.Services.GetRequiredService<TrackRegistry>();
-                registry.CleanupDeadReferences();
+                    var vmFactory = Program.Services.GetRequiredService<TrackViewModelFactory>();
+                    vmFactory.CleanupCache();
 
-                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
-                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
-                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                    var registry = Program.Services.GetRequiredService<TrackRegistry>();
+                    registry.CleanupDeadReferences();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[Memory] Cache cleanup error: {ex.Message}");
+                }
 
-                MemoryHelpers.TrimWorkingSet();
-
-                var afterMb = GC.GetTotalMemory(false) / 1024 / 1024;
-                Log.Info($"[Memory] After cleanup: {afterMb} MB");
+                if (isPlaying)
+                {
+                    GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
+                    Log.Info("[Memory] Soft cleanup (playback active)");
+                }
+                else if (aggressive)
+                {
+                    System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                        System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                    MemoryHelpers.TrimWorkingSet();
+                    Log.Info($"[Memory] Aggressive cleanup: {GC.GetTotalMemory(false) / 1024 / 1024} MB");
+                }
+                else
+                {
+                    GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+                    Log.Info($"[Memory] Normal cleanup: {GC.GetTotalMemory(false) / 1024 / 1024} MB");
+                }
             }
             catch (Exception ex)
             {
