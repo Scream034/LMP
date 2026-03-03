@@ -8,11 +8,16 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Приостанавливает фоновую загрузку (при сворачивании окна).
+    /// 
+    /// <para><b>ВАЖНО:</b> Suspend останавливает только background fill.
+    /// Critical read-ahead (чанки вокруг текущей позиции) продолжает работать
+    /// для бесперебойного воспроизведения. On-demand загрузка через ReadAtAsync
+    /// тоже не затрагивается.</para>
     /// </summary>
     public void Suspend()
     {
         _suspendGate.Reset();
-        Log.Debug("[CachingSource] Suspended");
+        Log.Debug("[CachingSource] Suspended (background fill paused, critical read-ahead active)");
     }
 
     /// <summary>
@@ -28,6 +33,17 @@ public sealed partial class CachingStreamSource
 
     #region Preload Loop
 
+    /// <summary>
+    /// Фоновый цикл предзагрузки чанков.
+    /// 
+    /// <para><b>Два режима:</b></para>
+    /// <list type="bullet">
+    ///   <item><b>Suspend mode:</b> Загружает только critical read-ahead (5 чанков вперёд).
+    ///     Чанки загружаются последовательно (await) для надёжности при тротлинге сети.
+    ///     Блокируется на _suspendGate до Resume или timeout 500ms.</item>
+    ///   <item><b>Normal mode:</b> Полный preload с parallel downloads и background fill.</item>
+    /// </list>
+    /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
         int lastReportedProgress = -1;
@@ -43,15 +59,18 @@ public sealed partial class CachingStreamSource
                 if (isSuspended)
                 {
                     // ═══ SUSPEND MODE: Только critical read-ahead ═══
-                    // Гарантирует что при автосмене трека в фоне
-                    // чанки вокруг текущей позиции будут загружены
+                    // Гарантирует бесперебойное воспроизведение при свёрнутом окне.
+                    // В фоне ОС тротлит ThreadPool (EcoQoS), но выделенный decoder thread
+                    // продолжает работать. Нужно обеспечить ему данные.
                     int current = Volatile.Read(ref _currentChunk);
                     var epochAtStart = Interlocked.Read(ref _downloadEpoch);
                     var downloadToken = CurrentDownloadToken;
 
-                    // Загружаем 2-3 чанка вперёд — достаточно для бесперебойного
-                    // воспроизведения, но не нагружаем сеть
-                    int criticalAhead = Math.Min(3, _config.ReadAheadChunks);
+                    // ═══ 5 чанков вместо 3 ═══
+                    // 5 чанков × 128KB = 640KB ≈ 40 секунд при 128kbps.
+                    // При тротлинге сети в фоне 3 чанков (~24 сек) может быть мало
+                    // если переключение трека совпало с медленным ответом от YouTube.
+                    int criticalAhead = Math.Min(5, _config.ReadAheadChunks + 1);
 
                     for (int i = 0; i <= criticalAhead; i++)
                     {
@@ -63,14 +82,36 @@ public sealed partial class CachingStreamSource
 
                         if (!IsChunkAvailable(idx) && !_activeDownloads.ContainsKey(idx))
                         {
-                            _ = SafeEnsureChunkAsync(idx, downloadToken);
+                            // ═══ await вместо fire-and-forget ═══
+                            // В suspend mode надёжность важнее параллелизма.
+                            // Sequential загрузка гарантирует что каждый чанк
+                            // реально загружен перед переходом к следующему.
+                            // Fire-and-forget в фоне может "застрять" на ThreadPool scheduling.
+                            try
+                            {
+                                await EnsureChunkAsync(idx, downloadToken);
+                            }
+                            catch (OperationCanceledException) { break; }
+                            catch (Exceptions.ChunkDownloadFatalException)
+                            {
+                                Log.Debug($"[CachingSource] Critical chunk {idx} fatal in suspend mode");
+                                break;
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Debug($"[CachingSource] Critical chunk {idx}: {ex.Message}");
+                                // Продолжаем — следующий чанк может быть доступен
+                            }
                         }
                     }
 
-                    // Ждём resume или timeout — проверяем каждые 200ms
+                    // ═══ _suspendGate.Wait вместо Task.Delay ═══
+                    // Мгновенный resume вместо ожидания до 200ms.
+                    // При Resume() _suspendGate.Set() немедленно разблокирует Wait.
+                    // Timeout 500ms — периодическая проверка critical chunks.
                     try
                     {
-                        await Task.Delay(200, ct);
+                        _suspendGate.Wait(500, ct);
                     }
                     catch (OperationCanceledException) { break; }
 
@@ -197,7 +238,6 @@ public sealed partial class CachingStreamSource
     {
         if (_cacheEntry == null) return null;
 
-        // Используем реальное количество чанков
         int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
 
         for (int offset = 1; offset < total; offset++)
@@ -223,7 +263,6 @@ public sealed partial class CachingStreamSource
         if (_cacheEntry == null)
             return [];
 
-        // Используем реальное количество чанков
         int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
         if (total == 0)
             return [];

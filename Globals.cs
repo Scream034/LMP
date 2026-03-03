@@ -137,7 +137,6 @@ public static class G
         public static readonly string Logs = Path.Combine(Data, "Logs");
         public static readonly string Downloads = Path.Combine(Data, "Downloads");
         public static readonly string ImageCache = Path.Combine(Cache, "ImageCache");
-        public static readonly string StreamCache = Path.Combine(Cache, "StreamCache");
         public static readonly string SearchCache = Path.Combine(Cache, "SearchCache");
         public static readonly string AudioCache = Path.Combine(Cache, "AudioCache");
         public static readonly string NTokenCache = Path.Combine(Cache, "NToken");
@@ -149,7 +148,6 @@ public static class G
             Directory.CreateDirectory(Cache);
             Directory.CreateDirectory(Downloads);
             Directory.CreateDirectory(ImageCache);
-            Directory.CreateDirectory(StreamCache);
             Directory.CreateDirectory(SearchCache);
             Directory.CreateDirectory(AudioCache);
             Directory.CreateDirectory(NTokenCache);

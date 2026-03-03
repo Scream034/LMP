@@ -38,12 +38,12 @@ class Program
 
         try
         {
-            // ═══ ЭТАП 1: Логгер (мгновенно) ═══
+            // ═══ ЭТАП 1: Создать папки ПЕРВЫМ ═══
+            G.Folder.Create();
+
+            // ═══ ЭТАП 2: Логгер ═══
             Log.Initialize();
             Log.Info($"{G.AppId} starting...");
-
-            // ═══ ЭТАП 2: Создать папки ═══
-            G.Folder.Create();
 
             // ═══ ЭТАП 3: Bootstrap настройки (быстро, без БД) ═══
             BootstrapSettings.Initialize();
@@ -62,6 +62,11 @@ class Program
         catch (Exception ex)
         {
             Log.Fatal($"Global crash: {ex.Message}\n{ex.StackTrace}");
+        }
+        finally
+        {
+            // ═══ ГАРАНТИРОВАННЫЙ SHUTDOWN логгера ═══
+            Log.Shutdown();
         }
     }
 

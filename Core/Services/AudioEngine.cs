@@ -289,7 +289,34 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             cachingSource.Resume();
         }
 
+        // ═══ Pre-warm HTTP connections после длительной паузы ═══
+        // После паузы >30s TCP соединения могут протухнуть.
+        // Отправляем легковесный HEAD запрос чтобы обновить connection pool.
+        _ = PreWarmHttpConnectionAsync();
+
         Log.Debug("[AudioEngine] Resumed (background downloads active)");
+    }
+
+    /// <summary>
+    /// Отправляет легковесный запрос для обновления HTTP connection pool.
+    /// Fire-and-forget — не блокирует Resume.
+    /// </summary>
+    private static async Task PreWarmHttpConnectionAsync()
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Head,
+                "https://redirector.googlevideo.com/");
+            request.Version = System.Net.HttpVersion.Version11;
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await Audio.Http.SharedHttpClient.Instance
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        }
+        catch
+        {
+            // Не критично — просто прогрев connection pool
+        }
     }
 
     #endregion

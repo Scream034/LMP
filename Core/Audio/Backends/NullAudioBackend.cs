@@ -21,6 +21,7 @@ public sealed class NullAudioBackend : IPlaybackBackend
     public float Volume { get => _volume; set => _volume = Math.Clamp(value, 0f, 1f); }
     public bool IsPlaying => _playing;
     public int BufferedSamples => 0;
+    public int BufferedBytes => 0;
 
     public void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback)
     {
@@ -35,6 +36,10 @@ public sealed class NullAudioBackend : IPlaybackBackend
     {
         Initialize(sampleRate, channels, dataCallback);
     }
+
+    public void ActivateFillLoop() { }
+
+    public bool WaitForWarmup(int timeoutMs = 3000) => true;
 
     public void Start()
     {

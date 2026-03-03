@@ -271,9 +271,26 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     {
         if (_state != PlayerState.Paused) return;
 
+        var pipeline = _activePipeline;
+        if (pipeline == null) return;
+
+        // ═══ Проверяем состояние буфера перед Resume ═══
+        // После длительной паузы BufferedWaveProvider может быть в порядке,
+        // но при быстром Pause/Resume (UI toggle) буфер может быть разреженным.
+        int bufferedBytes = _sharedBackend.BufferedBytes;
+        int minBytes = pipeline.SampleRate * pipeline.Channels * sizeof(float) * 100 / 1000; // 100ms
+
+        if (bufferedBytes < minBytes)
+        {
+            // Буфер разреженный — активируем fill loop для дозаполнения
+            pipeline.ActivateFillLoop();
+            // Короткий warmup — не блокируем UI надолго
+            pipeline.WaitForBackendWarmup(timeoutMs: 500);
+        }
+
         // Optimistic UI update
         SetState(PlayerState.Playing);
-        _activePipeline?.Start();
+        pipeline.Start();
     }
 
     /// <summary>
@@ -448,6 +465,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         try
         {
             // ═══ Создаём pipeline с SHARED backend ═══
+            // После CreateAsync backend находится в остановленном состоянии:
+            // Reinitialize() деактивировал fill loop, waveOut не играет.
             var pipeline = await AudioPipeline.CreateAsync(
                 cmd.Url,
                 cmd.TrackId,
@@ -475,20 +494,14 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             }
 
             // ═══ ATOMIC SEEK-BEFORE-PLAY ═══
-            // При переключении качества: seek выполняется ДО старта backend.
-            // Decoder начинает ��екодировать с правильной позиции,
-            // backend не слышит артефактов с позиции 0.
             if (cmd.SeekPosition is { TotalMilliseconds: > 0 } seekPos)
             {
-                // PrepareForSeek устанавливает skip frames counter для codec warmup
                 long seekMs = (long)seekPos.TotalMilliseconds;
                 pipeline.PrepareForSeek(seekMs);
 
-                // Seek в source — перемещает read pointer к нужному сегменту
                 bool seekOk = await pipeline.Source.SeekAsync(seekMs, _lifetimeCts.Token);
                 if (seekOk)
                 {
-                    // Обновляем position counter для корректного Position reporting
                     long targetSamples = (long)(seekMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
                     pipeline.SetDecodedSamplesPosition(targetSamples);
 
@@ -496,7 +509,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 }
             }
 
-            // ═══ Запускаем decoder — он декодирует с правильной позиции (после seek) ═══
+            // ═══ ЭТАП 1: Запускаем decoder ═══
+            // Decoder начинает декодировать и наполнять PCM RingBuffer
             pipeline.StartDecoding(
                 CreateUrlRefresher(),
                 _options,
@@ -505,9 +519,12 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
             SetState(PlayerState.Buffering);
 
+            // ═══ ЭТАП 2: Ждём PCM RingBuffer ═══
+            // Минимум данных в ring buffer чтобы fill loop имел что перекачивать
             int threshold = pipeline.SampleRate * pipeline.Channels * MinBufferMs / 1000;
             await pipeline.WaitForBufferAsync(threshold, 5000, _lifetimeCts.Token);
 
+            // Проверка сессии после ожидания
             currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (cmd.SessionId < currentSession)
             {
@@ -518,7 +535,36 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
-            // ═══ Backend стартует — PCM buffer содержит данные с ПРАВИЛЬНОЙ позиции ═══
+            // ═══ ЭТАП 3: Активируем fill loop (warmup) ═══
+            // Fill loop начинает перекачивать данные: PCM RingBuffer → BufferedWaveProvider
+            // WaveOut ещё НЕ играет — данные только накапливаются
+            pipeline.ActivateFillLoop();
+
+            // ═══ ЭТАП 4: Ждём BufferedWaveProvider warmup ═══
+            // WaitForWarmup блокирует до накопления ≥200ms данных в BufferedWaveProvider.
+            // Это КРИТИЧНО для предотвращения артефакта "щётки":
+            // без warmup waveOut.Play() начнёт читать из пустого буфера → glitches.
+            // В фоновом режиме (EcoQoS троттлинг) warmup может занять дольше —
+            // таймаут 3000ms достаточен даже при медленной сети.
+            bool warmedUp = pipeline.WaitForBackendWarmup(timeoutMs: 3000);
+            if (!warmedUp)
+            {
+                Log.Warn("[AudioPlayer] ⚠ Backend warmup timeout — possible initial artifact");
+            }
+
+            // Финальная проверка сессии после warmup
+            currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+            if (cmd.SessionId < currentSession)
+            {
+                Log.Debug($"[AudioPlayer] Play cancelled after warmup: " +
+                          $"session {cmd.SessionId} < {currentSession}");
+                var stale = Interlocked.Exchange(ref _activePipeline, null);
+                if (stale != null) await stale.DisposeAsync();
+                return;
+            }
+
+            // ═══ ЭТАП 5: Безопасный старт ═══
+            // BufferedWaveProvider содержит ≥200ms данных → waveOut.Play() безопасен
             pipeline.Start();
             StartTimers();
             SetState(PlayerState.Playing);
@@ -582,17 +628,12 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         bool wasPlaying = _state == PlayerState.Playing;
         SetState(PlayerState.Seeking);
 
-        // ═══ FIX: Останавливаем position timer во время seek ═══
-        // Это предотвращает попадание stale position events в Rx pipeline.
-        // Buffer timer НЕ останавливаем — cache line должна обновляться.
         StopPositionTimer();
 
         try
         {
-            // Decoder stop — в логах стабильно <10ms, 200ms safety timeout
             await pipeline.StopDecodingAsync(TimeSpan.FromMilliseconds(200));
 
-            // Проверяем сессию — мог прийти новый Play/Stop пока ждали
             int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (cmd.SessionId < currentSession)
             {
@@ -601,15 +642,12 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
-            // Останавливаем backend и очищаем все буферы (быстро, <1ms)
             pipeline.Stop();
             pipeline.Flush();
 
-            // Подготавливаем decoder: skip frames + timestamp-based skip
             long posMs = (long)cmd.Position.TotalMilliseconds;
             pipeline.PrepareForSeek(posMs);
 
-            // Выполняем seek в source — теперь non-blocking (fire-and-forget preload)
             bool success = await pipeline.Source.SeekAsync(posMs, _lifetimeCts.Token);
 
             if (!success)
@@ -621,25 +659,27 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
-            // Обновляем позицию для корректного Position reporting
             long targetSamples = (long)(posMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
             pipeline.SetDecodedSamplesPosition(targetSamples);
 
-            // Перезапускаем decoder loop — он начнёт читать из новой позиции
             pipeline.StartDecoding(
                 CreateUrlRefresher(),
                 _options,
                 OnTrackEnded,
                 HandleError);
 
-            // ═══ FIX: Убран WaitForBufferAsync ═══
-            // Backend AudioCallback уже обрабатывает underrun: заполняет тишиной.
-            // Decoder заполнит буфер за 1-2 фрейма (~40ms).
-            // Для rapid seeking это критично: каждый WaitForBuffer добавлял 100-300ms.
-
-            // Возобновляем воспроизведение
+            // ═══ Warmup protocol для seek ═══
+            // При seek буферы пусты после Flush(). Без warmup waveOut.Play()
+            // начнёт читать пустой BufferedWaveProvider → артефакты.
+            // Для seek используем короткий таймаут (500ms) чтобы не замедлять UX.
             if (wasPlaying)
             {
+                pipeline.ActivateFillLoop();
+
+                // Короткий warmup — seek должен быть быстрым
+                // 500ms достаточно: decoder уже работает, PCM buffer наполняется
+                pipeline.WaitForBackendWarmup(timeoutMs: 500);
+
                 pipeline.Start();
                 SetState(PlayerState.Playing);
             }
@@ -648,8 +688,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 SetState(PlayerState.Paused);
             }
 
-            // ═══ FIX: Перезапускаем timer С ЗАДЕРЖКОЙ перед событием ═══
-            // Первый тик через interval мс — к этому моменту Position будет корректной
             StartPositionTimerDelayed();
 
             _events.RaiseSeekCompleted(cmd.Position);
@@ -667,7 +705,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             Log.Warn($"[AudioPlayer] Seek error: {ex.Message}");
             cmd.Completion?.TrySetException(ex);
 
-            // Восстанавливаем состояние
             SetState(wasPlaying ? PlayerState.Playing : PlayerState.Paused);
             if (wasPlaying) pipeline.Start();
             StartPositionTimerDelayed();

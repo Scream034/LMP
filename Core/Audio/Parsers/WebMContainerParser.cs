@@ -96,7 +96,7 @@ public sealed class WebMContainerParser : IContainerParser
         // Очищаем текущий фрейм при перемотке
         ReleaseCurrentFrame();
         
-        // ═══ FIX: Сбрасываем состояние парсера ═══
+        // ═══ Сбрасываем состояние парсера ═══
         // _currentClusterTimecode должен обновиться из первого Cluster после seek.
         // WebMParser.ReadNextBlockAsync сам обновит его при чтении TIMECODE_ID.
         // Никаких дополнительных действий не нужно — Reset фрейма достаточно.

@@ -328,7 +328,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         try
         {
-            // ═══ FIX: Используем pooled buffer для чтения с диска ═══
+            // ═══ Используем pooled buffer для чтения с диска ═══
             var rentedBuffer = Memory.ChunkPool.Shared.Rent(size);
             int totalRead = 0;
 

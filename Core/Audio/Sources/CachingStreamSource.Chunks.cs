@@ -71,7 +71,6 @@ public sealed partial class CachingStreamSource
         int chunkIndex = (int)(position / _chunkSize);
         int offsetInChunk = (int)(position % _chunkSize);
 
-        // Проверка границ — не пытаемся читать за пределами файла
         if (chunkIndex >= _totalChunks)
             return 0;
 
@@ -100,7 +99,6 @@ public sealed partial class CachingStreamSource
 
                 var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token);
 
-                // Чанк за пределами файла — возвращаем 0 (EOF)
                 if (result == ChunkDownloadResult.OutOfRange)
                     return 0;
 
@@ -225,7 +223,10 @@ public sealed partial class CachingStreamSource
                         continue;
 
                     case ChunkDownloadResult.NetworkError:
-                        int delay = ComputeRetryDelay(attempt);
+                        // ═══ Быстрый первый retry, потом backoff ═══
+                        // Первая ошибка после паузы обычно из-за протухшего соединения.
+                        // Мгновенный retry на свежем соединении почти всегда успешен.
+                        int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
                         Log.Warn($"[CachingSource] Chunk {index}: network retry " +
                                  $"{attempt + 1}/{maxAttempts}, delay={delay}ms");
                         await Task.Delay(delay, ct);

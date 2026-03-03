@@ -249,7 +249,7 @@ public sealed class WebMParser : IDisposable
             return await ParseLacedBlockAsync(dataSize, lacingType, timecodeOffset, isKeyFrame, ct);
         }
 
-        // ═══ FIX: Аренда памяти вместо new byte[] ═══
+        // ═══ Аренда памяти вместо new byte[] ═══
         var memoryOwner = MemoryPool<byte>.Shared.Rent(dataSize);
         try
         {

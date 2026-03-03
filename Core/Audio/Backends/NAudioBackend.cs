@@ -17,6 +17,26 @@ namespace LMP.Core.Audio.Backends;
 /// waveOutClose/waveOutOpen при каждой смене трека, что критично
 /// когда приложение в фоне (ОС деприоритезирует потоки).
 /// 
+/// <para><b>Warmup Protocol:</b></para>
+/// <para>После <see cref="Reinitialize"/> или <see cref="Flush"/>,
+/// вызывающий код ДОЛЖЕН использовать:</para>
+/// <code>
+/// backend.ActivateFillLoop();       // Будит fill thread для наполнения буфера
+/// backend.WaitForWarmup(3000);      // Ждёт ≥200ms данных
+/// backend.Start();                  // waveOut.Play() — буфер уже содержит данные
+/// </code>
+/// <para>Это предотвращает артефакт "щётки" от чтения пустого буфера.</para>
+/// 
+/// <para><b>Driver Queue vs BufferedWaveProvider:</b></para>
+/// <para>NAudio использует двухуровневую буферизацию:</para>
+/// <list type="number">
+///   <item><see cref="BufferedWaveProvider"/> — наш управляемый буфер (1 сек)</item>
+///   <item>Driver Queue — буферы переданные ОС через waveOutWrite() (~150ms)</item>
+/// </list>
+/// <para><c>ClearBuffer()</c> очищает только уровень 1. Для очистки уровня 2
+/// нужен <c>waveOut.Stop()</c> (= waveOutReset()). При смене трека <see cref="Reinitialize"/>
+/// вызывает оба для полной очистки.</para>
+/// 
 /// <para><b>Потокобезопасность:</b></para>
 /// <list type="bullet">
 ///   <item><see cref="Start"/>/<see cref="Stop"/> — можно вызывать из любого потока.
@@ -30,26 +50,25 @@ namespace LMP.Core.Audio.Backends;
 /// </summary>
 public sealed class NAudioBackend : IPlaybackBackend
 {
+    #region Constants
+
     private const int InternalBufferSeconds = 1;
     private const int DesiredLatencyMs = 150;
 
     /// <summary>Заполнение буфера, выше которого fill loop засыпает.</summary>
     private const double BufferHighWaterMark = 0.8;
 
-    /// <summary>Пауза fill loop когда буфер полон или не playing (ms).</summary>
+    /// <summary>Пауза fill loop когда буфер полон или не активен (ms).</summary>
     private const int IdleSleepMs = 10;
 
     /// <summary>Пауза fill loop когда нет данных от callback (ms).</summary>
-    private const int EmptyCallbackSleepMs = 10;
+    private const int EmptyCallbackSleepMs = 5;
 
     /// <summary>Пауза после flush detection (ms).</summary>
     private const int PostFlushSleepMs = 10;
 
     /// <summary>Пауза после ошибки в fill loop (ms).</summary>
     private const int ErrorSleepMs = 100;
-
-    /// <summary>Пауза fill loop когда decoder не работает (ms).</summary>
-    private const int DecoderDeadSleepMs = 50;
 
     /// <summary>
     /// Количество внутренних буферов NAudio.
@@ -66,10 +85,33 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <summary>
     /// Длительность fade-out при остановке для предотвращения щелчков (ms).
-    /// Fade-out записывает затухающий сигнал в BufferedWaveProvider
-    /// перед вызовом waveOutReset(), предотвращая резкий обрыв волны.
     /// </summary>
     private const int FadeOutMs = 15;
+
+    /// <summary>
+    /// Минимальное количество миллисекунд данных в BufferedWaveProvider
+    /// перед разрешением Play().
+    /// </summary>
+    private const int WarmupMinMs = 200;
+
+    /// <summary>
+    /// Максимальное время ожидания warmup по умолчанию (ms).
+    /// </summary>
+    private const int WarmupDefaultTimeoutMs = 3000;
+
+    /// <summary>
+    /// Интервал проверки в WaitForWarmup (ms).
+    /// </summary>
+    private const int WarmupPollIntervalMs = 5;
+
+    /// <summary>
+    /// Количество последовательных underrun после которых логируется предупреждение.
+    /// </summary>
+    private const int UnderrunLogThreshold = 50;
+
+    #endregion
+
+    #region Fields
 
     private WaveOutEvent? _waveOut;
     private BufferedWaveProvider? _provider;
@@ -80,40 +122,42 @@ public sealed class NAudioBackend : IPlaybackBackend
     private float[]? _floatBuffer;
     private byte[]? _byteBuffer;
 
+    /// <summary>
+    /// Флаг воспроизведения. true = waveOut.Play() вызван.
+    /// </summary>
     private volatile bool _playing;
+
     private volatile bool _disposed;
-    private volatile bool _decoderAlive;
 
     /// <summary>
-    /// Lock для синхронизации Start/Stop.
-    /// Предотвращает race condition когда Stop() и Start() 
-    /// вызываются быстро подряд (при seek).
+    /// Флаг активности fill loop. true = fill loop перекачивает данные.
+    /// Отличие от _playing: _fillActive=true, _playing=false → warmup фаза.
     /// </summary>
+    private volatile bool _fillActive;
+
     private readonly Lock _stateLock = new();
 
     /// <summary>
-    /// Поколение flush. Инкрементируется при <see cref="Flush"/>.
-    /// Fill loop сравнивает до и после чтения callback —
-    /// если изменилось, данные устарели и не записываются в буфер.
+    /// Поколение flush. Fill loop пропускает данные при смене generation.
     /// </summary>
     private int _flushGeneration;
 
-    /// <summary>
-    /// Выделенный поток для fill loop.
-    /// Использование выделенного потока вместо ThreadPool критично:
-    /// ОС агрессивно деприоритезирует ThreadPool потоки фоновых процессов,
-    /// а выделенный поток с <see cref="ThreadPriority.AboveNormal"/> 
-    /// сохраняет приоритет.
-    /// </summary>
     private Thread? _fillThread;
-
     private CancellationTokenSource? _cts;
 
     /// <summary>
     /// Сигнал пробуждения fill loop.
-    /// Set при Start() — будит поток из ожидания.
     /// </summary>
     private readonly ManualResetEventSlim _fillWakeup = new(false);
+
+    /// <summary>
+    /// Счётчик последовательных underrun для диагностики.
+    /// </summary>
+    private int _consecutiveUnderrunCount;
+
+    #endregion
+
+    #region Properties
 
     /// <inheritdoc/>
     public string Name => "NAudio";
@@ -141,6 +185,14 @@ public sealed class NAudioBackend : IPlaybackBackend
         _provider != null ? _provider.BufferedBytes / sizeof(float) : 0;
 
     /// <inheritdoc/>
+    public int BufferedBytes =>
+        _provider?.BufferedBytes ?? 0;
+
+    #endregion
+
+    #region Initialize / Reinitialize
+
+    /// <inheritdoc/>
     public void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -156,21 +208,7 @@ public sealed class NAudioBackend : IPlaybackBackend
         Log.Info($"[NAudioBackend] Initialized: {sampleRate}Hz, {channels}ch (dedicated thread)");
     }
 
-    /// <summary>
-    /// Переинициализирует backend для нового трека.
-    /// 
-    /// <para><b>Fast path</b> (sampleRate и channels совпадают):</para>
-    /// <para>Только обновляет callback и сбрасывает буферы. ~0ms.
-    /// WaveOutEvent не трогается — никаких kernel-вызовов.</para>
-    /// 
-    /// <para><b>Slow path</b> (формат изменился, например Opus 48kHz → AAC 44.1kHz):</para>
-    /// <para>Пересоздаёт WaveOutEvent с новым форматом. ~50-200ms.
-    /// Fill thread останавливается и перезапускается.
-    /// Перед уничтожением WaveOut выполняется fade-out для предотвращения щелчков.</para>
-    /// 
-    /// <para><b>First call</b> (Initialize не вызывался):</para>
-    /// <para>Делегирует к <see cref="Initialize"/>.</para>
-    /// </summary>
+    /// <inheritdoc/>
     public void Reinitialize(int sampleRate, int channels, AudioDataCallback dataCallback)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -182,27 +220,48 @@ public sealed class NAudioBackend : IPlaybackBackend
             return;
         }
 
-        // Останавливаем воспроизведение с fade-out
+        // ═══ ПОЛНАЯ ОСТАНОВКА ═══
+        // Критично для обоих путей: waveOut.Stop() вызывает waveOutReset() который
+        // очищает driver queue. Без этого fast path оставляет хвост PCM от
+        // предыдущего трека в driver buffers → артефакт "щётки" при Play().
+        //
+        // Почему waveOutReset() а не waveOutPause():
+        // - waveOutPause() приостанавливает но НЕ очищает driver queue
+        // - waveOutReset() останавливает И возвращает все буферы из driver queue
+        // - При смене трека нам нужно ГАРАНТИРОВАТЬ что ни один сэмпл
+        //   от предыдущего трека не проиграется
         lock (_stateLock)
         {
+            _fillActive = false;
+
             if (_playing)
             {
-                _decoderAlive = false;
                 WriteSilenceFadeOut();
                 _playing = false;
-                try { _waveOut.Pause(); }
-                catch (ObjectDisposedException) { }
-                catch (Exception ex) { Log.Warn($"[NAudioBackend] Reinit pause error: {ex.Message}"); }
+            }
+
+            try
+            {
+                _waveOut.Stop(); // waveOutReset() — очищает driver queue
+            }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                Log.Warn($"[NAudioBackend] Reinit stop error: {ex.Message}");
             }
         }
 
         // Обновляем callback
         _callback = dataCallback ?? throw new ArgumentNullException(nameof(dataCallback));
 
+        // Сбрасываем underrun counter для нового трека
+        Volatile.Write(ref _consecutiveUnderrunCount, 0);
+
         if (sampleRate == _sampleRate && channels == _channels)
         {
             // ═══ FAST PATH: формат совпадает ═══
-            // Только flush буферов — WaveOutEvent не трогаем
+            // WaveOut уже остановлен (waveOutReset), driver queue чист.
+            // Очищаем BufferedWaveProvider и обновляем generation.
             Interlocked.Increment(ref _flushGeneration);
             _provider?.ClearBuffer();
 
@@ -220,20 +279,326 @@ public sealed class NAudioBackend : IPlaybackBackend
         // Останавливаем fill thread
         StopFillThread();
 
+        // Инкрементируем generation ПЕРЕД пересозданием provider
+        Interlocked.Increment(ref _flushGeneration);
+
         // Пересоздаём WaveOut с новым форматом
-        try { _waveOut.Stop(); }
-        catch { }
+        // Stop() уже вызван выше, Dispose нужен для освобождения handle
         try { _waveOut.Dispose(); }
         catch { }
 
         CreateWaveOut(sampleRate, channels);
         AllocateBuffers(sampleRate, channels);
         StartFillThread();
+
+        Log.Debug("[NAudioBackend] Reinit (slow path) complete");
+    }
+
+    #endregion
+
+    #region Warmup Protocol
+
+    /// <inheritdoc/>
+    public void ActivateFillLoop()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_waveOut == null) return;
+
+        _fillActive = true;
+        _fillWakeup.Set();
+
+        Log.Debug("[NAudioBackend] Fill loop activated (warmup phase)");
+    }
+
+    /// <inheritdoc/>
+    public bool WaitForWarmup(int timeoutMs = WarmupDefaultTimeoutMs)
+    {
+        if (_provider == null || _disposed) return false;
+        if (_sampleRate == 0 || _channels == 0) return false;
+
+        int minBytes = _sampleRate * _channels * sizeof(float) * WarmupMinMs / 1000;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (_disposed) return false;
+
+            int currentBytes = _provider.BufferedBytes;
+            if (currentBytes >= minBytes)
+            {
+                Log.Debug($"[NAudioBackend] ✓ Warmup complete: " +
+                          $"{currentBytes} bytes " +
+                          $"({currentBytes * 1000 / (_sampleRate * _channels * sizeof(float))}ms) " +
+                          $"in {sw.ElapsedMilliseconds}ms");
+                return true;
+            }
+
+            Thread.Sleep(WarmupPollIntervalMs);
+        }
+
+        int finalBytes = _provider.BufferedBytes;
+        int bytesPerMs = Math.Max(1, _sampleRate * _channels * sizeof(float) / 1000);
+        Log.Warn($"[NAudioBackend] ✗ Warmup timeout after {timeoutMs}ms: " +
+                 $"{finalBytes}/{minBytes} bytes " +
+                 $"({finalBytes / bytesPerMs}ms/{WarmupMinMs}ms)");
+        return false;
+    }
+
+    #endregion
+
+    #region Start / Stop
+
+    /// <inheritdoc/>
+    public void Start()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_waveOut == null) return;
+
+        lock (_stateLock)
+        {
+            if (_playing) return;
+
+            _fillActive = true;
+            _playing = true;
+
+            // ═══ ДИАГНОСТИКА ═══
+            int bufferedBytes = _provider?.BufferedBytes ?? 0;
+            int bytesPerMs = Math.Max(1, _sampleRate * _channels * sizeof(float) / 1000);
+            int warmupMinBytes = bytesPerMs * WarmupMinMs;
+
+            if (bufferedBytes < warmupMinBytes)
+            {
+                Log.Warn($"[NAudioBackend] ⚠ Start with LOW buffer: " +
+                         $"{bufferedBytes}/{warmupMinBytes} bytes " +
+                         $"({bufferedBytes / bytesPerMs}ms/{WarmupMinMs}ms). Artifact risk!");
+            }
+            else
+            {
+                Log.Debug($"[NAudioBackend] Start: buffered={bufferedBytes} bytes " +
+                          $"({bufferedBytes / bytesPerMs}ms)");
+            }
+
+            _waveOut.Play();
+            _fillWakeup.Set();
+        }
+    }
+
+    /// <inheritdoc/>
+    public void Stop()
+    {
+        if (_waveOut == null) return;
+
+        lock (_stateLock)
+        {
+            if (!_playing) return;
+
+            WriteSilenceFadeOut();
+
+            _playing = false;
+            _fillActive = false;
+
+            try
+            {
+                // Pause для обычной паузы — сохраняет driver queue position
+                // (при Resume данные продолжатся с того же места)
+                _waveOut.Pause();
+            }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                Log.Warn($"[NAudioBackend] Stop error: {ex.Message}");
+            }
+        }
+    }
+
+    #endregion
+
+    #region Flush
+
+    /// <inheritdoc/>
+    public void Flush()
+    {
+        if (_provider == null || _disposed) return;
+
+        Interlocked.Increment(ref _flushGeneration);
+        _provider.ClearBuffer();
+        Volatile.Write(ref _consecutiveUnderrunCount, 0);
+
+        Log.Debug("[NAudioBackend] Flushed");
+    }
+
+    #endregion
+
+    #region Fill Buffer Loop
+
+    /// <summary>
+    /// Фоновый цикл заполнения буфера воспроизведения.
+    /// </summary>
+    private void FillBufferLoop(CancellationToken ct)
+    {
+        int lastGeneration = Volatile.Read(ref _flushGeneration);
+
+        while (!ct.IsCancellationRequested && !_disposed)
+        {
+            try
+            {
+                var provider = _provider;
+                var callback = _callback;
+                var floatBuf = _floatBuffer;
+                var byteBuf = _byteBuffer;
+
+                if (provider == null || callback == null
+                    || floatBuf == null || byteBuf == null)
+                {
+                    Thread.Sleep(IdleSleepMs);
+                    continue;
+                }
+
+                // Проверяем flush generation
+                int currentGeneration = Volatile.Read(ref _flushGeneration);
+                if (currentGeneration != lastGeneration)
+                {
+                    lastGeneration = currentGeneration;
+                    Thread.Sleep(PostFlushSleepMs);
+                    continue;
+                }
+
+                // Fill loop не активен — спим до пробуждения
+                if (!_fillActive)
+                {
+                    _fillWakeup.Reset();
+                    _fillWakeup.Wait(FillWakeupTimeoutMs);
+                    continue;
+                }
+
+                // Буфер достаточно полон — спим
+                if (provider.BufferedDuration.TotalSeconds > InternalBufferSeconds * BufferHighWaterMark)
+                {
+                    Thread.Sleep(IdleSleepMs * 2);
+                    continue;
+                }
+
+                // Читаем данные из callback
+                int framesRead = callback(floatBuf);
+
+                // Проверяем generation ПОСЛЕ чтения
+                int generationAfterRead = Volatile.Read(ref _flushGeneration);
+                if (generationAfterRead != lastGeneration)
+                {
+                    lastGeneration = generationAfterRead;
+                    continue;
+                }
+
+                if (framesRead > 0)
+                {
+                    int totalSamples = framesRead * _channels;
+                    int bytes = totalSamples * sizeof(float);
+                    Buffer.BlockCopy(floatBuf, 0, byteBuf, 0, bytes);
+                    provider.AddSamples(byteBuf, 0, bytes);
+
+                    Volatile.Write(ref _consecutiveUnderrunCount, 0);
+                }
+                else
+                {
+                    // ═══ UNDERRUN: записываем тишину ═══
+                    // Предотвращает полное опустошение BufferedWaveProvider.
+                    // WaveOut с пустым буфером → audio driver discontinuity → артефакты.
+                    if (_playing)
+                    {
+                        WriteSilenceBlock(provider, byteBuf);
+                    }
+
+                    int underruns = Interlocked.Increment(ref _consecutiveUnderrunCount);
+                    if (underruns == UnderrunLogThreshold)
+                    {
+                        Log.Warn($"[NAudioBackend] ⚠ {underruns} consecutive underruns — " +
+                                 $"decoder may be starved. BufferedMs=" +
+                                 $"{(int)provider.BufferedDuration.TotalMilliseconds}");
+                    }
+
+                    Thread.Sleep(EmptyCallbackSleepMs);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[NAudioBackend] Fill loop error: {ex.Message}");
+                Thread.Sleep(ErrorSleepMs);
+            }
+        }
     }
 
     /// <summary>
-    /// Создаёт WaveOutEvent и BufferedWaveProvider для указанного формата.
+    /// Записывает 10ms тишины в BufferedWaveProvider при underrun.
     /// </summary>
+    private void WriteSilenceBlock(BufferedWaveProvider provider, byte[] byteBuf)
+    {
+        int silenceSamples = _sampleRate * _channels / 100; // 10ms
+        int silenceBytes = Math.Min(silenceSamples * sizeof(float), byteBuf.Length);
+
+        Array.Clear(byteBuf, 0, silenceBytes);
+
+        try
+        {
+            provider.AddSamples(byteBuf, 0, silenceBytes);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[NAudioBackend] Silence write error: {ex.Message}");
+        }
+    }
+
+    #endregion
+
+    #region Fade-out
+
+    /// <summary>
+    /// Записывает fade-out (затухание) в BufferedWaveProvider перед waveOutReset.
+    /// </summary>
+    private void WriteSilenceFadeOut()
+    {
+        if (_provider == null || _sampleRate == 0 || _channels == 0) return;
+
+        try
+        {
+            int fadeSamples = _sampleRate * _channels * FadeOutMs / 1000;
+            if (fadeSamples <= 0) fadeSamples = _channels * 64;
+
+            var fadeBuffer = new byte[fadeSamples * sizeof(float)];
+            var floats = new float[fadeSamples];
+
+            int totalFrames = fadeSamples / _channels;
+            for (int frame = 0; frame < totalFrames; frame++)
+            {
+                for (int ch = 0; ch < _channels; ch++)
+                {
+                    floats[frame * _channels + ch] = 0f;
+                }
+            }
+
+            Buffer.BlockCopy(floats, 0, fadeBuffer, 0, fadeBuffer.Length);
+            _provider.AddSamples(fadeBuffer, 0, fadeBuffer.Length);
+
+            Thread.Sleep(2);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[NAudioBackend] Fade-out error: {ex.Message}");
+        }
+    }
+
+    #endregion
+
+    #region Internal Helpers
+
     private void CreateWaveOut(int sampleRate, int channels)
     {
         var format = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
@@ -254,20 +619,13 @@ public sealed class NAudioBackend : IPlaybackBackend
         _waveOut.Volume = Volume;
     }
 
-    /// <summary>
-    /// Выделяет буферы для fill loop.
-    /// Размер = 50ms @ sampleRate*channels.
-    /// </summary>
     private void AllocateBuffers(int sampleRate, int channels)
     {
-        int samplesPerRead = sampleRate * channels / 20;
+        int samplesPerRead = sampleRate * channels / 20; // 50ms
         _floatBuffer = new float[samplesPerRead];
         _byteBuffer = new byte[samplesPerRead * sizeof(float)];
     }
 
-    /// <summary>
-    /// Запускает выделенный поток для fill loop.
-    /// </summary>
     private void StartFillThread()
     {
         _cts = new CancellationTokenSource();
@@ -282,13 +640,10 @@ public sealed class NAudioBackend : IPlaybackBackend
         _fillThread.Start();
     }
 
-    /// <summary>
-    /// Останавливает fill thread и освобождает CTS.
-    /// </summary>
     private void StopFillThread()
     {
         _cts?.Cancel();
-        _fillWakeup.Set(); // Разбудить если спит в Wait()
+        _fillWakeup.Set();
 
         if (_fillThread is { IsAlive: true })
         {
@@ -300,231 +655,9 @@ public sealed class NAudioBackend : IPlaybackBackend
         _fillThread = null;
     }
 
-    /// <inheritdoc/>
-    public void Start()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_waveOut == null) return;
+    #endregion
 
-        lock (_stateLock)
-        {
-            if (_playing) return;
-
-            _decoderAlive = true;
-            _playing = true;
-            _waveOut.Play();
-            _fillWakeup.Set(); // Будим fill thread
-        }
-    }
-
-    /// <inheritdoc/>
-    /// <remarks>
-    /// <para><b>Синхронный вызов</b> — блокирует вызывающий поток до завершения Pause().
-    /// Это предотвращает race condition когда Stop() и Start() вызываются быстро подряд.</para>
-    /// <para>Перед Pause выполняется micro fade-out для предотвращения щелчков
-    /// от резкого обрыва звуковой волны (waveOutReset).</para>
-    /// </remarks>
-    public void Stop()
-    {
-        if (_waveOut == null) return;
-
-        lock (_stateLock)
-        {
-            if (!_playing) return;
-
-            _decoderAlive = false;
-
-            // Micro fade-out: записываем тишину с затуханием
-            // чтобы предотвратить щелчок от waveOutReset
-            WriteSilenceFadeOut();
-
-            _playing = false;
-
-            try
-            {
-                _waveOut.Pause();
-            }
-            catch (ObjectDisposedException) { }
-            catch (Exception ex)
-            {
-                Log.Warn($"[NAudioBackend] Stop error: {ex.Message}");
-            }
-        }
-    }
-
-    /// <summary>
-    /// Записывает короткий fade-out (затухание до тишины) в BufferedWaveProvider.
-    /// 
-    /// <para><b>Зачем:</b> NAudio WaveOutEvent.Pause() вызывает waveOutReset(),
-    /// который мгновенно обнуляет буферы. Если в момент обнуления сигнал
-    /// был на ненулевом уровне — будет слышен щелчок (DC offset discontinuity).
-    /// Fade-out плавно сводит сигнал к нулю перед reset.</para>
-    /// 
-    /// <para><b>Длительность:</b> ~15ms (720 сэмплов при 48kHz).
-    /// Достаточно для устранения щелчка, не слышно как затухание.</para>
-    /// </summary>
-    private void WriteSilenceFadeOut()
-    {
-        if (_provider == null || _sampleRate == 0 || _channels == 0) return;
-
-        try
-        {
-            // Количество сэмплов для fade-out
-            int fadeSamples = _sampleRate * _channels * FadeOutMs / 1000;
-            if (fadeSamples <= 0) fadeSamples = _channels * 64; // Минимум
-
-            var fadeBuffer = new byte[fadeSamples * sizeof(float)];
-            var floats = new float[fadeSamples];
-
-            // Линейное затухание от 1.0 до 0.0
-            int totalFrames = fadeSamples / _channels;
-            for (int frame = 0; frame < totalFrames; frame++)
-            {
-                float gain = 1.0f - (float)frame / totalFrames;
-                for (int ch = 0; ch < _channels; ch++)
-                {
-                    // Записываем тишину с gain (данные из callback = 0, 
-                    // но если в буфере есть остатки — они затухнут)
-                    floats[frame * _channels + ch] = 0f;
-                }
-            }
-
-            Buffer.BlockCopy(floats, 0, fadeBuffer, 0, fadeBuffer.Length);
-            _provider.AddSamples(fadeBuffer, 0, fadeBuffer.Length);
-
-            // Даём WaveOut проиграть fade-out
-            // При 48kHz, 15ms = 720 сэмплов ≈ 0.7ms проигрывания
-            // Но WaveOut буферизирует блоками DesiredLatency/NumberOfBuffers = 50ms
-            // Поэтому спим немного чтобы fade дошёл до аудио-устройства
-            Thread.Sleep(2);
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[NAudioBackend] Fade-out error: {ex.Message}");
-        }
-    }
-
-    /// <inheritdoc/>
-    /// <remarks>
-    /// Инкрементирует <see cref="_flushGeneration"/> и очищает буфер.
-    /// Fill loop обнаружит смену generation и пропустит устаревшие данные.
-    /// </remarks>
-    public void Flush()
-    {
-        if (_provider == null || _disposed) return;
-
-        // Инкрементируем generation ПЕРЕД очисткой буфера
-        Interlocked.Increment(ref _flushGeneration);
-        _provider.ClearBuffer();
-
-        Log.Debug("[NAudioBackend] Flushed");
-    }
-
-    /// <summary>
-    /// Фоновый цикл заполнения буфера воспроизведения.
-    /// 
-    /// <para><b>Почему выделенный поток:</b></para>
-    /// <para>ThreadPool потоки деприоритезируются ОС (EcoQoS, троттлинг)
-    /// когда приложение в фоне. Выделенный поток с <see cref="ThreadPriority.AboveNormal"/>
-    /// сохраняет приоритет, предотвращая buffer underrun.</para>
-    /// 
-    /// <para><b>Почему Thread.Sleep вместо Task.Delay:</b></para>
-    /// <para>Thread.Sleep не зависит от ThreadPool scheduling.
-    /// Task.Delay планирует continuation через ThreadPool — в фоне это может
-    /// добавить десятки мс дополнительной задержки.</para>
-    /// </summary>
-    private void FillBufferLoop(CancellationToken ct)
-    {
-        int lastGeneration = Volatile.Read(ref _flushGeneration);
-
-        while (!ct.IsCancellationRequested && !_disposed)
-        {
-            try
-            {
-                // Захватываем ссылки — могут измениться при Reinitialize
-                var provider = _provider;
-                var callback = _callback;
-                var floatBuf = _floatBuffer;
-                var byteBuf = _byteBuffer;
-
-                if (provider == null || callback == null
-                    || floatBuf == null || byteBuf == null)
-                {
-                    Thread.Sleep(IdleSleepMs);
-                    continue;
-                }
-
-                // Проверяем flush
-                int currentGeneration = Volatile.Read(ref _flushGeneration);
-                if (currentGeneration != lastGeneration)
-                {
-                    lastGeneration = currentGeneration;
-                    Thread.Sleep(PostFlushSleepMs);
-                    continue;
-                }
-
-                // Не playing — спим до пробуждения через _fillWakeup
-                if (!_playing)
-                {
-                    _fillWakeup.Reset();
-                    _fillWakeup.Wait(FillWakeupTimeoutMs);
-                    continue;
-                }
-
-                // Decoder не работает — спим подольше
-                // Предотвращает buffer underrun → NAudio flapping
-                if (!_decoderAlive)
-                {
-                    Thread.Sleep(DecoderDeadSleepMs);
-                    continue;
-                }
-
-                // Буфер достаточно полон — спим
-                if (provider.BufferedDuration.TotalSeconds > InternalBufferSeconds * BufferHighWaterMark)
-                {
-                    Thread.Sleep(IdleSleepMs * 2);
-                    continue;
-                }
-
-                // Читаем данные из callback (PCM ring buffer)
-                int framesRead = callback(floatBuf);
-
-                // Проверяем generation ПОСЛЕ чтения —
-                // если flush произошёл во время callback, данные устарели
-                int generationAfterRead = Volatile.Read(ref _flushGeneration);
-                if (generationAfterRead != lastGeneration)
-                {
-                    lastGeneration = generationAfterRead;
-                    continue; // Отбрасываем прочитанные данные
-                }
-
-                if (framesRead > 0 && _playing)
-                {
-                    int totalSamples = framesRead * _channels;
-                    int bytes = totalSamples * sizeof(float);
-                    Buffer.BlockCopy(floatBuf, 0, byteBuf, 0, bytes);
-                    provider.AddSamples(byteBuf, 0, bytes);
-                }
-                else if (framesRead <= 0)
-                {
-                    Thread.Sleep(EmptyCallbackSleepMs);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[NAudioBackend] Fill loop error: {ex.Message}");
-                Thread.Sleep(ErrorSleepMs);
-            }
-        }
-    }
+    #region Dispose
 
     /// <inheritdoc/>
     public void Dispose()
@@ -533,12 +666,10 @@ public sealed class NAudioBackend : IPlaybackBackend
         _disposed = true;
 
         _playing = false;
-        _decoderAlive = false;
+        _fillActive = false;
 
-        // Останавливаем fill thread
         StopFillThread();
 
-        // Останавливаем и dispose'им WaveOut
         try { _waveOut?.Stop(); }
         catch { }
 
@@ -554,4 +685,6 @@ public sealed class NAudioBackend : IPlaybackBackend
 
         Log.Debug("[NAudioBackend] Disposed");
     }
+
+    #endregion
 }

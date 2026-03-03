@@ -16,12 +16,24 @@ namespace LMP.Core.Audio;
 ///   <item><see cref="CreateAsync(string, string?, int, Func{CancellationToken, Task{string?}}?, AudioPlayerOptions, IPlaybackBackend, CancellationToken)"/>
 ///     — создаёт source, decoder, переиспользует shared backend</item>
 ///   <item><see cref="StartDecoding"/> — запускает decoder loop (выделенный поток)</item>
-///   <item><see cref="Start"/> — запускает backend (NAudio playback)</item>
+///   <item><see cref="ActivateFillLoop"/> — активирует fill loop для warmup</item>
+///   <item><see cref="WaitForBackendWarmup"/> — ждёт заполнения BufferedWaveProvider</item>
+///   <item><see cref="Start"/> — запускает backend (waveOut.Play)</item>
 ///   <item><see cref="StopDecodingAsync"/> — останавливает decoder loop (для seek)</item>
 ///   <item><see cref="Flush"/> — очищает PCM buffer и backend buffer</item>
 ///   <item><see cref="DisposeAsync"/> — освобождает source, decoder, buffers.
 ///     Shared backend НЕ уничтожается.</item>
 /// </list>
+/// 
+/// <para><b>Warmup Protocol:</b></para>
+/// <para>Для предотвращения артефактов при старте трека:</para>
+/// <code>
+/// pipeline.StartDecoding(...);           // Decoder начинает наполнять PCM RingBuffer
+/// await pipeline.WaitForBufferAsync(...); // PCM RingBuffer набрал минимум данных
+/// pipeline.ActivateFillLoop();           // Fill loop начинает перекачку → BufferedWaveProvider
+/// pipeline.WaitForBackendWarmup(3000);   // BufferedWaveProvider набрал ≥200ms
+/// pipeline.Start();                      // waveOut.Play() — безопасно, буфер полон
+/// </code>
 /// 
 /// <para><b>Shared Backend:</b></para>
 /// <para>Pipeline НЕ владеет backend'ом при <c>ownsBackend=false</c>.
@@ -112,7 +124,8 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// </summary>
     /// <param name="sharedBackend">Shared backend из AudioPlayer. 
     /// Reinitialize вызывается автоматически — fast path (~0ms) если формат совпадает,
-    /// slow path (~50-200ms) если sampleRate/channels изменились.</param>
+    /// slow path (~50-200ms) если sampleRate/channels изменились.
+    /// После Reinitialize backend в остановленном состоянии — fill loop деактивирован.</param>
     public static async Task<AudioPipeline> CreateAsync(
         string url,
         string? trackId,
@@ -159,6 +172,9 @@ public sealed class AudioPipeline : IAsyncDisposable
 
             // Reinitialize backend для нового трека
             // Fast path если формат совпадает (обычно Opus 48kHz/2ch → Opus 48kHz/2ch)
+            // После Reinitialize backend в остановленном состоянии:
+            // fill loop деактивирован, waveOut не играет.
+            // Вызывающий код должен использовать warmup protocol.
             sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
 
             Log.Info($"[AudioPipeline] Created (shared backend): {streamInfo.FormatDisplay}");
@@ -338,50 +354,20 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     /// <summary>
     /// Строит <see cref="AudioStreamInfo"/> с РЕАЛЬНЫМ битрейтом (не нормализованным).
-    /// 
-    /// <para><b>Приоритет контейнера:</b></para>
-    /// <list type="number">
-    ///   <item>Определяется по кодеку SOURCE (не cacheEntry!) — гарантирует корректность 
-    ///     при переключении качества (WebM→Mp4 и обратно)</item>
-    ///   <item>CacheEntry.Format используется только если source — <see cref="Sources.LocalFileSource"/>
-    ///     (т.е. играем из полного кэша, контейнер совпадает с записью)</item>
-    /// </list>
-    /// 
-    /// <para><b>Приоритет битрейта:</b></para>
-    /// <list type="number">
-    ///   <item><paramref name="bitrateHint"/> — явно переданный при Play (РЕАЛЬНЫЙ, например 134)</item>
-    ///   <item><see cref="CacheEntry.Bitrate"/> — из метаданных кэша (РЕАЛЬНЫЙ)</item>
-    ///   <item><see cref="Sources.CachingStreamSource.Bitrate"/> — из source (РЕАЛЬНЫЙ)</item>
-    ///   <item>Fallback 128/96 — только для <see cref="Sources.LocalFileSource"/> без кэш-метаданных</item>
-    /// </list>
-    /// 
-    /// <para><b>ВАЖНО:</b> Нормализация (134→128) применяется ТОЛЬКО в
-    /// <see cref="AudioSourceFactory.BuildCacheKey"/> для ключа кэша.
-    /// StreamInfo всегда содержит РЕАЛЬНЫЙ битрейт для корректного отображения в UI
-    /// и предотвращения бесконечного цикла переключения качества.</para>
     /// </summary>
     private static AudioStreamInfo BuildStreamInfo(IAudioSource source, string? trackId, int bitrateHint)
     {
-        // Кэш-запись используется ТОЛЬКО для bitrate fallback и IsFromCache
-        // Контейнер определяется по РЕАЛЬНОМУ source, не по cacheEntry.
-        // Причина: При переключении WebM→Mp4 cacheEntry может быть от старого WebM кэша,
-        // а source уже Mp4. Стало: "Mp4/Aac/49kbps".
         var cacheEntry = !string.IsNullOrEmpty(trackId)
             ? AudioSourceFactory.FindAnyCachedTrack(trackId)?.Entry
             : null;
 
-        // КОНТЕЙНЕР: определяем по source, не по cacheEntry
-        // Для LocalFileSource (полный кэш) — используем cacheEntry.Format (source не знает формат).
-        // Для CachingStreamSource (стриминг) — используем кодек source (реальный формат потока).
         string container;
         if (source is Sources.LocalFileSource && cacheEntry != null)
         {
-            // LocalFileSource играет из полного кэша — контейнер совпадает с записью
             container = cacheEntry.Format.ToString();
         }
         else
         {
-            // CachingStreamSource или другой — определяем по кодеку (реальный формат)
             container = source.Codec switch
             {
                 AudioCodec.Opus => "WebM",
@@ -390,7 +376,6 @@ public sealed class AudioPipeline : IAsyncDisposable
             };
         }
 
-        // БИТРЕЙТ: приоритетная цепочка
         int bitrate;
         if (bitrateHint > 0)
         {
@@ -540,9 +525,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         Action<Exception>? onError,
         CancellationToken ct)
     {
-        // Устанавливаем SustainedLowLatency на время декодирования.
-        // Это предотвращает Gen2 blocking GC, который замораживает
-        // fill loop и вызывает buffer underrun.
         var previousLatencyMode = System.Runtime.GCSettings.LatencyMode;
 
         try
@@ -650,27 +632,20 @@ public sealed class AudioPipeline : IAsyncDisposable
                         ? _decoder.DecodeWithReset(frame.Value.Data.Span, _decodeBuffer)
                         : _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
 
-                    // Skip frames (codec warmup после seek)
                     if (needReset)
                     {
                         Interlocked.Decrement(ref _skipFramesCounter);
                         continue;
                     }
 
-                    // POST-SEEK TIMESTAMP SKIP
-                    // WebM cue points имеют шаг ~10-30 секунд.
-                    // Seek к 3s → cue point 0ms → парсер начинает с 0ms.
-                    // Пропускаем фреймы до целевого timestamp.
                     long seekTarget = Volatile.Read(ref _seekTargetMs);
                     if (seekTarget >= 0)
                     {
                         if (frame.Value.TimestampMs < seekTarget)
                         {
-                            // Фрейм до цели — декодировали (для state), но не пишем
                             continue;
                         }
 
-                        // Достигли или превысили цель — выключаем skip
                         Volatile.Write(ref _seekTargetMs, -1L);
                     }
 
@@ -700,7 +675,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
         finally
         {
-            // Восстанавливаем предыдущий режим GC
             try { System.Runtime.GCSettings.LatencyMode = previousLatencyMode; }
             catch { }
         }
@@ -718,11 +692,32 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Playback Control
 
+    /// <summary>
+    /// Активирует fill loop для перекачки данных PCM RingBuffer → BufferedWaveProvider.
+    /// НЕ запускает воспроизведение. Первый шаг warmup protocol.
+    /// </summary>
+    public void ActivateFillLoop()
+    {
+        if (_disposed) return;
+        _backend.ActivateFillLoop();
+    }
+
+    /// <summary>
+    /// Ожидает наполнения BufferedWaveProvider минимальным количеством данных.
+    /// Второй шаг warmup protocol. Блокирует вызывающий поток.
+    /// </summary>
+    /// <param name="timeoutMs">Максимальное время ожидания (мс).</param>
+    /// <returns>true если буфер прогрет, false если таймаут.</returns>
+    public bool WaitForBackendWarmup(int timeoutMs = 3000)
+    {
+        if (_disposed) return false;
+        return _backend.WaitForWarmup(timeoutMs);
+    }
+
     public void Start()
     {
         if (_disposed) return;
 
-        // Сообщаем backend что decoder работает
         _backend.Start();
 
         Log.Debug("[AudioPipeline] Backend started");
@@ -732,7 +727,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     {
         if (_disposed) return;
 
-        // Backend.Stop() содержит micro fade-out для предотвращения щелчков
         _backend.Stop();
 
         Log.Debug("[AudioPipeline] Backend stopped");
@@ -742,12 +736,7 @@ public sealed class AudioPipeline : IAsyncDisposable
     {
         if (_disposed) return;
 
-        // Flush backend буфера — это сбросит _flushGeneration,
-        // fill loop пропустит устаревшие данные из PCM buffer
         _backend.Flush();
-
-        // Очищаем PCM ring buffer — критично для seek!
-        // Без этого fill loop будет качать старые данные
         _pcmBuffer.Clear();
     }
 
@@ -761,18 +750,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Подготавливает decoder к seek: устанавливает skip frames counter
     /// и target timestamp для точного позиционирования.
     /// </summary>
-    /// <param name="targetMs">Целевая позиция в миллисекундах. 
-    /// Фреймы до этого timestamp будут декодированы (для state decoder) но не записаны в PCM buffer.</param>
-    /// <remarks>
-    /// <para><b>AAC (MP4):</b> skip frames = 0. MP4 использует segment-based seek, каждый сегмент
-    /// начинается с keyframe. Warmup обеспечивается через <c>_seekTargetMs</c>: фреймы от начала
-    /// сегмента до целевой позиции декодируются (прогревая decoder state), но не пишутся в буфер.</para>
-    /// 
-    /// <para><b>Opus (WebM):</b> skip frames = N. Opus SILK layer имеет inter-frame зависимости.
-    /// Первые N фреймов после reset декодируются через <see cref="IAudioDecoder.DecodeWithReset"/>
-    /// для сброса внутреннего состояния декодера. Затем <c>_seekTargetMs</c> дополнительно
-    /// пропускает фреймы до целевого timestamp.</para>
-    /// </remarks>
     public void PrepareForSeek(long targetMs = -1)
     {
         int skipFrames = _source.Codec == AudioCodec.Opus
@@ -856,14 +833,10 @@ public sealed class AudioPipeline : IAsyncDisposable
         // Backend: зависит от ownership
         if (_ownsBackend)
         {
-            // Owned backend — полный dispose (waveOutClose)
             _backend.Dispose();
         }
         else
         {
-            // Shared backend — только stop + flush, НЕ dispose.
-            // Stop() содержит micro fade-out для предотвращения щелчков.
-            // Backend продолжит жить для следующего трека.
             try
             {
                 _backend.Stop();
