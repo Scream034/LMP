@@ -163,6 +163,13 @@ public static class G
         public static readonly string Library = Path.Combine(Folder.Data, "library.json");
         public static readonly string Database = Path.Combine(Folder.Data, "library.db");
         public static readonly string Theme = Path.Combine(Folder.Data, "theme.json");
+        
+        /// <summary>
+        /// Файл состояния авторизации (профиль пользователя, кэш данных).
+        /// Хранится в %APPDATA%/LMP/auth.json
+        /// </summary>
+        public static readonly string AuthData = Path.Combine(Folder.Data, "auth.json");
+        
         public static readonly string NTokenCache = Path.Combine(Folder.NTokenCache, "tokens.json");
         public static readonly string NTokenScript = Path.Combine(Folder.NTokenCache, "ntoken_override.js");
         public static readonly string SigCipherCache = Path.Combine(Folder.SigCipherCache, "sigcache.json");

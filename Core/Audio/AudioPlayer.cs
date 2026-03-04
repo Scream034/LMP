@@ -863,7 +863,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         {
             Sources.CachingStreamSource caching => caching.DownloadedBytes,
             Sources.LocalFileSource => pipeline.Source.IsFullyBuffered
-                ? (long)(pipeline.StreamInfo.DurationMs * pipeline.StreamInfo.Bitrate / 8)
+                ? pipeline.StreamInfo.DurationMs * pipeline.StreamInfo.Bitrate / 8
                 : 0,
             _ => (long)(pipeline.Source.BufferProgress / 100.0
                 * pipeline.StreamInfo.DurationMs * pipeline.StreamInfo.Bitrate / 8)

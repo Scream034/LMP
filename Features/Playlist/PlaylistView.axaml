@@ -159,8 +159,6 @@
                     <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,0,0,4">
 
                         <!-- Название плейлиста -->
-                        <!-- Padding снизу и ClipToBounds=False спасают от обрезки выносных
-                        элементов шрифта -->
                         <TextBlock Text="{Binding PlaylistName}"
                             FontSize="42" FontWeight="Black"
                             Foreground="{DynamicResource TextPrimaryBrush}"
@@ -219,6 +217,8 @@
                                 IsVisible="{Binding IsPlayingThisPlaylist}" />
                         </Panel>
                     </Button>
+
+                    <!-- Shuffle Play: разовое перемешивание, БЕЗ авто-режима -->
                     <Button Classes="playback-btn"
                         Command="{Binding ShufflePlayCommand}"
                         Width="40" Height="40" CornerRadius="20"
@@ -227,6 +227,7 @@
                             Height="20"
                             Foreground="{Binding IsShuffleActive, Converter={StaticResource BoolToSelector}, ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
                     </Button>
+
                     <Button Classes="playback-btn"
                         Command="{Binding AddToQueueCommand}"
                         Width="40" Height="40" CornerRadius="20"

@@ -10,11 +10,20 @@ using System.Reactive.Linq;
 using LMP.Core.Youtube.Search;
 using System.Reactive.Disposables;
 using LMP.UI.Dialogs;
+using Avalonia.Threading;
 
 namespace LMP.Features.Library;
 
 /// <summary>
 /// ViewModel страницы «Библиотека» — управление плейлистами пользователя.
+/// 
+/// <para><b>Оптимизации:</b></para>
+/// <list type="bullet">
+///   <item>UI-Yielding через Dispatcher.InvokeAsync для плавного рендера</item>
+///   <item>Батчинг карточек: первые 12 мгновенно, остальные по 4 с задержкой</item>
+///   <item>Подписки на события только в конструкторе (без дублирования)</item>
+///   <item>O(1) запрос длительности вместо N+1</item>
+/// </list>
 /// </summary>
 public sealed class LibraryViewModel : ViewModelBase
 {
@@ -38,7 +47,6 @@ public sealed class LibraryViewModel : ViewModelBase
     private CancellationTokenSource? _staggerCts;
     private CancellationTokenSource? _statsAnimCts;
     private bool _isDisposed;
-    private bool _eventsSubscribed;
     private int _prevPlaylistCount;
     private int _prevTrackCount;
 
@@ -116,6 +124,10 @@ public sealed class LibraryViewModel : ViewModelBase
         }));
 
         RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadPlaylistsAsync));
+
+        // ═══ ИСПРАВЛЕНИЕ: подписки ТОЛЬКО в конструкторе ═══
+        // Раньше подписывались в OnNavigatedToAsync при каждом переходе
+        SubscribeToLibraryEvents();
     }
 
     #endregion
@@ -126,12 +138,6 @@ public sealed class LibraryViewModel : ViewModelBase
     {
         if (_isDisposed) return;
 
-        if (!_eventsSubscribed)
-        {
-            _eventsSubscribed = true;
-            SubscribeToIncrementalEvents();
-        }
-
         await LoadPlaylistsAsync();
         IsContentReady = true;
     }
@@ -140,24 +146,31 @@ public sealed class LibraryViewModel : ViewModelBase
 
     #region Подписки на события
 
-    private void SubscribeToIncrementalEvents()
+    /// <summary>
+    /// Подписывается на события LibraryService.
+    /// Вызывается ТОЛЬКО из конструктора — предотвращает дублирование подписок.
+    /// </summary>
+    private void SubscribeToLibraryEvents()
     {
+        // Инкрементальное обновление при изменении плейлиста
         Observable.FromEvent<Action<Core.Models.Playlist>, Core.Models.Playlist>(
                 h => _library.OnPlaylistChanged += h,
                 h => _library.OnPlaylistChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
-            .Subscribe(playlist => OnPlaylistChangedIncremental(playlist))
+            .Subscribe(OnPlaylistChangedIncremental)
             .DisposeWith(Disposables);
 
+        // Инкрементальное удаление плейлиста
         Observable.FromEvent<Action<string>, string>(
                 h => _library.OnPlaylistRemoved += h,
                 h => _library.OnPlaylistRemoved -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
-            .Subscribe(id => OnPlaylistRemovedIncremental(id))
+            .Subscribe(OnPlaylistRemovedIncremental)
             .DisposeWith(Disposables);
 
+        // Обновление статистики с дебаунсом
         Observable.FromEvent(
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
@@ -592,8 +605,7 @@ public sealed class LibraryViewModel : ViewModelBase
         var targetPlaylists = Playlists.Count;
         var targetTracks = Playlists.Sum(p => p.TrackCount);
 
-        // ═══ ИСПРАВЛЕНИЕ УЗКОГО МЕСТА (N+1 ЗАПРОСЫ) ═══
-        // Вместо вызова N запросов к БД, получаем сразу всю длительность 1 запросом.
+        // ═══ O(1) ЗАПРОС вместо N+1 ═══
         long totalTicks = 0;
         try
         {
@@ -682,8 +694,20 @@ public sealed class LibraryViewModel : ViewModelBase
     #region Полная загрузка
 
     /// <summary>
+    /// Константы батчинга для UI-Yielding.
+    /// </summary>
+    private const int InitialBatchSize = 12;  // Первые N карточек — мгновенно
+    private const int BatchSize = 4;          // Последующие батчи
+
+    /// <summary>
     /// Полная перезагрузка списка плейлистов с diff-алгоритмом и UI-Yielding.
-    /// Загружает данные мгновенно, не блокируя UI-поток.
+    /// 
+    /// <para><b>Оптимизация рендера:</b></para>
+    /// <list type="bullet">
+    ///   <item>Первые 12 карточек появляются мгновенно (покрывают viewport)</item>
+    ///   <item>Остальные добавляются батчами по 4 с yield между ними</item>
+    ///   <item>Dispatcher.InvokeAsync(Background) реально отдаёт UI-поток</item>
+    /// </list>
     /// </summary>
     private async Task LoadPlaylistsAsync()
     {
@@ -708,6 +732,7 @@ public sealed class LibraryViewModel : ViewModelBase
         var existingDict = Playlists.ToDictionary(vm => vm.Id);
         var newIdSet = new HashSet<string>(sorted.Select(x => x.Playlist.Id));
 
+        // Удаляем плейлисты, которых больше нет
         var toRemove = Playlists.Where(vm => !newIdSet.Contains(vm.Id)).ToList();
         foreach (var vm in toRemove)
         {
@@ -738,6 +763,7 @@ public sealed class LibraryViewModel : ViewModelBase
             }
         }
 
+        // Добавляем новые карточки в коллекцию
         foreach (var (vm, targetIndex) in newItems)
         {
             if (ct.IsCancellationRequested || _isDisposed) return;
@@ -748,36 +774,45 @@ public sealed class LibraryViewModel : ViewModelBase
                 Playlists.Insert(targetIndex, vm);
         }
 
-        // ═══ СУПЕР-ОПТИМИЗАЦИЯ: UI-Yielding вместо Task.Delay ═══
+        // ═══ UI-YIELDING: правильная реализация ═══
         if (newItems.Count > 0)
         {
-            // Берем первые 20 карточек (с запасом покрывает видимую область экрана)
-            int initialBatch = Math.Min(newItems.Count, 20);
-
-            // 1. Делаем первые 20 карточек видимыми мгновенно
+            // 1. Первые InitialBatchSize карточек — мгновенно (покрывают видимую область)
+            int initialBatch = Math.Min(newItems.Count, InitialBatchSize);
             for (int i = 0; i < initialBatch; i++)
             {
                 newItems[i].vm.Show();
             }
 
-            // 2. Если карточек больше 20, уступаем UI-поток (Yield), 
-            // чтобы Avalonia успела отрисовать первые 20 штук на экране прямо сейчас.
+            // 2. Остальные карточки — батчами с реальным Yield
             if (newItems.Count > initialBatch)
             {
-                await Task.Yield(); // Магия: возвращаем управление рендеру на 1 кадр
+                int remaining = newItems.Count - initialBatch;
+                int batchCount = (remaining + BatchSize - 1) / BatchSize;
 
-                // 3. Добавляем остальные карточки (они за пределами экрана, юзер не заметит)
-                for (int i = initialBatch; i < newItems.Count; i++)
+                for (int batch = 0; batch < batchCount; batch++)
                 {
                     if (ct.IsCancellationRequested || _isDisposed) return;
-                    newItems[i].vm.Show();
+
+                    // ═══ НАСТОЯЩИЙ YIELD: отдаём управление рендеру ═══
+                    await Dispatcher.UIThread.InvokeAsync(
+                        () => { }, 
+                        DispatcherPriority.Background);
+
+                    int startIdx = initialBatch + (batch * BatchSize);
+                    int endIdx = Math.Min(startIdx + BatchSize, newItems.Count);
+
+                    for (int i = startIdx; i < endIdx; i++)
+                    {
+                        if (ct.IsCancellationRequested || _isDisposed) return;
+                        newItems[i].vm.Show();
+                    }
                 }
             }
         }
 
         if (!_isDisposed && !ct.IsCancellationRequested)
         {
-            // Запускаем расчёт статистики в фоне
             UpdateStatsInBackground();
         }
     }

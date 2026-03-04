@@ -1,0 +1,239 @@
+<Window xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mi="using:Material.Icons.Avalonia"
+    x:Class="LMP.Features.Shell.TrayPopupWindow"
+    Title=""
+    SizeToContent="WidthAndHeight"
+    CanResize="False"
+    ShowInTaskbar="False"
+    SystemDecorations="None"
+    ExtendClientAreaToDecorationsHint="False"
+    Background="Transparent"
+    Topmost="True"
+    Focusable="True">
+
+    <Window.Styles>
+        <!-- ═══ Базовый стиль элементов tray-меню ═══
+             Border всегда имеет BorderThickness="1" с прозрачным border,
+             чтобы при hover не было layout shift (прыжка на 1px).
+             Hover = только анимация BorderBrush, без фонов и масштабов. -->
+        <Style Selector="Button.tray-menu-item">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="11,7" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button.tray-menu-item:pointerover">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style Selector="Button.tray-menu-item:pressed">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+        </Style>
+        <Style Selector="Button.tray-menu-item:disabled">
+            <Setter Property="Opacity" Value="0.4" />
+            <Setter Property="Cursor" Value="Arrow" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+
+        <!-- ═══ Fluent override — убираем серый фон ContentPresenter ═══ -->
+        <Style Selector="Button.tray-menu-item /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style
+            Selector="Button.tray-menu-item:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+        <Style
+            Selector="Button.tray-menu-item:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style
+            Selector="Button.tray-menu-item:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <!-- TextBlock и MaterialIcon — без фона -->
+        <Style Selector="Button.tray-menu-item TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.tray-menu-item:pointerover TextBlock">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.tray-menu-item mi|MaterialIcon">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.tray-menu-item:pointerover mi|MaterialIcon">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.tray-menu-item:disabled mi|MaterialIcon">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <!-- ═══ Volume section — только анимация Border при наведении ═══
+             BorderThickness всегда 1 (прозрачный → AccentBrush), без фонов и масштабов -->
+        <Style Selector="Border.volume-section">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.volume-section:pointerover">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+    </Window.Styles>
+
+    <!-- Корневая карточка -->
+    <Border CornerRadius="8"
+        Background="{DynamicResource BgElevatedBrush}"
+        BorderBrush="{DynamicResource BgHighlightBrush}"
+        BorderThickness="1"
+        Padding="4"
+        MinWidth="220"
+        MaxWidth="280"
+        ClipToBounds="True">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="16" Opacity="0.4" OffsetX="0" OffsetY="4" Color="#000000" />
+        </Border.Effect>
+
+        <StackPanel Spacing="2">
+
+            <!-- ═══ TRACK INFO ═══ -->
+            <Border x:Name="TrackInfoSection"
+                IsVisible="False"
+                Background="{DynamicResource BgSecondaryBrush}"
+                CornerRadius="6"
+                Padding="12,10"
+                Margin="0,0,0,2">
+                <StackPanel Spacing="2">
+                    <TextBlock x:Name="TrackTitleText"
+                        FontSize="13" FontWeight="SemiBold"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        TextTrimming="CharacterEllipsis"
+                        MaxLines="1" />
+                    <TextBlock x:Name="TrackAuthorText"
+                        FontSize="11"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        TextTrimming="CharacterEllipsis"
+                        MaxLines="1" />
+                </StackPanel>
+            </Border>
+
+            <!-- ═══ SHOW / HIDE WINDOW ═══ -->
+            <Button Classes="tray-menu-item" x:Name="ShowButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <!-- x:Name="ShowIcon" — иконка меняется кодом (WindowRestore / WindowMinimize) -->
+                    <mi:MaterialIcon x:Name="ShowIcon" Kind="WindowRestore" Width="16" Height="16"
+                        Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock x:Name="ShowText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <Border Height="1" Background="{DynamicResource BgHighlightBrush}" Margin="8,2" />
+
+            <!-- ═══ PLAY / PAUSE ═══ -->
+            <Button Classes="tray-menu-item" x:Name="PlayPauseButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon x:Name="PlayPauseIcon" Kind="Play" Width="16" Height="16"
+                        Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock x:Name="PlayPauseText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <!-- ═══ NEXT ═══ -->
+            <Button Classes="tray-menu-item" x:Name="NextButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon Kind="SkipNext" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock x:Name="NextText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <!-- ═══ PREVIOUS ═══ -->
+            <Button Classes="tray-menu-item" x:Name="PrevButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon Kind="SkipPrevious" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock x:Name="PrevText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <!-- ═══ REPEAT ═══ -->
+            <Button Classes="tray-menu-item" x:Name="RepeatButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon x:Name="RepeatIcon" Kind="Repeat" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock x:Name="RepeatText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <Border Height="1" Background="{DynamicResource BgHighlightBrush}" Margin="8,2" />
+
+            <!-- ═══ VOLUME (scrollable) ═══ -->
+            <Border Classes="volume-section" x:Name="VolumeSection"
+                Padding="11,5">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <mi:MaterialIcon x:Name="VolumeIcon" Kind="VolumeHigh" Width="16" Height="16"
+                        Foreground="{DynamicResource TextMutedBrush}"
+                        VerticalAlignment="Center" />
+                    <TextBlock x:Name="VolumeText" FontSize="12"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        VerticalAlignment="Center" />
+                </StackPanel>
+            </Border>
+
+            <Border Height="1" Background="{DynamicResource BgHighlightBrush}" Margin="8,2" />
+
+            <!-- ═══ QUEUE ═══ -->
+            <Button Classes="tray-menu-item" x:Name="QueueButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon Kind="PlaylistPlay" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock x:Name="QueueText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <!-- ═══ CLEAR MEMORY ═══ -->
+            <Button Classes="tray-menu-item" x:Name="CleanMemButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon Kind="Broom" Width="16" Height="16"
+                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock x:Name="CleanMemText" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+
+            <Border Height="1" Background="{DynamicResource BgHighlightBrush}" Margin="8,2" />
+
+            <!-- ═══ EXIT ═══ -->
+            <Button Classes="tray-menu-item" x:Name="ExitButton">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <mi:MaterialIcon Kind="Power" Width="16" Height="16"
+                        Foreground="{DynamicResource SystemErrorBrush}" />
+                    <TextBlock x:Name="ExitText" VerticalAlignment="Center"
+                        Foreground="{DynamicResource SystemErrorBrush}" />
+                </StackPanel>
+            </Button>
+
+        </StackPanel>
+    </Border>
+</Window>

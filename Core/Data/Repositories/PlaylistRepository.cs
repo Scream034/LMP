@@ -327,7 +327,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         return totalTicks;
     }
 
-    // ═══ НОВЫЙ МЕТОД: ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
+    // ═══ ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
     public async Task<long> GetTotalLibraryDurationAsync(CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);

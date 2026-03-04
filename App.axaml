@@ -30,13 +30,4 @@
         <StyleInclude Source="/UI/Theme/PlaylistCardTemplate.axaml" />
         <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />
     </Application.Styles>
-
-    <TrayIcon.Icons>
-        <TrayIcons>
-            <TrayIcon
-                Icon="avares://LMP/Assets/app.ico"
-                ToolTipText="Lite Music Player"
-                IsVisible="False" />
-        </TrayIcons>
-    </TrayIcon.Icons>
 </Application>

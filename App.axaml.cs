@@ -53,8 +53,29 @@ public partial class App : Application
             }, DispatcherPriority.Background);
         }
 
+#if !WINDOWS
+        // Этот код вообще не попадет в сборку под Windows
+        InitializeTrayIcon();
+#endif
+
         base.OnFrameworkInitializationCompleted();
     }
+
+#if !WINDOWS
+    private void InitializeTrayIcon()
+    {
+        var trayIcon = new TrayIcon
+        {
+            // В Avalonia 11 иконки загружаются через AssetLoader
+            Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://LMP/Assets/app.ico"))),
+            ToolTipText = LocalizationService.Instance["Commnon_AppName"],
+            IsVisible = false
+        };
+
+        var trayIcons = new TrayIcons { trayIcon };
+        TrayIcon.SetIcons(this, trayIcons);
+    }
+#endif
 
     private async Task InitializeAppAsync(IClassicDesktopStyleApplicationLifetime desktop)
     {

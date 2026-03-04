@@ -142,7 +142,7 @@ public sealed class DominantColorService
             if (skBitmap == null)
             {
                 Log.Debug("[DominantColor] SKBitmap.Decode returned null");
-                return (Color?)null;
+                return null;
             }
 
             // Resize до 50x50

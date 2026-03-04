@@ -29,6 +29,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     private readonly MainWindowViewModel _mainWindow;
     private readonly PlaylistEditService _editService;
     private readonly PlaylistSyncService _syncService;
+    private readonly PlayerControlService _playerControl;
 
     private readonly EventHandler<string> _languageChangedHandler;
 
@@ -135,7 +136,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         DominantColorService dominantColor,
         MainWindowViewModel mainWindow,
         PlaylistSyncService syncService,
-        PlaylistEditService editService)
+        PlaylistEditService editService,
+        PlayerControlService playerControl)
     {
         _audio = audio;
         _downloads = downloads;
@@ -146,11 +148,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         _mainWindow = mainWindow;
         _syncService = syncService;
         _editService = editService;
+        _playerControl = playerControl;
 
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
-        IsShuffleActive = _audio.ShuffleEnabled;
+        IsShuffleActive = _playerControl.ShuffleEnabled;
         _headerHeight = new GridLength(LibService.Settings.PlaylistHeaderHeight);
 
         var hasTracks = this.WhenAnyValue(x => x.TrackCount, c => c > 0);
@@ -364,7 +367,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var playlist = await LibService.GetPlaylistAsync(playlistId);
         if (playlist == null) return;
 
-        // Сохраняем ссылку на текущий плейлист для доступа к ComputedColor/EffectiveColor
         _currentPlaylist = playlist;
 
         PlaylistName = playlist.Name;
@@ -406,8 +408,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         if (result is { Changed: true })
         {
-            // Reload playlist header to reflect changes
-            // (name, thumbnail, description, sync status, gradient)
             await LoadPlaylistAsync(_currentPlaylistId);
         }
     }
@@ -416,15 +416,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     /// <summary>
     /// Синхронизирует плейлист с YouTube через централизованный PlaylistSyncService.
-    /// 
-    /// <para><b>Алгоритм:</b></para>
-    /// <list type="number">
-    ///   <item>Блокирует кнопку (IsSyncing = true)</item>
-    ///   <item>Делегирует в PlaylistSyncService.SyncWithDialogAsync()</item>
-    ///   <item>PlaylistSyncService строит diff, показывает диалог, применяет стратегию</item>
-    ///   <item>После успешной синхронизации перезагружает данные плейлиста</item>
-    ///   <item>При ошибке показывает уведомление</item>
-    /// </list>
     /// </summary>
     private async Task RefreshPlaylistAsync()
     {
@@ -439,7 +430,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
             if (result == null)
             {
-                // Пользователь отменил
                 return;
             }
 
@@ -448,12 +438,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                 InvalidateAllTracksCache();
                 await LoadPlaylistAsync(_currentPlaylistId);
 
-                // Toast вместо диалога
                 if (result.TracksAddedLocally > 0 || result.TracksAddedToCloud > 0 ||
                     result.TracksRemovedLocally > 0 || result.TracksRemovedFromCloud > 0 ||
                     result.MetadataChanged)
                 {
-                    // Инжектируем NotificationService через DI
                     var notifications = Microsoft.Extensions.DependencyInjection
                         .ServiceProviderServiceExtensions
                         .GetRequiredService<NotificationService>(Program.Services);
@@ -463,10 +451,10 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                         messageKey: "Playlist_SyncSuccess_Details",
                         messageArgs: new object[]
                         {
-                        result.TracksAddedLocally,
-                        result.TracksAddedToCloud,
-                        result.TracksRemovedLocally,
-                        result.TracksRemovedFromCloud
+                            result.TracksAddedLocally,
+                            result.TracksAddedToCloud,
+                            result.TracksRemovedLocally,
+                            result.TracksRemovedFromCloud
                         },
                         severity: NotificationSeverity.Success,
                         durationMs: 4000);
@@ -476,7 +464,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             }
             else
             {
-                // Ошибка синхронизации — ОСТАВИТЬ диалог (критичная ошибка)
                 await _dialog.ShowInfoAsync(
                     SL["Dialog_Error_Title"] ?? "Error",
                     result.ErrorMessage ?? SL["Playlist_SyncFailed"] ?? "Sync failed");
@@ -486,7 +473,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         {
             Log.Error($"[Playlist] Sync error: {ex.Message}");
 
-            // КРИТИЧНАЯ ошибка — ОСТАВИТЬ диалог
             await _dialog.ShowInfoAsync(
                 SL["Dialog_Error_Title"] ?? "Error",
                 ex.Message);
@@ -503,15 +489,11 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     /// <summary>
     /// Загружает градиент хедера с учётом приоритета цветов:
     /// CustomColor → ComputedColor → доминантный из обложки → null.
-    /// 
-    /// <para>При вычислении доминантного цвета из обложки сохраняет его
-    /// как ComputedColor в БД, чтобы при следующей загрузке не пересчитывать.</para>
     /// </summary>
     private async Task LoadHeaderGradientAsync()
     {
         try
         {
-            // ═══ STEP 1: Попробовать использовать EffectiveColor (CustomColor ?? ComputedColor) ═══
             if (_currentPlaylist?.EffectiveColor is { } effectiveColorStr)
             {
                 try
@@ -526,11 +508,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                 catch (FormatException)
                 {
                     Log.Warn($"[Playlist] Invalid EffectiveColor: {effectiveColorStr}");
-                    // Продолжаем — попробуем вычислить из обложки
                 }
             }
 
-            // ═══ STEP 2: Вычислить из обложки ═══
             if (string.IsNullOrEmpty(ThumbnailUrl))
             {
                 await SetHeaderBackgroundAsync(null);
@@ -548,7 +528,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
             if (dominantColor != null)
             {
-                // Сохраняем вычисленный цвет в БД для последующего использования
                 _ = SaveComputedColorAsync(dominantColor.Value);
 
                 await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
@@ -588,7 +567,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     /// <summary>
     /// Сохраняет вычисленный доминантный цвет в поле ComputedColor плейлиста.
-    /// Выполняется тихо — ошибка сохранения не влияет на отображение.
     /// </summary>
     private async Task SaveComputedColorAsync(Color color)
     {
@@ -596,7 +574,6 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
         var colorHex = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
 
-        // Не сохраняем если уже совпадает
         if (string.Equals(_currentPlaylist.ComputedColor, colorHex, StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -647,6 +624,11 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         }
     }
 
+    /// <summary>
+    /// Воспроизводит все треки плейлиста по порядку.
+    /// Выключает авто-перемешивание через PlayerControlService
+    /// чтобы гарантировать синхронизацию с PlayerBar.
+    /// </summary>
     private async Task PlayAllAsync()
     {
         if (TrackCount == 0) return;
@@ -660,11 +642,18 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         var allTracks = await GetAllTracksAsync();
         if (allTracks.Count == 0) return;
 
-        _audio.ShuffleEnabled = false;
+        // Используем PlayerControlService вместо прямого _audio.ShuffleEnabled
+        // чтобы BehaviorSubject оставался синхронизированным с UI
+        _playerControl.SetShuffleEnabled(false);
         IsShuffleActive = false;
         await _audio.StartQueueAsync(allTracks, allTracks[0]);
     }
 
+    /// <summary>
+    /// Перемешивает треки плейлиста и начинает воспроизведение.
+    /// Это НЕ включает авто-перемешивание — просто разовый shuffle.
+    /// Выключает авто-перемешивание через PlayerControlService.
+    /// </summary>
     private async Task ShufflePlayAsync()
     {
         if (TrackCount == 0) return;
@@ -680,7 +669,9 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             (shuffled[i], shuffled[j]) = (shuffled[j], shuffled[i]);
         }
 
-        _audio.ShuffleEnabled = false;
+        // Используем PlayerControlService — выключаем авто-shuffle
+        // Playlist shuffle — это разовая операция, не авто-режим
+        _playerControl.SetShuffleEnabled(false);
         await _audio.StartQueueAsync(shuffled, shuffled[0]);
 
         IsShuffleActive = true;
@@ -723,11 +714,16 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             FormattedDuration = $"{seconds}{SL["Duration_Seconds"]}";
     }
 
+    /// <summary>
+    /// Запускает воспроизведение конкретного трека из плейлиста.
+    /// Выключает авто-перемешивание через PlayerControlService.
+    /// </summary>
     private async void PlayFromPlaylistAsync(TrackInfo track)
     {
         try
         {
-            _audio.ShuffleEnabled = false;
+            // Используем PlayerControlService
+            _playerControl.SetShuffleEnabled(false);
             IsShuffleActive = false;
 
             var allTracks = await GetAllTracksAsync();

@@ -1,25 +1,23 @@
-﻿using Avalonia;
+﻿using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using ReactiveUI;
 
 namespace LMP.Features.Player;
 
-/// <summary>
-/// Code-behind для панели управления плеером.
-/// </summary>
 public partial class PlayerBarView : UserControl
 {
     #region Constants
 
-    private const double SeekThumbDiameter = 14.0;
-    private const double SeekThumbRadius = SeekThumbDiameter / 2.0;
+    private const double SeekThumbRadius = 7.0;
     private const double SeekCursorHalfWidth = 1.0;
 
-    private const double VolumeThumbDiameter = 12.0;
-    private const double VolumeThumbRadius = VolumeThumbDiameter / 2.0;
+    private const double VolumeThumbRadius = 6.0;
     private const double VolumeSliderMinHeight = 60.0;
     private const double VolumeSliderMaxHeight = 200.0;
 
@@ -42,10 +40,7 @@ public partial class PlayerBarView : UserControl
     private bool _isDraggingVolume;
     private bool _isVolumePopupHovered;
     private bool _isVolumeButtonHovered;
-    private bool _isWindowActive = true;
     private bool _isSuspended;
-
-    private bool _isVolumeTooltipActive;
 
     private double _seekDragRatio;
     private double _sparkPosition = -SparkWidth;
@@ -54,13 +49,27 @@ public partial class PlayerBarView : UserControl
     private readonly List<Border> _bufferSegments = [];
     private IBrush? _bufferBrushCache;
 
-    private DispatcherTimer? _volumePopupCloseTimer;
-    private DispatcherTimer? _volumeTooltipHideTimer;
-    private DispatcherTimer? _sparkAnimationTimer;
-    private DispatcherTimer? _seekHintTimer;
-    private FlyoutBase? _formatFlyout;
+    /// <summary>
+    /// Rx-based timed disposables. SerialDisposable автоматически отменяет предыдущий таймер.
+    /// </summary>
+    private readonly SerialDisposable _volumePopupCloseDisposable = new();
+    private readonly SerialDisposable _volumeTooltipHideDisposable = new();
+    private readonly SerialDisposable _seekHintDisposable = new();
 
+    /// <summary>
+    /// Spark анимация остаётся на DispatcherTimer т.к. нужен frame-rate update (16ms).
+    /// Observable.Interval не гарантирует такую точность из-за scheduler overhead.
+    /// </summary>
+    private DispatcherTimer? _sparkAnimationTimer;
+
+    private FlyoutBase? _formatFlyout;
     private PlayerBarViewModel? _currentViewModel;
+
+    /// <summary>
+    /// Флаг: hover-подписки на VolumeButton сейчас активны.
+    /// Единая точка управления — <see cref="SetVolumeHoverEnabled"/>.
+    /// </summary>
+    private bool _volumeHoverSubscribed;
 
     #endregion
 
@@ -68,7 +77,7 @@ public partial class PlayerBarView : UserControl
     {
         InitializeComponent();
         SetupEventHandlers();
-        SetupTimers();
+        SetupSparkTimer();
     }
 
     #region Initialization
@@ -78,8 +87,6 @@ public partial class PlayerBarView : UserControl
         SeekContainer.PropertyChanged += OnSeekContainerPropertyChanged;
         VolumeSliderPanel.PropertyChanged += OnVolumeSliderPropertyChanged;
 
-        VolumeButton.PointerEntered += OnVolumeButtonEntered;
-        VolumeButton.PointerExited += OnVolumeButtonExited;
         VolumePopup.Opened += OnVolumePopupOpened;
         VolumePopup.Closed += OnVolumePopupClosed;
 
@@ -93,42 +100,13 @@ public partial class PlayerBarView : UserControl
         KeyDown += OnKeyDown;
     }
 
-    private void SetupTimers()
+    private void SetupSparkTimer()
     {
-        _volumePopupCloseTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(VolumePopupCloseDelayMs)
-        };
-        _volumePopupCloseTimer.Tick += (_, _) =>
-        {
-            if (!_isVolumePopupHovered && !_isVolumeButtonHovered && !_isDraggingVolume)
-                VolumePopup.IsOpen = false;
-            _volumePopupCloseTimer?.Stop();
-        };
-
-        _volumeTooltipHideTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(VolumeTooltipHideDelayMs)
-        };
-        _volumeTooltipHideTimer.Tick += (_, _) =>
-        {
-            _isVolumeTooltipActive = false;
-            VolumeTooltipPopup.IsOpen = false;
-            _volumeTooltipHideTimer?.Stop();
-        };
-
         _sparkAnimationTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(SparkAnimationIntervalMs)
         };
         _sparkAnimationTimer.Tick += OnSparkAnimationTick;
-
-        _seekHintTimer = new DispatcherTimer();
-        _seekHintTimer.Tick += (_, _) =>
-        {
-            SeekHintPopup.IsOpen = false;
-            _seekHintTimer?.Stop();
-        };
     }
 
     #endregion
@@ -144,6 +122,9 @@ public partial class PlayerBarView : UserControl
             window.Activated += OnWindowActivated;
             window.Deactivated += OnWindowDeactivated;
         }
+
+        // Окно считается активным при attach — включаем hover
+        SetVolumeHoverEnabled(true);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -156,50 +137,49 @@ public partial class PlayerBarView : UserControl
             window.Deactivated -= OnWindowDeactivated;
         }
 
+        SetVolumeHoverEnabled(false);
+        VolumePopup.Opened -= OnVolumePopupOpened;
+        VolumePopup.Closed -= OnVolumePopupClosed;
+
         CloseAllPopups();
         CancelSeekDrag();
         CancelVolumeDrag();
         StopSparkAnimation();
 
-        VolumeButton.PointerEntered -= OnVolumeButtonEntered;
-        VolumeButton.PointerExited -= OnVolumeButtonExited;
-        VolumePopup.Opened -= OnVolumePopupOpened;
-        VolumePopup.Closed -= OnVolumePopupClosed;
-        _currentViewModel?.PropertyChanged -= OnViewModelPropertyChanged;
-        _currentViewModel = null;
-
+        UnsubscribeFromViewModel();
         ClearBufferSegments();
+
+        _volumePopupCloseDisposable.Dispose();
+        _volumeTooltipHideDisposable.Dispose();
+        _seekHintDisposable.Dispose();
     }
 
     private void OnWindowActivated(object? sender, EventArgs e)
     {
-        _isWindowActive = true;
+        SetVolumeHoverEnabled(true);
 
         if (!_isSuspended)
-        {
-            UpdateSeekVisual();
-            UpdateBufferVisual();
-            UpdatePlayingGlow();
-        }
+            RefreshAllVisuals();
     }
 
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
-        _isWindowActive = false;
+        SetVolumeHoverEnabled(false);
         CloseAllPopups();
     }
 
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
-        _currentViewModel?.PropertyChanged -= OnViewModelPropertyChanged;
-        _currentViewModel = null;
+
+        UnsubscribeFromViewModel();
 
         if (DataContext is PlayerBarViewModel vm)
         {
             _currentViewModel = vm;
             vm.PropertyChanged += OnViewModelPropertyChanged;
-            vm.RegisterView(this);
+            vm.SuspendRequested += OnSuspend;
+            vm.ResumeRequested += OnResume;
 
             InitializeVolumeSlider(vm);
 
@@ -213,41 +193,43 @@ public partial class PlayerBarView : UserControl
         }
     }
 
+    private void UnsubscribeFromViewModel()
+    {
+        if (_currentViewModel != null)
+        {
+            _currentViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _currentViewModel.SuspendRequested -= OnSuspend;
+            _currentViewModel.ResumeRequested -= OnResume;
+            _currentViewModel = null;
+        }
+    }
+
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (sender is not PlayerBarViewModel vm) return;
 
-        if (e.PropertyName == nameof(PlayerBarViewModel.IsLoading))
+        switch (e.PropertyName)
         {
-            if (_isSuspended) return;
+            case nameof(PlayerBarViewModel.IsLoading):
+                if (_isSuspended) return;
+                if (vm.IsLoading) StartSparkAnimation();
+                else StopSparkAnimation();
+                return;
 
-            if (vm.IsLoading)
-                StartSparkAnimation();
-            else
-                StopSparkAnimation();
-            return;
+            case nameof(PlayerBarViewModel.IsTrackResetting):
+                if (vm.IsTrackResetting) ApplySliderReset();
+                else RemoveSliderReset();
+                return;
         }
 
-        if (e.PropertyName == nameof(PlayerBarViewModel.IsTrackResetting))
-        {
-            if (vm.IsTrackResetting)
-                ApplySliderReset();
-            else
-                RemoveSliderReset();
-            return;
-        }
-
-        if (_isSuspended || !_isWindowActive) return;
+        if (_isSuspended) return;
 
         switch (e.PropertyName)
         {
             case nameof(PlayerBarViewModel.PositionSeconds):
             case nameof(PlayerBarViewModel.DurationSeconds):
                 if (!_isDraggingSeek)
-                {
-                    UpdateSeekVisual();
-                    UpdatePlayingGlow();
-                }
+                    UpdateSeekAndGlow();
                 break;
 
             case nameof(PlayerBarViewModel.BufferedRanges):
@@ -256,8 +238,7 @@ public partial class PlayerBarView : UserControl
                 break;
 
             case nameof(PlayerBarViewModel.Volume):
-                if (!_isDraggingVolume)
-                    UpdateVolumeVisual();
+                if (!_isDraggingVolume) UpdateVolumeVisual();
                 break;
 
             case nameof(PlayerBarViewModel.MaxVolume):
@@ -266,10 +247,7 @@ public partial class PlayerBarView : UserControl
                 break;
 
             case nameof(PlayerBarViewModel.IsSeekBusy):
-                if (!vm.IsSeekBusy)
-                {
-                    UpdateBufferVisual();
-                }
+                if (!vm.IsSeekBusy) UpdateBufferVisual();
                 break;
         }
     }
@@ -298,11 +276,7 @@ public partial class PlayerBarView : UserControl
             StopSparkAnimation();
 
         if (!_isSuspended)
-        {
-            UpdateSeekVisual();
-            UpdateBufferVisual();
-            UpdatePlayingGlow();
-        }
+            RefreshAllVisuals();
     }
 
     public void OnSuspend()
@@ -322,10 +296,7 @@ public partial class PlayerBarView : UserControl
             StartSparkAnimation();
 
         _cachedSeekWidth = SeekContainer.Bounds.Width;
-        UpdateSeekVisual();
-        UpdateBufferVisual();
-        UpdatePlayingGlow();
-        UpdateVolumeVisual();
+        RefreshAllVisuals();
     }
 
     private void InitializeVolumeSlider(PlayerBarViewModel vm)
@@ -339,10 +310,7 @@ public partial class PlayerBarView : UserControl
             int volume = Math.Clamp(vm.Volume, 0, maxVolume);
             double ratio = (double)volume / maxVolume;
 
-            VolumeBar.Height = height * ratio;
-            double thumbTop = height * (1 - ratio) - VolumeThumbRadius;
-            VolumeThumb.Margin = new Thickness(0, Math.Max(0, thumbTop), 0, 0);
-
+            ApplyVolumeVisual(ratio, height);
             UpdateVolumePopupOffset();
         }
         catch (Exception ex)
@@ -356,28 +324,86 @@ public partial class PlayerBarView : UserControl
 
     #endregion
 
+    #region Unified Visual Updates
+
+    /// <summary>
+    /// Обновляет все визуальные элементы. Вызывается при Resume, Activated, RemoveSliderReset.
+    /// Единая точка вместо дублирования 4 вызовов в 5 местах.
+    /// </summary>
+    private void RefreshAllVisuals()
+    {
+        UpdateSeekAndGlow();
+        UpdateBufferVisual();
+        UpdateVolumeVisual();
+    }
+
+    /// <summary>
+    /// Объединённое обновление seek progress и playing glow (одна формула ratio).
+    /// </summary>
+    private void UpdateSeekAndGlow()
+    {
+        if (DataContext is not PlayerBarViewModel vm) return;
+        if (vm.IsTrackResetting) return;
+
+        double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
+        double duration = vm.DurationSeconds;
+
+        if (width <= 0 || duration <= 0) return;
+
+        double ratio = Math.Clamp(vm.PositionSeconds / duration, 0, 1);
+        double position = width * ratio;
+
+        // Seek visual
+        ProgressBar.Width = position;
+        Canvas.SetLeft(SeekThumb, position - SeekThumbRadius);
+
+        // Playing glow
+        PlayingGlow.Width = Math.Max(20, position);
+    }
+
+    #endregion
+
+    #region Volume Hover (single toggle point)
+
+    /// <summary>
+    /// Единая точка управления hover-подписками на VolumeButton.
+    /// Предотвращает двойную подписку через флаг <see cref="_volumeHoverSubscribed"/>.
+    /// </summary>
+    private void SetVolumeHoverEnabled(bool enabled)
+    {
+        if (enabled == _volumeHoverSubscribed) return;
+
+        if (enabled)
+        {
+            VolumeButton.PointerEntered += OnVolumeButtonEntered;
+            VolumeButton.PointerExited += OnVolumeButtonExited;
+        }
+        else
+        {
+            VolumeButton.PointerEntered -= OnVolumeButtonEntered;
+            VolumeButton.PointerExited -= OnVolumeButtonExited;
+        }
+
+        _volumeHoverSubscribed = enabled;
+    }
+
+    #endregion
+
     #region Shuffle Button - Right Click Handler
 
     /// <summary>
-    /// Обработчик нажатия на кнопку shuffle.
-    /// ЛКМ: выполняется Command (ShuffleQueueCommand) — однократное перемешивание.
-    /// ПКМ: toggle auto-shuffle (сохраняется в настройках).
+    /// ЛКМ: ShuffleQueueCommand (через Command binding).
+    /// ПКМ: toggle auto-shuffle.
     /// </summary>
     private void OnShuffleButtonPressed(object? sender, PointerPressedEventArgs e)
     {
         var point = e.GetCurrentPoint(sender as Control);
-        
+
         if (point.Properties.IsRightButtonPressed)
         {
-            // ПКМ — toggle auto-shuffle
             e.Handled = true;
-            
-            if (DataContext is PlayerBarViewModel vm)
-            {
-                vm.ToggleAutoShuffleCommand.Execute().Subscribe();
-            }
+            _currentViewModel?.ToggleAutoShuffleCommand.Execute().Subscribe();
         }
-        // ЛКМ обрабатывается стандартным Command binding
     }
 
     #endregion
@@ -406,7 +432,7 @@ public partial class PlayerBarView : UserControl
 
     private void OnSparkAnimationTick(object? sender, EventArgs e)
     {
-        if (!_isWindowActive || _isSuspended) return;
+        if (_isSuspended) return;
 
         double containerWidth = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
         if (containerWidth <= 0) containerWidth = 600;
@@ -430,17 +456,13 @@ public partial class PlayerBarView : UserControl
             _cachedSeekWidth = SeekContainer.Bounds.Width;
 
             if (!_isSuspended)
-            {
-                UpdateSeekVisual();
-                UpdateBufferVisual();
-                UpdatePlayingGlow();
-            }
+                RefreshAllVisuals();
         }
     }
 
     private void OnVolumeSliderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property.Name == nameof(Bounds) || e.Property.Name == nameof(Height))
+        if (e.Property.Name is nameof(Bounds) or nameof(Height))
         {
             UpdateVolumeVisual();
             UpdateVolumePopupOffset();
@@ -449,10 +471,10 @@ public partial class PlayerBarView : UserControl
 
     private void OnVolumePopupOpened(object? sender, EventArgs e)
     {
-        if (DataContext is PlayerBarViewModel vm)
+        if (_currentViewModel != null)
         {
-            if (VolumeSliderPanel.Height <= 0)
-                UpdateVolumeSliderHeight(vm.MaxVolume);
+            if (VolumeSliderPanel.Height <= 0 || double.IsNaN(VolumeSliderPanel.Height))
+                UpdateVolumeSliderHeight(_currentViewModel.MaxVolume);
             UpdateVolumeVisual();
             UpdateVolumePopupOffset();
         }
@@ -460,7 +482,7 @@ public partial class PlayerBarView : UserControl
 
     private void OnVolumePopupClosed(object? sender, EventArgs e)
     {
-        _isVolumeTooltipActive = false;
+        _volumeTooltipHideDisposable.Disposable = null;
         VolumeTooltipPopup.IsOpen = false;
     }
 
@@ -506,6 +528,7 @@ public partial class PlayerBarView : UserControl
         EnsureBufferSegmentCount(ranges.Count);
 
         var brush = GetBufferBrush();
+        double opacity = vm.IsFullyBuffered ? 0.6 : 0.45;
 
         for (int i = 0; i < ranges.Count; i++)
         {
@@ -531,7 +554,7 @@ public partial class PlayerBarView : UserControl
             segment.Height = 4;
             segment.Background = brush;
             segment.IsVisible = segWidth > 0;
-            segment.Opacity = vm.IsFullyBuffered ? 0.6 : 0.45;
+            segment.Opacity = opacity;
         }
 
         for (int i = ranges.Count; i < _bufferSegments.Count; i++)
@@ -540,6 +563,8 @@ public partial class PlayerBarView : UserControl
 
     private void EnsureBufferSegmentCount(int needed)
     {
+        var brush = GetBufferBrush();
+
         while (_bufferSegments.Count < needed)
         {
             var segment = new Border
@@ -548,7 +573,7 @@ public partial class PlayerBarView : UserControl
                 CornerRadius = new CornerRadius(2),
                 IsHitTestVisible = false,
                 Opacity = 0.45,
-                Background = GetBufferBrush()
+                Background = brush
             };
 
             _bufferSegments.Add(segment);
@@ -590,38 +615,7 @@ public partial class PlayerBarView : UserControl
 
     #endregion
 
-    #region Seek Visual
-
-    private void UpdateSeekVisual()
-    {
-        if (DataContext is not PlayerBarViewModel vm) return;
-        if (vm.IsTrackResetting) return;
-
-        double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
-        double duration = vm.DurationSeconds;
-
-        if (width <= 0 || duration <= 0) return;
-
-        double ratio = Math.Clamp(vm.PositionSeconds / duration, 0, 1);
-        double position = width * ratio;
-
-        ProgressBar.Width = position;
-        Canvas.SetLeft(SeekThumb, position - SeekThumbRadius);
-    }
-
-    private void UpdatePlayingGlow()
-    {
-        if (DataContext is not PlayerBarViewModel vm) return;
-        if (vm.IsTrackResetting) return;
-
-        double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
-        double duration = vm.DurationSeconds;
-
-        if (width <= 0 || duration <= 0) return;
-
-        double ratio = Math.Clamp(vm.PositionSeconds / duration, 0, 1);
-        PlayingGlow.Width = Math.Max(20, width * ratio);
-    }
+    #region Seek Visual Helpers
 
     private void UpdateSeekCursor(double x) =>
         Canvas.SetLeft(SeekCursor, x - SeekCursorHalfWidth);
@@ -643,22 +637,22 @@ public partial class PlayerBarView : UserControl
 
     #endregion
 
-    #region Seek Hint Tooltip
+    #region Seek Hint Tooltip (Rx-based)
 
     private void ShowSeekHint(string text, int autoHideMs)
     {
         SeekHintText.Text = text;
         SeekHintPopup.IsOpen = true;
 
-        _seekHintTimer?.Stop();
-        _seekHintTimer!.Interval = TimeSpan.FromMilliseconds(autoHideMs);
-        _seekHintTimer.Start();
+        _seekHintDisposable.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(autoHideMs))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => SeekHintPopup.IsOpen = false);
     }
 
     private void HideSeekHint()
     {
         SeekHintPopup.IsOpen = false;
-        _seekHintTimer?.Stop();
+        _seekHintDisposable.Disposable = null;
     }
 
     #endregion
@@ -674,14 +668,12 @@ public partial class PlayerBarView : UserControl
             ? 40.0 * Math.Log2(1 + (maxVolume - 100) / 200.0)
             : 0;
 
-        double height = baseHeight + extra;
-        return Math.Clamp(height, VolumeSliderMinHeight, VolumeSliderMaxHeight);
+        return Math.Clamp(baseHeight + extra, VolumeSliderMinHeight, VolumeSliderMaxHeight);
     }
 
     private void UpdateVolumeSliderHeight(int maxVolume)
     {
         double height = ComputeVolumeSliderHeight(maxVolume);
-
         if (double.IsNaN(height) || double.IsInfinity(height))
             height = VolumeSliderMinHeight;
 
@@ -691,10 +683,10 @@ public partial class PlayerBarView : UserControl
 
     private void UpdateVolumeVisual()
     {
-        if (DataContext is not PlayerBarViewModel vm) return;
+        if (_currentViewModel == null) return;
 
         double height = VolumeSliderPanel.Height;
-        int maxVolume = vm.MaxVolume;
+        int maxVolume = _currentViewModel.MaxVolume;
 
         if (height <= 0 || double.IsNaN(height))
         {
@@ -704,11 +696,15 @@ public partial class PlayerBarView : UserControl
 
         if (maxVolume <= 0) maxVolume = 100;
 
-        double ratio = Math.Clamp((double)vm.Volume / maxVolume, 0, 1);
-        UpdateVolumeVisualInternal(ratio, height);
+        double ratio = Math.Clamp((double)_currentViewModel.Volume / maxVolume, 0, 1);
+        ApplyVolumeVisual(ratio, height);
     }
 
-    private void UpdateVolumeVisualInternal(double ratio, double height)
+    /// <summary>
+    /// Единый метод для применения визуальных изменений Volume slider.
+    /// Используется из UpdateVolumeVisual, InitializeVolumeSlider, OnVolumeAreaMoved, OnVolumeAreaPressed.
+    /// </summary>
+    private void ApplyVolumeVisual(double ratio, double height)
     {
         if (double.IsNaN(ratio) || double.IsInfinity(ratio)) ratio = 0;
         if (double.IsNaN(height) || double.IsInfinity(height) || height <= 0)
@@ -721,8 +717,7 @@ public partial class PlayerBarView : UserControl
 
         VolumeBar.Height = barHeight;
 
-        double thumbTop = height * (1 - ratio) - VolumeThumbRadius;
-        thumbTop = Math.Max(0, thumbTop);
+        double thumbTop = Math.Max(0, height * (1 - ratio) - VolumeThumbRadius);
         if (double.IsNaN(thumbTop)) thumbTop = 0;
 
         VolumeThumb.Margin = new Thickness(0, thumbTop, 0, 0);
@@ -736,14 +731,14 @@ public partial class PlayerBarView : UserControl
         if (height <= 0) height = VolumeSliderMinHeight;
 
         double thumbY = height * (1 - ratio);
-        double panelCenter = height / 2.0;
-        VolumeTooltipPopup.VerticalOffset = thumbY - panelCenter;
+        VolumeTooltipPopup.VerticalOffset = thumbY - (height / 2.0);
 
-        _isVolumeTooltipActive = true;
         VolumeTooltipPopup.IsOpen = true;
 
-        _volumeTooltipHideTimer?.Stop();
-        _volumeTooltipHideTimer?.Start();
+        // Автоскрытие через Rx (SerialDisposable отменяет предыдущий таймер)
+        _volumeTooltipHideDisposable.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(VolumeTooltipHideDelayMs))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ => VolumeTooltipPopup.IsOpen = false);
     }
 
     #endregion
@@ -756,7 +751,10 @@ public partial class PlayerBarView : UserControl
         SeekHintPopup.IsOpen = false;
         VolumeTooltipPopup.IsOpen = false;
         VolumePopup.IsOpen = false;
-        _isVolumeTooltipActive = false;
+
+        _volumePopupCloseDisposable.Disposable = null;
+        _volumeTooltipHideDisposable.Disposable = null;
+        _seekHintDisposable.Disposable = null;
     }
 
     private void ShowSeekPreview() => PreviewFill.Classes.Add("active");
@@ -771,17 +769,28 @@ public partial class PlayerBarView : UserControl
 
     #region Volume Popup Hover
 
+    /// <summary>
+    /// При наведении на кнопку громкости:
+    /// 1. Если suspended — запрашиваем Resume через ViewModel
+    /// 2. Открываем Volume popup
+    /// </summary>
     private void OnVolumeButtonEntered(object? sender, PointerEventArgs e)
     {
         _isVolumeButtonHovered = true;
-        _volumePopupCloseTimer?.Stop();
+        _volumePopupCloseDisposable.Disposable = null; // cancel pending close
 
-        if (DataContext is PlayerBarViewModel vm)
+        if (_isSuspended)
+        {
+            _currentViewModel?.RequestResumeIfSuspended();
+            return;
+        }
+
+        if (_currentViewModel != null)
         {
             try
             {
                 if (VolumeSliderPanel.Height <= 0 || double.IsNaN(VolumeSliderPanel.Height))
-                    InitializeVolumeSlider(vm);
+                    InitializeVolumeSlider(_currentViewModel);
 
                 VolumePopup.IsOpen = true;
             }
@@ -801,7 +810,7 @@ public partial class PlayerBarView : UserControl
     private void OnVolumePopupContentEntered(object? sender, PointerEventArgs e)
     {
         _isVolumePopupHovered = true;
-        _volumePopupCloseTimer?.Stop();
+        _volumePopupCloseDisposable.Disposable = null; // cancel pending close
     }
 
     private void OnVolumePopupContentExited(object? sender, PointerEventArgs e)
@@ -811,10 +820,22 @@ public partial class PlayerBarView : UserControl
             TryScheduleVolumePopupClose();
     }
 
+    /// <summary>
+    /// Планирует закрытие Volume popup через Rx timer (SerialDisposable).
+    /// Предыдущий таймер автоматически отменяется.
+    /// </summary>
     private void TryScheduleVolumePopupClose()
     {
-        if (!_isDraggingVolume && !_isVolumePopupHovered && !_isVolumeButtonHovered)
-            _volumePopupCloseTimer?.Start();
+        if (_isDraggingVolume || _isVolumePopupHovered || _isVolumeButtonHovered)
+            return;
+
+        _volumePopupCloseDisposable.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(VolumePopupCloseDelayMs))
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(_ =>
+            {
+                if (!_isVolumePopupHovered && !_isVolumeButtonHovered && !_isDraggingVolume)
+                    VolumePopup.IsOpen = false;
+            });
     }
 
     #endregion
@@ -823,8 +844,7 @@ public partial class PlayerBarView : UserControl
 
     private void OnSeekAreaMoved(object? sender, PointerEventArgs e)
     {
-        if (DataContext is not PlayerBarViewModel vm) return;
-        if (vm.DurationSeconds <= 0) return;
+        if (_currentViewModel == null || _currentViewModel.DurationSeconds <= 0) return;
 
         var point = e.GetCurrentPoint(SeekContainer);
 
@@ -839,7 +859,7 @@ public partial class PlayerBarView : UserControl
 
         double x = Math.Clamp(point.Position.X, 0, width);
         double ratio = x / width;
-        double seconds = ratio * vm.DurationSeconds;
+        double seconds = ratio * _currentViewModel.DurationSeconds;
 
         UpdateSeekCursor(x);
         UpdateSeekTooltip(x, seconds);
@@ -850,8 +870,7 @@ public partial class PlayerBarView : UserControl
             ShowSeekPreview();
             UpdateSeekPreview(x);
             SeekTooltipPopup.IsOpen = true;
-
-            vm.UpdateSeekPosition(seconds);
+            _currentViewModel.UpdateSeekPosition(seconds);
         }
         else if (SeekHitBox.IsPointerOver)
         {
@@ -868,8 +887,7 @@ public partial class PlayerBarView : UserControl
 
     private void OnSeekAreaPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (DataContext is not PlayerBarViewModel vm) return;
-        if (!vm.HasTrack) return;
+        if (_currentViewModel == null || !_currentViewModel.HasTrack) return;
 
         var point = e.GetCurrentPoint(SeekContainer);
 
@@ -883,7 +901,7 @@ public partial class PlayerBarView : UserControl
 
         _isDraggingSeek = true;
         e.Pointer.Capture(SeekHitBox);
-        vm.StartSeek();
+        _currentViewModel.StartSeek();
         SeekContainer.Classes.Add("dragging");
 
         double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
@@ -896,10 +914,10 @@ public partial class PlayerBarView : UserControl
         ShowSeekPreview();
         UpdateSeekPreview(x);
         UpdateSeekCursor(x);
-        UpdateSeekTooltip(x, ratio * vm.DurationSeconds);
+        UpdateSeekTooltip(x, ratio * _currentViewModel.DurationSeconds);
         SeekTooltipPopup.IsOpen = true;
 
-        string cancelHint = vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel");
+        string cancelHint = _currentViewModel.L.Get("Seek_CancelHint", "ESC or Right Click to cancel");
         ShowSeekHint(cancelHint, SeekHintAutoHideMs);
     }
 
@@ -907,11 +925,11 @@ public partial class PlayerBarView : UserControl
     {
         if (!_isDraggingSeek) return;
 
-        if (DataContext is PlayerBarViewModel vm)
+        if (_currentViewModel != null)
         {
-            double targetSeconds = _seekDragRatio * vm.DurationSeconds;
-            vm.UpdateSeekPosition(targetSeconds);
-            vm.EndSeek();
+            double targetSeconds = _seekDragRatio * _currentViewModel.DurationSeconds;
+            _currentViewModel.UpdateSeekPosition(targetSeconds);
+            _currentViewModel.EndSeek();
         }
 
         HideSeekHint();
@@ -946,40 +964,42 @@ public partial class PlayerBarView : UserControl
             _isDraggingSeek = false;
             SeekContainer.Classes.Remove("dragging");
 
-            if (DataContext is PlayerBarViewModel vm)
+            if (_currentViewModel != null)
             {
-                vm.CancelSeek();
-
-                string cancelledText = vm.L.Get("Seek_Cancelled", "Seek cancelled");
+                _currentViewModel.CancelSeek();
+                string cancelledText = _currentViewModel.L.Get("Seek_Cancelled", "Seek cancelled");
                 ShowSeekHint(cancelledText, SeekCancelledHintMs);
             }
         }
 
         SeekTooltipPopup.IsOpen = false;
         HideSeekPreview();
-        UpdateSeekVisual();
+        UpdateSeekAndGlow();
     }
 
     #endregion
 
     #region Volume Slider
 
+    /// <summary>
+    /// Scroll на кнопке/ползунке громкости.
+    /// </summary>
     private void OnVolumeScroll(object? sender, PointerWheelEventArgs e)
     {
-        if (DataContext is not PlayerBarViewModel vm) return;
+        if (_currentViewModel == null) return;
 
-        int step = vm.GetVolumeScrollStep();
+        int step = _currentViewModel.GetVolumeScrollStep();
         int delta = e.Delta.Y > 0 ? step : -step;
-        int newVolume = Math.Clamp(vm.Volume + delta, 0, vm.MaxVolume);
+        int newVolume = Math.Clamp(_currentViewModel.Volume + delta, 0, _currentViewModel.MaxVolume);
 
-        if (newVolume != vm.Volume)
+        if (newVolume != _currentViewModel.Volume)
         {
-            vm.Volume = newVolume;
-            vm.OnVolumeChangeComplete();
+            _currentViewModel.Volume = newVolume;
+            _currentViewModel.OnVolumeChangeComplete();
         }
 
-        double ratio = Math.Clamp((double)newVolume / vm.MaxVolume, 0, 1);
-        ShowVolumeTooltip(newVolume, vm.MaxVolume, ratio);
+        double ratio = Math.Clamp((double)newVolume / _currentViewModel.MaxVolume, 0, 1);
+        ShowVolumeTooltip(newVolume, _currentViewModel.MaxVolume, ratio);
 
         e.Handled = true;
     }
@@ -987,7 +1007,7 @@ public partial class PlayerBarView : UserControl
     private void OnVolumeAreaMoved(object? sender, PointerEventArgs e)
     {
         if (sender is not Border hitBox) return;
-        if (DataContext is not PlayerBarViewModel vm) return;
+        if (_currentViewModel == null) return;
 
         var point = e.GetCurrentPoint(VolumeSliderPanel);
 
@@ -1002,24 +1022,24 @@ public partial class PlayerBarView : UserControl
 
         double y = Math.Clamp(point.Position.Y, 0, height);
         double ratio = 1 - (y / height);
-        int volumePercent = (int)(ratio * vm.MaxVolume);
+        int volumePercent = (int)(ratio * _currentViewModel.MaxVolume);
 
         if (_isDraggingVolume)
         {
-            UpdateVolumeVisualInternal(ratio, height);
-            vm.Volume = volumePercent;
-            ShowVolumeTooltip(volumePercent, vm.MaxVolume, ratio);
+            ApplyVolumeVisual(ratio, height);
+            _currentViewModel.Volume = volumePercent;
+            ShowVolumeTooltip(volumePercent, _currentViewModel.MaxVolume, ratio);
         }
         else if (hitBox.IsPointerOver)
         {
-            ShowVolumeTooltip(volumePercent, vm.MaxVolume, ratio);
+            ShowVolumeTooltip(volumePercent, _currentViewModel.MaxVolume, ratio);
         }
     }
 
     private void OnVolumeAreaPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Border hitBox) return;
-        if (DataContext is not PlayerBarViewModel vm) return;
+        if (_currentViewModel == null) return;
 
         var point = e.GetCurrentPoint(VolumeSliderPanel);
 
@@ -1041,20 +1061,18 @@ public partial class PlayerBarView : UserControl
 
         double y = Math.Clamp(point.Position.Y, 0, height);
         double ratio = 1 - (y / height);
-        int newVolume = (int)(ratio * vm.MaxVolume);
+        int newVolume = (int)(ratio * _currentViewModel.MaxVolume);
 
-        UpdateVolumeVisualInternal(ratio, height);
-        vm.Volume = newVolume;
-
-        ShowVolumeTooltip(newVolume, vm.MaxVolume, ratio);
+        ApplyVolumeVisual(ratio, height);
+        _currentViewModel.Volume = newVolume;
+        ShowVolumeTooltip(newVolume, _currentViewModel.MaxVolume, ratio);
     }
 
     private void OnVolumeAreaReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (!_isDraggingVolume) return;
 
-        if (DataContext is PlayerBarViewModel vm)
-            vm.OnVolumeChangeComplete();
+        _currentViewModel?.OnVolumeChangeComplete();
 
         CompleteVolumeDrag(e.Pointer);
         TryScheduleVolumePopupClose();
@@ -1062,11 +1080,8 @@ public partial class PlayerBarView : UserControl
 
     private void OnVolumeAreaExited(object? sender, PointerEventArgs e)
     {
-        if (!_isDraggingVolume && !_isVolumeTooltipActive)
-        {
-            _volumeTooltipHideTimer?.Stop();
+        if (!_isDraggingVolume)
             VolumeTooltipPopup.IsOpen = false;
-        }
     }
 
     private void OnVolumeAreaCaptureLost(object? sender, PointerCaptureLostEventArgs e) =>
@@ -1089,7 +1104,7 @@ public partial class PlayerBarView : UserControl
             VolumeBar.Classes.Remove("dragging");
         }
 
-        _isVolumeTooltipActive = false;
+        _volumeTooltipHideDisposable.Disposable = null;
         VolumeTooltipPopup.IsOpen = false;
         UpdateVolumeVisual();
     }

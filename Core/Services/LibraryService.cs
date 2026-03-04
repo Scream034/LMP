@@ -275,7 +275,7 @@ public sealed class LibraryService : IAsyncDisposable
         return TimeSpan.FromTicks(totalTicks);
     }
 
-    // ═══ НОВЫЙ МЕТОД: ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
+    // ═══ ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
     public async Task<long> GetTotalLibraryDurationAsync(CancellationToken ct = default)
     {
         return await _playlists.GetTotalLibraryDurationAsync(ct);

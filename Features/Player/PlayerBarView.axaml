@@ -220,10 +220,47 @@
                             Classes.auto-enabled="{Binding AutoShuffleEnabled}"
                             Command="{Binding ShuffleQueueCommand}"
                             CornerRadius="20"
-                            ToolTip.Tip="{Binding ShuffleTooltip}"
-                            ToolTip.Placement="Top"
-                            ToolTip.VerticalOffset="-6"
                             PointerPressed="OnShuffleButtonPressed">
+                            <!-- Стилизованный ToolTip для hover (современный дизайн) -->
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="4" MaxWidth="200">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Border
+                                            Width="20" Height="20"
+                                            CornerRadius="10"
+                                            Background="{DynamicResource AccentBrush}"
+                                            Classes.shuffle-active="{Binding AutoShuffleEnabled}">
+                                            <Border.Styles>
+                                                <Style Selector="Border">
+                                                    <Setter Property="Opacity" Value="0.3" />
+                                                </Style>
+                                                <Style Selector="Border.shuffle-active">
+                                                    <Setter Property="Opacity" Value="1" />
+                                                </Style>
+                                            </Border.Styles>
+                                            <mi:MaterialIcon
+                                                Width="12" Height="12"
+                                                Foreground="{DynamicResource AccentButtonTextBrush}"
+                                                Kind="Shuffle"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock
+                                            FontSize="13"
+                                            FontWeight="SemiBold"
+                                            Foreground="{DynamicResource TextPrimaryBrush}"
+                                            Text="{Binding ShuffleTooltip}"
+                                            VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{DynamicResource TextMutedBrush}"
+                                        Text="{Binding L[Player_Shuffle_Hint]}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ToolTip.Tip>
+                            <ToolTip.Placement>Top</ToolTip.Placement>
+                            <ToolTip.VerticalOffset>-6</ToolTip.VerticalOffset>
                             <Panel>
                                 <mi:MaterialIcon Width="18" Height="18" Kind="Shuffle" />
                                 <!-- Индикатор auto-shuffle (точка) -->
@@ -236,23 +273,57 @@
                                     IsVisible="{Binding AutoShuffleEnabled}" />
                             </Panel>
                         </Button>
-                        <!-- Shuffle Hint Popup -->
+
+                        <!-- Hint Popup (показывается при ПКМ toggle) -->
                         <Popup
-                            HorizontalOffset="-30"
+                            HorizontalOffset="-40"
                             IsLightDismissEnabled="False"
                             IsOpen="{Binding IsShuffleHintVisible}"
                             Placement="Top"
                             PlacementTarget="{Binding #ShuffleButton}"
                             VerticalOffset="-8">
-                            <Border Classes="mode-hint"
-                                Classes.visible="{Binding IsShuffleHintVisible}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon Width="14" Height="14"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        Kind="Shuffle" />
-                                    <TextBlock FontSize="12" FontWeight="SemiBold"
-                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                        Text="{Binding ShuffleHintText}" />
+                            <Border
+                                Padding="10,8"
+                                Background="{DynamicResource BgElevatedBrush}"
+                                BorderBrush="{DynamicResource BgHighlightBrush}"
+                                BorderThickness="1"
+                                BoxShadow="0 4 16 0 #50000000"
+                                CornerRadius="8">
+                                <StackPanel Spacing="4">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Border
+                                            Width="24" Height="24"
+                                            CornerRadius="12"
+                                            Background="{DynamicResource AccentBrush}"
+                                            Classes.shuffle-active="{Binding AutoShuffleEnabled}">
+                                            <Border.Styles>
+                                                <Style Selector="Border">
+                                                    <Setter Property="Opacity" Value="0.3" />
+                                                </Style>
+                                                <Style Selector="Border.shuffle-active">
+                                                    <Setter Property="Opacity" Value="1" />
+                                                </Style>
+                                            </Border.Styles>
+                                            <mi:MaterialIcon
+                                                Width="14" Height="14"
+                                                Foreground="{DynamicResource AccentButtonTextBrush}"
+                                                Kind="Shuffle"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock
+                                            FontSize="13"
+                                            FontWeight="SemiBold"
+                                            Foreground="{DynamicResource TextPrimaryBrush}"
+                                            Text="{Binding ShuffleHintText}"
+                                            VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock
+                                        FontSize="11"
+                                        Foreground="{DynamicResource TextMutedBrush}"
+                                        Text="{Binding L[Player_Shuffle_Hint]}"
+                                        TextWrapping="Wrap"
+                                        MaxWidth="180" />
                                 </StackPanel>
                             </Border>
                         </Popup>

@@ -13,7 +13,11 @@ public partial class CookieAuthService
     private readonly Dictionary<string, string> _cookieMap = new(32, StringComparer.Ordinal);
     private string _cachedHeaderString = "";
 
-    private readonly string _authDataPath = Path.Combine(AppContext.BaseDirectory, "auth.json");
+    /// <summary>
+    /// Путь к файлу состояния авторизации.
+    /// Использует G.FilePath.AuthData (%APPDATA%/LMP/auth.json).
+    /// </summary>
+    private readonly string _authDataPath = G.FilePath.AuthData;
 
     /// <summary>
     /// Статический FrozenSet для resurrection cookies — O(1) проверка, zero alloc.
@@ -57,6 +61,42 @@ public partial class CookieAuthService
         LoadCookies();
         LoadAuthData();
         UpdateStateAuthStatus();
+        
+        // Миграция: удалить старый файл рядом с exe если существует
+        MigrateLegacyAuthFile();
+    }
+
+    /// <summary>
+    /// Мигрирует auth.json из папки exe в %APPDATA%/LMP/.
+    /// Вызывается один раз при старте для обратной совместимости.
+    /// </summary>
+    private void MigrateLegacyAuthFile()
+    {
+        try
+        {
+            var legacyPath = Path.Combine(AppContext.BaseDirectory, "auth.json");
+            
+            if (!File.Exists(legacyPath)) return;
+            
+            // Если новый файл не существует или пустой — копируем старый
+            if (!File.Exists(_authDataPath) || new FileInfo(_authDataPath).Length == 0)
+            {
+                File.Copy(legacyPath, _authDataPath, overwrite: true);
+                Log.Info($"[Auth] Migrated auth.json from exe folder to {_authDataPath}");
+                
+                // Перезагружаем данные из нового расположения
+                LoadAuthData();
+            }
+            
+            // Удаляем старый файл
+            File.Delete(legacyPath);
+            Log.Info("[Auth] Deleted legacy auth.json from exe folder");
+        }
+        catch (Exception ex)
+        {
+            // Не критично — просто логируем
+            Log.Warn($"[Auth] Failed to migrate legacy auth.json: {ex.Message}");
+        }
     }
 
     // --- Profile Management ---

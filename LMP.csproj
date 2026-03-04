@@ -83,6 +83,12 @@
     <PublishTrimmed>false</PublishTrimmed> <!-- Можно включить partial при необходимости -->
   </PropertyGroup>
 
+  <!-- ====================== PLATFORM DEFINES ====================== -->
+  <!-- Определяет WINDOWS для условной компиляции (TrayVolumeHook, platform-specific features) -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+  </PropertyGroup>
+
   <!-- ====================== ФАЙЛЫ ====================== -->
   <ItemGroup>
     <Compile Remove="External\**" />

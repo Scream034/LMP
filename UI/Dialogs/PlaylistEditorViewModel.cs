@@ -247,7 +247,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         this.WhenAnyValue(x => x.ThumbnailUrl)
             .Throttle(TimeSpan.FromMilliseconds(400))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(url => UpdateThumbnailPreview(url))
+            .Subscribe(UpdateThumbnailPreview)
             .DisposeWith(Disposables);
 
         // ═══ Обновление видимости кнопки загрузки обложки ═══

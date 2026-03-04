@@ -27,7 +27,7 @@
                 <StackPanel Spacing="6" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="20">
                         <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount]}">
+                            ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount], FallbackValue=''}">
                             <mi:MaterialIcon Kind="PlaylistMusic" Width="16" Height="16"
                                 Foreground="{DynamicResource AccentBrush}" />
                             <TextBlock Text="{Binding PlaylistCountText}"
@@ -35,14 +35,14 @@
                                 Foreground="{DynamicResource TextPrimaryBrush}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_TrackCount]}">
+                            ToolTip.Tip="{Binding L[Library_Tip_TrackCount], FallbackValue=''}">
                             <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16"
                                 Foreground="{DynamicResource TextMutedBrush}" />
                             <TextBlock Text="{Binding TotalTracksText}"
                                 FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_TotalDuration]}">
+                            ToolTip.Tip="{Binding L[Library_Tip_TotalDuration], FallbackValue=''}">
                             <mi:MaterialIcon Kind="ClockOutline" Width="16" Height="16"
                                 Foreground="{DynamicResource TextMutedBrush}" />
                             <TextBlock Text="{Binding TotalDurationText}"
@@ -53,10 +53,10 @@
                     <StackPanel Orientation="Horizontal" Spacing="20">
                         <TextBlock Text="{Binding AvgTrackDurationText}"
                             FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
-                            ToolTip.Tip="{Binding L[Library_Tip_AvgTrack]}" />
+                            ToolTip.Tip="{Binding L[Library_Tip_AvgTrack], FallbackValue=''}" />
                         <TextBlock Text="{Binding AvgPlaylistDurationText}"
                             FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
-                            ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist]}" />
+                            ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist], FallbackValue=''}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -70,7 +70,8 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
                 VerticalAlignment="Center">
                 <Button Command="{Binding SyncAccountPlaylistsCommand}"
-                    Classes="icon-btn" ToolTip.Tip="{Binding L[Library_SyncYoutube]}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Library_SyncYoutube], FallbackValue=''}"
                     Width="36" Height="36">
                     <Panel Width="22" Height="22">
                         <mi:MaterialIcon Kind="CloudSync" Width="22" Height="22"
@@ -96,7 +97,8 @@
                 </Button>
 
                 <Button Command="{Binding OpenCreateCommand}"
-                    Classes="icon-btn" ToolTip.Tip="{Binding L[Library_CreatePlaylist]}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Library_CreatePlaylist], FallbackValue=''}"
                     IsEnabled="{Binding !IsSyncing}">
                     <mi:MaterialIcon Kind="Plus" Width="20" Height="20" />
                 </Button>
@@ -169,26 +171,27 @@
                             <DataTemplate x:DataType="vm:PlaylistCardViewModel">
                                 <Border Width="220" Margin="10"
                                     Classes="playlist-card-inner"
-                                    Classes.visible="{Binding IsVisible}">
+                                    Classes.visible="{Binding IsVisible}"
+                                    Tag="{Binding DataContext, ElementName=LibraryRoot}">
 
                                     <Border.ContextMenu>
                                         <ContextMenu>
                                             <MenuItem
-                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Player_Play]}"
+                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Player_Play], FallbackValue='Play', TargetNullValue='Play'}"
                                                 Command="{Binding PlayCommand}">
                                                 <MenuItem.Icon>
                                                     <mi:MaterialIcon Kind="Play" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                             <MenuItem
-                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Playlist_Open]}"
+                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Playlist_Open], FallbackValue='Open', TargetNullValue='Open'}"
                                                 Command="{Binding OpenCommand}">
                                                 <MenuItem.Icon>
                                                     <mi:MaterialIcon Kind="FolderOpen" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                             <MenuItem
-                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[EditPlaylist_Title]}"
+                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[EditPlaylist_Title], FallbackValue='Edit', TargetNullValue='Edit'}"
                                                 Command="{Binding EditCommand}"
                                                 IsVisible="{Binding CanEdit}">
                                                 <MenuItem.Icon>
@@ -196,7 +199,7 @@
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                             <MenuItem
-                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Queue_AddAll]}"
+                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Queue_AddAll], FallbackValue='Add to queue', TargetNullValue='Add to queue'}"
                                                 Command="{Binding AddToQueueCommand}">
                                                 <MenuItem.Icon>
                                                     <mi:MaterialIcon Kind="PlaylistPlay" />
@@ -204,7 +207,7 @@
                                             </MenuItem>
                                             <Separator Classes="menu-separator" />
                                             <MenuItem
-                                                Header="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Button_Delete]}"
+                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Button_Delete], FallbackValue='Delete', TargetNullValue='Delete'}"
                                                 Command="{Binding DeleteCommand}"
                                                 IsVisible="{Binding CanDelete}"
                                                 Classes="danger">
@@ -223,8 +226,7 @@
                                             Padding="0" Cursor="Hand"
                                             CornerRadius="8,8,0,0" ClipToBounds="True">
                                             <Panel Width="220" Height="220">
-                                                <!-- Liked: градиент сверху вниз + Heart, заполняет
-                                                весь квадрат -->
+                                                <!-- Liked: градиент сверху вниз + Heart -->
                                                 <Border IsVisible="{Binding IsLikedPlaylist}"
                                                     Width="220" Height="220">
                                                     <Border.Background>
@@ -258,8 +260,7 @@
                                                         VerticalAlignment="Center" />
                                                 </Border>
 
-                                                <!-- Thumbnail с QualityImage (поддерживает http,
-                                                file, avares, локальные пути) -->
+                                                <!-- Thumbnail -->
                                                 <Image
                                                     controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                                     controls:QualityImage.Quality="High"
@@ -285,11 +286,13 @@
                                                         Text="{Binding FormattedTrackCount}"
                                                         FontSize="12"
                                                         Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <!-- CloudCheck tooltip через Tag -->
                                                     <mi:MaterialIcon Kind="CloudCheck" Width="13"
                                                         Height="13"
                                                         Foreground="{DynamicResource TextMutedBrush}"
                                                         IsVisible="{Binding IsSynced}"
-                                                        ToolTip.Tip="{Binding #LibraryRoot.((vm:LibraryViewModel)DataContext).L[Library_CloudSyncTooltip]}" />
+                                                        Tag="{Binding DataContext, ElementName=LibraryRoot}"
+                                                        ToolTip.Tip="{Binding $parent[Border]?.((vm:LibraryViewModel)Tag).L[Library_CloudSyncTooltip]}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Button>
@@ -305,7 +308,7 @@
                         <mi:MaterialIcon Kind="PlaylistMusic" Width="64" Height="64"
                             Foreground="{DynamicResource TextMutedBrush}"
                             HorizontalAlignment="Center" />
-                        <TextBlock Text="{Binding L[Library_Empty]}" FontSize="16"
+                        <TextBlock Text="{Binding L[Library_Empty], FallbackValue=''}" FontSize="16"
                             Foreground="{DynamicResource TextSecondaryBrush}"
                             HorizontalAlignment="Center" Margin="0,16,0,0" />
                     </StackPanel>

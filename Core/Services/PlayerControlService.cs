@@ -1,9 +1,7 @@
 using System.Reactive;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using LMP.Core.Audio;
-using LMP.Core.Helpers;
 using LMP.Core.Models;
 
 namespace LMP.Core.Services;
@@ -22,6 +20,10 @@ namespace LMP.Core.Services;
 /// <para><b>ForceSync:</b></para>
 /// <para>Не публикует повторные значения в CurrentTrack если объект тот же (по Id).
 /// Это предотвращает ложный TrackReset при восстановлении из трея.</para>
+/// 
+/// <para><b>Shuffle:</b></para>
+/// <para>Все изменения ShuffleEnabled ДОЛЖНЫ идти через этот сервис (SetShuffleEnabled / ToggleAutoShuffle),
+/// чтобы BehaviorSubject всегда был синхронизирован с AudioEngine.</para>
 /// </summary>
 public sealed class PlayerControlService : IDisposable
 {
@@ -37,11 +39,23 @@ public sealed class PlayerControlService : IDisposable
     private readonly BehaviorSubject<int> _queueCountSubject;
 
     /// <summary>
+    /// Реактивный поток текущей громкости (0–MaxVolume).
+    /// Публикуется при любом изменении: скролл трея, слайдер, программное.
+    /// </summary>
+    private readonly BehaviorSubject<int> _volumeSubject;
+
+    /// <summary>
     /// Сигнал принудительной синхронизации. Подписчики должны обновить
     /// все свои состояния без полного TrackReset.
-    /// Значение — true при вызове ForceSync.
+    /// Значение — Unit при вызове ForceSync.
     /// </summary>
     private readonly Subject<Unit> _forceSyncSubject = new();
+
+    /// <summary>
+    /// Сигнал запроса Resume из любого компонента (например, Volume popup при suspend).
+    /// MainWindow подписывается и вызывает RestoreFromTray / BroadcastResume.
+    /// </summary>
+    private readonly Subject<Unit> _resumeRequestSubject = new();
 
     private bool _disposed;
 
@@ -57,6 +71,7 @@ public sealed class PlayerControlService : IDisposable
         _repeatModeSubject = new BehaviorSubject<RepeatMode>(_audio.RepeatMode);
         _shuffleEnabledSubject = new BehaviorSubject<bool>(_audio.ShuffleEnabled);
         _queueCountSubject = new BehaviorSubject<int>(_audio.Queue.Count);
+        _volumeSubject = new BehaviorSubject<int>((int)Math.Round(_audio.GetVolume()));
 
         _audio.OnPlaybackStateChanged += OnPlaybackStateChanged;
         _audio.OnTrackChanged += OnTrackChanged;
@@ -77,6 +92,12 @@ public sealed class PlayerControlService : IDisposable
     public bool HasTrack => _currentTrackSubject.Value != null;
     public int QueueCount => _queueCountSubject.Value;
 
+    /// <summary>
+    /// Текущая громкость (0–MaxVolume). 
+    /// Обновляется реактивно через <see cref="VolumeObservable"/>.
+    /// </summary>
+    public int CurrentVolume => _volumeSubject.Value;
+
     #endregion
 
     #region Observables
@@ -96,6 +117,12 @@ public sealed class PlayerControlService : IDisposable
     public IObservable<bool> ShuffleEnabledObservable => _shuffleEnabledSubject.AsObservable();
     public IObservable<int> QueueCountObservable => _queueCountSubject.AsObservable();
 
+    /// <summary>
+    /// Реактивный поток изменения громкости.
+    /// Используется TrayManager, PlayerBar и другими подписчиками.
+    /// </summary>
+    public IObservable<int> VolumeObservable => _volumeSubject.AsObservable();
+
     public IObservable<(bool IsPlaying, bool IsPaused)> PlaybackStateObservable =>
         _isPlayingSubject.CombineLatest(_isPausedSubject, (p, u) => (p, u));
 
@@ -104,6 +131,13 @@ public sealed class PlayerControlService : IDisposable
     /// Вызывается при восстановлении из трея / minimize.
     /// </summary>
     public IObservable<Unit> ForceSyncObservable => _forceSyncSubject.AsObservable();
+
+    /// <summary>
+    /// Сигнал запроса Resume. MainWindow подписывается и вызывает RestoreFromTray.
+    /// Используется когда пользователь взаимодействует с UI в suspend-режиме
+    /// (например, Volume popup hover/scroll).
+    /// </summary>
+    public IObservable<Unit> ResumeRequestObservable => _resumeRequestSubject.AsObservable();
 
     #endregion
 
@@ -168,6 +202,10 @@ public sealed class PlayerControlService : IDisposable
         Log.Debug("[PlayerControl] Queue shuffled");
     }
 
+    /// <summary>
+    /// Переключает авто-перемешивание (toggle).
+    /// Синхронизирует AudioEngine, сохраняет в настройки, публикует в Subject.
+    /// </summary>
     public void ToggleAutoShuffle()
     {
         bool newState = !_audio.ShuffleEnabled;
@@ -176,6 +214,142 @@ public sealed class PlayerControlService : IDisposable
         _shuffleEnabledSubject.OnNext(newState);
 
         Log.Debug($"[PlayerControl] AutoShuffle changed to {newState}");
+    }
+
+    /// <summary>
+    /// Устанавливает состояние авто-перемешивания напрямую.
+    /// Используется из PlaylistViewModel и других мест, которые хотят
+    /// явно установить shuffle = false перед стартом очереди.
+    /// 
+    /// <para><b>ВАЖНО:</b> Все изменения ShuffleEnabled должны идти через этот метод
+    /// или ToggleAutoShuffle(), чтобы BehaviorSubject оставался синхронизированным.</para>
+    /// </summary>
+    /// <param name="enabled">Новое состояние авто-перемешивания.</param>
+    public void SetShuffleEnabled(bool enabled)
+    {
+        if (_audio.ShuffleEnabled == enabled)
+            return;
+
+        _audio.ShuffleEnabled = enabled;
+        _library.UpdateSettings(s => s.ShuffleEnabled = enabled);
+        _shuffleEnabledSubject.OnNext(enabled);
+
+        Log.Debug($"[PlayerControl] ShuffleEnabled set to {enabled}");
+    }
+
+    /// <summary>
+    /// Быстрое изменение громкости без сохранения на диск.
+    /// Предназначено для вызова из tight loops (mouse hook callback).
+    /// 
+    /// <para><b>Почему отдельный метод:</b> Стандартный <see cref="AdjustVolume"/>
+    /// вызывает <c>SaveVolumeNow()</c> и <c>UpdateSettings()</c> на каждый тик колёсика.
+    /// В mouse hook callback это создаёт задержку (файловый I/O).
+    /// Этот метод только меняет значение в памяти + публикует в Subject.</para>
+    /// 
+    /// <para>Вызывайте <see cref="CommitVolume"/> после завершения серии scroll events
+    /// для сохранения на диск.</para>
+    /// </summary>
+    /// <param name="delta">Положительный = громче, отрицательный = тише.</param>
+    /// <returns>Новое значение громкости (0–MaxVolume).</returns>
+    public int AdjustVolumeFast(int delta)
+    {
+        int currentVolume = (int)Math.Round(_audio.GetVolume());
+        int maxVolume = _library.Settings.MaxVolumeLimit;
+        if (maxVolume <= 0) maxVolume = 100;
+
+        int newVolume = Math.Clamp(currentVolume + delta, 0, maxVolume);
+
+        if (newVolume != currentVolume)
+        {
+            _audio.SetVolumeInstant(newVolume);
+            _volumeSubject.OnNext(newVolume);
+        }
+
+        return newVolume;
+    }
+
+    /// <summary>
+    /// Сохраняет текущую громкость на диск.
+    /// Вызывается после серии быстрых изменений (scroll end).
+    /// </summary>
+    public void CommitVolume()
+    {
+        int volume = (int)Math.Round(_audio.GetVolume());
+        _library.UpdateSettings(s => s.LastVolume = volume);
+        _audio.SaveVolumeNow();
+        Log.Debug($"[PlayerControl] Volume committed: {volume}");
+    }
+
+    /// <summary>
+    /// Изменяет громкость на указанный шаг.
+    /// Используется для scroll на tray icon и горячих клавиш.
+    /// Публикует новое значение в <see cref="VolumeObservable"/>.
+    /// </summary>
+    /// <param name="delta">Положительный = громче, отрицательный = тише.</param>
+    /// <returns>Новое значение громкости (0–MaxVolume).</returns>
+    public int AdjustVolume(int delta)
+    {
+        int currentVolume = (int)Math.Round(_audio.GetVolume());
+        int maxVolume = _library.Settings.MaxVolumeLimit;
+        if (maxVolume <= 0) maxVolume = 100;
+
+        int newVolume = Math.Clamp(currentVolume + delta, 0, maxVolume);
+
+        if (newVolume != currentVolume)
+        {
+            _audio.SetVolumeInstant(newVolume);
+            _library.UpdateSettings(s => s.LastVolume = newVolume);
+            _audio.SaveVolumeNow();
+            _volumeSubject.OnNext(newVolume);
+        }
+
+        return newVolume;
+    }
+
+    /// <summary>
+    /// Устанавливает громкость напрямую (для слайдера PlayerBar).
+    /// Публикует новое значение в <see cref="VolumeObservable"/>.
+    /// </summary>
+    /// <param name="volume">Значение громкости (0–MaxVolume).</param>
+    public void SetVolume(int volume)
+    {
+        int maxVolume = _library.Settings.MaxVolumeLimit;
+        if (maxVolume <= 0) maxVolume = 100;
+
+        int clamped = Math.Clamp(volume, 0, maxVolume);
+        int current = (int)Math.Round(_audio.GetVolume());
+
+        if (clamped != current)
+        {
+            _audio.SetVolumeInstant(clamped);
+            _library.UpdateSettings(s => s.LastVolume = clamped);
+            _audio.SaveVolumeNow();
+            _volumeSubject.OnNext(clamped);
+        }
+    }
+
+    /// <summary>
+    /// Возвращает текущую громкость из AudioEngine (округлённую до int).
+    /// Предпочитайте свойство <see cref="CurrentVolume"/> или <see cref="VolumeObservable"/>.
+    /// </summary>
+    public int GetCurrentVolume() => (int)Math.Round(_audio.GetVolume());
+
+    /// <summary>
+    /// Возвращает максимальную громкость из настроек.
+    /// </summary>
+    public int GetMaxVolume()
+    {
+        int max = _library.Settings.MaxVolumeLimit;
+        return max > 0 ? max : 100;
+    }
+
+    /// <summary>
+    /// Запрашивает Resume у MainWindow (через ResumeRequestObservable).
+    /// Вызывается когда пользователь взаимодействует с UI в suspend-режиме.
+    /// </summary>
+    public void RequestResume()
+    {
+        _resumeRequestSubject.OnNext(Unit.Default);
     }
 
     #endregion
@@ -215,6 +389,9 @@ public sealed class PlayerControlService : IDisposable
     /// 
     /// <para>Вместо этого публикует ForceSyncObservable, на который PlayerBarViewModel
     /// подписывается для мягкого обновления (позиция, буфер, стрим-инфо).</para>
+    /// 
+    /// <para><b>Shuffle sync:</b> Всегда перечитывает _audio.ShuffleEnabled и публикует,
+    /// чтобы исправить рассинхронизацию если кто-то менял через _audio напрямую.</para>
     /// </summary>
     public void ForceSync()
     {
@@ -224,6 +401,7 @@ public sealed class PlayerControlService : IDisposable
         _repeatModeSubject.OnNext(_audio.RepeatMode);
         _shuffleEnabledSubject.OnNext(_audio.ShuffleEnabled);
         _queueCountSubject.OnNext(_audio.Queue.Count);
+        _volumeSubject.OnNext((int)Math.Round(_audio.GetVolume()));
 
         // НЕ переиздаём CurrentTrack — это вызвало бы HandleTrackChanged → BeginTrackReset
         // Вместо этого сигнализируем "мягкую" синхронизацию
@@ -253,7 +431,9 @@ public sealed class PlayerControlService : IDisposable
         _repeatModeSubject.Dispose();
         _shuffleEnabledSubject.Dispose();
         _queueCountSubject.Dispose();
+        _volumeSubject.Dispose();
         _forceSyncSubject.Dispose();
+        _resumeRequestSubject.Dispose();
 
         Log.Debug("[PlayerControl] Service disposed");
     }
