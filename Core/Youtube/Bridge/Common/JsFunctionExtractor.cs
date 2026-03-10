@@ -1,3 +1,5 @@
+// Core/Youtube/Bridge/Common/JsFunctionExtractor.cs
+
 using System.Buffers;
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
@@ -18,6 +20,14 @@ internal static partial class JsFunctionExtractor
 
     private static readonly SearchValues<char> s_identStartChars =
         SearchValues.Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$");
+
+    /// <summary>
+    /// Символы, которые могут предшествовать regex литералу в JS.
+    /// После этих символов `/` интерпретируется как начало regex, а не оператор деления.
+    /// Основано на спецификации ECMAScript (§12.9.5 Rules of Automatic Semicolon Insertion).
+    /// </summary>
+    private static readonly SearchValues<char> s_regexPrecedingChars =
+        SearchValues.Create("=(<>!&|^~?:;,{}[+-%*/\n\r");
 
     private static readonly FrozenSet<string> SkipNames = FrozenSet.ToFrozenSet(
     [
@@ -59,7 +69,18 @@ internal static partial class JsFunctionExtractor
     // PUBLIC API
     // ═══════════════════════════════════════════════════════════════
 
-    public static string? ExtractBundle(string fullJs, string entryFuncName)
+    /// <summary>
+    /// Извлекает минимальный JS-бандл: entry function + все зависимости.
+    /// <para>
+    /// <paramref name="externalNames"/> — имена, определённые вне бандла
+    /// (например, словарь O, prepended отдельно). Они не будут:
+    /// - искаться как зависимости
+    /// - добавляться как guard vars
+    /// - перезаписываться var X=0;
+    /// </para>
+    /// </summary>
+    public static string? ExtractBundle(string fullJs, string entryFuncName,
+        IReadOnlySet<string>? externalNames = null)
     {
         try
         {
@@ -72,25 +93,15 @@ internal static partial class JsFunctionExtractor
                 return null;
             }
 
+            Log.Debug($"[JsExtractor] Entry '{entryFuncName}' definition: {entryDef.Length} chars, " +
+                       $"preview: {Truncate(entryDef, 120)}");
+
             var dictName = DetectDictArrayName(entryDef);
 
-            // ═══ Thin wrapper fallback ═══
-            // If entry is a thin wrapper (e.g. Sxt → Ox.call), dict appears in the
-            // referenced function, not in the wrapper itself.
-            if (dictName is null && entryDef.Length < 300)
+            // ═══ Thin wrapper fallback — multi-level ═══
+            if (dictName is null)
             {
-                foreach (var depName in FindReferencedNames(entryDef))
-                {
-                    if (SkipNames.Contains(depName)) continue;
-                    var depDef = FindAnyDefinition(fullJs, depName);
-                    if (depDef is null || depDef.Length < 200) continue;
-                    dictName = DetectDictArrayName(depDef);
-                    if (dictName is not null)
-                    {
-                        Log.Debug($"[JsExtractor] Dict array '{dictName}' found via dependency '{depName}'");
-                        break;
-                    }
-                }
+                dictName = FindDictArrayInDependencies(fullJs, entryDef, maxDepth: 3);
             }
 
             string? dictArrayCode = null;
@@ -101,20 +112,42 @@ internal static partial class JsFunctionExtractor
                 if (dictArrayCode is not null)
                     Log.Debug($"[JsExtractor] Dict array '{dictName}': {dictArrayCode.Length} chars");
                 else
-                    Log.Warn($"[JsExtractor] Dict array '{dictName}' not found");
+                    Log.Warn($"[JsExtractor] Dict array '{dictName}' definition not found in base.js");
+            }
+            else
+            {
+                Log.Debug($"[JsExtractor] No dict array detected in entry or dependencies");
             }
 
-            var definitions = new Dictionary<string, string>(64);
+            // ═══ Собираем параметры entry function — они НЕ являются зависимостями ═══
+            var entryParams = ExtractParamNames(entryDef);
+
+            var definitions = new Dictionary<string, string>(128);
             var visited = new HashSet<string>(SkipNames);
             var notFound = new HashSet<string>();
 
             if (dictName is not null) visited.Add(dictName);
 
+            // ═══ Внешние имена (словарь и т.д.) — не трогаем ═══
+            if (externalNames is not null)
+            {
+                foreach (var extName in externalNames)
+                    visited.Add(extName);
+            }
+
+            // ═══ Однобуквенные параметры entry — пропускаем как зависимости,
+            // т.к. FindAnyDefinition найдёт случайные определения из других функций ═══
+            foreach (var param in entryParams)
+            {
+                if (param.Length <= 2)
+                    visited.Add(param);
+            }
+
             var queue = new Queue<string>();
             queue.Enqueue(entryFuncName);
 
             int iterations = 0;
-            const int maxIterations = 200;
+            const int maxIterations = 300;
 
             var defBuilder = new StringBuilder(512);
 
@@ -131,6 +164,14 @@ internal static partial class JsFunctionExtractor
                     continue;
                 }
 
+                if (!IsValidExtractedDefinition(def, currentName))
+                {
+                    Log.Debug($"[JsExtractor] Skipping invalid definition for '{currentName}': " +
+                              $"{Truncate(def, 80)}");
+                    notFound.Add(currentName);
+                    continue;
+                }
+
                 var cleanSpan = def.AsSpan().TrimEnd([';', ',', ' ', '\n', '\r']);
 
                 defBuilder.Clear();
@@ -141,8 +182,20 @@ internal static partial class JsFunctionExtractor
                 defBuilder.Append(';');
                 definitions[currentName] = defBuilder.ToString();
 
+                // ═══ Извлекаем зависимости, но фильтруем параметры ═══
+                var depParams = ExtractParamNames(def);
                 foreach (var dep in FindReferencedNames(def))
                 {
+                    // Пропускаем параметры ЭТОЙ функции — они локальные
+                    if (depParams.Contains(dep))
+                        continue;
+
+                    // Пропускаем однобуквенные имена, которые скорее всего
+                    // являются параметрами/переменными вложенных функций.
+                    // Такие имена FindAnyDefinition найдёт из случайного места base.js.
+                    if (dep.Length == 1 && char.IsLower(dep[0]))
+                        continue;
+
                     if (!visited.Contains(dep))
                         queue.Enqueue(dep);
                 }
@@ -150,7 +203,8 @@ internal static partial class JsFunctionExtractor
 
             if (definitions.Count < 3)
             {
-                Log.Warn($"[JsExtractor] Too few definitions ({definitions.Count})");
+                Log.Warn($"[JsExtractor] Too few definitions ({definitions.Count}), " +
+                         $"entry='{entryFuncName}', iterations={iterations}");
             }
 
             var guardVars = FindTypeofGuardVars(entryDef, definitions, dictName);
@@ -160,20 +214,58 @@ internal static partial class JsFunctionExtractor
                     guardVars.Add(guardVar);
             }
 
-            // ═══ Add short notFound names as guard vars for safety ═══
             foreach (var name in notFound)
             {
-                if (name.Length <= 4 && !guardVars.Contains(name))
+                if (name.Length <= 4
+                    && !guardVars.Contains(name)
+                    && name.All(c => char.IsLetterOrDigit(c) || c is '_' or '$')
+                    && name.Any(c => char.IsUpper(c) || c is '_' or '$'))
+                {
                     guardVars.Add(name);
+                }
             }
 
+            // ═══ КРИТИЧНО: убираем из guard vars имена, которые уже определены извне ═══
+            if (externalNames is not null)
+            {
+                foreach (var extName in externalNames)
+                    guardVars.Remove(extName);
+            }
+
+            // ═══ Убираем имена, которые уже есть в definitions ═══
+            guardVars.ExceptWith(definitions.Keys);
+
             if (guardVars.Count > 0)
-                Log.Debug($"[JsExtractor] Guard vars: {string.Join(", ", guardVars)}");
+                Log.Debug($"[JsExtractor] Guard vars ({guardVars.Count}): {string.Join(", ", guardVars.Take(20))}");
+
+            // ═══════════════════════════════════════════════════════
+            // BUILD BUNDLE
+            // ═══════════════════════════════════════════════════════
 
             var totalSize = (dictArrayCode?.Length ?? 0)
                           + definitions.Values.Sum(static d => d.Length)
                           + guardVars.Count * 16
                           + 1024;
+
+            var safeDefs = new List<KeyValuePair<string, string>>();
+            var unsafeDefs = new List<KeyValuePair<string, string>>();
+
+            foreach (var kv in definitions)
+            {
+                if (string.Equals(kv.Key, entryFuncName, StringComparison.Ordinal))
+                    continue;
+
+                if (IsSafeForTryCatchWrap(kv.Value))
+                    safeDefs.Add(kv);
+                else
+                    unsafeDefs.Add(kv);
+            }
+
+            if (unsafeDefs.Count > 0)
+            {
+                Log.Debug($"[JsExtractor] Unsafe defs (no try-catch wrap): " +
+                          $"{string.Join(", ", unsafeDefs.Select(kv => kv.Key))}");
+            }
 
             var sb = new StringBuilder(totalSize);
 
@@ -182,11 +274,14 @@ internal static partial class JsFunctionExtractor
             foreach (var guardVar in guardVars)
                 sb.Append("var ").Append(guardVar).AppendLine("=0;");
 
-            foreach (var kv in definitions)
+            foreach (var kv in unsafeDefs)
             {
-                if (string.Equals(kv.Key, entryFuncName, StringComparison.Ordinal))
-                    continue;
-                sb.Append("try{").Append(kv.Value).AppendLine("}catch(e){}");
+                sb.AppendLine(kv.Value);
+            }
+
+            foreach (var kv in safeDefs)
+            {
+                sb.Append("try{").Append(kv.Value).AppendLine("}catch(e$){}");
             }
 
             if (definitions.TryGetValue(entryFuncName, out var entryCode))
@@ -204,7 +299,8 @@ internal static partial class JsFunctionExtractor
                      $"({reduction}% reduction) in {sw.ElapsedMilliseconds}ms");
 
             if (notFound.Count > 0)
-                Log.Debug($"[JsExtractor] Not found ({notFound.Count}): {string.Join(", ", notFound.Take(20))}");
+                Log.Debug($"[JsExtractor] Not found ({notFound.Count}): " +
+                          $"{string.Join(", ", notFound.Take(30))}");
 
             return result;
         }
@@ -215,6 +311,159 @@ internal static partial class JsFunctionExtractor
         }
     }
 
+    /// <summary>
+    /// Ищет dict array name в зависимостях entry function до заданной глубины.
+    /// </summary>
+    private static string? FindDictArrayInDependencies(string fullJs, string entryDef, int maxDepth)
+    {
+        var visited = new HashSet<string>(SkipNames);
+        var currentLevel = FindReferencedNames(entryDef);
+
+        for (int depth = 0; depth < maxDepth; depth++)
+        {
+            var nextLevel = new HashSet<string>();
+
+            foreach (var depName in currentLevel)
+            {
+                if (!visited.Add(depName)) continue;
+
+                var depDef = FindAnyDefinition(fullJs, depName);
+                if (depDef is null) continue;
+
+                var dictName = DetectDictArrayName(depDef);
+                if (dictName is not null)
+                {
+                    Log.Debug($"[JsExtractor] Dict array '{dictName}' found via " +
+                              $"dependency '{depName}' at depth {depth + 1}");
+                    return dictName;
+                }
+
+                foreach (var nextDep in FindReferencedNames(depDef))
+                {
+                    if (!visited.Contains(nextDep))
+                        nextLevel.Add(nextDep);
+                }
+            }
+
+            if (nextLevel.Count == 0) break;
+            currentLevel = nextLevel;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Валидирует извлечённое определение перед вставкой в бандл.
+    /// 
+    /// КЛЮЧЕВОЙ ПРИНЦИП:
+    /// Для функций (начинающихся с "function") мы ДОВЕРЯЕМ FindMatchingBrace —
+    /// если он нашёл парную скобку, определение корректно. HasBalancedBraces
+    /// может давать false-positive на regex литералах в минифицированном JS,
+    /// поэтому мы НЕ проверяем баланс для функций.
+    /// 
+    /// HasBalancedBraces проверяется только для коротких value определений,
+    /// где SkipValue мог обрезать код.
+    /// </summary>
+    private static bool IsValidExtractedDefinition(string definition, string name)
+    {
+        if (string.IsNullOrWhiteSpace(definition)) return false;
+
+        var span = definition.AsSpan().TrimEnd([';', ',', ' ', '\n', '\r']);
+        if (span.Length == 0) return false;
+
+        // ═══ ФУНКЦИИ: доверяем FindMatchingBrace ═══
+        // FindFunctionDefinition, FindDestructuringFunctionDefinition и FindArrowFunctionDefinition
+        // используют FindMatchingBrace/FindMatchingParen для нахождения тела.
+        // Если они вернули результат — скобки парные. 
+        // HasBalancedBraces может ломаться на regex литералах (`;/pattern/flags`)
+        // поэтому НЕ вызываем его для функций.
+
+        if (span.StartsWith("function"))
+        {
+            // Функция должна заканчиваться на }
+            if (span[^1] != '}')
+            {
+                Log.Debug($"[JsExtractor] Definition '{name}' is incomplete function (not ending with }})");
+                return false;
+            }
+
+            // Проверяем что parameter list закрыт
+            int parenStart = span.IndexOf('(');
+            if (parenStart >= 0)
+            {
+                int parenEnd = FindMatchingParen(definition, parenStart);
+                if (parenEnd < 0)
+                {
+                    Log.Debug($"[JsExtractor] Definition '{name}' has unclosed parameter list");
+                    return false;
+                }
+            }
+
+            return true; // Доверяем FindMatchingBrace
+        }
+
+        // Arrow function с блочным телом
+        if (span.Contains("=>", StringComparison.Ordinal))
+        {
+            int arrowIdx = span.IndexOf("=>");
+            int afterArrow = arrowIdx + 2;
+            while (afterArrow < span.Length && span[afterArrow] is ' ' or '\t') afterArrow++;
+
+            if (afterArrow < span.Length && span[afterArrow] == '{')
+            {
+                // Блочное тело — должно заканчиваться на }
+                if (span[^1] != '}')
+                {
+                    Log.Debug($"[JsExtractor] Definition '{name}' is incomplete arrow function");
+                    return false;
+                }
+                return true; // Доверяем FindMatchingBrace
+            }
+        }
+
+        // ═══ VALUE определения: проверяем баланс скобок ═══
+        // Для коротких определений HasBalancedBraces надёжен (нет regex проблем).
+        // Для длинных (> 10KB) value определений — тоже доверяем FindMatchingBrace,
+        // т.к. они были извлечены через FindObjectDefinition с matching.
+        if (span.Length < 10_000 && !HasBalancedBraces(span))
+        {
+            Log.Debug($"[JsExtractor] Definition '{name}' has unbalanced braces ({span.Length} chars)");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Проверяет, безопасно ли оборачивать определение в try{...}catch(e){}.
+    /// </summary>
+    private static bool IsSafeForTryCatchWrap(string definition)
+    {
+        if (!HasBalancedBracesForWrap(definition.AsSpan()))
+        {
+            return false;
+        }
+
+        if (HasUnmatchedTopLevelTry(definition))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Облегчённая проверка баланса для try-catch обёртки.
+    /// Для длинных определений (> 5KB) не проверяем — оборачиваем как unsafe.
+    /// Это предотвращает false-positive от regex литералов.
+    /// </summary>
+    private static bool HasBalancedBracesForWrap(ReadOnlySpan<char> code)
+    {
+        // Длинные определения (функции с regex внутри) — не оборачиваем
+        if (code.Length > 5000) return false;
+        return HasBalancedBraces(code);
+    }
+
     public static string[]? ExtractArrayElements(string fullJs, string name)
     {
         var def = FindDictArrayDefinition(fullJs, name);
@@ -222,11 +471,9 @@ internal static partial class JsFunctionExtractor
 
         var defSpan = def.AsSpan();
 
-        // Try split pattern: "content".split("separator")
         if (TryParseSplitExpression(defSpan, out var content, out var separator))
             return SplitToArray(content, separator);
 
-        // Try bracket array: [elem1, elem2, ...]
         var bracketStart = defSpan.IndexOf('[');
         if (bracketStart >= 0)
         {
@@ -241,10 +488,26 @@ internal static partial class JsFunctionExtractor
         return null;
     }
 
+    /// <summary>
+    /// Определяет имя массива-словаря в коде функции.
+    /// Ищет паттерн <c>name[число]</c>, исключая:
+    /// - параметры функции
+    /// - стандартные JS-имена
+    /// - однобуквенные имена, совпадающие с распространёнными локальными переменными
+    /// 
+    /// ВАЖНО: Этот метод может ложно определить локальную переменную
+    /// как dict array, если она часто индексируется числами.
+    /// Вызывающий код должен проверять, что найденное имя существует
+    /// как глобальное определение в base.js.
+    /// </summary>
     public static string? DetectDictArrayName(string funcCode)
     {
         var paramNames = ExtractParamNames(funcCode);
         var countDict = new Dictionary<string, int>(8);
+
+        // ═══ Собираем все локальные var-имена из тела функции ═══
+        // Они не могут быть глобальным словарём
+        var localVars = ExtractLocalVarNames(funcCode);
 
         var span = funcCode.AsSpan();
         int i = 0;
@@ -254,7 +517,6 @@ internal static partial class JsFunctionExtractor
             if (bracketPos < 0) break;
             bracketPos += i;
 
-            // After '[' must be digits followed by ']'
             int afterBracket = bracketPos + 1;
             if (afterBracket < span.Length && char.IsAsciiDigit(span[afterBracket]))
             {
@@ -263,18 +525,22 @@ internal static partial class JsFunctionExtractor
 
                 if (digitEnd < span.Length && span[digitEnd] == ']')
                 {
-                    // Extract identifier before '['
                     int nameEnd = bracketPos;
                     int nameStart = nameEnd - 1;
-                    while (nameStart >= 0 && IsIdentChar(span[nameStart])) nameStart--;
+                    while (nameStart >= 0 && IsIdentCharStrict(span[nameStart])) nameStart--;
                     nameStart++;
 
                     int nameLen = nameEnd - nameStart;
-                    if (nameLen is >= 1 and <= 3 &&
-                        (nameStart == 0 || !IsIdentChar(span[nameStart - 1])))
+                    if (nameLen >= 1 &&
+                        (nameStart == 0 || !IsIdentCharStrict(span[nameStart - 1])))
                     {
                         var arrName = span.Slice(nameStart, nameLen).ToString();
-                        if (!paramNames.Contains(arrName) && !SkipNames.Contains(arrName))
+
+                        // ═══ Фильтрация: пропускаем параметры, локальные переменные,
+                        // стандартные имена и однобуквенные строчные (скорее всего локальные) ═══
+                        if (!paramNames.Contains(arrName)
+                            && !SkipNames.Contains(arrName)
+                            && !localVars.Contains(arrName))
                         {
                             ref var count = ref CollectionsMarshal.GetValueRefOrAddDefault(
                                 countDict, arrName, out _);
@@ -288,7 +554,7 @@ internal static partial class JsFunctionExtractor
         }
 
         string? best = null;
-        int bestCount = 1; // minimum 2 required
+        int bestCount = 1;
         foreach (var kv in countDict)
         {
             if (kv.Value > bestCount)
@@ -298,7 +564,115 @@ internal static partial class JsFunctionExtractor
             }
         }
 
+        if (best is not null)
+            Log.Debug($"[JsExtractor] DetectDictArrayName: best='{best}' count={bestCount}");
+
         return best;
+    }
+
+    /// <summary>
+    /// Извлекает имена локальных переменных, объявленных через <c>var</c> в теле функции.
+    /// Не рекурсирует во вложенные функции.
+    /// Используется для фильтрации ложных dict array candidates.
+    /// </summary>
+    private static HashSet<string> ExtractLocalVarNames(string funcCode)
+    {
+        var result = new HashSet<string>(8);
+        var span = funcCode.AsSpan();
+
+        // Ищем "var " после первого { (начало тела функции)
+        int bodyStart = span.IndexOf('{');
+        if (bodyStart < 0) return result;
+
+        int i = bodyStart + 1;
+        int braceDepth = 0; // глубина вложенных функций
+
+        while (i < span.Length - 4)
+        {
+            char c = span[i];
+
+            // Пропускаем строки
+            if (c is '"' or '\'' or '`')
+            {
+                i = SkipString(funcCode, i);
+                continue;
+            }
+
+            // Отслеживаем вложенные function(){} — не извлекаем их var
+            if (c == 'f' && i + 8 <= span.Length
+                && span.Slice(i, 8).SequenceEqual("function")
+                && (i == 0 || !IsIdentCharStrict(span[i - 1])))
+            {
+                braceDepth++;
+                i += 8;
+                continue;
+            }
+
+            // Arrow function с блочным телом
+            if (c == '=' && i + 1 < span.Length && span[i + 1] == '>')
+            {
+                int afterArrow = i + 2;
+                while (afterArrow < span.Length && span[afterArrow] is ' ' or '\t') afterArrow++;
+                if (afterArrow < span.Length && span[afterArrow] == '{')
+                    braceDepth++;
+                i = afterArrow;
+                continue;
+            }
+
+            if (c == '{' && braceDepth > 0) { braceDepth++; i++; continue; }
+            if (c == '}' && braceDepth > 0) { braceDepth--; i++; continue; }
+
+            // Внутри вложенной функции — пропускаем
+            if (braceDepth > 0) { i++; continue; }
+
+            // Ищем "var "
+            if (c == 'v' && i + 4 <= span.Length
+                && span.Slice(i, 4).SequenceEqual("var ")
+                && (i == 0 || !IsIdentCharStrict(span[i - 1])))
+            {
+                i += 4;
+                // Может быть несколько переменных через запятую: var a, b, c=...
+                while (i < span.Length)
+                {
+                    while (i < span.Length && span[i] is ' ' or '\t') i++;
+
+                    int nameStart = i;
+                    while (i < span.Length && IsIdentCharStrict(span[i])) i++;
+
+                    if (i > nameStart)
+                        result.Add(span[nameStart..i].ToString());
+
+                    // Пропускаем до , или ;
+                    while (i < span.Length && span[i] is ' ' or '\t') i++;
+
+                    if (i < span.Length && span[i] == '=')
+                    {
+                        // Пропускаем значение (может содержать , внутри скобок)
+                        i++;
+                        int depth = 0;
+                        while (i < span.Length)
+                        {
+                            char vc = span[i];
+                            if (vc is '"' or '\'' or '`') { i = SkipString(funcCode, i); continue; }
+                            if (vc is '(' or '[' or '{') depth++;
+                            else if (vc is ')' or ']' or '}') { if (depth == 0) break; depth--; }
+                            else if (vc == ',' && depth == 0) break;
+                            else if (vc == ';' && depth == 0) break;
+                            i++;
+                        }
+                    }
+
+                    if (i >= span.Length) break;
+                    if (span[i] == ',') { i++; continue; } // следующая переменная
+                    break; // ; или другой символ
+                }
+                continue;
+            }
+
+            i++;
+        }
+
+        return result;
     }
 
     public static HashSet<string> ExtractParamNames(string funcCode)
@@ -306,7 +680,6 @@ internal static partial class JsFunctionExtractor
         var result = new HashSet<string>(4);
         var span = funcCode.AsSpan();
 
-        // Try: function(param1, param2)
         if (span.StartsWith("function"))
         {
             int parenStart = span.IndexOf('(');
@@ -315,14 +688,13 @@ internal static partial class JsFunctionExtractor
                 int parenEnd = FindMatchingParen(funcCode, parenStart);
                 if (parenEnd > parenStart)
                 {
-                    ParseCommaSeparatedIdents(
+                    ExtractParamNamesFromParens(
                         span.Slice(parenStart + 1, parenEnd - parenStart - 1), result);
                     return result;
                 }
             }
         }
 
-        // Try: (params) => ...  or  async (params) => ...
         int openParen = -1;
         if (span.Length > 0 && span[0] == '(')
             openParen = 0;
@@ -334,13 +706,12 @@ internal static partial class JsFunctionExtractor
             int closeParen = FindMatchingParen(funcCode, openParen);
             if (closeParen > openParen)
             {
-                ParseCommaSeparatedIdents(
+                ExtractParamNamesFromParens(
                     span.Slice(openParen + 1, closeParen - openParen - 1), result);
                 return result;
             }
         }
 
-        // Try: singleParam => ...
         int arrowIdx = span.IndexOf("=>");
         if (arrowIdx > 0)
         {
@@ -350,6 +721,96 @@ internal static partial class JsFunctionExtractor
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Извлекает имена параметров из содержимого скобок, включая destructuring.
+    /// Поддерживает: a, b, {c:d, e:f}, [g, h], ...rest, defaults (x=1)
+    /// </summary>
+    private static void ExtractParamNamesFromParens(ReadOnlySpan<char> paramsSpan, HashSet<string> result)
+    {
+        int i = 0;
+        while (i < paramsSpan.Length)
+        {
+            while (i < paramsSpan.Length && char.IsWhiteSpace(paramsSpan[i])) i++;
+            if (i >= paramsSpan.Length) break;
+
+            char c = paramsSpan[i];
+
+            if (c == '.' && i + 2 < paramsSpan.Length && paramsSpan[i + 1] == '.' && paramsSpan[i + 2] == '.')
+            {
+                i += 3;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                int depth = 1;
+                i++;
+                while (i < paramsSpan.Length && depth > 0)
+                {
+                    if (paramsSpan[i] == '{') depth++;
+                    else if (paramsSpan[i] == '}') depth--;
+                    if (depth > 0) i++;
+                }
+                if (i < paramsSpan.Length) i++;
+                continue;
+            }
+            if (c == '[')
+            {
+                int depth = 1;
+                i++;
+                while (i < paramsSpan.Length && depth > 0)
+                {
+                    if (paramsSpan[i] == '[') depth++;
+                    else if (paramsSpan[i] == ']') depth--;
+                    if (depth > 0) i++;
+                }
+                if (i < paramsSpan.Length) i++;
+                continue;
+            }
+
+            if (c == ',') { i++; continue; }
+
+            if (s_identStartChars.Contains(c))
+            {
+                int start = i;
+                while (i < paramsSpan.Length &&
+                       (char.IsLetterOrDigit(paramsSpan[i]) || paramsSpan[i] is '_' or '$'))
+                    i++;
+
+                result.Add(paramsSpan[start..i].ToString());
+
+                while (i < paramsSpan.Length && char.IsWhiteSpace(paramsSpan[i])) i++;
+                if (i < paramsSpan.Length && paramsSpan[i] == '=')
+                {
+                    i++;
+                    int depth = 0;
+                    while (i < paramsSpan.Length)
+                    {
+                        char vc = paramsSpan[i];
+                        if (vc is '(' or '[' or '{') depth++;
+                        else if (vc is ')' or ']' or '}') depth--;
+                        else if (vc == ',' && depth == 0) break;
+                        if (vc is '"' or '\'' or '`')
+                        {
+                            char q = vc;
+                            i++;
+                            while (i < paramsSpan.Length)
+                            {
+                                if (paramsSpan[i] == '\\' && i + 1 < paramsSpan.Length) { i += 2; continue; }
+                                if (paramsSpan[i] == q) break;
+                                i++;
+                            }
+                        }
+                        i++;
+                    }
+                }
+                continue;
+            }
+
+            i++;
+        }
     }
 
     public static string? FindDictArrayDefinition(string fullJs, string name) =>
@@ -364,7 +825,6 @@ internal static partial class JsFunctionExtractor
     public static string? FindFunctionDefinition(string fullJs, string name)
     {
         var fullSpan = fullJs.AsSpan();
-        // target: "name=function("
         var target = string.Concat(name, "=function(");
         var targetSpan = target.AsSpan();
 
@@ -376,14 +836,27 @@ internal static partial class JsFunctionExtractor
             idx += searchFrom;
             searchFrom = idx + targetSpan.Length;
 
-            if (idx > 0 && IsIdentChar(fullSpan[idx - 1])) continue;
+            if (idx > 0 && IsIdentCharStrict(fullSpan[idx - 1])) continue;
 
-            int funcStart = idx + name.Length + 1;
-            int braceOffset = fullSpan[funcStart..].IndexOf('{');
-            if (braceOffset < 0 || braceOffset > 300) continue;
+            int funcStart = idx + name.Length + 1; // position of "function("
 
-            int braceStart = funcStart + braceOffset;
-            int braceEnd = FindMatchingBrace(fullJs, braceStart);
+            // ═══ FIX: Правильно находим тело функции через FindMatchingParen ═══
+            // Сначала пропускаем parameter list (который может содержать { } для destructuring)
+            int parenPos = idx + target.Length - 1; // position of '('
+            int parenEnd = FindMatchingParen(fullJs, parenPos);
+            if (parenEnd < 0) continue;
+
+            // Теперь ищем { тела функции ПОСЛЕ закрывающей ) параметров
+            int bodySearchStart = parenEnd + 1;
+            int bodyBrace = -1;
+            for (int bi = bodySearchStart; bi < fullSpan.Length && bi < bodySearchStart + 50; bi++)
+            {
+                if (fullSpan[bi] == '{') { bodyBrace = bi; break; }
+                if (fullSpan[bi] is not (' ' or '\t' or '\n' or '\r')) break;
+            }
+            if (bodyBrace < 0) continue;
+
+            int braceEnd = FindMatchingBrace(fullJs, bodyBrace);
             if (braceEnd < 0) continue;
 
             int end = braceEnd + 1;
@@ -408,7 +881,7 @@ internal static partial class JsFunctionExtractor
             idx += searchFrom;
             searchFrom = idx + targetSpan.Length;
 
-            if (idx > 0 && IsIdentChar(fullSpan[idx - 1])) continue;
+            if (idx > 0 && IsIdentCharStrict(fullSpan[idx - 1])) continue;
 
             int afterEq = idx + name.Length + 1;
             if (afterEq < fullSpan.Length && fullSpan[afterEq] == '=') continue;
@@ -484,7 +957,7 @@ internal static partial class JsFunctionExtractor
             idx += searchFrom;
             searchFrom = idx + targetSpan.Length;
 
-            if (idx > 0 && IsIdentChar(fullSpan[idx - 1])) continue;
+            if (idx > 0 && IsIdentCharStrict(fullSpan[idx - 1])) continue;
 
             int afterEq = idx + name.Length + 1;
             if (afterEq < fullSpan.Length && fullSpan[afterEq] == '=') continue;
@@ -493,11 +966,14 @@ internal static partial class JsFunctionExtractor
             int valueStart = SkipHorizontalWhitespace(fullSpan, afterEq);
             if (valueStart >= fullSpan.Length) continue;
 
-            // Check for "function" keyword — 8 chars
             if (valueStart + 8 <= fullSpan.Length &&
                 fullSpan.Slice(valueStart, 8).SequenceEqual("function"))
                 continue;
             if (IsArrowFunctionStart(fullJs, valueStart)) continue;
+
+            if (valueStart + 5 <= fullSpan.Length &&
+                fullSpan.Slice(valueStart, 5).SequenceEqual("class"))
+                continue;
 
             int valueEnd = SkipValue(fullJs, valueStart);
             if (valueEnd <= valueStart) continue;
@@ -506,14 +982,192 @@ internal static partial class JsFunctionExtractor
             var valueSpan = fullSpan[valueStart..valueEnd];
             if (!IsValidValue(valueSpan)) continue;
 
+            // HasBalancedBraces только для коротких value — для длинных доверяем SkipValue
+            if (valueSpan.Length < 5000 && !HasBalancedBraces(valueSpan))
+                continue;
+
             return fullJs[valueStart..valueEnd];
         }
         return null;
     }
 
     /// <summary>
-    /// Fallback for object definitions (handles cases like TZ = {...}).
+    /// Быстрая проверка баланса скобок в извлечённом фрагменте.
+    /// Учитывает строки и комментарии — пропускает скобки внутри них.
+    /// Учитывает regex литералы после операторов.
     /// </summary>
+    private static bool HasBalancedBraces(ReadOnlySpan<char> code)
+    {
+        int braces = 0, brackets = 0, parens = 0;
+        for (int i = 0; i < code.Length; i++)
+        {
+            switch (code[i])
+            {
+                case '{': braces++; break;
+                case '}': braces--; break;
+                case '[': brackets++; break;
+                case ']': brackets--; break;
+                case '(': parens++; break;
+                case ')': parens--; break;
+                case '/' when i + 1 < code.Length:
+                    if (code[i + 1] == '/')
+                    {
+                        // Line comment
+                        i++;
+                        while (i < code.Length && code[i] != '\n') i++;
+                        continue;
+                    }
+                    if (code[i + 1] == '*')
+                    {
+                        // Block comment
+                        i += 2;
+                        while (i + 1 < code.Length)
+                        {
+                            if (code[i] == '*' && code[i + 1] == '/') { i++; break; }
+                            i++;
+                        }
+                        continue;
+                    }
+                    // Potential regex — check if preceded by operator
+                    if (IsRegexContext(code, i))
+                    {
+                        i = SkipRegexLiteral(code, i);
+                    }
+                    break;
+                case '"' or '\'' or '`':
+                    char q = code[i];
+                    i++;
+                    while (i < code.Length)
+                    {
+                        if (code[i] == '\\' && i + 1 < code.Length) { i += 2; continue; }
+                        if (code[i] == q) break;
+                        if (q == '`' && code[i] == '$' && i + 1 < code.Length && code[i + 1] == '{')
+                        {
+                            // Template literal — skip ${...} recursively
+                            i += 2;
+                            int d = 1;
+                            while (i < code.Length && d > 0)
+                            {
+                                if (code[i] is '"' or '\'' or '`')
+                                {
+                                    char innerQ = code[i]; i++;
+                                    while (i < code.Length)
+                                    {
+                                        if (code[i] == '\\' && i + 1 < code.Length) { i += 2; continue; }
+                                        if (code[i] == innerQ) break;
+                                        i++;
+                                    }
+                                }
+                                else if (code[i] == '{') d++;
+                                else if (code[i] == '}') d--;
+                                if (d > 0) i++;
+                            }
+                            continue;
+                        }
+                        i++;
+                    }
+                    break;
+            }
+            if (braces < 0 || brackets < 0 || parens < 0) return false;
+        }
+        return braces == 0 && brackets == 0 && parens == 0;
+    }
+
+    /// <summary>
+    /// Определяет, является ли `/` в позиции `pos` началом regex литерала.
+    /// В JS `/` может быть:
+    ///   1. Деление: a / b
+    ///   2. Regex: /pattern/flags
+    /// 
+    /// Regex следует после: = ( [ { , ; ! &amp; | ^ ~ ? : return typeof void delete
+    /// Деление следует после: идентификатор, число, ) ] ++ --
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsRegexContext(ReadOnlySpan<char> code, int pos)
+    {
+        if (pos == 0) return true;
+
+        // Ищем последний значимый символ перед /
+        int j = pos - 1;
+        while (j >= 0 && code[j] is ' ' or '\t') j--;
+        if (j < 0) return true;
+
+        char prev = code[j];
+
+        // После этих символов всегда regex
+        if (s_regexPrecedingChars.Contains(prev))
+            return true;
+
+        // После ) или ] — деление (result of expression)
+        if (prev is ')' or ']')
+            return false;
+
+        // После идентификатора — обычно деление, КРОМЕ ключевых слов
+        if (char.IsLetterOrDigit(prev) || prev is '_' or '$')
+        {
+            // Проверяем: это ключевое слово "return", "typeof", "void", "delete", "case",
+            // "throw", "in", "instanceof", "new"?
+            int wordEnd = j + 1;
+            int wordStart = j;
+            while (wordStart > 0 && (char.IsLetterOrDigit(code[wordStart - 1]) || code[wordStart - 1] is '_' or '$'))
+                wordStart--;
+
+            var word = code[wordStart..wordEnd];
+            if (word.SequenceEqual("return") || word.SequenceEqual("typeof") ||
+                word.SequenceEqual("void") || word.SequenceEqual("delete") ||
+                word.SequenceEqual("case") || word.SequenceEqual("throw") ||
+                word.SequenceEqual("in") || word.SequenceEqual("instanceof") ||
+                word.SequenceEqual("new") || word.SequenceEqual("else"))
+            {
+                return true;
+            }
+
+            return false; // identifier / number — это деление
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Пропускает regex литерал начиная с `/`.
+    /// Возвращает позицию ПОСЛЕДНЕГО символа regex (включая flags).
+    /// Обрабатывает escaped символы и character classes [...].
+    /// </summary>
+    private static int SkipRegexLiteral(ReadOnlySpan<char> code, int pos)
+    {
+        // pos points to opening /
+        int i = pos + 1;
+        while (i < code.Length)
+        {
+            char c = code[i];
+            if (c == '\\' && i + 1 < code.Length) { i += 2; continue; }
+            if (c == '/') break; // closing /
+            if (c == '[')
+            {
+                // Character class — scan to ]
+                i++;
+                while (i < code.Length)
+                {
+                    if (code[i] == '\\' && i + 1 < code.Length) { i += 2; continue; }
+                    if (code[i] == ']') break;
+                    i++;
+                }
+            }
+            if (c is '\n' or '\r') return pos; // Не regex — newline внутри
+            i++;
+        }
+
+        // Skip flags (gimsuy)
+        if (i < code.Length && code[i] == '/')
+        {
+            i++;
+            while (i < code.Length && char.IsLetter(code[i])) i++;
+            return i - 1;
+        }
+
+        return pos; // Не удалось разобрать как regex
+    }
+
     public static string? FindObjectDefinition(string fullJs, string name)
     {
         var fullSpan = fullJs.AsSpan();
@@ -527,12 +1181,10 @@ internal static partial class JsFunctionExtractor
             idx += searchFrom;
             searchFrom = idx + name.Length;
 
-            // Word boundary: before
             if (idx > 0 && (char.IsLetterOrDigit(fullSpan[idx - 1]) ||
                             fullSpan[idx - 1] is '_' or '$' or '.'))
                 continue;
 
-            // Word boundary: after
             int afterName = idx + name.Length;
             if (afterName < fullSpan.Length &&
                 (char.IsLetterOrDigit(fullSpan[afterName]) || fullSpan[afterName] is '_' or '$'))
@@ -542,7 +1194,6 @@ internal static partial class JsFunctionExtractor
             if (pos >= fullSpan.Length || fullSpan[pos] != '=') continue;
             pos++;
 
-            // Skip '==' (comparison)
             if (pos < fullSpan.Length && fullSpan[pos] == '=') continue;
 
             pos = SkipWhitespace(fullSpan, pos);
@@ -567,23 +1218,32 @@ internal static partial class JsFunctionExtractor
     {
         var jsSpan = js.AsSpan();
 
-        // Pattern 1: name=function(
+        // Strategy 1: name=function(
         var funcTarget = string.Concat(name, "=function(");
         int idx = jsSpan.IndexOf(funcTarget.AsSpan(), StringComparison.Ordinal);
-        if (idx >= 0 && (idx == 0 || !IsIdentChar(jsSpan[idx - 1])))
+        if (idx >= 0 && (idx == 0 || !IsIdentCharStrict(jsSpan[idx - 1])))
         {
-            int funcStart = idx + name.Length + 1;
-            int braceOffset = jsSpan[funcStart..].IndexOf('{');
-            if (braceOffset >= 0 && braceOffset <= 300)
+            int parenStart = idx + funcTarget.Length - 1;
+            int parenEnd = FindMatchingParen(js, parenStart);
+            if (parenEnd > 0)
             {
-                int braceStart = funcStart + braceOffset;
-                int braceEnd = FindMatchingBrace(js, braceStart);
-                if (braceEnd > 0)
-                    return new JsFunctionInfo(name, js[funcStart..(braceEnd + 1)], idx);
+                int bodyStart = parenEnd + 1;
+                while (bodyStart < jsSpan.Length && jsSpan[bodyStart] is ' ' or '\t' or '\n' or '\r')
+                    bodyStart++;
+
+                if (bodyStart < jsSpan.Length && jsSpan[bodyStart] == '{')
+                {
+                    int braceEnd = FindMatchingBrace(js, bodyStart);
+                    if (braceEnd > 0)
+                    {
+                        int funcStart = idx + name.Length + 1;
+                        return new JsFunctionInfo(name, js[funcStart..(braceEnd + 1)], idx);
+                    }
+                }
             }
         }
 
-        // Pattern 2: name=...=>  (arrow function)
+        // Strategy 2: Arrow functions
         var eqTarget = string.Concat(name, "=");
         var eqTargetSpan = eqTarget.AsSpan();
 
@@ -595,7 +1255,7 @@ internal static partial class JsFunctionExtractor
             idx += searchFrom;
             searchFrom = idx + eqTargetSpan.Length;
 
-            if (idx > 0 && IsIdentChar(jsSpan[idx - 1])) continue;
+            if (idx > 0 && IsIdentCharStrict(jsSpan[idx - 1])) continue;
 
             int afterEq = idx + name.Length + 1;
             if (afterEq >= jsSpan.Length || jsSpan[afterEq] == '=') continue;
@@ -627,10 +1287,12 @@ internal static partial class JsFunctionExtractor
             if (!isArrow) continue;
 
             int funcStart2 = idx + name.Length + 1;
-            int braceOffset2 = jsSpan[funcStart2..].IndexOf('{');
+            // Arrow function body
+            int arrowBodySearch = funcStart2;
+            int braceOffset2 = jsSpan[arrowBodySearch..].IndexOf('{');
             if (braceOffset2 >= 0 && braceOffset2 <= 300)
             {
-                int braceStart = funcStart2 + braceOffset2;
+                int braceStart = arrowBodySearch + braceOffset2;
                 int braceEnd = FindMatchingBrace(js, braceStart);
                 if (braceEnd > 0)
                     return new JsFunctionInfo(name, js[funcStart2..(braceEnd + 1)], idx);
@@ -640,6 +1302,15 @@ internal static partial class JsFunctionExtractor
         return null;
     }
 
+    /// <summary>
+    /// Находит все идентификаторы, на которые ссылается код.
+    /// 
+    /// ВАЖНО: НЕ фильтрует параметры/локальные переменные —
+    /// это ответственность вызывающего кода (ExtractBundle).
+    /// Но фильтрует стандартные JS-имена (SkipNames) и
+    /// однобуквенные строчные буквы (a-z), которые практически
+    /// всегда являются параметрами/переменными, а не глобальными функциями.
+    /// </summary>
     public static HashSet<string> FindReferencedNames(string code)
     {
         var result = new HashSet<string>(32);
@@ -650,14 +1321,12 @@ internal static partial class JsFunctionExtractor
         {
             char c = span[i];
 
-            // Skip strings
             if (c is '"' or '\'' or '`')
             {
                 i = SkipString(code, i);
                 continue;
             }
 
-            // Skip comments
             if (c == '/' && i + 1 < span.Length)
             {
                 if (span[i + 1] == '/')
@@ -673,9 +1342,14 @@ internal static partial class JsFunctionExtractor
                     i = endComment >= 0 ? i + endComment + 2 : span.Length;
                     continue;
                 }
+                // Regex
+                if (IsRegexContext(span, i))
+                {
+                    int regEnd = SkipRegexLiteral(span, i);
+                    if (regEnd > i) { i = regEnd + 1; continue; }
+                }
             }
 
-            // Identifier start
             if (s_identStartChars.Contains(c))
             {
                 int start = i;
@@ -685,17 +1359,24 @@ internal static partial class JsFunctionExtractor
                     i++;
 
                 int len = i - start;
-                if (len is >= 2 and <= 20 &&
+                if (len is >= 1 and <= 20 &&
                     (start == 0 || span[start - 1] != '.'))
                 {
-                    var ident = span.Slice(start, len).ToString();
-                    if (!SkipNames.Contains(ident))
-                        result.Add(ident);
+                    var ident = span.Slice(start, len);
+
+                    // ═══ Пропускаем однобуквенные строчные — это почти всегда
+                    // параметры/локальные переменные, FindAnyDefinition
+                    // найдёт случайное определение из другой функции ═══
+                    if (len == 1 && char.IsLower(ident[0]))
+                        continue;
+
+                    var identStr = ident.ToString();
+                    if (!SkipNames.Contains(identStr))
+                        result.Add(identStr);
                 }
                 continue;
             }
 
-            // Skip numeric tokens
             if (char.IsAsciiDigit(c))
             {
                 while (i < span.Length &&
@@ -713,6 +1394,10 @@ internal static partial class JsFunctionExtractor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsIdentChar(char c) =>
         char.IsLetterOrDigit(c) || c is '_' or '$' or '.';
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsIdentCharStrict(char c) =>
+        char.IsLetterOrDigit(c) || c is '_' or '$';
 
     public static int FindMatchingBrace(string js, int pos) => FindMatching(js, pos, '{', '}');
     public static int FindMatchingBracket(string js, int pos) => FindMatching(js, pos, '[', ']');
@@ -749,17 +1434,16 @@ internal static partial class JsFunctionExtractor
             return i;
         }
 
-        // Optimized: scan for quote or backslash using IndexOfAny
         var span = js.AsSpan();
         while (i < span.Length)
         {
             int found = span[i..].IndexOfAny(quote, '\\');
-            if (found < 0) return span.Length; // unterminated string
+            if (found < 0) return span.Length;
             i += found;
 
             if (span[i] == '\\') { i += 2; continue; }
 
-            return i + 1; // closing quote
+            return i + 1;
         }
 
         return i;
@@ -771,7 +1455,6 @@ internal static partial class JsFunctionExtractor
     // PRIVATE HELPERS
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>Skips ' ' and '\t', returns new position.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int SkipHorizontalWhitespace(ReadOnlySpan<char> span, int pos)
     {
@@ -779,12 +1462,158 @@ internal static partial class JsFunctionExtractor
         return pos;
     }
 
-    /// <summary>Skips all whitespace chars, returns new position.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int SkipWhitespace(ReadOnlySpan<char> span, int pos)
     {
         while (pos < span.Length && char.IsWhiteSpace(span[pos])) pos++;
         return pos;
+    }
+
+    /// <summary>
+    /// Проверяет, содержит ли код top-level try без соответствующего catch/finally.
+    /// </summary>
+    private static bool HasUnmatchedTopLevelTry(string code)
+    {
+        if (code.IndexOf("try", StringComparison.Ordinal) < 0)
+            return false;
+
+        var span = code.AsSpan();
+        int i = 0;
+        int braceDepth = 0;
+        int unmatchedTry = 0;
+
+        Span<int> scopeStack = stackalloc int[64];
+        int scopeTop = -1;
+
+        while (i < span.Length)
+        {
+            char c = span[i];
+
+            if (c is '"' or '\'' or '`') { i = SkipString(code, i); continue; }
+
+            if (c == '/' && i + 1 < span.Length)
+            {
+                if (span[i + 1] == '/')
+                {
+                    int nl = span[i..].IndexOf('\n');
+                    i = nl >= 0 ? i + nl + 1 : span.Length;
+                    continue;
+                }
+                if (span[i + 1] == '*')
+                {
+                    i += 2;
+                    int end = span[i..].IndexOf("*/");
+                    i = end >= 0 ? i + end + 2 : span.Length;
+                    continue;
+                }
+                if (IsRegexContext(span, i))
+                {
+                    int regEnd = SkipRegexLiteral(span, i);
+                    if (regEnd > i) { i = regEnd + 1; continue; }
+                }
+            }
+
+            if (c == '{')
+            {
+                braceDepth++;
+                i++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                braceDepth--;
+                if (scopeTop >= 0 && braceDepth == scopeStack[scopeTop])
+                {
+                    scopeTop--;
+                }
+                i++;
+                continue;
+            }
+
+            if (c == 'f' && MatchKeyword(span, i, "function"))
+            {
+                // Пропускаем до { через FindMatchingParen (для destructuring)
+                int parenPos = -1;
+                for (int pi = i + 8; pi < span.Length && pi < i + 200; pi++)
+                {
+                    if (span[pi] == '(') { parenPos = pi; break; }
+                    if (span[pi] is not (' ' or '\t' or '*')) break;
+                }
+                if (parenPos >= 0)
+                {
+                    int parenEnd = FindMatchingParen(code, parenPos);
+                    if (parenEnd > 0)
+                    {
+                        // Ищем { после )
+                        int bodySearch = parenEnd + 1;
+                        while (bodySearch < span.Length && span[bodySearch] is ' ' or '\t' or '\n' or '\r') bodySearch++;
+                        if (bodySearch < span.Length && span[bodySearch] == '{')
+                        {
+                            if (scopeTop + 1 < scopeStack.Length)
+                                scopeStack[++scopeTop] = braceDepth;
+                            i = bodySearch;
+                            continue;
+                        }
+                    }
+                }
+                i += 8;
+                continue;
+            }
+
+            if (c == '=' && i + 1 < span.Length && span[i + 1] == '>')
+            {
+                int afterArrow = SkipHorizontalWhitespace(span, i + 2);
+                if (afterArrow < span.Length && span[afterArrow] == '{')
+                {
+                    if (scopeTop + 1 < scopeStack.Length)
+                        scopeStack[++scopeTop] = braceDepth;
+                    i = afterArrow;
+                    continue;
+                }
+                i += 2;
+                continue;
+            }
+
+            if (scopeTop >= 0) { i++; continue; }
+
+            if (c == 't' && MatchKeyword(span, i, "try"))
+            {
+                unmatchedTry++;
+                i += 3;
+                continue;
+            }
+
+            if (c == 'c' && MatchKeyword(span, i, "catch"))
+            {
+                if (unmatchedTry > 0) unmatchedTry--;
+                i += 5;
+                continue;
+            }
+
+            if (c == 'f' && MatchKeyword(span, i, "finally"))
+            {
+                if (unmatchedTry > 0) unmatchedTry--;
+                i += 7;
+                continue;
+            }
+
+            i++;
+        }
+
+        return unmatchedTry > 0;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool MatchKeyword(ReadOnlySpan<char> span, int i, string keyword)
+    {
+        int len = keyword.Length;
+        if (i + len > span.Length) return false;
+        if (!span.Slice(i, len).SequenceEqual(keyword)) return false;
+        if (i > 0 && IsIdentCharStrict(span[i - 1])) return false;
+        if (i + len < span.Length && (char.IsLetterOrDigit(span[i + len]) || span[i + len] is '_' or '$'))
+            return false;
+        return true;
     }
 
     private static HashSet<string> FindTypeofGuardVars(
@@ -825,14 +1654,16 @@ internal static partial class JsFunctionExtractor
             idx += searchFrom;
             searchFrom = idx + targetSpan.Length;
 
-            if (idx > 0 && IsIdentChar(fullSpan[idx - 1])) continue;
+            if (idx > 0 && IsIdentCharStrict(fullSpan[idx - 1])) continue;
 
             int bracketPos = idx + name.Length + 1;
             int bracketEnd = FindMatchingBracket(fullJs, bracketPos);
             if (bracketEnd < 0) continue;
 
             int elementCount = CountTopLevelCommas(fullJs, bracketPos + 1, bracketEnd) + 1;
-            if (elementCount < 50) continue;
+
+            int minElements = name.Length <= 2 ? 20 : 50;
+            if (elementCount < minElements) continue;
 
             int sampleEnd = Math.Min(bracketPos + 500, bracketEnd);
             var sampleSpan = fullSpan[bracketPos..sampleEnd];
@@ -842,6 +1673,8 @@ internal static partial class JsFunctionExtractor
             if (end < fullSpan.Length && fullSpan[end] == ';') end++;
 
             var valuePart = fullSpan[bracketPos..end];
+
+            Log.Debug($"[JsExtractor] Found bracket array '{name}' with {elementCount} elements");
             return string.Concat("var ".AsSpan(), name.AsSpan(), "=".AsSpan(), valuePart);
         }
         return null;
@@ -867,7 +1700,7 @@ internal static partial class JsFunctionExtractor
                 idx += searchFrom;
                 searchFrom = idx + targetSpan.Length;
 
-                if (idx > 0 && IsIdentChar(fullSpan[idx - 1])) continue;
+                if (idx > 0 && IsIdentCharStrict(fullSpan[idx - 1])) continue;
 
                 int eqPos = idx + name.Length;
                 if (eqPos + 1 < fullSpan.Length &&
@@ -895,7 +1728,6 @@ internal static partial class JsFunctionExtractor
 
                 var stringContent = fullSpan.Slice(quoteStart + 1, quoteEnd - quoteStart - 2);
 
-                // ═══ Extract separator from .split("X") and count elements ═══
                 int sepAreaStart = splitParenStart + 1;
                 int sepPos = SkipHorizontalWhitespace(fullSpan, sepAreaStart);
                 if (sepPos >= fullSpan.Length || fullSpan[sepPos] is not ('"' or '\'')) continue;
@@ -923,7 +1755,6 @@ internal static partial class JsFunctionExtractor
                     sPos += found + separator.Length;
                 }
                 if (separatorCount + 1 < 50) continue;
-                // ═══ END ═══
 
                 var definitionSpan = fullSpan[(idx + name.Length + 1)..end];
 
@@ -1036,13 +1867,25 @@ internal static partial class JsFunctionExtractor
 
         char c = span[i];
 
-        // Skip function(...) { ... }
         if (c == 'f' && i + 8 <= span.Length && span.Slice(i, 8).SequenceEqual("function"))
         {
-            int braceOffset = span[(i + 8)..].IndexOf('{');
-            if (braceOffset < 0 || braceOffset > 200) return i;
-            int braceStart = i + 8 + braceOffset;
-            int braceEnd = FindMatchingBrace(js, braceStart);
+            // Правильно пропускаем function: через параметры → тело
+            int parenStart = -1;
+            for (int pi = i + 8; pi < span.Length && pi < i + 200; pi++)
+            {
+                if (span[pi] == '(') { parenStart = pi; break; }
+                if (span[pi] is not (' ' or '\t' or '*') && !IsIdentCharStrict(span[pi])) break;
+            }
+            if (parenStart < 0) return i;
+
+            int parenEnd = FindMatchingParen(js, parenStart);
+            if (parenEnd < 0) return i;
+
+            int bodyStart = parenEnd + 1;
+            while (bodyStart < span.Length && span[bodyStart] is ' ' or '\t' or '\n' or '\r') bodyStart++;
+            if (bodyStart >= span.Length || span[bodyStart] != '{') return i;
+
+            int braceEnd = FindMatchingBrace(js, bodyStart);
             return braceEnd >= 0 ? braceEnd + 1 : i;
         }
 
@@ -1051,7 +1894,6 @@ internal static partial class JsFunctionExtractor
         if (c == '(') { int end = FindMatchingParen(js, i); return end >= 0 ? end + 1 : i; }
         if (c is '"' or '\'' or '`') return SkipString(js, i);
 
-        // Skip new Class(...)
         if (c == 'n' && i + 4 <= span.Length && span.Slice(i, 4).SequenceEqual("new "))
         {
             i += 4;
@@ -1066,7 +1908,6 @@ internal static partial class JsFunctionExtractor
             return i;
         }
 
-        // Skip to next statement boundary
         int depth = 0;
         while (i < span.Length)
         {
@@ -1082,7 +1923,12 @@ internal static partial class JsFunctionExtractor
     }
 
     /// <summary>
-    /// Universal matching bracket finder, respecting strings and comments.
+    /// Находит парный символ (скобку) с учётом строк, комментариев и regex литералов.
+    /// 
+    /// КЛЮЧЕВОЕ УЛУЧШЕНИЕ: Обработка regex литералов.
+    /// В минифицированном JS часто встречается `};/regex/` — без обработки regex
+    /// парсер принимает `/` за оператор деления и теряет синхронизацию,
+    /// что приводит к обрезанию больших функций (например fD ~160KB).
     /// </summary>
     private static int FindMatching(string js, int openPos, char open, char close)
     {
@@ -1116,6 +1962,12 @@ internal static partial class JsFunctionExtractor
                         i = endComment >= 0 ? i + endComment + 2 : span.Length;
                         continue;
                     }
+                    // ═══ REGEX HANDLING ═══
+                    if (IsRegexContext(span, i))
+                    {
+                        int regEnd = SkipRegexLiteral(span, i);
+                        if (regEnd > i) { i = regEnd + 1; continue; }
+                    }
                     break;
             }
             i++;
@@ -1128,9 +1980,6 @@ internal static partial class JsFunctionExtractor
     // SPAN-BASED PARSING HELPERS
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Zero-alloc parse of "content".split("separator") pattern.
-    /// </summary>
     private static bool TryParseSplitExpression(
         ReadOnlySpan<char> def,
         out ReadOnlySpan<char> content,
@@ -1159,13 +2008,12 @@ internal static partial class JsFunctionExtractor
         int afterContent = contentEnd + 1;
         var rest = def[afterContent..];
 
-        // Skip whitespace
         int ws = 0;
         while (ws < rest.Length && rest[ws] is ' ' or '\t') ws++;
         rest = rest[ws..];
 
         if (!rest.StartsWith(".split(")) return false;
-        rest = rest[7..]; // skip ".split("
+        rest = rest[7..];
 
         ws = 0;
         while (ws < rest.Length && rest[ws] is ' ' or '\t') ws++;
@@ -1189,12 +2037,8 @@ internal static partial class JsFunctionExtractor
         return true;
     }
 
-    /// <summary>
-    /// Splits content by separator. Single allocation for result array.
-    /// </summary>
     private static string[] SplitToArray(ReadOnlySpan<char> content, ReadOnlySpan<char> separator)
     {
-        // Count occurrences first
         int count = 1;
         int pos = 0;
         while (pos <= content.Length - separator.Length)
@@ -1221,9 +2065,6 @@ internal static partial class JsFunctionExtractor
         return result;
     }
 
-    /// <summary>
-    /// Splits bracket array elements, trimming quotes and whitespace.
-    /// </summary>
     private static string[] SplitBracketElements(ReadOnlySpan<char> inner)
     {
         var list = new List<string>(64);
@@ -1247,9 +2088,8 @@ internal static partial class JsFunctionExtractor
                     i++;
                 }
                 int elemLen = i - start;
-                if (elemLen > 0)
-                    list.Add(inner.Slice(start, elemLen).ToString());
-                if (i < inner.Length) i++; // skip closing quote
+                list.Add(elemLen > 0 ? inner.Slice(start, elemLen).ToString() : "");
+                if (i < inner.Length) i++;
             }
             else
             {
@@ -1265,19 +2105,14 @@ internal static partial class JsFunctionExtractor
         return [.. list];
     }
 
-    /// <summary>
-    /// Parses comma-separated identifiers from span into result set.
-    /// </summary>
     private static void ParseCommaSeparatedIdents(ReadOnlySpan<char> span, HashSet<string> result)
     {
         int start = 0;
         while (start < span.Length)
         {
-            // Skip whitespace
             while (start < span.Length && span[start] is ' ' or '\t' or '\n' or '\r') start++;
             if (start >= span.Length) break;
 
-            // Find comma or end
             int end = span[start..].IndexOf(',');
             ReadOnlySpan<char> param;
             if (end >= 0)
@@ -1306,6 +2141,9 @@ internal static partial class JsFunctionExtractor
         sb.Append(a).Append(b).Append(c).Append(d).Append(e);
         return sb.ToString();
     }
+
+    private static string Truncate(string s, int len = 60) =>
+        s.Length <= len ? s : string.Concat(s.AsSpan(0, len), "...");
 
     // ═══════════════════════════════════════════════════════════════
     // GENERATED REGEX

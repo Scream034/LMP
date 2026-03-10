@@ -2,13 +2,27 @@
 
 using System.Diagnostics;
 using LMP.Core.Youtube.Bridge.SigCipher;
+using LMP.Tests.Framework;
 
 namespace LMP.Tests.Unit;
 
 /// <summary>
 /// Исчерпывающие тесты SigCipherSolver.
-/// Покрывает все паттерны, граничные случаи и стресс-тесты.
+/// <para>
+/// Покрывает:
+/// <list type="bullet">
+///   <item>Все известные паттерны YouTube</item>
+///   <item>Диапазон swap-параметров 1-99</item>
+///   <item>Все splice-значения 1-3</item>
+///   <item>Различные длины подписей 85-115</item>
+///   <item>Random-комбинации для стресс-теста</item>
+///   <item>Edge cases: null, empty, invalid</item>
+/// </list>
+/// </para>
 /// </summary>
+/// <remarks>
+/// Параметры стресс-теста и benchmark'а берутся из <see cref="TestConfig.SolverConfig"/>.
+/// </remarks>
 public static class SigCipherSolverTests
 {
     /// <summary>Стандартная YouTube-подпись: 105 символов.</summary>
@@ -27,6 +41,7 @@ public static class SigCipherSolverTests
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>Тестирует каждый известный паттерн YouTube отдельно.</summary>
+    [TestMethod(TestCategory.Unit, "Solver: All Known Patterns", Group = TestGroups.Solver, Order = 10)]
     public static Task TestAllKnownPatternsAsync()
     {
         var patterns = new (string Name, SigCipherOperation[] Ops)[]
@@ -124,13 +139,13 @@ public static class SigCipherSolverTests
     /// Проверяет что solver находит решение для ВСЕХ swap-значений 1-99.
     /// Это критический тест: YouTube может использовать любое значение.
     /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: All Swap Values (1-99)", Group = TestGroups.Solver, Order = 20)]
     public static Task TestAllSwapValuesAsync()
     {
         int passed = 0;
         int failed = 0;
         var failedValues = new List<int>();
 
-        // Тестируем паттерн swap→reverse→splice с каждым возможным swap
         for (int swapVal = 1; swapVal <= 99; swapVal++)
         {
             var ops = new SigCipherOperation[]
@@ -166,13 +181,13 @@ public static class SigCipherSolverTests
     /// <summary>
     /// Тестирует двойные swap'ы с разными комбинациями параметров.
     /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: Double Swap Range", Group = TestGroups.Solver, Order = 30)]
     public static Task TestDoubleSwapRangeAsync()
     {
         int passed = 0;
         int failed = 0;
         int total = 0;
 
-        // Выборка: каждый 10-й swap для первого, каждый 5-й для второго
         for (int s1 = 1; s1 <= 99; s1 += 10)
         {
             for (int s2 = 1; s2 <= 99; s2 += 5)
@@ -214,6 +229,7 @@ public static class SigCipherSolverTests
     /// <summary>
     /// YouTube подписи бывают 90-110 символов. Проверяем весь диапазон.
     /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: Signature Lengths (85-115)", Group = TestGroups.Solver, Order = 40)]
     public static Task TestVariousSignatureLengthsAsync()
     {
         const string alphabet =
@@ -260,6 +276,10 @@ public static class SigCipherSolverTests
     // 4. ВСЕ SPLICE-ЗНАЧЕНИЯ
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Проверяет все реальные splice-значения: 1, 2, 3.
+    /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: All Splice Values (1-3)", Group = TestGroups.Solver, Order = 50)]
     public static Task TestAllSpliceValuesAsync()
     {
         int passed = 0;
@@ -289,9 +309,13 @@ public static class SigCipherSolverTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 5. РЕАЛИСТИЧНЫЕ ПОДПИСИ (как от YouTube API)
+    // 5. РЕАЛИСТИЧНЫЕ ПОДПИСИ
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Тестирует солвер на реалистичной подписи с символами YouTube.
+    /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: Realistic Signatures", Group = TestGroups.Solver, Order = 60)]
     public static Task TestRealisticSignaturesAsync()
     {
         var ops = new SigCipherOperation[]
@@ -303,8 +327,6 @@ public static class SigCipherSolverTests
         };
 
         var manifest = new SigCipherManifest("v", ops, "t");
-
-        // Тест с реалистичной подписью
         var decrypted = manifest.Decipher(RealisticSignature);
         var solved = SigCipherSolver.Solve(RealisticSignature, decrypted);
 
@@ -317,13 +339,18 @@ public static class SigCipherSolverTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 6. СТРЕСС-ТЕСТ (СЛУЧАЙНЫЕ КОМБИНАЦИИ)
+    // 6. СТРЕСС-ТЕСТ
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// 100 случайных комбинаций паттернов и параметров.
+    /// N случайных комбинаций паттернов и параметров.
     /// Допускается не более 2% фейлов (из-за коллизий символов).
     /// </summary>
+    /// <remarks>
+    /// Количество комбинаций берётся из <see cref="TestConfig.SolverConfig.RandomCombinationsCount"/>.
+    /// </remarks>
+    [TestMethod(TestCategory.Unit, "Solver: Random Combinations", Group = TestGroups.Solver, Order = 70,
+        TimeoutSeconds = 60)]
     public static Task TestRandomCombinationsAsync()
     {
         var rng = new Random(42);
@@ -340,7 +367,7 @@ public static class SigCipherSolverTests
 
         int passed = 0;
         int failed = 0;
-        const int totalTests = 100;
+        var totalTests = TestConfig.Get().Solver.RandomCombinationsCount;
 
         var sw = Stopwatch.StartNew();
 
@@ -373,7 +400,7 @@ public static class SigCipherSolverTests
 
         sw.Stop();
 
-        int maxAllowedFailures = totalTests * 2 / 100; // 2%
+        int maxAllowedFailures = totalTests * 2 / 100;
         Assert(failed <= maxAllowedFailures,
             $"Random: {failed}/{totalTests} failed (max allowed: {maxAllowedFailures})");
 
@@ -384,54 +411,21 @@ public static class SigCipherSolverTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 7. PERFORMANCE BENCHMARK
+    // 7. EDGE CASES
     // ═══════════════════════════════════════════════════════════════
 
-    public static Task BenchmarkSolverAsync()
-    {
-        var ops = new SigCipherOperation[]
-        {
-            new(SigCipherOpType.Swap, 64),
-            new(SigCipherOpType.Reverse, 0),
-            new(SigCipherOpType.Swap, 56),
-            new(SigCipherOpType.Splice, 1),
-        };
-
-        var manifest = new SigCipherManifest("v", ops, "t");
-        var decrypted = manifest.Decipher(StandardSignature);
-
-        // Warm-up
-        SigCipherSolver.Solve(StandardSignature, decrypted);
-
-        // Benchmark
-        const int iterations = 50;
-        var sw = Stopwatch.StartNew();
-
-        for (int i = 0; i < iterations; i++)
-            SigCipherSolver.Solve(StandardSignature, decrypted);
-
-        sw.Stop();
-        var avgMs = sw.Elapsed.TotalMilliseconds / iterations;
-
-        Assert(avgMs < 100, $"Solver too slow: {avgMs:F2}ms avg (max 100ms)");
-        Log.Info($"[SolverBench] Average: {avgMs:F2}ms per solve ({iterations} iterations)");
-
-        return Task.CompletedTask;
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // 8. EDGE CASES
-    // ═══════════════════════════════════════════════════════════════
-
+    /// <summary>
+    /// Проверяет граничные случаи: null, empty, invalid inputs.
+    /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: Edge Cases", Group = TestGroups.Solver, Order = 80)]
     public static Task TestEdgeCasesAsync()
     {
-        // Null/empty
+        // Null inputs
         Assert(SigCipherSolver.Solve(null!, "abc") is null, "Null input should return null");
         Assert(SigCipherSolver.Solve("abc", null!) is null, "Null expected should return null");
         Assert(SigCipherSolver.Solve("", "") is null, "Empty should return null");
 
-        // Same length (splice=0, should try 1-3)
-        // This is unusual for YouTube but should not crash
+        // Паттерн без splice (не поддерживается)
         var opsNoSplice = new SigCipherOperation[]
         {
             new(SigCipherOpType.Swap, 50),
@@ -440,16 +434,15 @@ public static class SigCipherSolverTests
         var manifestNoSplice = new SigCipherManifest("v", opsNoSplice, "t");
         var decryptedNoSplice = manifestNoSplice.Decipher(StandardSignature);
 
-        // Solver might not find this (no splice pattern matches same-length)
-        // But it should NOT crash
+        // Should NOT crash
         var resultNoSplice = SigCipherSolver.Solve(StandardSignature, decryptedNoSplice);
         Log.Info($"[SolverTest] No-splice: {(resultNoSplice is not null ? "found" : "null (expected)")}");
 
-        // Output longer than input (negative splice) — should return null
+        // Негативный splice (output длиннее input) — invalid
         Assert(SigCipherSolver.Solve("abc", "abcde") is null,
             "Negative splice should return null");
 
-        // Splice > 3 — should return null
+        // Splice > 3 — unsupported
         Assert(SigCipherSolver.Solve("abcdefghij", "abcdef") is null,
             "Splice > 3 should return null");
 
@@ -458,9 +451,13 @@ public static class SigCipherSolverTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 9. PARALLEL SOLVER
+    // 8. PARALLEL SOLVER
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Тестирует параллельную версию солвера.
+    /// </summary>
+    [TestMethod(TestCategory.Unit, "Solver: Parallel", Group = TestGroups.Solver, Order = 90)]
     public static Task TestParallelSolverAsync()
     {
         var ops = new SigCipherOperation[]
@@ -487,54 +484,63 @@ public static class SigCipherSolverTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // RUNNER
+    // 9. BENCHMARK
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>Запускает все тесты солвера.</summary>
-    public static async Task RunAllAsync()
+    /// <summary>
+    /// Benchmark: измеряет среднее время решения.
+    /// </summary>
+    /// <remarks>
+    /// Количество итераций берётся из <see cref="TestConfig.SolverConfig.BenchmarkIterations"/>.
+    /// </remarks>
+    [TestMethod(TestCategory.Benchmark, "Solver: Performance Benchmark", Group = TestGroups.Solver, Order = 100)]
+    public static Task BenchmarkSolverAsync()
     {
-        Log.Info("\n══════════════════════════════════════");
-        Log.Info("  SIG CIPHER SOLVER TEST SUITE");
-        Log.Info("══════════════════════════════════════\n");
-
-        var sw = Stopwatch.StartNew();
-        int passed = 0;
-        int failed = 0;
-
-        var tests = new (string Name, Func<Task> Test)[]
+        var ops = new SigCipherOperation[]
         {
-            ("All Known Patterns", TestAllKnownPatternsAsync),
-            ("All Swap Values (1-99)", TestAllSwapValuesAsync),
-            ("Double Swap Range", TestDoubleSwapRangeAsync),
-            ("Variable Lengths (85-115)", TestVariousSignatureLengthsAsync),
-            ("All Splice Values (1-3)", TestAllSpliceValuesAsync),
-            ("Realistic Signatures", TestRealisticSignaturesAsync),
-            ("Random Combinations (100)", TestRandomCombinationsAsync),
-            ("Edge Cases", TestEdgeCasesAsync),
-            ("Parallel Solver", TestParallelSolverAsync),
-            ("Performance Benchmark", BenchmarkSolverAsync),
+            new(SigCipherOpType.Swap, 64),
+            new(SigCipherOpType.Reverse, 0),
+            new(SigCipherOpType.Swap, 56),
+            new(SigCipherOpType.Splice, 1),
         };
 
-        foreach (var (name, test) in tests)
-        {
-            try
-            {
-                await test();
-                passed++;
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                Log.Error($"  ✗ {name}: {ex.Message}");
-            }
-        }
+        var manifest = new SigCipherManifest("v", ops, "t");
+        var decrypted = manifest.Decipher(StandardSignature);
+
+        // Warm-up
+        SigCipherSolver.Solve(StandardSignature, decrypted);
+
+        var iterations = TestConfig.Get().Solver.BenchmarkIterations;
+        var sw = Stopwatch.StartNew();
+
+        for (int i = 0; i < iterations; i++)
+            SigCipherSolver.Solve(StandardSignature, decrypted);
 
         sw.Stop();
-        Log.Info($"\n  Results: {passed}/{tests.Length} passed ({sw.Elapsed.TotalSeconds:F1}s)");
+        var avgMs = sw.Elapsed.TotalMilliseconds / iterations;
 
-        if (failed > 0)
-            throw new Exception($"Solver tests: {failed} FAILED");
+        Assert(avgMs < 100, $"Solver too slow: {avgMs:F2}ms avg (max 100ms)");
+        Log.Info($"[SolverBench] Average: {avgMs:F2}ms per solve ({iterations} iterations)");
+
+        return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Запускает все тесты солвера (legacy entry point).
+    /// </summary>
+    public static async Task RunAllAsync()
+    {
+        var runner = new TestRunner(Program.Services);
+        var solverTests = TestDiscovery.GetAllOrdered()
+            .Where(t => t.ClassName == nameof(SigCipherSolverTests))
+            .ToList();
+
+        await runner.RunBatchAsync(solverTests);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════
 
     private static void Assert(bool condition, string message)
     {

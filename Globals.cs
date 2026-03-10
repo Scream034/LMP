@@ -141,6 +141,12 @@ public static class G
         public static readonly string AudioCache = Path.Combine(Cache, "AudioCache");
         public static readonly string NTokenCache = Path.Combine(Cache, "NToken");
         public static readonly string SigCipherCache = Path.Combine(Cache, "SigCipher");
+        
+        /// <summary>
+        /// Папка с тестовыми данными для разных версий плеера.
+        /// Содержит JSON-файлы с парами encrypted/expected для NToken и SigCipher.
+        /// </summary>
+        public static readonly string TestData = Path.Combine(Cache, "TestData");
 
         public static void Create()
         {
@@ -153,6 +159,7 @@ public static class G
             Directory.CreateDirectory(NTokenCache);
             Directory.CreateDirectory(SigCipherCache);
             Directory.CreateDirectory(Logs);
+            Directory.CreateDirectory(TestData);
         }
     }
 
@@ -173,6 +180,13 @@ public static class G
         public static readonly string NTokenCache = Path.Combine(Folder.NTokenCache, "tokens.json");
         public static readonly string NTokenScript = Path.Combine(Folder.NTokenCache, "ntoken_override.js");
         public static readonly string SigCipherCache = Path.Combine(Folder.SigCipherCache, "sigcache.json");
+        
+        /// <summary>
+        /// Конфигурация параметров тестов.
+        /// Позволяет менять videoId, tokens, iterations без перекомпиляции.
+        /// Хранится в %LOCALAPPDATA%/LMP/test-config.json
+        /// </summary>
+        public static readonly string TestConfig = Path.Combine(Folder.Cache, "test-config.json");
     }
 
     public static class Json

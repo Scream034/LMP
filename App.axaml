@@ -30,4 +30,5 @@
         <StyleInclude Source="/UI/Theme/PlaylistCardTemplate.axaml" />
         <StyleInclude Source="/UI/Theme/ChipStyles.axaml" />
     </Application.Styles>
+
 </Application>

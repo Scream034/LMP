@@ -1,188 +1,103 @@
 #if DEBUG
 
 using System.Diagnostics;
-using LMP.Tests.Unit;
-using LMP.Tests.Integration;
+using LMP.Tests.Framework;
 
 namespace LMP.Tests;
 
 /// <summary>
-/// Точка входа для всех тестов.
-/// Запуск: F10 в Debug режиме.
+/// Точка входа для запуска тестов из кода (F10 в Debug).
+/// <para>
+/// Теперь делегирует в <see cref="TestRunner"/> с автоматическим discovery.
+/// Сохраняет обратную совместимость: legacy-методы всё ещё работают.
+/// </para>
 /// </summary>
 public static class ManualTests
 {
+    /// <summary>
+    /// Запускает ВСЕ обнаруженные тесты: Unit → Integration → Benchmark.
+    /// Заменяет старую ручную регистрацию.
+    /// </summary>
     public static async Task RunAllAsync()
     {
         var sw = Stopwatch.StartNew();
 
         Console.WriteLine("\n" + new string('═', 70));
-        Console.WriteLine("  LMP TEST SUITE");
+        Console.WriteLine("  LMP TEST SUITE (Auto-Discovery)");
         Console.WriteLine(new string('═', 70) + "\n");
 
-        var results = new TestResults();
+        var runner = new TestRunner(Program.Services);
+        int passed = 0, failed = 0, skipped = 0;
 
-        // ══════════════════════════════════════════════════════════════
-        // UNIT TESTS (no network)
-        // ══════════════════════════════════════════════════════════════
+        runner.TestCompleted += (descriptor, result) =>
+        {
+            var icon = result.State switch
+            {
+                TestRunState.Passed => "✓",
+                TestRunState.Failed => "✗",
+                TestRunState.Skipped => "⊘",
+                _ => "?",
+            };
 
-        Console.WriteLine("▶ UNIT TESTS (no network)\n");
+            Console.WriteLine($"  {icon} {descriptor.DisplayName} ({result.DurationFormatted})" +
+                (result.ErrorMessage is not null ? $" — {result.ErrorMessage}" : ""));
 
-        await results.RunAsync("SigCipher.Manifest.Serialize",
-            SigCipherTests.TestManifestSerializationAsync);
+            switch (result.State)
+            {
+                case TestRunState.Passed: Interlocked.Increment(ref passed); break;
+                case TestRunState.Failed: Interlocked.Increment(ref failed); break;
+                case TestRunState.Skipped: Interlocked.Increment(ref skipped); break;
+            }
+        };
 
-        await results.RunAsync("SigCipher.Manifest.Decipher",
-            SigCipherTests.TestManifestDecipherAsync);
+        // Группируем вывод по категории
+        var grouped = TestDiscovery.GetGrouped();
 
-        await results.RunAsync("SigCipher.Solver.KnownPatterns",
-            SigCipherTests.TestSolverKnownPatternsAsync);
+        foreach (var (category, tests) in grouped)
+        {
+            var label = category switch
+            {
+                TestCategory.Unit => "▶ UNIT TESTS (no network)",
+                TestCategory.Integration => "▶ INTEGRATION TESTS (network required)",
+                TestCategory.Benchmark => "▶ BENCHMARKS",
+                _ => $"▶ {category}",
+            };
+            Console.WriteLine($"\n{label}\n");
 
-        await results.RunAsync("SigCipher.Solver.RandomInputs",
-            SigCipherTests.TestSolverRandomInputsAsync);
-
-        await results.RunAsync("SigCipher.Extractor.ParseDictArray",
-            SigCipherTests.TestParseDictArrayAsync);
-
-        await results.RunAsync("SigCipher.Extractor.DetectMethods",
-            SigCipherTests.TestDetectMethodsAsync);
-
-        await results.RunAsync("NToken.FunctionDetection",
-            NTokenTests.TestFunctionDetectionAsync);
-
-        await results.RunAsync("NToken.BundleExtraction",
-            NTokenTests.TestBundleExtractionAsync);
-
-        await results.RunAsync("Cache.MemoryCache",
-            CacheTests.TestMemoryCacheAsync);
-
-        await results.RunAsync("Cache.DiskRoundtrip",
-            CacheTests.TestDiskRoundtripAsync);
-
-        await results.RunAsync("SigSolver.AllKnownPatterns",
-SigCipherSolverTests.TestAllKnownPatternsAsync);
-
-        await results.RunAsync("SigSolver.AllSwapValues",
-            SigCipherSolverTests.TestAllSwapValuesAsync);
-
-        await results.RunAsync("SigSolver.DoubleSwapRange",
-            SigCipherSolverTests.TestDoubleSwapRangeAsync);
-
-        await results.RunAsync("SigSolver.SignatureLengths",
-            SigCipherSolverTests.TestVariousSignatureLengthsAsync);
-
-        await results.RunAsync("SigSolver.SpliceValues",
-            SigCipherSolverTests.TestAllSpliceValuesAsync);
-
-        await results.RunAsync("SigSolver.RealisticSigs",
-            SigCipherSolverTests.TestRealisticSignaturesAsync);
-
-        await results.RunAsync("SigSolver.RandomCombos",
-            SigCipherSolverTests.TestRandomCombinationsAsync);
-
-        await results.RunAsync("SigSolver.EdgeCases",
-            SigCipherSolverTests.TestEdgeCasesAsync);
-
-        await results.RunAsync("SigSolver.Parallel",
-            SigCipherSolverTests.TestParallelSolverAsync);
-
-        await results.RunAsync("SigSolver.Benchmark",
-            SigCipherSolverTests.BenchmarkSolverAsync);
-
-        // ══════════════════════════════════════════════════════════════
-        // INTEGRATION TESTS (network required)
-        // ══════════════════════════════════════════════════════════════
-
-        Console.WriteLine("\n▶ INTEGRATION TESTS (network required)\n");
-
-        await results.RunAsync("NToken.LiveDecryption",
-            () => NTokenTests.TestLiveDecryptionAsync(Program.Services));
-
-        await results.RunAsync("NToken.CacheHit",
-            () => NTokenTests.TestCacheHitAsync(Program.Services));
-
-        await results.RunAsync("SigCipher.LiveExtraction",
-            () => SigCipherTests.TestLiveExtractionAsync(Program.Services));
-
-        await results.RunAsync("SigCipher.LiveDecryption",
-            () => SigCipherTests.TestLiveDecryptionAsync(Program.Services));
-
-        await results.RunAsync("Pipeline.StreamResolution",
-            () => StreamPipelineTests.TestStreamResolutionAsync(Program.Services));
-
-        await results.RunAsync("Pipeline.MultiVideo",
-            () => StreamPipelineTests.TestMultiVideoAsync(Program.Services));
-
-        await results.RunAsync("Pipeline.AudioDownload",
-            () => StreamPipelineTests.TestAudioDownloadAsync(Program.Services));
-
-        // ══════════════════════════════════════════════════════════════
-        // RESULTS
-        // ══════════════════════════════════════════════════════════════
+            await runner.RunBatchAsync(tests);
+        }
 
         sw.Stop();
+
         Console.WriteLine("\n" + new string('═', 70));
-        Console.WriteLine($"  RESULTS: {results.Passed} passed, {results.Failed} failed " +
+        Console.WriteLine($"  RESULTS: {passed} passed, {failed} failed, {skipped} skipped " +
                          $"({sw.Elapsed.TotalSeconds:F1}s)");
         Console.WriteLine(new string('═', 70) + "\n");
-
-        if (results.Failed > 0)
-        {
-            Console.WriteLine("❌ FAILED TESTS:");
-            foreach (var failure in results.Failures)
-                Console.WriteLine($"   • {failure}");
-        }
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // QUICK TESTS (для отдельного запуска)
+    // LEGACY QUICK TESTS (для обратной совместимости)
     // ══════════════════════════════════════════════════════════════════
 
     /// <summary>Быстрый тест N-Token (самый важный).</summary>
     public static Task TestNTokenQuickAsync() =>
-        NTokenTests.TestLiveDecryptionAsync(Program.Services);
+        Unit.NTokenTests.TestLiveDecryptionAsync(Program.Services);
 
     /// <summary>Быстрый тест Sig Cipher.</summary>
     public static Task TestSigCipherQuickAsync() =>
-        SigCipherTests.TestLiveDecryptionAsync(Program.Services);
+        Unit.SigCipherTests.TestLiveDecryptionAsync(Program.Services);
 
     /// <summary>Полный pipeline тест.</summary>
     public static Task TestSigCipherFullAsync(string videoId = "dQw4w9WgXcQ") =>
-        StreamPipelineTests.TestFullPipelineAsync(Program.Services, videoId);
+        Integration.StreamPipelineTests.TestFullPipelineInternalAsync(Program.Services, videoId);
 
     /// <summary>Полный тест солвера.</summary>
     public static Task TestSolverFullAsync() =>
-        SigCipherSolverTests.RunAllAsync();
+        Unit.SigCipherSolverTests.RunAllAsync();
 
     /// <summary>Benchmark N-Token.</summary>
     public static Task BenchmarkNTokenAsync() =>
-        NTokenTests.BenchmarkAsync(Program.Services);
-}
-
-/// <summary>Аккумулятор результатов тестов.</summary>
-file sealed class TestResults
-{
-    public int Passed { get; private set; }
-    public int Failed { get; private set; }
-    public List<string> Failures { get; } = [];
-
-    public async Task RunAsync(string name, Func<Task> test)
-    {
-        var sw = Stopwatch.StartNew();
-        try
-        {
-            await test();
-            sw.Stop();
-            Console.WriteLine($"  ✓ {name} ({sw.ElapsedMilliseconds}ms)");
-            Passed++;
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            Console.WriteLine($"  ✗ {name}: {ex.Message}");
-            Failures.Add($"{name}: {ex.Message}");
-            Failed++;
-        }
-    }
+        Unit.NTokenTests.BenchmarkAsync(Program.Services);
 }
 
 #endif

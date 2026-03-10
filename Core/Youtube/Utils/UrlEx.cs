@@ -1,132 +1,286 @@
-using System.Net;
-using System.Text;
+using System.Runtime.CompilerServices;
 
 namespace LMP.Core.Youtube.Utils;
 
+/// <summary>
+/// Утилиты для работы с URL. Все операции сохраняют исходный порядок параметров
+/// и НЕ перекодируют значения, которые не были изменены.
+/// </summary>
 internal static class UrlEx
 {
-    // Оптимизировано: используем индексы вместо string.Split, чтобы избежать аллокации массива.
-    // Мы не используем Span здесь, так как yield return не позволяет хранить ref-структуры.
-    private static IEnumerable<KeyValuePair<string, string>> EnumerateQueryParameters(string url)
+    // ═══════════════════════════════════════════════════════════════
+    //  SetQueryParameter — IN-PLACE замена с сохранением порядка
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Устанавливает значение query-параметра. Если параметр уже существует,
+    /// заменяет его значение НА МЕСТЕ, сохраняя порядок всех остальных параметров.
+    /// Если параметра нет — добавляет в конец.
+    /// Значение кодируется через <see cref="Uri.EscapeDataString"/>,
+    /// но остальные параметры остаются нетронутыми (zero re-encoding).
+    /// </summary>
+    public static string SetQueryParameter(string url, string key, string value)
     {
-        if (string.IsNullOrWhiteSpace(url))
-            yield break;
+        var urlSpan = url.AsSpan();
 
-        var queryIndex = url.IndexOf('?');
-        var startIndex = queryIndex >= 0 ? queryIndex + 1 : 0;
+        // Ищем позицию существующего параметра
+        var (keyStart, valueStart, valueEnd) = FindParameterBounds(urlSpan, key);
 
-        // Убираем проверку на "http" без "?"
-        // signatureCipher — это query string БЕЗ "?", но содержит "url=https://..."
-        // Поэтому просто парсим с начала если нет "?"
+        // Кодируем ТОЛЬКО новое значение
+        var encodedValue = Uri.EscapeDataString(value);
 
-        var currentIndex = startIndex;
-        while (currentIndex < url.Length)
+        if (keyStart >= 0)
         {
-            var ampIndex = url.IndexOf('&', currentIndex);
-            var segmentEnd = ampIndex < 0 ? url.Length : ampIndex;
-            var segmentLength = segmentEnd - currentIndex;
-
-            if (segmentLength > 0)
+            // ═══ IN-PLACE REPLACEMENT ═══
+            // url = [prefix][old_value][suffix]
+            //        ^0..valueStart    ^valueEnd..
+            // Заменяем old_value на encodedValue, всё остальное — побитово копируем.
+            
+            int newLength = valueStart + encodedValue.Length + (url.Length - valueEnd);
+            
+            return string.Create(newLength, (url, valueStart, valueEnd, encodedValue), 
+                static (span, state) =>
             {
-                var eqIndex = url.IndexOf('=', currentIndex, segmentLength);
-                if (eqIndex >= 0)
-                {
-                    var key = WebUtility.UrlDecode(url[currentIndex..eqIndex]);
-                    var value = WebUtility.UrlDecode(url.Substring(eqIndex + 1, segmentEnd - eqIndex - 1));
+                var (originalUrl, valStart, valEnd, newVal) = state;
+                var src = originalUrl.AsSpan();
 
-                    if (!string.IsNullOrWhiteSpace(key))
-                        yield return new KeyValuePair<string, string>(key, value);
-                }
-                else
-                {
-                    var key = WebUtility.UrlDecode(url.Substring(currentIndex, segmentLength));
-                    if (!string.IsNullOrWhiteSpace(key))
-                        yield return new KeyValuePair<string, string>(key, "");
-                }
-            }
+                // Prefix: всё до старого значения
+                src[..valStart].CopyTo(span);
+                int pos = valStart;
 
-            currentIndex = segmentEnd + 1;
+                // New value
+                newVal.AsSpan().CopyTo(span[pos..]);
+                pos += newVal.Length;
+
+                // Suffix: всё после старого значения
+                src[valEnd..].CopyTo(span[pos..]);
+            });
         }
+
+        // ═══ APPEND — параметра нет, добавляем в конец ═══
+        var separator = urlSpan.Contains('?') ? '&' : '?';
+        var encodedKey = Uri.EscapeDataString(key);
+        
+        int appendLength = url.Length + 1 + encodedKey.Length + 1 + encodedValue.Length;
+        
+        return string.Create(appendLength, (url, separator, encodedKey, encodedValue),
+            static (span, state) =>
+        {
+            var (originalUrl, sep, eKey, eVal) = state;
+            int pos = 0;
+
+            originalUrl.AsSpan().CopyTo(span);
+            pos += originalUrl.Length;
+
+            span[pos++] = sep;
+
+            eKey.AsSpan().CopyTo(span[pos..]);
+            pos += eKey.Length;
+
+            span[pos++] = '=';
+
+            eVal.AsSpan().CopyTo(span[pos..]);
+        });
+    }
+
+    /// <summary>
+    /// Удаляет query-параметр из URL. Не трогает и не перекодирует остальные параметры.
+    /// </summary>
+    public static string RemoveQueryParameter(string url, string key)
+    {
+        var urlSpan = url.AsSpan();
+        var (keyStart, _, valueEnd) = FindParameterBounds(urlSpan, key);
+
+        if (keyStart < 0)
+            return url; // Параметра нет — возвращаем как есть
+
+        // Определяем полный диапазон удаления (включая разделитель '&' или '?')
+        int removeStart;
+        int removeEnd = valueEnd;
+
+        if (keyStart > 0 && urlSpan[keyStart - 1] == '&')
+        {
+            // Параметр НЕ первый — удаляем вместе с предшествующим '&'
+            removeStart = keyStart - 1;
+        }
+        else if (keyStart > 0 && urlSpan[keyStart - 1] == '?')
+        {
+            // Параметр первый после '?'
+            if (removeEnd < urlSpan.Length && urlSpan[removeEnd] == '&')
+            {
+                // Есть ещё параметры — удаляем '&' после
+                removeStart = keyStart;
+                removeEnd++;
+            }
+            else
+            {
+                // Единственный параметр — удаляем вместе с '?'
+                removeStart = keyStart - 1;
+            }
+        }
+        else
+        {
+            // Параметр в начале строки (signatureCipher без '?')
+            removeStart = keyStart;
+            if (removeEnd < urlSpan.Length && urlSpan[removeEnd] == '&')
+                removeEnd++;
+        }
+
+        int newLength = removeStart + (url.Length - removeEnd);
+        if (newLength <= 0)
+            return url[..Math.Max(0, removeStart)];
+
+        return string.Create(newLength, (url, removeStart, removeEnd), 
+            static (span, state) =>
+        {
+            var (originalUrl, rStart, rEnd) = state;
+            var src = originalUrl.AsSpan();
+            
+            src[..rStart].CopyTo(span);
+            src[rEnd..].CopyTo(span[rStart..]);
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Query parameter reading — zero-alloc fast path
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Возвращает raw (не декодированное) значение параметра, или null если не найден.
+    /// Для большинства случаев декодирование не нужно.
+    /// </summary>
+    public static string? TryGetQueryParameterValue(string url, string key)
+    {
+        var urlSpan = url.AsSpan();
+        var (keyStart, valueStart, valueEnd) = FindParameterBounds(urlSpan, key);
+
+        if (keyStart < 0)
+            return null;
+
+        var rawValue = urlSpan[valueStart..valueEnd];
+        
+        // Если значение содержит %XX — декодируем, иначе возвращаем как есть
+        if (rawValue.Contains('%'))
+            return Uri.UnescapeDataString(rawValue.ToString());
+
+        return rawValue.ToString();
+    }
+
+    public static bool ContainsQueryParameter(string url, string key)
+    {
+        var (keyStart, _, _) = FindParameterBounds(url.AsSpan(), key);
+        return keyStart >= 0;
     }
 
     public static IReadOnlyDictionary<string, string> GetQueryParameters(string url)
     {
-        var dic = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var kvp in EnumerateQueryParameters(url))
+        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        var urlSpan = url.AsSpan();
+
+        int queryStart = urlSpan.IndexOf('?');
+        int pos = queryStart >= 0 ? queryStart + 1 : 0;
+
+        while (pos < urlSpan.Length)
         {
-            dic[kvp.Key] = kvp.Value;
+            // Находим конец текущего параметра
+            int ampPos = urlSpan[pos..].IndexOf('&');
+            int segEnd = ampPos >= 0 ? pos + ampPos : urlSpan.Length;
+
+            if (segEnd > pos)
+            {
+                var segment = urlSpan[pos..segEnd];
+                int eqPos = segment.IndexOf('=');
+
+                string paramKey;
+                string paramValue;
+
+                if (eqPos >= 0)
+                {
+                    var rawKey = segment[..eqPos];
+                    var rawVal = segment[(eqPos + 1)..];
+                    
+                    paramKey = rawKey.Contains('%') 
+                        ? Uri.UnescapeDataString(rawKey.ToString()) 
+                        : rawKey.ToString();
+                    paramValue = rawVal.Contains('%') 
+                        ? Uri.UnescapeDataString(rawVal.ToString()) 
+                        : rawVal.ToString();
+                }
+                else
+                {
+                    paramKey = segment.Contains('%') 
+                        ? Uri.UnescapeDataString(segment.ToString()) 
+                        : segment.ToString();
+                    paramValue = "";
+                }
+
+                if (paramKey.Length > 0)
+                    dict[paramKey] = paramValue;
+            }
+
+            pos = segEnd + 1;
         }
-        return dic;
+
+        return dict;
     }
 
-    public static string? TryGetQueryParameterValue(string url, string key)
+    // ═══════════════════════════════════════════════════════════════
+    //  CORE: FindParameterBounds — span-based, zero-allocation
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Находит точные границы параметра в URL.
+    /// Возвращает (keyStart, valueStart, valueEnd):
+    ///   keyStart  — индекс первого символа ключа
+    ///   valueStart — индекс первого символа значения (после '=')
+    ///   valueEnd   — индекс символа ПОСЛЕ последнего символа значения ('&' или конец строки)
+    /// Если параметр не найден, keyStart = -1.
+    /// 
+    /// Поиск по RAW ключу (без декодирования), т.к. YouTube ключи всегда plain ASCII.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (int keyStart, int valueStart, int valueEnd) FindParameterBounds(
+        ReadOnlySpan<char> url, string key)
     {
-        foreach (var parameter in EnumerateQueryParameters(url))
+        var keySpan = key.AsSpan();
+        int queryStart = url.IndexOf('?');
+        int searchPos = queryStart >= 0 ? queryStart + 1 : 0;
+
+        while (searchPos < url.Length)
         {
-            if (string.Equals(parameter.Key, key, StringComparison.Ordinal))
-                return parameter.Value;
-        }
-        return null;
-    }
+            // Находим конец текущего сегмента
+            int ampPos = url[searchPos..].IndexOf('&');
+            int segmentEnd = ampPos >= 0 ? searchPos + ampPos : url.Length;
 
-    public static bool ContainsQueryParameter(string url, string key) =>
-        TryGetQueryParameterValue(url, key) is not null;
+            // Ищем '=' в текущем сегменте
+            var segment = url[searchPos..segmentEnd];
+            int eqPos = segment.IndexOf('=');
 
-    public static string SetQueryParameter(string url, string key, string value)
-    {
-        var queryIndex = url.IndexOf('?');
-        var baseUrl = queryIndex < 0 ? url : url[..queryIndex];
+            if (eqPos >= 0)
+            {
+                var paramKey = segment[..eqPos];
+                
+                // Точное сравнение ключа (case-sensitive, как YouTube и требует)
+                if (paramKey.SequenceEqual(keySpan))
+                {
+                    int keyStart = searchPos;
+                    int valueStart = searchPos + eqPos + 1;
+                    int valueEnd = segmentEnd;
+                    return (keyStart, valueStart, valueEnd);
+                }
+            }
+            else
+            {
+                // Параметр без значения (key без =)
+                if (segment.SequenceEqual(keySpan))
+                {
+                    return (searchPos, segmentEnd, segmentEnd);
+                }
+            }
 
-        var sb = new StringBuilder(baseUrl);
-        sb.Append('?');
-
-        var hasParams = false;
-        foreach (var p in EnumerateQueryParameters(url))
-        {
-            if (string.Equals(p.Key, key, StringComparison.Ordinal))
-                continue;
-
-            if (hasParams) sb.Append('&');
-            sb.Append(Uri.EscapeDataString(p.Key));
-            sb.Append('=');
-            sb.Append(Uri.EscapeDataString(p.Value));
-            hasParams = true;
-        }
-
-        if (hasParams) sb.Append('&');
-        sb.Append(Uri.EscapeDataString(key));
-        sb.Append('=');
-        sb.Append(Uri.EscapeDataString(value));
-
-        return sb.ToString();
-    }
-
-    public static string RemoveQueryParameter(string url, string key)
-    {
-        var queryIndex = url.IndexOf('?');
-        if (queryIndex < 0) return url;
-
-        var baseUrl = url[..queryIndex];
-        var query = url[(queryIndex + 1)..];
-
-        var parts = query.Split('&');
-        var sb = new StringBuilder(url.Length);
-        sb.Append(baseUrl);
-
-        var first = true;
-        foreach (var part in parts)
-        {
-            var eqIndex = part.IndexOf('=');
-            var paramName = eqIndex >= 0 ? part[..eqIndex] : part;
-
-            if (string.Equals(paramName, key, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            sb.Append(first ? '?' : '&');
-            sb.Append(part);
-            first = false;
+            searchPos = segmentEnd + 1;
         }
 
-        return sb.ToString();
+        return (-1, -1, -1);
     }
 }

@@ -1,5 +1,6 @@
 ﻿using System.Net.Http.Headers;
 using LMP.Core.Youtube.Bridge;
+using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
@@ -21,7 +22,7 @@ namespace LMP.Core.Youtube.Videos;
 /// <para>Решение о том, как показать ошибку пользователю, принимается на уровне выше
 /// (см. <see cref="Services.PlaybackErrorOrchestrator"/>).</para>
 /// </remarks>
-internal class VideoController(HttpClient http)
+internal partial class VideoController(HttpClient http)
 {
     #region Bot Detection State
 
@@ -283,6 +284,11 @@ internal class VideoController(HttpClient http)
 
     private string? _signatureTimestamp;
 
+    /// <summary>
+    /// Извлекает signatureTimestamp из base.js.
+    /// Timestamp одинаков для всех локализаций одной версии плеера,
+    /// поэтому безопасно парсить из любого уже скачанного base.js.
+    /// </summary>
     private async ValueTask<string?> ResolveSignatureTimestampAsync(CancellationToken ct)
     {
         if (_signatureTimestamp != null) return _signatureTimestamp;
@@ -290,14 +296,28 @@ internal class VideoController(HttpClient http)
         try
         {
             var iframe = await Http.GetStringAsync("https://www.youtube.com/iframe_api", ct);
-            var versionMatch = System.Text.RegularExpressions.Regex.Match(iframe, @"player\\?/([0-9a-fA-F]{8})\\?/");
+            var versionMatch = SignatureTimestampRegex().Match(iframe);
             if (!versionMatch.Success) return null;
 
             var version = versionMatch.Groups[1].Value;
-            var playerJs = await Http.GetStringAsync(
-                $"https://www.youtube.com/s/player/{version}/player_ias.vflset/en_US/base.js", ct);
 
-            var stsMatch = System.Text.RegularExpressions.Regex.Match(playerJs, @"signatureTimestamp[=:]\s*(\d+)");
+            // ═══ Try to get timestamp from cached player first ═══
+            var cached = PlayerContext.LoadFromCache(version);
+            string? playerJs;
+
+            if (cached is not null)
+            {
+                playerJs = cached.BaseJs;
+                Log.Debug($"[VideoController] Using cached base.js for STS: {version}");
+            }
+            else
+            {
+                // Fallback: download minimal — only need ~first 500KB for STS
+                playerJs = await Http.GetStringAsync(
+                    $"https://www.youtube.com/s/player/{version}/player_ias.vflset/ru_RU/base.js", ct);
+            }
+
+            var stsMatch = SignatureTimestampRegex2().Match(playerJs);
             if (stsMatch.Success)
             {
                 _signatureTimestamp = stsMatch.Groups[1].Value;
@@ -503,6 +523,11 @@ internal class VideoController(HttpClient http)
         return await GetPlayerResponseWithClientAsync(
             videoId, "TVHTML5_SIMPLY_EMBEDDED_PLAYER", cancellationToken, signatureTimestamp);
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"player\\?/([0-9a-fA-F]{8})\\?/")]
+    private static partial System.Text.RegularExpressions.Regex SignatureTimestampRegex();
+    [System.Text.RegularExpressions.GeneratedRegex(@"signatureTimestamp[=:]\s*(\d+)")]
+    private static partial System.Text.RegularExpressions.Regex SignatureTimestampRegex2();
 
     #endregion
 }

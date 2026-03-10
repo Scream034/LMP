@@ -4,7 +4,7 @@ namespace LMP.Core.Youtube.Bridge.Common;
 /// Единая точка управления версией плеера и base.js.
 /// Singleton, потокобезопасный.
 /// </summary>
-public sealed class PlayerContextManager
+public class PlayerContextManager
 {
     private readonly HttpClient _http;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -16,7 +16,7 @@ public sealed class PlayerContextManager
     }
     
     /// <summary>Получает актуальный контекст плеера (из кэша или скачивает).</summary>
-    public async Task<PlayerContext> GetOrLoadAsync(CancellationToken ct = default)
+    public virtual async Task<PlayerContext> GetOrLoadAsync(CancellationToken ct = default)
     {
         // Fast path
         if (_current?.IsValid() == true)

@@ -8,7 +8,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     protected readonly PlayerContextManager PlayerManager;
     protected readonly DecryptorCache<string, string> Cache;
 
-    private readonly Lock _initLock = new();
+    private readonly SemaphoreSlim _initSemaphore = new(1, 1);
 
     protected Engine? BundleEngine;
     protected string? BundleFuncName;
@@ -16,7 +16,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     protected string? FullFuncName;
 
     protected string? CurrentPlayerVersion;
-    protected volatile bool IsInitialized;
+    internal volatile bool IsInitialized;
 
     /// <summary>Имя дешифратора для логов.</summary>
     protected string DecryptorName => typeof(T).Name;
@@ -34,23 +34,19 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         Cache = new DecryptorCache<string, string>(cacheFilePath, maxMemory, maxDisk);
     }
 
-    protected async ValueTask EnsureInitializedAsync(CancellationToken ct)
+    public async ValueTask EnsureInitializedAsync(CancellationToken ct)
     {
         if (IsInitialized) return;
 
-        lock (_initLock)
+        await _initSemaphore.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
             if (IsInitialized) return;
-        }
 
-        var context = await PlayerManager.GetOrLoadAsync(ct);
-
-        lock (_initLock)
-        {
-            if (IsInitialized) return;
+            var context = await PlayerManager.GetOrLoadAsync(ct).ConfigureAwait(false);
 
             CurrentPlayerVersion = context.Version;
-            Cache.LoadAsync(context.Version).Wait(ct);
+            await Cache.LoadAsync(context.Version).ConfigureAwait(false);
 
             try
             {
@@ -62,6 +58,10 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 Log.Error($"[{DecryptorName}] Initialization failed: {ex.Message}");
             }
         }
+        finally
+        {
+            _initSemaphore.Release();
+        }
     }
 
     protected abstract void InitializeCore(PlayerContext context);
@@ -71,21 +71,41 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Универсальная инициализация JS движков.
-    /// Подклассы вызывают этот метод, предоставляя:
-    /// - funcName: имя entry-функции
-    /// - buildWrapperScript: генератор wrapper-скрипта
-    /// - testInput: тестовый вход для проверки
-    /// - buildBundle: опциональный кастомный builder бандла
+    /// Инициализация JS-движков БЕЗ magic numbers.
+    /// Используется SigCipherDecryptor и другими декрипторами,
+    /// которые не нуждаются в числовых аргументах.
     /// </summary>
-    protected bool TryInitJsEngines(
+    internal bool TryInitJsEngines(
         PlayerContext context,
         string funcName,
         Func<string, string> buildWrapperScript,
         string testInput,
         Func<string, string, string?>? buildBundle = null)
     {
-        var wrapperScript = buildWrapperScript(funcName);
+        // Оборачиваем в новую сигнатуру, игнорируя MagicNumbers
+        return TryInitJsEngines(
+            context,
+            funcName,
+            MagicNumbers.None,
+            (fn, _) => buildWrapperScript(fn),
+            testInput,
+            buildBundle);
+    }
+
+    /// <summary>
+    /// Инициализация JS-движков С magic numbers.
+    /// Используется NTokenDecryptor для передачи числовых аргументов
+    /// перед N-токеном: <c>f(6, 4494, nToken)</c>.
+    /// </summary>
+    internal bool TryInitJsEngines(
+        PlayerContext context,
+        string funcName,
+        MagicNumbers magic,
+        Func<string, MagicNumbers, string> buildWrapperScript,
+        string testInput,
+        Func<string, string, string?>? buildBundle = null)
+    {
+        var wrapperScript = buildWrapperScript(funcName, magic);
         const string wrapperFuncName = "__decryptorTransform";
 
         // 1. Bundle
@@ -98,7 +118,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
             SaveDiagScript("bundle", bundle, funcName);
             if (TryInitBundle(bundle, wrapperScript, wrapperFuncName, testInput))
             {
-                Log.Info($"[{DecryptorName}] Bundle ready ({bundle.Length / 1024}KB)");
+                Log.Info($"[{DecryptorName}] Bundle ready ({bundle.Length / 1024}KB, {magic})");
                 return true;
             }
         }
@@ -109,41 +129,107 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         var modifiedJs = InjectWindowExport(context.BaseJs, funcName);
         if (TryInitFull(modifiedJs, wrapperScript, wrapperFuncName, testInput))
         {
-            Log.Info($"[{DecryptorName}] Full JS ready ({context.BaseJs.Length / 1024}KB)");
+            Log.Info($"[{DecryptorName}] Full JS ready ({context.BaseJs.Length / 1024}KB, {magic})");
             return true;
+        }
+
+        // 3. Fallback: если magic numbers были указаны, пробуем без них
+        if (magic.HasArgs)
+        {
+            Log.Debug($"[{DecryptorName}] Retrying without magic numbers...");
+            var fallbackWrapper = buildWrapperScript(funcName, MagicNumbers.None);
+
+            if (bundle is not null && TryInitBundle(bundle, fallbackWrapper, wrapperFuncName, testInput))
+            {
+                Log.Info($"[{DecryptorName}] Bundle ready WITHOUT magic numbers (fallback)");
+                return true;
+            }
+
+            if (TryInitFull(modifiedJs, fallbackWrapper, wrapperFuncName, testInput))
+            {
+                Log.Info($"[{DecryptorName}] Full JS ready WITHOUT magic numbers (fallback)");
+                return true;
+            }
         }
 
         return false;
     }
 
     /// <summary>
-    /// Строит бандл по умолчанию: ExtractBundle + словарь строк + dict resolution.
+    /// Пробует инициализировать JS-движки с несколькими вариантами magic numbers.
+    /// Первый успешно инициализированный вариант побеждает.
+    /// </summary>
+    internal bool TryInitJsEnginesWithCandidates(
+        PlayerContext context,
+        string funcName,
+        List<MagicNumbers> candidates,
+        Func<string, MagicNumbers, string> buildWrapperScript,
+        string testInput,
+        Func<string, string, string?>? buildBundle = null)
+    {
+        if (candidates.Count == 0)
+            candidates = [MagicNumbers.None];
+
+        foreach (var magic in candidates)
+        {
+            Log.Debug($"[{DecryptorName}] Trying magic: {magic}");
+
+            if (TryInitJsEngines(context, funcName, magic, buildWrapperScript, testInput, buildBundle))
+                return true;
+
+            // Очищаем движки перед следующей попыткой
+            BundleEngine?.Dispose();
+            BundleEngine = null;
+            BundleFuncName = null;
+            FullEngine?.Dispose();
+            FullEngine = null;
+            FullFuncName = null;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Строит минимальный JS-бандл для функции дешифрации.
+    /// 
+    /// Стратегия:
+    /// 1. Находит глобальный словарь строк (split/bracket)
+    /// 2. Передаёт имя словаря в ExtractBundle как "внешнее" имя,
+    ///    чтобы оно НЕ перезаписывалось guard var'ом <c>var O=0;</c>
+    /// 3. Извлекает функцию и все её зависимости
+    /// 4. Prepend'ит словарь если он не включён в бандл
+    /// 
+    /// НЕ резолвит обращения к словарю (h[4] → "value") —
+    /// оставляет runtime-обращения как есть для корректной работы
+    /// с динамическими индексами и XOR-masked ключами.
     /// </summary>
     protected virtual string? BuildDefaultBundle(string baseJs, string funcName)
     {
-        var extracted = JsFunctionExtractor.ExtractBundle(baseJs, funcName);
-        if (extracted is null) return null;
+        // ═══ Находим словарь ПЕРЕД извлечением бандла ═══
+        // Нужно знать его имя, чтобы передать в ExtractBundle как external
+        var dictCode = FindStringDictionary(baseJs);
+        string? dictVarName = null;
 
-        // ═══ Step 1: Resolve dictionary references (q[N] → actual values) ═══
-        var dictName = JsDictResolver.DetectDictName(extracted);
-        if (dictName is not null)
+        if (dictCode is not null)
         {
-            var dictElements = JsFunctionExtractor.ExtractArrayElements(baseJs, dictName);
-            if (dictElements is not null && dictElements.Length >= 10)
-            {
-                var resolved = JsDictResolver.Resolve(extracted, dictName, dictElements);
-                Log.Debug($"[{DecryptorName}] Dict '{dictName}' resolved in bundle: " +
-                          $"{extracted.Length} → {resolved.Length} chars");
-                extracted = resolved;
-            }
+            // Извлекаем имя переменной словаря: "var X=..." → "X"
+            dictVarName = ExtractVarNameFromDeclaration(dictCode);
         }
 
-        // ═══ Step 2: Check if dictionary .split() definition is included ═══
+        // ═══ Собираем набор "внешних" имён ═══
+        HashSet<string>? externalNames = null;
+        if (dictVarName is not null)
+        {
+            externalNames = [dictVarName];
+        }
+
+        var extracted = JsFunctionExtractor.ExtractBundle(baseJs, funcName, externalNames);
+        if (extracted is null) return null;
+
+        // ═══ Check if dictionary definition is included ═══
         if (BundleContainsDictionary(extracted))
             return extracted;
 
-        // Fallback: find and prepend dictionary
-        var dictCode = FindStringDictionary(baseJs);
         if (dictCode is not null)
         {
             Log.Debug($"[{DecryptorName}] Prepending dictionary ({dictCode.Length} chars)");
@@ -152,6 +238,36 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
 
         Log.Warn($"[{DecryptorName}] Dictionary not found, bundle may fail");
         return extracted;
+    }
+
+    /// <summary>
+    /// Извлекает имя переменной из объявления <c>var NAME=...</c>.
+    /// Возвращает <c>null</c> если формат не распознан.
+    /// </summary>
+    private static string? ExtractVarNameFromDeclaration(string declaration)
+    {
+        var span = declaration.AsSpan().TrimStart();
+
+        // Пропускаем "var "
+        if (span.StartsWith("var "))
+            span = span[4..];
+        else if (span.StartsWith("let "))
+            span = span[4..];
+        else if (span.StartsWith("const "))
+            span = span[6..];
+        else
+            return null;
+
+        span = span.TrimStart();
+
+        // Читаем идентификатор
+        int i = 0;
+        while (i < span.Length && (char.IsLetterOrDigit(span[i]) || span[i] is '_' or '$'))
+            i++;
+
+        if (i == 0) return null;
+
+        return span[..i].ToString();
     }
 
     private bool TryInitBundle(
@@ -218,10 +334,6 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         }
     }
 
-    /// <summary>
-    /// Вызывает JS-движок для расшифровки.
-    /// Сначала bundle, потом full — с кэшированием результата.
-    /// </summary>
     protected string? TryInvokeJs(string input, string logPrefix)
     {
         if (BundleEngine is not null && BundleFuncName is not null)
@@ -268,47 +380,107 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Инжектирует window['funcName']=funcName; после определения функции в base.js.
-    /// Необходимо потому что функции определены внутри IIFE и недоступны глобально.
+    /// Инжектирует window['funcName']=funcName; в base.js.
+    /// 
+    /// Стратегии (в порядке приоритета):
+    /// 1. Точное определение через FindFunctionByName → safe insertion point
+    /// 2. Pattern search для function( 
+    /// 3. Generic name= search
+    /// 4. Вставка перед концом IIFE
+    /// 5. Конец файла
     /// </summary>
     protected static string InjectWindowExport(string baseJs, string funcName)
     {
+        var export = $"\nwindow['{funcName}']={funcName};\n";
+
         try
         {
-            // Strategy 1: через JsFunctionExtractor
+            // ═══ Strategy 1: Точное определение ═══
             var funcInfo = JsFunctionExtractor.FindFunctionByName(baseJs, funcName);
             if (funcInfo is not null)
             {
                 int endOfDef = funcInfo.Value.Position + funcName.Length + 1 + funcInfo.Value.Code.Length;
-                while (endOfDef < baseJs.Length && baseJs[endOfDef] is ';' or ',' or ' ' or '\t')
-                    endOfDef++;
+                int safePos = FindSafeInsertionPoint(baseJs, endOfDef);
 
-                var export = $"\nwindow['{funcName}']={funcName};\n";
-                Log.Debug($"[JsDecryptor] Injecting window export for '{funcName}' at position {endOfDef}");
-                return baseJs.Insert(endOfDef, export);
+                Log.Debug($"[JsDecryptor] Injecting window export for '{funcName}' " +
+                          $"at safe position {safePos} (def ended at {endOfDef})");
+                return baseJs.Insert(safePos, export);
             }
 
-            // Strategy 2: простой string search
+            // ═══ Strategy 2: function( pattern ═══
             var pattern = $"{funcName}=function(";
             int patternIdx = baseJs.IndexOf(pattern, StringComparison.Ordinal);
-            if (patternIdx >= 0)
+            if (patternIdx >= 0 && (patternIdx == 0 || !JsFunctionExtractor.IsIdentChar(baseJs[patternIdx - 1])))
             {
-                int braceStart = baseJs.IndexOf('{', patternIdx + pattern.Length);
-                if (braceStart >= 0)
+                int parenStart = patternIdx + pattern.Length - 1;
+                int parenEnd = JsFunctionExtractor.FindMatchingParen(baseJs, parenStart);
+                if (parenEnd > 0)
                 {
-                    int braceEnd = JsFunctionExtractor.FindMatchingBrace(baseJs, braceStart);
-                    if (braceEnd > 0)
-                    {
-                        int insertPos = braceEnd + 1;
-                        if (insertPos < baseJs.Length && baseJs[insertPos] == ';') insertPos++;
+                    int bodySearch = parenEnd + 1;
+                    while (bodySearch < baseJs.Length && baseJs[bodySearch] is ' ' or '\t' or '\n' or '\r')
+                        bodySearch++;
 
-                        var export = $"\nwindow['{funcName}']={funcName};\n";
-                        return baseJs.Insert(insertPos, export);
+                    if (bodySearch < baseJs.Length && baseJs[bodySearch] == '{')
+                    {
+                        int braceEnd = JsFunctionExtractor.FindMatchingBrace(baseJs, bodySearch);
+                        if (braceEnd > 0)
+                        {
+                            int safePos = FindSafeInsertionPoint(baseJs, braceEnd + 1);
+                            Log.Debug($"[JsDecryptor] Injecting window export for '{funcName}' " +
+                                      $"via pattern search at position {safePos}");
+                            return baseJs.Insert(safePos, export);
+                        }
                     }
                 }
             }
 
-            Log.Warn($"[JsDecryptor] Could not find injection point for '{funcName}'");
+            // ═══ Strategy 3: name= generic search ═══
+            var eqPattern = $"{funcName}=";
+            var baseSpan = baseJs.AsSpan();
+            int searchFrom = 0;
+
+            while (searchFrom < baseSpan.Length)
+            {
+                int found = baseSpan[searchFrom..].IndexOf(eqPattern.AsSpan(), StringComparison.Ordinal);
+                if (found < 0) break;
+                found += searchFrom;
+
+                if (found > 0 && JsFunctionExtractor.IsIdentChar(baseSpan[found - 1]))
+                {
+                    searchFrom = found + eqPattern.Length;
+                    continue;
+                }
+
+                int afterEq = found + eqPattern.Length;
+                if (afterEq < baseSpan.Length && baseSpan[afterEq] == '=')
+                {
+                    searchFrom = afterEq + 1;
+                    continue;
+                }
+
+                int safePos = FindSafeInsertionPointAfterDefinition(baseJs, afterEq);
+                if (safePos > 0)
+                {
+                    Log.Debug($"[JsDecryptor] Injecting window export for '{funcName}' " +
+                              $"via eq-search at position {safePos}");
+                    return baseJs.Insert(safePos, export);
+                }
+
+                searchFrom = afterEq;
+            }
+
+            // ═══ Strategy 4: IIFE end ═══
+            int fallbackPos = FindEndOfIIFE(baseJs);
+            if (fallbackPos > 0)
+            {
+                Log.Debug($"[JsDecryptor] Injecting window export for '{funcName}' " +
+                          $"at IIFE end (fallback), position {fallbackPos}");
+                return baseJs.Insert(fallbackPos, export);
+            }
+
+            // ═══ Strategy 5: EOF ═══
+            Log.Warn($"[JsDecryptor] Using end-of-file fallback for '{funcName}'");
+            return baseJs + export;
         }
         catch (Exception ex)
         {
@@ -318,16 +490,164 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         return baseJs;
     }
 
+    /// <summary>
+    /// Находит безопасную точку вставки после заданной позиции.
+    /// Ищет ближайший `;` или `}` которые завершают statement.
+    /// </summary>
+    private static int FindSafeInsertionPoint(string js, int afterPos)
+    {
+        var span = js.AsSpan();
+        int i = afterPos;
+
+        while (i < span.Length && span[i] is ' ' or '\t') i++;
+
+        if (i < span.Length && span[i] == ';') return i + 1;
+        if (i < span.Length && span[i] == '}') return i + 1;
+        if (i < span.Length && span[i] == ',') return i + 1;
+
+        while (i < span.Length)
+        {
+            char c = span[i];
+
+            if (c is '"' or '\'' or '`')
+            {
+                i = JsFunctionExtractor.SkipString(js, i);
+                continue;
+            }
+
+            if (c == '/' && i + 1 < span.Length)
+            {
+                if (span[i + 1] == '/')
+                {
+                    int nl = span[i..].IndexOf('\n');
+                    i = nl >= 0 ? i + nl : span.Length;
+                    continue;
+                }
+                if (span[i + 1] == '*')
+                {
+                    i += 2;
+                    int end = span[i..].IndexOf("*/");
+                    i = end >= 0 ? i + end + 2 : span.Length;
+                    continue;
+                }
+            }
+
+            if (c is ';' or '\n') return i + 1;
+            if (c == '}') return i + 1;
+
+            i++;
+        }
+
+        return afterPos;
+    }
+
+    private static int FindSafeInsertionPointAfterDefinition(string js, int valueStart)
+    {
+        var span = js.AsSpan();
+        int i = valueStart;
+
+        while (i < span.Length && span[i] is ' ' or '\t') i++;
+        if (i >= span.Length) return -1;
+
+        char c = span[i];
+
+        if (c == 'f' && i + 8 <= span.Length && span.Slice(i, 8).SequenceEqual("function"))
+        {
+            int parenStart = js.IndexOf('(', i + 8);
+            if (parenStart >= 0 && parenStart - i < 200)
+            {
+                int parenEnd = JsFunctionExtractor.FindMatchingParen(js, parenStart);
+                if (parenEnd > 0)
+                {
+                    int bodySearch = parenEnd + 1;
+                    while (bodySearch < span.Length && span[bodySearch] is ' ' or '\t') bodySearch++;
+                    if (bodySearch < span.Length && span[bodySearch] == '{')
+                    {
+                        int braceEnd = JsFunctionExtractor.FindMatchingBrace(js, bodySearch);
+                        if (braceEnd > 0)
+                            return FindSafeInsertionPoint(js, braceEnd + 1);
+                    }
+                }
+            }
+        }
+
+        if (c == '{')
+        {
+            int end = JsFunctionExtractor.FindMatchingBrace(js, i);
+            if (end > 0) return FindSafeInsertionPoint(js, end + 1);
+        }
+        if (c == '[')
+        {
+            int end = JsFunctionExtractor.FindMatchingBracket(js, i);
+            if (end > 0) return FindSafeInsertionPoint(js, end + 1);
+        }
+        if (c == '(')
+        {
+            int end = JsFunctionExtractor.FindMatchingParen(js, i);
+            if (end > 0) return FindSafeInsertionPoint(js, end + 1);
+        }
+        if (c is '"' or '\'' or '`')
+        {
+            int end = JsFunctionExtractor.SkipString(js, i);
+            return FindSafeInsertionPoint(js, end);
+        }
+
+        int depth = 0;
+        while (i < span.Length)
+        {
+            char ch = span[i];
+            if (ch is '"' or '\'' or '`') { i = JsFunctionExtractor.SkipString(js, i); continue; }
+            if (ch is '(' or '[' or '{') depth++;
+            else if (ch is ')' or ']' or '}') { depth--; if (depth < 0) return i; }
+            else if (depth == 0 && ch is ';' or '\n') return i + 1;
+            i++;
+        }
+
+        return -1;
+    }
+
+    private static int FindEndOfIIFE(string js)
+    {
+        var span = js.AsSpan();
+        for (int i = span.Length - 1; i >= 1; i--)
+        {
+            if (span[i] == '(' && span[i - 1] == ')')
+            {
+                int j = i - 2;
+                while (j >= 0 && span[j] is ' ' or '\t' or '\n' or '\r') j--;
+                if (j >= 0 && span[j] == '}')
+                    return j;
+            }
+
+            if (span[i] == ';' && i >= 1 && span[i - 1] == ')')
+            {
+                int j = i - 2;
+                while (j >= 0 && span[j] is ' ' or '\t' or '\n' or '\r') j--;
+                if (j >= 0 && span[j] == '}')
+                    return j;
+            }
+        }
+
+        return -1;
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // STRING DICTIONARY
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Находит определение глобального словаря строк (var q = '...'.split("}")).
-    /// JS-aware parsing: обрабатывает escaped кавычки, любые разделители,
-    /// и корректно отрезает trailing var declarations.
+    /// Находит определение глобального словаря строк.
+    /// Поддерживает:
+    ///   1. var q = '...'.split("}") — split-стиль
+    ///   2. var h = ["...", "...", ...] — bracket-стиль (новый формат YouTube)
     /// </summary>
     protected static string? FindStringDictionary(string baseJs)
+    {
+        return FindSplitStringDictionary(baseJs)
+            ?? FindBracketStringDictionary(baseJs);
+    }
+
+    private static string? FindSplitStringDictionary(string baseJs)
     {
         var span = baseJs.AsSpan();
         int pos = 0;
@@ -383,7 +703,6 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
             int splitParenEnd = JsFunctionExtractor.FindMatchingParen(baseJs, splitParenStart);
             if (splitParenEnd < 0) continue;
 
-            // Извлекаем разделитель и считаем элементы
             int sepStart = splitParenStart + 1;
             while (sepStart < span.Length && span[sepStart] is ' ' or '\t') sepStart++;
             if (sepStart >= span.Length || span[sepStart] is not ('\'' or '"')) continue;
@@ -416,7 +735,87 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
             int dictEnd = splitParenEnd + 1;
             var dictDef = $"var {varName}={baseJs[stringStart..dictEnd]};";
 
-            Log.Debug($"[JsDecryptor] Found dictionary '{varName}', {separatorCount + 1} elements");
+            Log.Debug($"[JsDecryptor] Found split dictionary '{varName}', {separatorCount + 1} elements");
+            return dictDef;
+        }
+
+        return null;
+    }
+
+    private static string? FindBracketStringDictionary(string baseJs)
+    {
+        var span = baseJs.AsSpan();
+
+        int searchStart = 0;
+        int useStrict = span.IndexOf("'use strict'", StringComparison.Ordinal);
+        if (useStrict >= 0) searchStart = useStrict;
+
+        int searchEnd = Math.Min(searchStart + 5000, span.Length);
+
+        int pos = searchStart;
+        while (pos < searchEnd - 10)
+        {
+            int varIdx = span[pos..searchEnd].IndexOf("var ", StringComparison.Ordinal);
+            if (varIdx < 0) break;
+            varIdx += pos;
+
+            if (varIdx > 0 && span[varIdx - 1] is not (';' or '{' or '}' or '\n' or '\r' or ' ' or '\t'))
+            {
+                pos = varIdx + 4;
+                continue;
+            }
+
+            pos = varIdx + 4;
+
+            int nameStart = pos;
+            while (nameStart < span.Length && span[nameStart] is ' ' or '\t') nameStart++;
+            int nameEnd = nameStart;
+            while (nameEnd < span.Length && (char.IsLetterOrDigit(span[nameEnd]) || span[nameEnd] is '_' or '$'))
+                nameEnd++;
+
+            int nameLen = nameEnd - nameStart;
+            if (nameLen < 1 || nameLen > 3) continue;
+
+            var varName = span[nameStart..nameEnd].ToString();
+
+            int eqPos = nameEnd;
+            while (eqPos < span.Length && span[eqPos] is ' ' or '\t') eqPos++;
+            if (eqPos >= span.Length || span[eqPos] != '=') continue;
+            eqPos++;
+            if (eqPos < span.Length && span[eqPos] == '=') continue;
+
+            while (eqPos < span.Length && span[eqPos] is ' ' or '\t') eqPos++;
+            if (eqPos >= span.Length || span[eqPos] != '[') continue;
+
+            int bracketStart = eqPos;
+            int bracketEnd = JsFunctionExtractor.FindMatchingBracket(baseJs, bracketStart);
+            if (bracketEnd < 0) continue;
+
+            int elementCount = 0;
+            int depth = 0;
+            for (int i = bracketStart + 1; i < bracketEnd; i++)
+            {
+                char c = span[i];
+                if (c is '"' or '\'' or '`') { i = JsFunctionExtractor.SkipString(baseJs, i) - 1; continue; }
+                if (c is '(' or '[' or '{') depth++;
+                else if (c is ')' or ']' or '}') depth--;
+                else if (c == ',' && depth == 0) elementCount++;
+            }
+            elementCount++;
+
+            if (elementCount < 50) continue;
+
+            var sampleEnd = Math.Min(bracketStart + 200, bracketEnd);
+            var sample = span[bracketStart..sampleEnd];
+            if (!sample.Contains('"') && !sample.Contains('\'')) continue;
+
+            int end = bracketEnd + 1;
+            if (end < span.Length && span[end] == ';') end++;
+
+            var dictDef = $"var {varName}={baseJs[bracketStart..end]}";
+            if (!dictDef.EndsWith(';')) dictDef += ";";
+
+            Log.Debug($"[JsDecryptor] Found bracket dictionary '{varName}', {elementCount} elements");
             return dictDef;
         }
 
@@ -433,7 +832,17 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         var searchArea = firstTry > 0
             ? bundle.AsSpan(0, firstTry)
             : bundle.AsSpan(0, Math.Min(bundle.Length, 5000));
-        return searchArea.Contains(".split(", StringComparison.Ordinal);
+
+        if (searchArea.Contains(".split(", StringComparison.Ordinal))
+            return true;
+
+        // Bracket array detection — count quotes
+        int quoteCount = 0;
+        for (int i = 0; i < searchArea.Length; i++)
+        {
+            if (searchArea[i] is '"' or '\'') quoteCount++;
+        }
+        return quoteCount > 100;
     }
 
     private static Engine CreateEngine(TimeSpan timeout, int maxStatements) =>
@@ -484,7 +893,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     protected static string Truncate(string s, int len = 20) =>
         s.Length <= len ? s : string.Concat(s.AsSpan(0, len), "...");
 
-    public void FlushCache() => Cache.SaveAsync().Wait();
+    public void FlushCache() => Cache.SaveAsync().GetAwaiter().GetResult();
 
     public void InvalidateCache()
     {
@@ -502,6 +911,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         FlushCache();
         BundleEngine?.Dispose();
         FullEngine?.Dispose();
+        _initSemaphore.Dispose();
         GC.SuppressFinalize(this);
     }
 

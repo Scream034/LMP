@@ -1,3 +1,5 @@
+#if DEBUG
+
 using System.Reactive;
 using LMP.Core.Models;
 using LMP.Core.Services;
@@ -8,7 +10,6 @@ using ReactiveUI.Fody.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Features.Shared;
 using LMP.Core.Audio.Helpers;
-
 using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
@@ -18,9 +19,24 @@ using LMP.Core.Audio.Backends;
 
 namespace LMP.Features.Debug;
 
+/// <summary>
+/// ViewModel для Debug-окна. Содержит логику YouTube/Memory/Audio вкладок
+/// и предоставляет <see cref="TestRunner"/> для вкладки Tests.
+/// </summary>
 public sealed class DebugViewModel : ViewModelBase, IDisposable
 {
     private readonly YoutubeProvider _youtube;
+
+    // ═══════════════════════════════════════════════════════════════
+    // TEST RUNNER (вкладка Tests)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>ViewModel для вкладки тестов. Создаётся лениво при первом обращении.</summary>
+    public TestRunnerViewModel TestRunner { get; } = new();
+
+    // ═══════════════════════════════════════════════════════════════
+    // EXISTING PROPERTIES (YouTube / Memory / Audio)
+    // ═══════════════════════════════════════════════════════════════
 
     [Reactive] public string LogOutput { get; set; } = "Debug Session Started...\n";
     [Reactive] public string SearchQuery { get; set; } = "Linkin Park";
@@ -45,7 +61,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ClearCachesCommand { get; }
     public ReactiveCommand<Unit, Unit> CheckVmLeaksCommand { get; }
 
-    // Audio test commands
     public ReactiveCommand<Unit, Unit> PlayYoutubeAudioCommand { get; }
     public ReactiveCommand<Unit, Unit> PlayYoutubeWithCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> StopAudioTestCommand { get; }
@@ -63,7 +78,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         SearchMusicCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteSearchMusic));
         ClearLogCommand = CreateCommand(ReactiveCommand.Create(() => LogOutput = ""));
 
-        // Memory commands
         DumpMemoryCommand = CreateCommand(ReactiveCommand.Create(ExecuteDumpMemory));
         ForceGcCommand = CreateCommand(ReactiveCommand.Create(ExecuteForceGc));
         ClearCachesCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteClearCaches));
@@ -77,9 +91,7 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
             if (cacheField?.GetValue(vmFactory) is System.Collections.Concurrent.ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> cache)
             {
-                int alive = 0;
-                int dead = 0;
-                int disposed = 0;
+                int alive = 0, dead = 0, disposed = 0;
 
                 foreach (var kvp in cache)
                 {
@@ -88,10 +100,7 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                         if (vm.IsDisposed) disposed++;
                         else alive++;
                     }
-                    else
-                    {
-                        dead++;
-                    }
+                    else dead++;
                 }
 
                 AppendLog($"\n--- TRACK VM CACHE ---");
@@ -103,7 +112,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             }
         }));
 
-        // Audio test commands
         PlayYoutubeAudioCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecutePlayYoutubeAudio));
         PlayYoutubeWithCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecutePlayYoutubeWithCache));
         StopAudioTestCommand = CreateCommand(ReactiveCommand.Create(ExecuteStopAudioTest));
@@ -112,16 +120,15 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         TestLocalFileCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteTestLocalFile));
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Audio methods — без изменений, оставлены как были
+    // ═══════════════════════════════════════════════════════════════
 
-    private async Task ExecutePlayYoutubeAudio()
-    {
+    private async Task ExecutePlayYoutubeAudio() =>
         await PlayAudioTestAsync(useCache: false);
-    }
 
-    private async Task ExecutePlayYoutubeWithCache()
-    {
+    private async Task ExecutePlayYoutubeWithCache() =>
         await PlayAudioTestAsync(useCache: true);
-    }
 
     private async Task PlayAudioTestAsync(bool useCache)
     {
@@ -187,7 +194,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
             AppendLog($"  → Creating AudioPlayer...");
 
-            // Инициализируем глобальный кэш если включен
             if (useCache)
             {
                 _testCacheManager = new AudioCacheManager();
@@ -204,7 +210,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 }
             };
 
-            // AudioPlayer теперь принимает только options
             _testPlayer = new AudioPlayer(options);
 
             _testPlayer.StateChanged += state =>
@@ -287,7 +292,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             _testPlayer = null;
         }
 
-        // *** ВАЖНО: освобождаем cacheManager чтобы сохранить индекс ***
         if (_testCacheManager != null)
         {
             await _testCacheManager.DisposeAsync();
@@ -305,7 +309,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
         try
         {
-            // Если есть активный тест — показываем его кэш
             if (_testCacheManager != null)
             {
                 var stats = _testCacheManager.GetStats();
@@ -318,10 +321,8 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             }
             else
             {
-                // Иначе создаём временный для чтения с диска
                 using var cacheManager = new AudioCacheManager();
                 var stats = cacheManager.GetStats();
-
                 AppendLog($"  [Disk Cache]");
                 AppendLog($"  Total entries: {stats.TotalEntries}");
                 AppendLog($"  Complete: {stats.CompleteEntries}");
@@ -354,11 +355,8 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 var files = Directory.GetFiles(cacheDir);
                 foreach (var file in files)
                 {
-                    try
-                    {
-                        File.Delete(file);
-                    }
-                    catch { }
+                    try { File.Delete(file); }
+                    catch { /* ignored */ }
                 }
                 AppendLog($"  ✓ Deleted {files.Length} files");
             }
@@ -383,8 +381,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         AppendLog("\n--- LOCAL FILE TEST ---");
         AppendLog("  Select a .webm, .mp4, .m4a, or .ogg file to test.");
 
-        // Для простоты — тест с фиксированным путём
-        // В реальном приложении нужен file picker
         var testPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
             "test.webm");
@@ -416,17 +412,15 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             AppendLog($"  ✓ Sample rate: {source.SampleRate}Hz");
             AppendLog($"  ✓ Channels: {source.Channels}");
 
-            // Create decoder
             IAudioDecoder decoder = source.Codec == AudioCodec.Opus
-                ? new OpusDecoder(source.SampleRate > 0 ? source.SampleRate : 48000, source.Channels > 0 ? source.Channels : 2)
-                : new AacDecoder(source.SampleRate > 0 ? source.SampleRate : 44100, source.Channels > 0 ? source.Channels : 2);
+                ? new OpusDecoder(source.SampleRate > 0 ? source.SampleRate : 48000,
+                    source.Channels > 0 ? source.Channels : 2)
+                : new AacDecoder(source.SampleRate > 0 ? source.SampleRate : 44100,
+                    source.Channels > 0 ? source.Channels : 2);
 
             if (decoder is AacDecoder aac && source.DecoderConfig != null)
-            {
                 aac.Initialize(source.DecoderConfig);
-            }
 
-            // Create backend
             IPlaybackBackend backend;
             try
             {
@@ -439,7 +433,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 AppendLog($"  ⚠️ NullBackend (no audio output)");
             }
 
-            // PCM buffer
             var pcmBuffer = new LockFreeRingBuffer<float>(decoder.SampleRate * decoder.Channels * 4);
             var decodeOutput = new float[decoder.MaxFrameSize * decoder.Channels];
 
@@ -450,7 +443,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 return read / decoder.Channels;
             });
 
-            // Decode loop
             var decodeTask = Task.Run(async () =>
             {
                 try
@@ -471,10 +463,8 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
                 catch (OperationCanceledException) { }
             });
 
-            // Buffer
             await Task.Delay(500, _audioTestCts.Token);
 
-            // Play
             backend.Start();
             AppendLog($"  ▶️ Playing for {AudioTestDuration}s...");
 
@@ -512,29 +502,27 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         if (string.IsNullOrWhiteSpace(input)) return null;
         input = input.Trim();
 
-        // Already a video ID?
         if (System.Text.RegularExpressions.Regex.IsMatch(input, @"^[a-zA-Z0-9_-]{11}$"))
             return input;
 
-        // youtube.com/watch?v=VIDEO_ID
         var match = System.Text.RegularExpressions.Regex.Match(input, @"[?&]v=([a-zA-Z0-9_-]{11})");
         if (match.Success) return match.Groups[1].Value;
 
-        // youtu.be/VIDEO_ID
         match = System.Text.RegularExpressions.Regex.Match(input, @"youtu\.be/([a-zA-Z0-9_-]{11})");
         if (match.Success) return match.Groups[1].Value;
 
-        // youtube.com/embed/VIDEO_ID
         match = System.Text.RegularExpressions.Regex.Match(input, @"embed/([a-zA-Z0-9_-]{11})");
         if (match.Success) return match.Groups[1].Value;
 
-        // youtube.com/shorts/VIDEO_ID
         match = System.Text.RegularExpressions.Regex.Match(input, @"shorts/([a-zA-Z0-9_-]{11})");
         if (match.Success) return match.Groups[1].Value;
 
         return null;
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Memory methods
+    // ═══════════════════════════════════════════════════════════════
 
     private void ExecuteDumpMemory()
     {
@@ -546,7 +534,6 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     private void ExecuteForceGc()
     {
         AppendLog("\n--- FORCING GARBAGE COLLECTION ---");
-
         var before = GC.GetTotalMemory(false) / 1024 / 1024;
         AppendLog($"Before: {before} MB");
 
@@ -597,6 +584,10 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // YouTube methods
+    // ═══════════════════════════════════════════════════════════════
+
     private async Task ExecuteGetLikedVideos()
     {
         await RunSafe("YT LIKED (LL)", async () =>
@@ -621,17 +612,13 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
     private async Task ExecuteSearchVideos()
     {
         await RunSafe($"YT SEARCH: {SearchQuery}", async () =>
-        {
-            return await _youtube.SearchFastAsync(SearchQuery, 10, SearchFilter.Video);
-        });
+            await _youtube.SearchFastAsync(SearchQuery, 10, SearchFilter.Video));
     }
 
     private async Task ExecuteSearchMusic()
     {
         await RunSafe($"YTM SEARCH: {SearchQuery}", async () =>
-        {
-            return await _youtube.SearchFastAsync(SearchQuery, 10, SearchFilter.Music);
-        });
+            await _youtube.SearchFastAsync(SearchQuery, 10, SearchFilter.Music));
     }
 
     private async Task RunSafe(string title, Func<Task<List<TrackInfo>>> action)
@@ -643,9 +630,7 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             var results = await action();
             AppendLog($"Success! Found {results.Count} items:");
             foreach (var item in results)
-            {
                 AppendLog($"- [{item.Id}] {item.Title} by {item.Author} (Music: {item.IsMusic})");
-            }
         }
         catch (Exception ex)
         {
@@ -659,10 +644,16 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void AppendLog(string text)
-    {
+    // ═══════════════════════════════════════════════════════════════
+    // LOG
+    // ═══════════════════════════════════════════════════════════════
+
+    private void AppendLog(string text) =>
         LogOutput += text + "\n";
-    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // DISPOSE
+    // ═══════════════════════════════════════════════════════════════
 
     protected override void Dispose(bool disposing)
     {
@@ -672,8 +663,10 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             _audioTestCts?.Dispose();
             _testPlayer?.Dispose();
             _testCacheManager?.Dispose();
+            TestRunner.Dispose();
         }
-
         base.Dispose(disposing);
     }
 }
+
+#endif

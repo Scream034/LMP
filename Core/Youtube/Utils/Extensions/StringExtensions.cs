@@ -60,7 +60,7 @@ internal static class StringExtensions
             // Given the context, StringBuilder is acceptable, but let's optimize capacity.
         });
     }
-    
+
     // Optimized StripNonDigit replacing the broken string.Create logic above
     // to actually work correctly without double-pass complexity.
     public static string StripNonDigitOptimized(this string str)
@@ -94,4 +94,7 @@ internal static class StringExtensions
             (span[state.firstCharIndex], span[state.secondCharIndex]) = (span[state.secondCharIndex], span[state.firstCharIndex]);
         });
     }
+
+    /// <summary>Повторяет символ N раз.</summary>
+    public static string Repeat(this char c, int count) => new(c, count);
 }

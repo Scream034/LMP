@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Memory;
 using LMP.Core.Exceptions;
 using LMP.Core.Youtube.Utils;
@@ -223,9 +224,6 @@ public sealed partial class CachingStreamSource
                         continue;
 
                     case ChunkDownloadResult.NetworkError:
-                        // ═══ Быстрый первый retry, потом backoff ═══
-                        // Первая ошибка после паузы обычно из-за протухшего соединения.
-                        // Мгновенный retry на свежем соединении почти всегда успешен.
                         int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
                         Log.Warn($"[CachingSource] Chunk {index}: network retry " +
                                  $"{attempt + 1}/{maxAttempts}, delay={delay}ms");
@@ -233,19 +231,16 @@ public sealed partial class CachingStreamSource
                         continue;
 
                     case ChunkDownloadResult.SlotTimeout:
-                        // Слоты заняты — короткая пауза
                         await Task.Delay(200, ct);
                         continue;
 
                     case ChunkDownloadResult.Cancelled:
-                        // Отмена НЕ по нашему ct — epoch change
                         if (!ct.IsCancellationRequested)
                         {
                             Log.Debug($"[CachingSource] Chunk {index}: cancelled (epoch change), retry");
                             await Task.Delay(50, ct);
                             continue;
                         }
-                        // Отмена по нашему ct — выходим
                         ct.ThrowIfCancellationRequested();
                         return result;
 
@@ -266,7 +261,6 @@ public sealed partial class CachingStreamSource
 
                 if (IsChunkAvailable(index))
                     return ChunkDownloadResult.Success;
-                // Не загрузился — retry в следующей итерации
             }
         }
 
@@ -349,8 +343,6 @@ public sealed partial class CachingStreamSource
                     : ChunkDownloadResult.Cancelled;
             }
 
-            // Освобождаем slot СРАЗУ — HTTP запрос будет жить своей жизнью
-            // Slot нужен только для throttling количества НОВЫХ запросов
             try { _downloadSlots.Release(); } catch { }
             gotSlot = false;
 
@@ -400,7 +392,6 @@ public sealed partial class CachingStreamSource
         }
         catch (TaskCanceledException)
         {
-            // HttpClient.Timeout
             return ChunkDownloadResult.NetworkError;
         }
         catch (HttpRequestException)
@@ -410,19 +401,38 @@ public sealed partial class CachingStreamSource
 
         using (response)
         {
-            // Проверяем отмену ПОСЛЕ завершения SendAsync
             if (ct.IsCancellationRequested)
                 return ChunkDownloadResult.Cancelled;
 
             if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
                 int count = Interlocked.Increment(ref _consecutive403Count);
-                Log.Warn($"[CachingSource] 403 for chunk {index} (consecutive={count})");
+
+                // ═══ EXTENDED 403 DIAGNOSTIC ═══
+                var nParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
+                var cParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "c");
+                var reqUa = request.Headers.UserAgent.ToString();
+
+                Log.Warn($"[CachingSource] ═══ 403 DIAGNOSTIC chunk {index} (consecutive={count}) ═══");
+                Log.Warn($"[CachingSource]   c={cParam ?? "?"}, UA={reqUa[..Math.Min(reqUa.Length, 50)]}...");
+                Log.Warn($"[CachingSource]   n-token: {nParam ?? "MISSING"} " +
+                         $"(len={nParam?.Length ?? 0}, looks_encrypted={nParam?.Length is > 15 and < 25})");
+
+                // Проверяем заголовки ответа для доп. информации
+                if (response.Headers.TryGetValues("X-Restrict-Formats-Hint", out var hints))
+                    Log.Warn($"[CachingSource]   Restrict-Hint: {string.Join(", ", hints)}");
+
+                var responseBody = "";
+                try { responseBody = await response.Content.ReadAsStringAsync(CancellationToken.None); }
+                catch { /* ignore */ }
+                if (responseBody.Length > 0)
+                    Log.Warn($"[CachingSource]   Response body: {responseBody[..Math.Min(responseBody.Length, 200)]}");
+
+                Log.Warn($"[CachingSource] ═══════════════════════════════════════════════════════");
+
                 return ChunkDownloadResult.Forbidden403;
             }
-
-            // 416 Range Not Satisfiable = конец файла, не ошибка
-            if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
+            else if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
             {
                 Log.Debug($"[CachingSource] Chunk {index}: 416 Range Not Satisfiable (EOF)");
                 return ChunkDownloadResult.OutOfRange;
@@ -457,7 +467,6 @@ public sealed partial class CachingStreamSource
                 return ChunkDownloadResult.NetworkError;
             }
 
-            // Проверяем отмену ПОСЛЕ чтения
             if (ct.IsCancellationRequested)
             {
                 ChunkPool.Shared.Return(rentedBuffer);
@@ -474,7 +483,6 @@ public sealed partial class CachingStreamSource
 
             if (actualLength < expectedBytes)
             {
-                // Если это последний чанк и получили хоть что-то — OK
                 if (start + actualLength >= _contentLength - _chunkSize)
                 {
                     Log.Debug($"[CachingSource] Chunk {index}: partial read " +
@@ -489,14 +497,10 @@ public sealed partial class CachingStreamSource
                 }
             }
 
-            // ═══ SAVE — создаём точный массив для длительного хранения в RAM ═══
-            // rentedBuffer может быть больше actualLength (из-за ArrayPool),
-            // поэтому создаём массив точного размера для RAM кэша
+            // ═══ SAVE ═══
             byte[] chunkData;
             if (rentedBuffer.Length == actualLength)
             {
-                // Редкий случай — размеры совпали, используем как есть
-                // Не возвращаем в пул — массив уходит в _ramChunks
                 chunkData = rentedBuffer;
             }
             else
@@ -508,7 +512,6 @@ public sealed partial class CachingStreamSource
 
             _ramChunks.TryAdd(index, new ChunkData(chunkData, actualLength));
 
-            // Асинхронная запись на диск — не блокируем поток загрузки
             _ = WriteToDiskFireAndForgetAsync(index, chunkData);
 
             if (_ramChunks.Count > _config.MaxRamChunks)
@@ -569,7 +572,6 @@ public sealed partial class CachingStreamSource
         bool acquired = await _refreshLock.WaitAsync(0, ct);
         if (!acquired)
         {
-            // Кто-то уже делает refresh — ждём
             Log.Debug("[CachingSource] Waiting for concurrent refresh...");
             await _refreshLock.WaitAsync(ct);
             _refreshLock.Release();
@@ -579,7 +581,6 @@ public sealed partial class CachingStreamSource
 
         try
         {
-            // Cooldown check
             var elapsed = DateTime.UtcNow - _lastRefreshTime;
             if (elapsed.TotalMilliseconds < _config.RefreshCooldownMs)
             {
@@ -588,11 +589,9 @@ public sealed partial class CachingStreamSource
                 await Task.Delay(waitMs, ct);
             }
 
-            // Выполняем refresh
             await RefreshUrlAsync(ct);
             _lastRefreshTime = DateTime.UtcNow;
 
-            // Сбрасываем 403 счётчик после успешного refresh
             Interlocked.Exchange(ref _consecutive403Count, 0);
             Log.Info("[CachingSource] 403 counter reset after URL refresh");
 
@@ -614,22 +613,53 @@ public sealed partial class CachingStreamSource
 
         if (isYouTube)
         {
-            string url = AppendYouTubeParams(_currentUrl, rn);
+            string url = BuildYouTubeChunkUrl(_currentUrl, rn);
+
+            // ═══ DIAGNOSTIC: URL + ключевые параметры для верификации ═══
+            var nParam = UrlEx.TryGetQueryParameterValue(url, "n");
+            var cParam = UrlEx.TryGetQueryParameterValue(url, "c");
+            var sigParam = UrlEx.TryGetQueryParameterValue(url, "sig");
+
+            Log.Debug($"[CachingSource] Chunk {index} URL: {url[..Math.Min(url.Length, 300)]}");
+            Log.Debug($"[CachingSource] Chunk {index} params: " +
+                      $"c={cParam ?? "MISSING"}, " +
+                      $"n={nParam?[..Math.Min(nParam.Length, 15)] ?? "MISSING"}..., " +
+                      $"sig={(sigParam is not null ? $"{sigParam.Length}chars,ends=...{sigParam[^Math.Min(6, sigParam.Length)..]}]" : "MISSING")}");
+
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new RangeHeaderValue(start, end);
+
+            // ═══ FIX: User-Agent соответствует клиенту из URL ═══
+            // URL содержит c=WEB_REMIX → нужен Chrome UA, НЕ Android VR!
+            SharedHttpClient.ApplyUserAgentFromUrl(request, url);
+
+            // ═══ DIAGNOSTIC: подтверждаем какой UA используется ═══
+            var appliedUa = request.Headers.UserAgent.ToString();
+            Log.Debug($"[CachingSource] Chunk {index} UA: {appliedUa[..Math.Min(appliedUa.Length, 60)]}...");
+
             return request;
         }
 
         var genericRequest = new HttpRequestMessage(HttpMethod.Get, _currentUrl);
         genericRequest.Headers.Range = new RangeHeaderValue(start, end);
+        genericRequest.Headers.TryAddWithoutValidation("User-Agent", YoutubeClientUtils.UaWebRemix);
         return genericRequest;
     }
 
-    private static string AppendYouTubeParams(string baseUrl, int rn)
+    /// <summary>
+    /// Строит URL для chunk-запроса к YouTube.
+    /// SRP: chunk-специфичные параметры (rn, rbuf) добавляются ЗДЕСЬ,
+    /// а не в StreamClient. StreamClient готовит "чистый" base URL.
+    /// 
+    /// Использует UrlEx.SetQueryParameter для in-place замены —
+    /// если rn/rbuf уже есть, они обновятся на месте, если нет — добавятся в конец.
+    /// Порядок остальных параметров (n, sig, sparams и т.д.) гарантированно сохраняется.
+    /// </summary>
+    private static string BuildYouTubeChunkUrl(string baseUrl, int rn)
     {
-        string url = UrlEx.RemoveQueryParameter(baseUrl, "rn");
-        url = UrlEx.RemoveQueryParameter(url, "rbuf");
-        url = UrlEx.SetQueryParameter(url, "rn", rn.ToString());
+        // SetQueryParameter делает in-place замену если параметр существует,
+        // или append если нет. Порядок остальных параметров не меняется.
+        string url = UrlEx.SetQueryParameter(baseUrl, "rn", rn.ToString());
         url = UrlEx.SetQueryParameter(url, "rbuf", "0");
         return url;
     }

@@ -12,6 +12,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager) 
         await EnsureInitializedAsync(ct);
 
         var result = TryInvokeJs(nToken, "NToken");
+
         return result ?? nToken;
     }
 
@@ -23,38 +24,64 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager) 
         var funcName = FindNTokenFunctionName(context.BaseJs);
         if (funcName is null)
         {
-            Log.Error("[NToken] n-token function not found");
+            Log.Error("[NToken] n-token function not found in base.js " +
+                      $"(version={context.Version}, size={context.BaseJs.Length / 1024}KB)");
             return;
         }
 
         Log.Debug($"[NToken] Found entry function: {funcName}");
 
+        // ═══ Извлекаем ВСЕ варианты magic numbers ═══
+        var candidates = MagicNumbersExtractor.ExtractCandidates(context.BaseJs, funcName);
+
+        if (candidates.Count == 0)
+        {
+            Log.Warn($"[NToken] No magic number candidates found for '{funcName}', trying without args");
+            candidates.Add(MagicNumbers.None);
+        }
+        else
+        {
+            Log.Info($"[NToken] Magic candidates: {string.Join(" | ", candidates)}");
+        }
+
+        // Всегда добавляем fallback без magic в конец
+        if (candidates.All(c => c.HasArgs))
+            candidates.Add(MagicNumbers.None);
+
         const string testToken = "WDZxqubC-kfdqV5cl60";
 
-        var success = TryInitJsEngines(
+        var success = TryInitJsEnginesWithCandidates(
             context,
             funcName,
+            candidates,
             BuildNTokenWrapperScript,
             testToken,
             BuildNTokenBundle);
 
         sw.Stop();
         if (success)
-            Log.Info($"[NToken] Ready in {sw.ElapsedMilliseconds}ms");
+        {
+            Log.Info($"[NToken] Ready in {sw.ElapsedMilliseconds}ms (entry={funcName})");
+        }
         else
-            Log.Error($"[NToken] All init strategies failed after {sw.ElapsedMilliseconds}ms");
+        {
+            Log.Error($"[NToken] All init strategies failed after {sw.ElapsedMilliseconds}ms " +
+                      $"(entry={funcName}, candidates={candidates.Count}, version={context.Version})");
+        }
     }
 
-    private static string BuildNTokenWrapperScript(string funcName) => $$"""
-        function __decryptorTransform(n) {
-            try {
-                var f = window['{{funcName}}'];
-                if (typeof f !== 'function') return n;
-                var r = f(n);
-                return (typeof r === 'string' && r !== n) ? r : n;
-            } catch(e) { return n; }
-        }
-        """;
+    private static string BuildNTokenWrapperScript(string funcName, MagicNumbers magic) => $$"""
+    function __decryptorTransform(n) {
+        try {
+            var f = window['{{funcName}}'];
+            if (typeof f !== 'function') return n;
+            var r = f({{magic.ToJsArgPrefix()}}n);
+            if (typeof r === 'string' && r.length > 0 && r !== n) return r;
+            if (Array.isArray(r)) return n;
+            return n;
+        } catch(e) { return n; }
+    }
+    """;
 
     /// <summary>
     /// Кастомный builder бандла для NToken.
@@ -69,10 +96,52 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager) 
 
     private static string? FindNTokenFunctionName(string baseJs)
     {
-        return FindBySelfReferences(baseJs)
+        return FindByTripleSelfReference(baseJs)      // ← NEW (приоритет 1)
+            ?? FindBySelfReferences(baseJs)
             ?? FindByWrapperArray(baseJs)
             ?? FindByEnhancedPattern(baseJs)
             ?? FindByNumericMarker(baseJs);
+    }
+
+    /// <summary>
+    /// Ищет N-токен функцию по уникальному паттерну трёх самоссылок массива.
+    /// <para>
+    /// Во ВСЕХ версиях плеера N-токен функция содержит массив,
+    /// который ссылается сам на себя три раза подряд:
+    /// </para>
+    /// <code>
+    /// // Старая: Y[6]=Y; Y[14]=Y; Y[72]=Y;
+    /// // Новая:  y[V^4504]=y; y[V^4555]=y; y[V^4551]=y;
+    /// </code>
+    /// <para>Этот паттерн уникален — больше нигде в base.js не встречается.</para>
+    /// </summary>
+    private static string? FindByTripleSelfReference(string baseJs)
+    {
+        var match = TripleSelfReferenceRegex().Match(baseJs);
+        if (!match.Success)
+        {
+            Log.Debug("[NToken] Triple self-reference pattern not found");
+            return null;
+        }
+
+        var arrayName = match.Groups[1].Value;
+        Log.Debug($"[NToken] Triple self-ref array '{arrayName}' at position {match.Index}");
+
+        // Находим функцию, содержащую этот паттерн
+        var containingFunc = FindContainingFunction(baseJs, match.Index);
+        if (containingFunc is null)
+        {
+            Log.Warn($"[NToken] Cannot find function containing triple self-ref at {match.Index}");
+            return null;
+        }
+
+        Log.Debug($"[NToken] Containing function: {containingFunc}");
+
+        // Может быть обёрнута — ищем wrapper
+        var wrapper = FindWrapperFor(baseJs, containingFunc);
+        var result = wrapper ?? containingFunc;
+        Log.Debug($"[NToken] Found via triple self-reference: {result}");
+        return result;
     }
 
     private static string? FindBySelfReferences(string baseJs)
@@ -213,6 +282,12 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager) 
     // ═══════════════════════════════════════════════════════════════
     // GENERATED REGEX
     // ═══════════════════════════════════════════════════════════════
+
+    // Regex: три самоссылки подряд — (\w+)[expr]=\1; \1[expr]=\1; \1[expr]=\1
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"(\w+)\s*\[\s*[^\]]+\s*\]\s*=\s*\1\s*;\s*\1\s*\[\s*[^\]]+\s*\]\s*=\s*\1\s*;\s*\1\s*\[\s*[^\]]+\s*\]\s*=\s*\1",
+        System.Text.RegularExpressions.RegexOptions.None)]
+    private static partial System.Text.RegularExpressions.Regex TripleSelfReferenceRegex();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"(\w+)\[\d+\]\s*=\s*\1\s*;\s*\1\[\d+\]\s*=\s*\1\s*;\s*\1\[\d+\]\s*=\s*\1", System.Text.RegularExpressions.RegexOptions.Compiled)]
     private static partial System.Text.RegularExpressions.Regex SelfReferencesRegex();

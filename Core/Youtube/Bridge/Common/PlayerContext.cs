@@ -100,15 +100,14 @@ public sealed partial class PlayerContext
             var version = match.Groups[1].Value;
             var urls = new[]
             {
-                $"https://www.youtube.com/s/player/{version}/player_es6.vflset/en_US/base.js",
-                $"https://www.youtube.com/s/player/{version}/player_ias.vflset/en_US/base.js",
-                $"https://www.youtube.com/s/player/{version}/player_ias.vflset/ru_RU/base.js",
+                $"https://www.youtube.com/s/player/{version}/player_es6.vflset/ru_RU/base.js",
             };
 
             return (version, urls);
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Error($"[PlayerContext] Version detection failed: {ex.Message}");
             return null;
         }
     }

@@ -10,21 +10,23 @@ using LMP.Core.Youtube.Videos.ClosedCaptions;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 
-public class StreamClient
+public sealed class StreamClient
 {
     private readonly StreamController _controller;
     private readonly HttpClient _http;
     private readonly NTokenDecryptor _nTokenDecryptor;
     private readonly SigCipherDecryptor _sigCipherDecryptor;
     private CipherManifest? _cipherManifest;
-    
+
     /// <summary>
     /// Callback для проверки авторизации.
-    /// Устанавливается при создании клиента.
     /// </summary>
     private readonly Func<bool>? _isAuthenticatedCheck;
 
-    public StreamClient(HttpClient http, NTokenDecryptor nTokenDecryptor, SigCipherDecryptor sigCipherDecryptor, 
+    public StreamClient(
+        HttpClient http,
+        NTokenDecryptor nTokenDecryptor,
+        SigCipherDecryptor sigCipherDecryptor,
         Func<bool>? isAuthenticatedCheck = null)
     {
         _http = http;
@@ -65,8 +67,8 @@ public class StreamClient
     }
 
     private async IAsyncEnumerable<IStreamInfo> GetAudioStreamInfosAsync(
-        IEnumerable<IStreamData> streamDatas,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+         IEnumerable<IStreamData> streamDatas,
+         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         foreach (var streamData in streamDatas)
         {
@@ -84,13 +86,18 @@ public class StreamClient
             var url = streamData.Url;
             if (string.IsNullOrWhiteSpace(url)) continue;
 
+            // ═══ DIAGNOSTIC: исходный URL из player response ═══
+            Log.Debug($"[StreamClient] itag={itag} raw URL (first 200): " +
+                      $"{url}");
+
             // ════════════════════════════════════════════════════════
             // SIGNATURE DECRYPTION
             // ════════════════════════════════════════════════════════
             if (!string.IsNullOrWhiteSpace(streamData.Signature))
             {
                 Log.Debug($"[StreamClient] itag={itag} needs signature decryption " +
-                          $"(sig length={streamData.Signature.Length})");
+                          $"(sig length={streamData.Signature.Length}, " +
+                          $"sigParam={streamData.SignatureParameter ?? "sig"})");
 
                 try
                 {
@@ -100,14 +107,31 @@ public class StreamClient
                     );
 
                     var sigParam = streamData.SignatureParameter ?? "sig";
-                    url = $"{url}&{sigParam}={Uri.EscapeDataString(decryptedSig)}";
+                    url = UrlEx.SetQueryParameter(url, sigParam, decryptedSig);
 
-                    Log.Debug($"[StreamClient] itag={itag} sig decrypted OK");
+                    Log.Debug($"[StreamClient] itag={itag} sig decrypted: " +
+                              $"'{streamData.Signature}' → " +
+                              $"'{decryptedSig}'");
                 }
                 catch (Exception ex)
                 {
                     Log.Error($"[StreamClient] itag={itag} sig decryption failed: {ex.Message}");
                     continue;
+                }
+            }
+            else
+            {
+                // ═══ DIAGNOSTIC: sig уже в URL, проверяем что он есть ═══
+                var existingSig = UrlEx.TryGetQueryParameterValue(url, "sig");
+                if (existingSig is not null)
+                {
+                    Log.Debug($"[StreamClient] itag={itag} sig already in URL " +
+                              $"(length={existingSig.Length}, " +
+                              $"ends={existingSig})");
+                }
+                else
+                {
+                    Log.Warn($"[StreamClient] itag={itag} NO sig in URL and no signatureCipher!");
                 }
             }
 
@@ -121,21 +145,36 @@ public class StreamClient
                 {
                     var decryptedN = await _nTokenDecryptor.DecryptAsync(nToken, cancellationToken);
                     url = UrlEx.SetQueryParameter(url, "n", decryptedN);
+
+                    // ═══ DIAGNOSTIC: n-token before/after ═══
+                    Log.Debug($"[StreamClient] itag={itag} n-token: " +
+                              $"'{nToken}' → '{decryptedN}'");
                 }
                 catch (Exception ex)
                 {
+                    // ═══ CRITICAL: n-token НЕ расшифрован → 403 ═══
                     Log.Warn($"[StreamClient] itag={itag} n-token failed: {ex.Message}");
+                    Log.Warn($"[StreamClient] ⚠ URL will have ENCRYPTED n-token → expect 403!");
                 }
             }
 
-            // ════════════════════════════════════════════════════════
-            // Cleanup YouTube internal parameters
-            // ════════════════════════════════════════════════════════
+            // Cleanup
             url = UrlEx.RemoveQueryParameter(url, "ump");
             url = UrlEx.RemoveQueryParameter(url, "alr");
             url = UrlEx.RemoveQueryParameter(url, "srfvp");
-            url = UrlEx.RemoveQueryParameter(url, "rbuf");
             url = UrlEx.RemoveQueryParameter(url, "pot");
+
+            // ═══ DIAGNOSTIC: финальный URL после всех трансформаций ═══
+            Log.Debug($"[StreamClient] itag={itag} FINAL URL (first 400): " +
+                      $"{url}");
+
+            // ═══ DIAGNOSTIC: проверяем ключевые параметры ═══
+            var finalN = UrlEx.TryGetQueryParameterValue(url, "n");
+            var finalSig = UrlEx.TryGetQueryParameterValue(url, "sig");
+            var finalC = UrlEx.TryGetQueryParameterValue(url, "c");
+            Log.Debug($"[StreamClient] itag={itag} params: c={finalC}, " +
+                      $"n={finalN}, " +
+                      $"sig={finalSig}");
 
             // ════════════════════════════════════════════════════════
             // Validation & yield
@@ -171,9 +210,11 @@ public class StreamClient
         }
     }
 
+    #region GetManifestAsync — PRE-INIT decryptors
+
     public async ValueTask<StreamManifest> GetManifestAsync(
-        VideoId videoId,
-        CancellationToken cancellationToken = default)
+    VideoId videoId,
+    CancellationToken cancellationToken = default)
     {
         PlayerResponse playerResponse;
         bool isAuth = _isAuthenticatedCheck?.Invoke() ?? false;
@@ -197,6 +238,25 @@ public class StreamClient
             throw new VideoUnplayableException(
                 $"Video {videoId} is not playable: {playerResponse.PlayabilityError}");
 
+        // ═══ PRE-INIT: загружаем player JS ДО обработки стримов ═══
+        // Без этого NTokenDecryptor пытается скачать base.js ОТДЕЛЬНО для каждого itag.
+        // Результат из логов: 4 itag = 4 фейла HTTP/2 = 4x "[StreamClient] n-token failed"
+        // С pre-init: одна загрузка base.js, потом все itag используют кэш.
+        var preInitSw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _nTokenDecryptor.EnsureInitializedAsync(cancellationToken);
+            preInitSw.Stop();
+            Log.Info($"[StreamClient] NToken pre-init OK in {preInitSw.ElapsedMilliseconds}ms");
+        }
+        catch (Exception ex)
+        {
+            preInitSw.Stop();
+            Log.Warn($"[StreamClient] NToken pre-init failed in {preInitSw.ElapsedMilliseconds}ms: " +
+                     $"{ex.Message}");
+            Log.Warn("[StreamClient] ⚠ N-tokens will NOT be decrypted → expect 403 on all chunks!");
+        }
+
         var streams = new List<IStreamInfo>();
         await foreach (var stream in GetAudioStreamInfosAsync(
             playerResponse.Streams, cancellationToken))
@@ -209,6 +269,26 @@ public class StreamClient
 
         return new StreamManifest(streams);
     }
+
+    /// <summary>
+    /// Предзагрузка player JS. Один раз для всех itag.
+    /// Если фейлит — логируем но не крашим (стримы попробуют без n-token).
+    /// </summary>
+    private async ValueTask PreInitializeDecryptorsAsync(CancellationToken ct)
+    {
+        try
+        {
+            // Это загрузит base.js и закэширует в StreamController
+            // NTokenDecryptor тоже должен использовать этот кэш
+            await _nTokenDecryptor.EnsureInitializedAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[StreamClient] Decryptor pre-init failed (will retry per-itag): {ex.Message}");
+        }
+    }
+
+    #endregion
 
     public async ValueTask DownloadAsync(
         IStreamInfo streamInfo,
