@@ -1,33 +1,32 @@
-// Core/Youtube/Bridge/Common/MagicNumbers.cs
-
 namespace LMP.Core.Youtube.Bridge.Common;
 
 /// <summary>
 /// Числовые аргументы, передаваемые JS-функции перед основным входным параметром.
 /// <para>
-/// YouTube вызывает дешифраторы с фиксированными числовыми аргументами,
-/// которые предшествуют основному параметру (N-токен, сигнатура и т.д.):
+/// YouTube вызывает дешифраторы с фиксированными числовыми аргументами:
 /// </para>
 /// <list type="bullet">
+///   <item><c>Tx(48, 8079, token, token)</c> → <c>Args = [48, 8079]</c></item>
 ///   <item><c>Xp(6, 4494, nToken)</c> → <c>Args = [6, 4494]</c></item>
-///   <item><c>KM(76, nToken)</c> → <c>Args = [76]</c></item>
 ///   <item><c>decrypt(nToken)</c> → <c>Args = []</c></item>
 /// </list>
 /// </summary>
 internal sealed record MagicNumbers(int[] Args)
 {
-    /// <summary>Нет числовых аргументов — функция вызывается только с основным параметром.</summary>
+    /// <summary>Нет числовых аргументов.</summary>
     public static MagicNumbers None { get; } = new([]);
+
+    /// <summary>Конструктор для двух magic numbers (наиболее частый случай).</summary>
+    public MagicNumbers(int r, int p) : this([r, p]) { }
 
     /// <summary>Есть ли хотя бы один числовой аргумент.</summary>
     public bool HasArgs => Args.Length > 0;
 
     /// <summary>
-    /// Формирует строку числовых аргументов для вставки в JS-вызов.
+    /// Формирует строку аргументов для вставки в JS-массив.
     /// <para>Примеры:</para>
     /// <list type="bullet">
-    ///   <item><c>[6, 4494]</c> → <c>"6, 4494, "</c></item>
-    ///   <item><c>[76]</c> → <c>"76, "</c></item>
+    ///   <item><c>[48, 8079]</c> → <c>"48, 8079, "</c></item>
     ///   <item><c>[]</c> → <c>""</c></item>
     /// </list>
     /// </summary>

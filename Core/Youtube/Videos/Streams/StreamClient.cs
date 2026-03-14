@@ -270,24 +270,6 @@ public sealed class StreamClient
         return new StreamManifest(streams);
     }
 
-    /// <summary>
-    /// Предзагрузка player JS. Один раз для всех itag.
-    /// Если фейлит — логируем но не крашим (стримы попробуют без n-token).
-    /// </summary>
-    private async ValueTask PreInitializeDecryptorsAsync(CancellationToken ct)
-    {
-        try
-        {
-            // Это загрузит base.js и закэширует в StreamController
-            // NTokenDecryptor тоже должен использовать этот кэш
-            await _nTokenDecryptor.EnsureInitializedAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[StreamClient] Decryptor pre-init failed (will retry per-itag): {ex.Message}");
-        }
-    }
-
     #endregion
 
     public async ValueTask DownloadAsync(

@@ -1,8 +1,21 @@
+// Core/Youtube/Bridge/Common/JsDecryptorBase.cs
+
 using System.Text;
 using Jint;
 
 namespace LMP.Core.Youtube.Bridge.Common;
 
+/// <summary>
+/// Базовый класс для JS-дешифраторов YouTube (N-Token, SigCipher и др.).
+/// <para>
+/// Содержит общую логику:
+/// - Инициализация JS-движков (Bundle / Full JS)
+/// - Кэширование результатов
+/// - Window export injection
+/// - Browser stubs для Jint
+/// - Поиск строковых словарей (split / bracket)
+/// </para>
+/// </summary>
 public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
 {
     protected readonly PlayerContextManager PlayerManager;
@@ -33,6 +46,10 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         PlayerManager = playerManager;
         Cache = new DecryptorCache<string, string>(cacheFilePath, maxMemory, maxDisk);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════
 
     public async ValueTask EnsureInitializedAsync(CancellationToken ct)
     {
@@ -67,6 +84,35 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     protected abstract void InitializeCore(PlayerContext context);
 
     // ═══════════════════════════════════════════════════════════════
+    // JS ENGINE FACTORY
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Создаёт настроенный JS-движок с ограничениями по времени и statements.
+    /// <para>
+    /// Единственная точка создания Engine — устраняет дублирование
+    /// между NTokenDecryptor и JsDecryptorBase.
+    /// </para>
+    /// </summary>
+    protected static Engine CreateEngine(TimeSpan timeout, int maxStatements) =>
+        new(opt => opt
+            .TimeoutInterval(timeout)
+            .LimitRecursion(200)
+            .MaxStatements(maxStatements));
+
+    /// <summary>Движок для Bundle (компактный JS, жёсткие лимиты).</summary>
+    protected static Engine CreateBundleEngine() =>
+        CreateEngine(TimeSpan.FromSeconds(15), 2_000_000);
+
+    /// <summary>Движок для Full JS (полный base.js, мягкие лимиты).</summary>
+    protected static Engine CreateFullEngine() =>
+        CreateEngine(TimeSpan.FromSeconds(30), 5_000_000);
+
+    /// <summary>Движок для Sieve fuzzing (полный base.js, максимальные лимиты).</summary>
+    protected static Engine CreateSieveEngine() =>
+        CreateEngine(TimeSpan.FromSeconds(30), 10_000_000);
+
+    // ═══════════════════════════════════════════════════════════════
     // JS ENGINE INITIALIZATION
     // ═══════════════════════════════════════════════════════════════
 
@@ -80,22 +126,18 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         string funcName,
         Func<string, string> buildWrapperScript,
         string testInput,
-        Func<string, string, string?>? buildBundle = null)
+        Func<string, string, string?>? buildBundle = null,
+        Func<string?, string, bool>? validateResult = null)
     {
-        // Оборачиваем в новую сигнатуру, игнорируя MagicNumbers
         return TryInitJsEngines(
-            context,
-            funcName,
-            MagicNumbers.None,
+            context, funcName, MagicNumbers.None,
             (fn, _) => buildWrapperScript(fn),
-            testInput,
-            buildBundle);
+            testInput, buildBundle, validateResult);
     }
 
     /// <summary>
     /// Инициализация JS-движков С magic numbers.
-    /// Используется NTokenDecryptor для передачи числовых аргументов
-    /// перед N-токеном: <c>f(6, 4494, nToken)</c>.
+    /// Пробует: Bundle → Full JS → Fallback без magic.
     /// </summary>
     internal bool TryInitJsEngines(
         PlayerContext context,
@@ -103,12 +145,12 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         MagicNumbers magic,
         Func<string, MagicNumbers, string> buildWrapperScript,
         string testInput,
-        Func<string, string, string?>? buildBundle = null)
+        Func<string, string, string?>? buildBundle = null,
+        Func<string?, string, bool>? validateResult = null)
     {
         var wrapperScript = buildWrapperScript(funcName, magic);
         const string wrapperFuncName = "__decryptorTransform";
 
-        // 1. Bundle
         var bundle = buildBundle is not null
             ? buildBundle(context.BaseJs, funcName)
             : BuildDefaultBundle(context.BaseJs, funcName);
@@ -116,7 +158,8 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         if (bundle is not null)
         {
             SaveDiagScript("bundle", bundle, funcName);
-            if (TryInitBundle(bundle, wrapperScript, wrapperFuncName, testInput))
+            if (TryInitEngine(bundle, wrapperScript, wrapperFuncName, testInput,
+                    isBundle: true, validateResult))
             {
                 Log.Info($"[{DecryptorName}] Bundle ready ({bundle.Length / 1024}KB, {magic})");
                 return true;
@@ -125,29 +168,31 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
 
         Log.Debug($"[{DecryptorName}] Bundle failed, trying full JS...");
 
-        // 2. Full JS with window export injection
         var modifiedJs = InjectWindowExport(context.BaseJs, funcName);
-        if (TryInitFull(modifiedJs, wrapperScript, wrapperFuncName, testInput))
+        if (TryInitEngine(modifiedJs, wrapperScript, wrapperFuncName, testInput,
+                isBundle: false, validateResult))
         {
             Log.Info($"[{DecryptorName}] Full JS ready ({context.BaseJs.Length / 1024}KB, {magic})");
             return true;
         }
 
-        // 3. Fallback: если magic numbers были указаны, пробуем без них
         if (magic.HasArgs)
         {
             Log.Debug($"[{DecryptorName}] Retrying without magic numbers...");
             var fallbackWrapper = buildWrapperScript(funcName, MagicNumbers.None);
 
-            if (bundle is not null && TryInitBundle(bundle, fallbackWrapper, wrapperFuncName, testInput))
+            if (bundle is not null &&
+                TryInitEngine(bundle, fallbackWrapper, wrapperFuncName, testInput,
+                    isBundle: true, validateResult))
             {
-                Log.Info($"[{DecryptorName}] Bundle ready WITHOUT magic numbers (fallback)");
+                Log.Info($"[{DecryptorName}] Bundle ready WITHOUT magic (fallback)");
                 return true;
             }
 
-            if (TryInitFull(modifiedJs, fallbackWrapper, wrapperFuncName, testInput))
+            if (TryInitEngine(modifiedJs, fallbackWrapper, wrapperFuncName, testInput,
+                    isBundle: false, validateResult))
             {
-                Log.Info($"[{DecryptorName}] Full JS ready WITHOUT magic numbers (fallback)");
+                Log.Info($"[{DecryptorName}] Full JS ready WITHOUT magic (fallback)");
                 return true;
             }
         }
@@ -156,183 +201,291 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     }
 
     /// <summary>
-    /// Пробует инициализировать JS-движки с несколькими вариантами magic numbers.
-    /// Первый успешно инициализированный вариант побеждает.
+    /// Пробует инициализировать с несколькими вариантами magic numbers.
+    /// <para>
+    /// ОПТИМИЗАЦИЯ:
+    /// 1. Bundle строится ОДИН раз (не зависит от magic).
+    /// 2. Full JS с window export строится ОДИН раз (lazy).
+    /// 3. Early exit при 2+ одинаковых ошибках подряд (системная проблема).
+    /// </para>
     /// </summary>
-    internal bool TryInitJsEnginesWithCandidates(
-        PlayerContext context,
-        string funcName,
-        List<MagicNumbers> candidates,
-        Func<string, MagicNumbers, string> buildWrapperScript,
-        string testInput,
-        Func<string, string, string?>? buildBundle = null)
+    internal bool TryInitWithCandidates(
+    PlayerContext context,
+    string funcName,
+    List<MagicNumbers> candidates,
+    Func<string, MagicNumbers, string> buildWrapperScript,
+    string testInput,
+    Func<string, string, string?>? buildBundle = null,
+    Func<string?, string, bool>? validateResult = null)
     {
         if (candidates.Count == 0)
             candidates = [MagicNumbers.None];
+
+        string? cachedBundle = buildBundle is not null
+            ? buildBundle(context.BaseJs, funcName)
+            : BuildDefaultBundle(context.BaseJs, funcName);
+
+        string? cachedModifiedJs = null;
+
+        string? lastBundleError = null;
+        int bundleRepeatCount = 0;
+        string? lastFullError = null;
+        int fullRepeatCount = 0;
+        const int maxRepeat = 2;
+        const string wrapperFuncName = "__decryptorTransform";
 
         foreach (var magic in candidates)
         {
             Log.Debug($"[{DecryptorName}] Trying magic: {magic}");
 
-            if (TryInitJsEngines(context, funcName, magic, buildWrapperScript, testInput, buildBundle))
-                return true;
+            var wrapperScript = buildWrapperScript(funcName, magic);
+            bool bundleTriedAndFailed = false;
 
-            // Очищаем движки перед следующей попыткой
-            BundleEngine?.Dispose();
-            BundleEngine = null;
-            BundleFuncName = null;
-            FullEngine?.Dispose();
-            FullEngine = null;
-            FullFuncName = null;
+            if (cachedBundle is not null && bundleRepeatCount < maxRepeat)
+            {
+                if (TryInitTracked(cachedBundle, wrapperScript, wrapperFuncName,
+                        testInput, isBundle: true,
+                        ref lastBundleError, ref bundleRepeatCount, validateResult))
+                    return true;
+                bundleTriedAndFailed = true;
+            }
+
+            if (fullRepeatCount < maxRepeat)
+            {
+                if (bundleTriedAndFailed)
+                    Log.Debug($"[{DecryptorName}] Bundle failed, trying full JS...");
+
+                cachedModifiedJs ??= InjectWindowExport(context.BaseJs, funcName);
+
+                if (TryInitTracked(cachedModifiedJs, wrapperScript, wrapperFuncName,
+                        testInput, isBundle: false,
+                        ref lastFullError, ref fullRepeatCount, validateResult))
+                    return true;
+            }
+
+            if (magic.HasArgs)
+            {
+                Log.Debug($"[{DecryptorName}] Retrying without magic numbers...");
+                var fallbackWrapper = buildWrapperScript(funcName, MagicNumbers.None);
+
+                if (cachedBundle is not null && bundleRepeatCount < maxRepeat)
+                {
+                    if (TryInitTracked(cachedBundle, fallbackWrapper, wrapperFuncName,
+                            testInput, isBundle: true,
+                            ref lastBundleError, ref bundleRepeatCount, validateResult))
+                        return true;
+                }
+
+                if (fullRepeatCount < maxRepeat)
+                {
+                    cachedModifiedJs ??= InjectWindowExport(context.BaseJs, funcName);
+                    if (TryInitTracked(cachedModifiedJs, fallbackWrapper, wrapperFuncName,
+                            testInput, isBundle: false,
+                            ref lastFullError, ref fullRepeatCount, validateResult))
+                        return true;
+                }
+            }
+
+            if (bundleRepeatCount >= maxRepeat && fullRepeatCount >= maxRepeat)
+            {
+                Log.Debug($"[{DecryptorName}] Both strategies hit repeat limit, " +
+                          $"skipping remaining candidates");
+                break;
+            }
+
+            ForceDisposeEngines();
         }
 
         return false;
     }
 
-    /// <summary>
-    /// Строит минимальный JS-бандл для функции дешифрации.
-    /// 
-    /// Стратегия:
-    /// 1. Находит глобальный словарь строк (split/bracket)
-    /// 2. Передаёт имя словаря в ExtractBundle как "внешнее" имя,
-    ///    чтобы оно НЕ перезаписывалось guard var'ом <c>var O=0;</c>
-    /// 3. Извлекает функцию и все её зависимости
-    /// 4. Prepend'ит словарь если он не включён в бандл
-    /// 
-    /// НЕ резолвит обращения к словарю (h[4] → "value") —
-    /// оставляет runtime-обращения как есть для корректной работы
-    /// с динамическими индексами и XOR-masked ключами.
-    /// </summary>
-    protected virtual string? BuildDefaultBundle(string baseJs, string funcName)
+    private bool TryInitTracked(
+        string jsCode,
+        string wrapperScript,
+        string wrapperFuncName,
+        string testInput,
+        bool isBundle,
+        ref string? lastError,
+        ref int repeatCount,
+        Func<string?, string, bool>? validateResult = null)
     {
-        // ═══ Находим словарь ПЕРЕД извлечением бандла ═══
-        // Нужно знать его имя, чтобы передать в ExtractBundle как external
-        var dictCode = FindStringDictionary(baseJs);
-        string? dictVarName = null;
-
-        if (dictCode is not null)
+        if (TryInitEngine(jsCode, wrapperScript, wrapperFuncName, testInput,
+                isBundle, validateResult))
         {
-            // Извлекаем имя переменной словаря: "var X=..." → "X"
-            dictVarName = ExtractVarNameFromDeclaration(dictCode);
+            lastError = null;
+            repeatCount = 0;
+            return true;
         }
-
-        // ═══ Собираем набор "внешних" имён ═══
-        HashSet<string>? externalNames = null;
-        if (dictVarName is not null)
-        {
-            externalNames = [dictVarName];
-        }
-
-        var extracted = JsFunctionExtractor.ExtractBundle(baseJs, funcName, externalNames);
-        if (extracted is null) return null;
-
-        // ═══ Check if dictionary definition is included ═══
-        if (BundleContainsDictionary(extracted))
-            return extracted;
-
-        if (dictCode is not null)
-        {
-            Log.Debug($"[{DecryptorName}] Prepending dictionary ({dictCode.Length} chars)");
-            return dictCode + "\n" + extracted;
-        }
-
-        Log.Warn($"[{DecryptorName}] Dictionary not found, bundle may fail");
-        return extracted;
+        return false;
     }
 
     /// <summary>
-    /// Извлекает имя переменной из объявления <c>var NAME=...</c>.
-    /// Возвращает <c>null</c> если формат не распознан.
+    /// Низкоуровневая инициализация одного JS-движка.
+    /// <para>
+    /// ИСПРАВЛЕНИЕ: Валидация результата через <c>validateResult</c> callback.
+    /// JS wrapper проверяет только <c>r !== n</c>, но C#-код должен
+    /// дополнительно проверять длину, символьный состав и substitution distance.
+    /// Без этого проходят ложные результаты: URL-charset строки (64 символа),
+    /// splice(0,1) мутации и прочие тривиальные преобразования.
+    /// </para>
     /// </summary>
-    private static string? ExtractVarNameFromDeclaration(string declaration)
+    private bool TryInitEngine(
+        string jsCode,
+        string wrapperScript,
+        string wrapperFuncName,
+        string testInput,
+        bool isBundle,
+        Func<string?, string, bool>? validateResult = null)
     {
-        var span = declaration.AsSpan().TrimStart();
-
-        // Пропускаем "var "
-        if (span.StartsWith("var "))
-            span = span[4..];
-        else if (span.StartsWith("let "))
-            span = span[4..];
-        else if (span.StartsWith("const "))
-            span = span[6..];
-        else
-            return null;
-
-        span = span.TrimStart();
-
-        // Читаем идентификатор
-        int i = 0;
-        while (i < span.Length && (char.IsLetterOrDigit(span[i]) || span[i] is '_' or '$'))
-            i++;
-
-        if (i == 0) return null;
-
-        return span[..i].ToString();
-    }
-
-    private bool TryInitBundle(
-        string bundle, string wrapperScript, string wrapperFuncName, string testInput)
-    {
+        Engine? engine = null;
         try
         {
-            BundleEngine = CreateEngine(TimeSpan.FromSeconds(15), 2_000_000);
-            BundleEngine.Execute(BrowserStubs);
-            BundleEngine.Execute(bundle);
-            BundleEngine.Execute(wrapperScript);
+            engine = isBundle ? CreateBundleEngine() : CreateFullEngine();
+            engine.Execute(BrowserStubs);
+            engine.Execute(jsCode);
+            engine.Execute(wrapperScript);
 
-            var result = BundleEngine.Invoke(wrapperFuncName, testInput).AsString();
+            var result = engine.Invoke(wrapperFuncName, testInput).AsString();
             if (string.IsNullOrEmpty(result) || result == testInput)
             {
-                BundleEngine.Dispose();
-                BundleEngine = null;
+                var jsError = ReadJsError(engine);
+                if (jsError is not null)
+                    Log.Debug($"[{DecryptorName}] {(isBundle ? "Bundle" : "Full")} JS error: {jsError}");
+
+                engine.Dispose();
                 return false;
             }
 
-            BundleFuncName = wrapperFuncName;
+            // ═══ C#-ВАЛИДАЦИЯ результата ═══
+            if (validateResult is not null && !validateResult(result, testInput))
+            {
+                Log.Debug($"[{DecryptorName}] {(isBundle ? "Bundle" : "Full")} " +
+                          $"result rejected by validator: '{Truncate(result, 40)}'");
+                engine.Dispose();
+                return false;
+            }
+
+            if (isBundle)
+            {
+                BundleEngine = engine;
+                BundleFuncName = wrapperFuncName;
+            }
+            else
+            {
+                FullEngine = engine;
+                FullFuncName = wrapperFuncName;
+            }
             Cache.Set(testInput, result);
+
+            var label = isBundle ? "Bundle" : "Full JS";
+            Log.Info($"[{DecryptorName}] {label} ready ({jsCode.Length / 1024}KB)");
             return true;
         }
         catch (Exception ex)
         {
-            Log.Debug($"[{DecryptorName}] Bundle init failed: {ex.Message}");
-            SaveDiagError("bundle", ex.ToString());
-            BundleEngine?.Dispose();
-            BundleEngine = null;
+            var detailedMsg = FormatJsException(ex);
+            Log.Debug($"[{DecryptorName}] {(isBundle ? "Bundle" : "Full")} init failed: " +
+                      $"{Truncate(detailedMsg, 150)}");
+
+            if (isBundle)
+                SaveDiagError("bundle", detailedMsg);
+            else
+                SaveDiagError("full", detailedMsg);
+
+            engine?.Dispose();
             return false;
         }
     }
 
-    private bool TryInitFull(
-        string baseJs, string wrapperScript, string wrapperFuncName, string testInput)
+    /// <summary>
+    /// Принудительно освобождает все неиспользуемые движки.
+    /// </summary>
+    protected void ForceDisposeEngines()
+    {
+        BundleEngine?.Dispose();
+        BundleEngine = null;
+        BundleFuncName = null;
+        FullEngine?.Dispose();
+        FullEngine = null;
+        FullFuncName = null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // JS ERROR FORMATTING
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Форматирует Jint-исключение с максимумом деталей:
+    /// JS error object, stack trace, позиция в коде.
+    /// <para>
+    /// Jint выбрасывает <c>JavaScriptException</c> с полем <c>Error</c>
+    /// (JS-объект) и <c>JavaScriptStackTrace</c>. Стандартный <c>ex.Message</c>
+    /// часто содержит только "X is not a function" без контекста.
+    /// </para>
+    /// </summary>
+    protected static string FormatJsException(Exception ex)
+    {
+        if (ex is not Jint.Runtime.JavaScriptException jsEx)
+            return ex.Message;
+
+        var sb = new StringBuilder(256);
+        sb.Append(jsEx.Message);
+
+        // JS Error object
+        try
+        {
+            var errorObj = jsEx.Error;
+            if (errorObj is not null && !errorObj.IsUndefined() && !errorObj.IsNull())
+            {
+                var errorStr = errorObj.ToString();
+                if (errorStr != jsEx.Message)
+                    sb.Append($" [JSError: {Truncate(errorStr, 100)}]");
+            }
+        }
+        catch { /* ignore */ }
+
+        // JS stack trace
+        try
+        {
+            var jsStack = jsEx.JavaScriptStackTrace;
+            if (!string.IsNullOrEmpty(jsStack))
+                sb.Append($" [JSStack: {Truncate(jsStack, 150)}]");
+        }
+        catch { /* ignore */ }
+
+        // Source location
+        try
+        {
+            var loc = jsEx.Location;
+            if (loc.Start.Line > 0)
+                sb.Append($" [Line:{loc.Start.Line}:{loc.Start.Column}]");
+        }
+        catch { /* ignore */ }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Читает последнюю JS-ошибку из глобальной переменной <c>__lastError</c>.
+    /// </summary>
+    private static string? ReadJsError(Engine engine)
     {
         try
         {
-            FullEngine = CreateEngine(TimeSpan.FromSeconds(30), 5_000_000);
-            FullEngine.Execute(BrowserStubs);
-            FullEngine.Execute(baseJs);
-            FullEngine.Execute(wrapperScript);
-
-            var result = FullEngine.Invoke(wrapperFuncName, testInput).AsString();
-            if (string.IsNullOrEmpty(result) || result == testInput)
+            var errorVal = engine.GetValue("__lastError");
+            if (errorVal.IsString())
             {
-                FullEngine.Dispose();
-                FullEngine = null;
-                return false;
+                var msg = errorVal.AsString();
+                return string.IsNullOrWhiteSpace(msg) ? null : msg;
             }
-
-            FullFuncName = wrapperFuncName;
-            Cache.Set(testInput, result);
-            return true;
         }
-        catch (Exception ex)
-        {
-            Log.Debug($"[{DecryptorName}] Full JS init failed: {ex.Message}");
-            SaveDiagError("full", ex.ToString());
-            FullEngine?.Dispose();
-            FullEngine = null;
-            return false;
-        }
+        catch { /* ignore */ }
+        return null;
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // JS INVOCATION
+    // ═══════════════════════════════════════════════════════════════
 
     protected string? TryInvokeJs(string input, string logPrefix)
     {
@@ -344,13 +497,15 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 if (!string.IsNullOrEmpty(result) && result != input)
                 {
                     Cache.Set(input, result);
-                    Log.Debug($"[{DecryptorName}] {logPrefix} Bundle: {Truncate(input)} -> {Truncate(result)}");
+                    Log.Debug($"[{DecryptorName}] {logPrefix} Bundle: " +
+                              $"{Truncate(input)} -> {Truncate(result)}");
                     return result;
                 }
             }
             catch (Exception ex)
             {
-                Log.Warn($"[{DecryptorName}] {logPrefix} Bundle failed: {ex.Message}");
+                Log.Warn($"[{DecryptorName}] {logPrefix} Bundle failed: " +
+                         $"{FormatJsException(ex)}");
             }
         }
 
@@ -362,13 +517,15 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 if (!string.IsNullOrEmpty(result) && result != input)
                 {
                     Cache.Set(input, result);
-                    Log.Debug($"[{DecryptorName}] {logPrefix} Full: {Truncate(input)} -> {Truncate(result)}");
+                    Log.Debug($"[{DecryptorName}] {logPrefix} Full: " +
+                              $"{Truncate(input)} -> {Truncate(result)}");
                     return result;
                 }
             }
             catch (Exception ex)
             {
-                Log.Error($"[{DecryptorName}] {logPrefix} Full JS failed: {ex.Message}");
+                Log.Error($"[{DecryptorName}] {logPrefix} Full JS failed: " +
+                          $"{FormatJsException(ex)}");
             }
         }
 
@@ -380,14 +537,15 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Инжектирует window['funcName']=funcName; в base.js.
-    /// 
+    /// Инжектирует <c>window['funcName']=funcName;</c> в base.js.
+    /// <para>
     /// Стратегии (в порядке приоритета):
-    /// 1. Точное определение через FindFunctionByName → safe insertion point
-    /// 2. Pattern search для function( 
+    /// 1. Точное определение через FindFunctionByName
+    /// 2. Pattern search для function(
     /// 3. Generic name= search
     /// 4. Вставка перед концом IIFE
     /// 5. Конец файла
+    /// </para>
     /// </summary>
     protected static string InjectWindowExport(string baseJs, string funcName)
     {
@@ -395,7 +553,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
 
         try
         {
-            // ═══ Strategy 1: Точное определение ═══
+            // Strategy 1: Точное определение
             var funcInfo = JsFunctionExtractor.FindFunctionByName(baseJs, funcName);
             if (funcInfo is not null)
             {
@@ -407,10 +565,11 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 return baseJs.Insert(safePos, export);
             }
 
-            // ═══ Strategy 2: function( pattern ═══
+            // Strategy 2: function( pattern
             var pattern = $"{funcName}=function(";
             int patternIdx = baseJs.IndexOf(pattern, StringComparison.Ordinal);
-            if (patternIdx >= 0 && (patternIdx == 0 || !JsFunctionExtractor.IsIdentChar(baseJs[patternIdx - 1])))
+            if (patternIdx >= 0 &&
+                (patternIdx == 0 || !JsFunctionExtractor.IsIdentChar(baseJs[patternIdx - 1])))
             {
                 int parenStart = patternIdx + pattern.Length - 1;
                 int parenEnd = JsFunctionExtractor.FindMatchingParen(baseJs, parenStart);
@@ -434,7 +593,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 }
             }
 
-            // ═══ Strategy 3: name= generic search ═══
+            // Strategy 3: name= generic search
             var eqPattern = $"{funcName}=";
             var baseSpan = baseJs.AsSpan();
             int searchFrom = 0;
@@ -469,7 +628,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 searchFrom = afterEq;
             }
 
-            // ═══ Strategy 4: IIFE end ═══
+            // Strategy 4: IIFE end
             int fallbackPos = FindEndOfIIFE(baseJs);
             if (fallbackPos > 0)
             {
@@ -478,7 +637,7 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
                 return baseJs.Insert(fallbackPos, export);
             }
 
-            // ═══ Strategy 5: EOF ═══
+            // Strategy 5: EOF
             Log.Warn($"[JsDecryptor] Using end-of-file fallback for '{funcName}'");
             return baseJs + export;
         }
@@ -490,10 +649,6 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         return baseJs;
     }
 
-    /// <summary>
-    /// Находит безопасную точку вставки после заданной позиции.
-    /// Ищет ближайший `;` или `}` которые завершают statement.
-    /// </summary>
     private static int FindSafeInsertionPoint(string js, int afterPos)
     {
         var span = js.AsSpan();
@@ -632,14 +787,71 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // DEFAULT BUNDLE
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Строит минимальный JS-бандл для функции дешифрации.
+    /// <para>
+    /// Стратегия:
+    /// 1. Находит глобальный словарь строк (split/bracket)
+    /// 2. Передаёт имя словаря как external name в ExtractBundle
+    /// 3. Prepend'ит словарь если он не включён в бандл
+    /// </para>
+    /// </summary>
+    protected virtual string? BuildDefaultBundle(string baseJs, string funcName)
+    {
+        var dictCode = FindStringDictionary(baseJs);
+        string? dictVarName = null;
+
+        if (dictCode is not null)
+            dictVarName = ExtractVarNameFromDeclaration(dictCode);
+
+        HashSet<string>? externalNames = null;
+        if (dictVarName is not null)
+            externalNames = [dictVarName];
+
+        var extracted = JsFunctionExtractor.ExtractBundle(baseJs, funcName, externalNames);
+        if (extracted is null) return null;
+
+        if (BundleContainsDictionary(extracted))
+            return extracted;
+
+        if (dictCode is not null)
+        {
+            Log.Debug($"[{DecryptorName}] Prepending dictionary ({dictCode.Length} chars)");
+            return dictCode + "\n" + extracted;
+        }
+
+        Log.Warn($"[{DecryptorName}] Dictionary not found, bundle may fail");
+        return extracted;
+    }
+
+    private static string? ExtractVarNameFromDeclaration(string declaration)
+    {
+        var span = declaration.AsSpan().TrimStart();
+
+        if (span.StartsWith("var ")) span = span[4..];
+        else if (span.StartsWith("let ")) span = span[4..];
+        else if (span.StartsWith("const ")) span = span[6..];
+        else return null;
+
+        span = span.TrimStart();
+
+        int i = 0;
+        while (i < span.Length && (char.IsLetterOrDigit(span[i]) || span[i] is '_' or '$'))
+            i++;
+
+        return i == 0 ? null : span[..i].ToString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // STRING DICTIONARY
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Находит определение глобального словаря строк.
-    /// Поддерживает:
-    ///   1. var q = '...'.split("}") — split-стиль
-    ///   2. var h = ["...", "...", ...] — bracket-стиль (новый формат YouTube)
+    /// Поддерживает split-стиль и bracket-стиль.
     /// </summary>
     protected static string? FindStringDictionary(string baseJs)
     {
@@ -735,7 +947,8 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
             int dictEnd = splitParenEnd + 1;
             var dictDef = $"var {varName}={baseJs[stringStart..dictEnd]};";
 
-            Log.Debug($"[JsDecryptor] Found split dictionary '{varName}', {separatorCount + 1} elements");
+            Log.Debug($"[JsDecryptor] Found split dictionary '{varName}', " +
+                      $"{separatorCount + 1} elements");
             return dictDef;
         }
 
@@ -796,7 +1009,11 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
             for (int i = bracketStart + 1; i < bracketEnd; i++)
             {
                 char c = span[i];
-                if (c is '"' or '\'' or '`') { i = JsFunctionExtractor.SkipString(baseJs, i) - 1; continue; }
+                if (c is '"' or '\'' or '`')
+                {
+                    i = JsFunctionExtractor.SkipString(baseJs, i) - 1;
+                    continue;
+                }
                 if (c is '(' or '[' or '{') depth++;
                 else if (c is ')' or ']' or '}') depth--;
                 else if (c == ',' && depth == 0) elementCount++;
@@ -815,7 +1032,8 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
             var dictDef = $"var {varName}={baseJs[bracketStart..end]}";
             if (!dictDef.EndsWith(';')) dictDef += ";";
 
-            Log.Debug($"[JsDecryptor] Found bracket dictionary '{varName}', {elementCount} elements");
+            Log.Debug($"[JsDecryptor] Found bracket dictionary '{varName}', " +
+                      $"{elementCount} elements");
             return dictDef;
         }
 
@@ -836,7 +1054,6 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         if (searchArea.Contains(".split(", StringComparison.Ordinal))
             return true;
 
-        // Bracket array detection — count quotes
         int quoteCount = 0;
         for (int i = 0; i < searchArea.Length; i++)
         {
@@ -844,12 +1061,6 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         }
         return quoteCount > 100;
     }
-
-    private static Engine CreateEngine(TimeSpan timeout, int maxStatements) =>
-        new(opt => opt
-            .TimeoutInterval(timeout)
-            .LimitRecursion(200)
-            .MaxStatements(maxStatements));
 
     protected void SaveDiagScript(string type, string code, string funcName)
     {
@@ -878,7 +1089,8 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         try
         {
             Directory.CreateDirectory(DiagFolder);
-            var path = Path.Combine(DiagFolder, $"player_{CurrentPlayerVersion}_{type}_error.txt");
+            var path = Path.Combine(DiagFolder,
+                $"player_{CurrentPlayerVersion}_{type}_error.txt");
             File.WriteAllText(path, $"""
                 === {DecryptorName.ToUpper()} {type.ToUpper()} ERROR ===
                 Player version: {CurrentPlayerVersion}
@@ -915,6 +1127,10 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         GC.SuppressFinalize(this);
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // BROWSER STUBS
+    // ═══════════════════════════════════════════════════════════════
+
     protected const string BrowserStubs = """
         var _sink = new Proxy(function(){return _sink;}, {
             get: function(t,p) { return p === 'then' ? void 0 : _sink; },
@@ -925,23 +1141,109 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         var location = { href: 'https://www.youtube.com/', hostname: 'www.youtube.com', protocol: 'https:' };
         window.location = location;
         var document = { 
-            createElement: function() { return _sink; }, 
+            createElement: function(tag) {
+                var el = {
+                    tagName: (tag||'').toUpperCase(),
+                    style: {},
+                    setAttribute: function(){},
+                    getAttribute: function(){ return null; },
+                    addEventListener: function(){},
+                    removeEventListener: function(){},
+                    appendChild: function(c){ return c; },
+                    removeChild: function(c){ return c; },
+                    insertBefore: function(c){ return c; },
+                    cloneNode: function(){ return el; },
+                    querySelector: function(){ return null; },
+                    querySelectorAll: function(){ return []; },
+                    getElementsByTagName: function(){ return []; },
+                    innerHTML: '', textContent: '', className: '',
+                    href: '', src: '', id: '',
+                    parentNode: null, firstChild: null, lastChild: null,
+                    nextSibling: null, previousSibling: null,
+                    childNodes: [], children: [],
+                    offsetWidth: 0, offsetHeight: 0,
+                    clientWidth: 0, clientHeight: 0
+                };
+                return el;
+            }, 
             getElementById: function() { return null; },
             querySelector: function() { return null; },
             querySelectorAll: function() { return []; },
-            readyState: 'complete'
+            getElementsByTagName: function() { return []; },
+            getElementsByClassName: function() { return []; },
+            createElementNS: function() { return document.createElement(''); },
+            createTextNode: function(t) { return { textContent: t, nodeType: 3 }; },
+            createDocumentFragment: function() { return { appendChild: function(c){return c;}, childNodes: [] }; },
+            head: { appendChild: function(){} },
+            body: { appendChild: function(){}, removeChild: function(){} },
+            documentElement: { style: {} },
+            readyState: 'complete',
+            cookie: '',
+            title: '',
+            domain: 'www.youtube.com'
         };
         window.document = document;
-        var navigator = { userAgent: '', platform: '' }; window.navigator = navigator;
+        var navigator = { 
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 
+            platform: 'Win32',
+            language: 'en-US',
+            languages: ['en-US', 'en'],
+            onLine: true,
+            cookieEnabled: true,
+            doNotTrack: null,
+            maxTouchPoints: 0,
+            hardwareConcurrency: 8
+        }; 
+        window.navigator = navigator;
         window.setTimeout = window.setInterval = function(f) { try { if (typeof f === 'function') f(); } catch(e) {} return 0; };
         window.clearTimeout = window.clearInterval = function() {};
+        window.requestAnimationFrame = function(f) { try { f(0); } catch(e) {} return 0; };
+        window.cancelAnimationFrame = function() {};
+        window.getComputedStyle = function() { return new Proxy({}, { get: function() { return ''; } }); };
+        window.matchMedia = function() { return { matches: false, addListener: function(){}, removeListener: function(){} }; };
+        window.innerWidth = 1920; window.innerHeight = 1080;
+        window.screen = { width: 1920, height: 1080, colorDepth: 24 };
+        window.devicePixelRatio = 1;
+        window.performance = { 
+            now: function() { return Date.now(); },
+            timing: { navigationStart: Date.now() },
+            mark: function(){}, measure: function(){}, getEntriesByName: function(){ return []; }
+        };
+        window.URL = window.webkitURL = { 
+            createObjectURL: function() { return ''; }, 
+            revokeObjectURL: function() {} 
+        };
+        window.MutationObserver = window.WebKitMutationObserver = function() { 
+            this.observe = this.disconnect = this.takeRecords = function() {}; 
+        };
+        window.ResizeObserver = function() { this.observe = this.unobserve = this.disconnect = function() {}; };
+        window.IntersectionObserver = function() { this.observe = this.unobserve = this.disconnect = function() {}; };
+        var _storageData = {};
+        var localStorage = {
+            getItem: function(k) { return _storageData[k] || null; },
+            setItem: function(k, v) { _storageData[k] = String(v); },
+            removeItem: function(k) { delete _storageData[k]; },
+            clear: function() { _storageData = {}; },
+            get: function(k) { return _storageData[k] || null; },
+            key: function(i) { return Object.keys(_storageData)[i] || null; },
+            get length() { return Object.keys(_storageData).length; }
+        };
+        window.localStorage = localStorage;
+        window.sessionStorage = {
+            getItem: function(k) { return null; },
+            setItem: function() {},
+            removeItem: function() {},
+            clear: function() {},
+            get length() { return 0; }
+        };
         var XMLHttpRequest = function() {
             this.open = this.send = this.setRequestHeader = function() {};
             this.readyState = 4; this.status = 200; this.responseText = '';
+            this.addEventListener = function() {};
         };
-        var fetch = function() { return Promise.resolve({ ok: true, text: function() { return Promise.resolve(''); } }); };
-        var ytcfg = { get: function() { return ''; }, set: function() {}, d: function() { return ''; } };
-        var yt = { config_: {} };
+        var fetch = function() { return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); }, text: function() { return Promise.resolve(''); } }); };
+        var ytcfg = { get: function(k, d) { return d !== void 0 ? d : ''; }, set: function() {}, d: function() { return ''; } };
+        var yt = { config_: {}, logging: { errors: [] } };
         var g = new Proxy({}, {
             get: function(t, p) {
                 if (p === 'then') return void 0;
@@ -953,5 +1255,20 @@ public abstract class JsDecryptorBase<T> : IYoutubeDecryptor, IDisposable
         });
         var kCO = window;
         var rHS = window;
+        var Image = function() { this.src = ''; this.onload = this.onerror = null; };
+        window.Image = Image;
+        var TextEncoder = function() { this.encode = function(s) { return new Uint8Array(0); }; };
+        var TextDecoder = function() { this.decode = function() { return ''; }; };
+        window.TextEncoder = TextEncoder;
+        window.TextDecoder = TextDecoder;
+        window.crypto = { getRandomValues: function(a) { for(var i=0;i<a.length;i++) a[i]=Math.floor(Math.random()*256); return a; }, subtle: _sink };
+        window.atob = function(s) { return ''; };
+        window.btoa = function(s) { return ''; };
+        if (typeof BigInt === 'undefined') {
+            var BigInt = function(v) { return Number(v); };
+            BigInt.asIntN = function(bits, n) { return Number(n); };
+            BigInt.asUintN = function(bits, n) { return Number(n); };
+            window.BigInt = BigInt;
+        }
         """;
 }

@@ -1,5 +1,3 @@
-// Core/Youtube/Bridge/Common/JsFunctionExtractor.cs
-
 using System.Buffers;
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
@@ -59,7 +57,13 @@ internal static partial class JsFunctionExtractor
         "findIndex", "every", "some", "keys", "values", "entries",
         "assign", "create", "defineProperty", "freeze",
         "parse", "stringify", "charCodeAt", "charAt", "fromCharCode",
-        "setPrototypeOf", "getPrototypeOf"
+        "setPrototypeOf", "getPrototypeOf",
+        // ═══ Common property/parameter names используемые в YouTube base.js ═══
+        // Эти имена часто встречаются как ключи объектов, параметры деструктуризации,
+        // или callback-параметры — FindAnyDefinition находит случайные определения.
+        "startTime", "ticks", "infos", "sampleRate", "timerName",
+        "query", "method", "level", "chunkSize", "strategy",
+        "search_query", "tkg",
     ]);
 
     [ThreadStatic]
@@ -284,10 +288,17 @@ internal static partial class JsFunctionExtractor
                 sb.Append("try{").Append(kv.Value).AppendLine("}catch(e$){}");
             }
 
+            // 5. Entry function + экспорт
             if (definitions.TryGetValue(entryFuncName, out var entryCode))
+            {
                 sb.AppendLine(entryCode);
-
-            sb.Append("window['").Append(entryFuncName).Append("']=").Append(entryFuncName).AppendLine(";");
+                sb.Append("window['").Append(entryFuncName).Append("']=")
+                  .Append(entryFuncName).AppendLine(";");
+            }
+            else
+            {
+                Log.Warn($"[JsExtractor] Entry function '{entryFuncName}' not found in definitions!");
+            }
 
             sw.Stop();
             var result = sb.ToString();

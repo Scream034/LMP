@@ -138,7 +138,7 @@ public static class NTokenTests
             Log.Info($"\n[Test] ═══ Testing player version: {version} ═══");
 
             // Загружаем закэшированный base.js
-            var cachedContext = PlayerContext.LoadFromCache(version);
+            var cachedContext = PlayerContext.LoadFromCacheNoExpiry(version);
             if (cachedContext is null)
             {
                 Log.Warn($"  ⊘ Skipped: no cached base.js for version {version}");
@@ -248,7 +248,7 @@ public static class NTokenTests
         var version = config.Versions[0];
         Log.Info($"[Test] Testing specific version: {version}");
 
-        var cachedContext = PlayerContext.LoadFromCache(version);
+        var cachedContext = PlayerContext.LoadFromCacheNoExpiry(version);
         if (cachedContext is null)
         {
             Log.Warn($"[Test] No cached base.js for version {version}");
