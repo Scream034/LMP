@@ -71,6 +71,23 @@ dotnet build LMP.csproj -c Debug ^
 goto :CHECK
 
 :RELEASE
+echo Checking for dead events...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Tools\find-dead-events.ps1"
+:: exit-код = кол-во мёртвых событий; не прерываем билд, только предупреждаем
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [WARNING] Dead events detected. Consider fixing before release.
+    echo.
+)
+
+echo Checking for dead code...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Tools\find-dead-code.ps1" -FailOnAny
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo ✗ Dead code found! Fix issues above before building Release.
+    goto :FAIL
+)
+
 echo Building Release...
 dotnet build LMP.csproj -c Release ^
     -p:Version=!VERSION! ^

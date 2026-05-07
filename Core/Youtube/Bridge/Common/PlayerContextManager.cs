@@ -4,41 +4,30 @@ namespace LMP.Core.Youtube.Bridge.Common;
 /// Единая точка управления версией плеера и base.js.
 /// Singleton, потокобезопасный.
 /// </summary>
-public class PlayerContextManager
+/// <param name="http">HTTP клиент для загрузки скриптов.</param>
+public class PlayerContextManager(HttpClient http)
 {
-    private readonly HttpClient _http;
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly HttpClient _http = http;
+    private readonly Lock _lock = new();
     private PlayerContext? _current;
-    
-    public PlayerContextManager(HttpClient http)
-    {
-        _http = http;
-    }
     
     /// <summary>Получает актуальный контекст плеера (из кэша или скачивает).</summary>
     public virtual async Task<PlayerContext> GetOrLoadAsync(CancellationToken ct = default)
     {
-        // Fast path
-        if (_current?.IsValid() == true)
-            return _current;
+        if (_current?.IsValid() == true) return _current;
         
-        await _lock.WaitAsync(ct);
-        try
+        // Используем блокировку для предотвращения множественных загрузок
+        lock (_lock)
         {
-            // Double-check
-            if (_current?.IsValid() == true)
-                return _current;
-            
-            // 1. Определяем версию
-            var versionInfo = await PlayerContext.DetectVersionAsync(_http, ct);
-            if (versionInfo is null)
-                throw new InvalidOperationException("Failed to detect player version");
-            
-            var (version, urls) = versionInfo.Value;
-            
-            // 2. Проверяем кэш
-            if (_current?.Version == version)
-                return _current;
+            if (_current?.IsValid() == true) return _current;
+        }
+
+        var versionInfo = await PlayerContext.DetectVersionAsync(_http, ct).ConfigureAwait(false) ?? throw new InvalidOperationException("Failed to detect player version");
+        var (version, urls) = versionInfo;
+        
+        lock (_lock)
+        {
+            if (_current?.Version == version) return _current;
             
             var cached = PlayerContext.LoadFromCache(version);
             if (cached is not null)
@@ -47,38 +36,41 @@ public class PlayerContextManager
                 Log.Debug($"[PlayerContext] Loaded from cache: {version}");
                 return cached;
             }
-            
-            // 3. Скачиваем
-            foreach (var url in urls)
-            {
-                try
-                {
-                    Log.Debug($"[PlayerContext] Downloading: {url}");
-                    var baseJs = await _http.GetStringAsync(url, ct);
-                    
-                    _current = new PlayerContext(version, baseJs);
-                    await _current.SaveCacheAsync();
-                    
-                    Log.Info($"[PlayerContext] Loaded fresh: {version} ({baseJs.Length / 1024}KB)");
-                    return _current;
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug($"[PlayerContext] Download failed: {ex.Message}");
-                }
-            }
-            
-            throw new InvalidOperationException("Failed to download base.js");
         }
-        finally
+
+        foreach (var url in urls)
         {
-            _lock.Release();
+            try
+            {
+                Log.Debug($"[PlayerContext] Downloading: {url}");
+                var baseJs = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+                
+                var newContext = new PlayerContext(version, baseJs);
+                await newContext.SaveCacheAsync().ConfigureAwait(false);
+                
+                lock (_lock)
+                {
+                    _current = newContext;
+                }
+                
+                Log.Info($"[PlayerContext] Loaded fresh: {version} ({baseJs.Length / 1024}KB)");
+                return newContext;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"[PlayerContext] Download failed: {ex.Message}");
+            }
         }
+        
+        throw new InvalidOperationException("Failed to download base.js");
     }
     
     /// <summary>Инвалидирует текущий контекст.</summary>
     public void Invalidate()
     {
-        _current = null;
+        lock (_lock)
+        {
+            _current = null;
+        }
     }
 }

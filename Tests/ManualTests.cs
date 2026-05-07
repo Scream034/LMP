@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 using LMP.Tests.Framework;
 
@@ -99,5 +97,3 @@ public static class ManualTests
     public static Task BenchmarkNTokenAsync() =>
         Unit.NTokenTests.BenchmarkAsync(Program.Services);
 }
-
-#endif

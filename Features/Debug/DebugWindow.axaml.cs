@@ -1,5 +1,3 @@
-#if DEBUG
-
 using Avalonia.Controls;
 
 namespace LMP.Features.Debug;
@@ -22,5 +20,3 @@ public partial class DebugWindow : Window
         (DataContext as DebugViewModel)?.Dispose();
     }
 }
-
-#endif

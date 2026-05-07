@@ -48,9 +48,6 @@ public sealed class MemoryDiagnostics : IDisposable
 
     #region Events
 
-    /// <summary>Вызывается после каждого обновления статистики.</summary>
-    public event Action<MemoryStats>? OnStatsUpdated;
-
     /// <summary>Вызывается при превышении порогов памяти.</summary>
     public event Action<string>? OnMemoryWarning;
 
@@ -202,8 +199,6 @@ public sealed class MemoryDiagnostics : IDisposable
                 Gen2Collections = GC.CollectionCount(2),
                 TrackedCategories = GetTrackedSummary()
             };
-
-            OnStatsUpdated?.Invoke(CurrentStats);
 
             // Проверяем пороги
             if (CurrentStats.WorkingSetMb > CriticalThresholdMb)

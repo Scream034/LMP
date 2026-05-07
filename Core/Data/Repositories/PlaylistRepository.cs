@@ -97,7 +97,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
                        $"Name={playlist.StoredName}");
 
             var entry = ctx.Entry(existing);
-            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            entry.State = EntityState.Detached;
 
             existing.Name = playlist.StoredName;
             existing.YoutubeId = playlist.YoutubeId;

@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Reactive;
 using LMP.Core.Models;
 using LMP.Core.Services;
@@ -212,20 +210,20 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
             _testPlayer = new AudioPlayer(options);
 
-            _testPlayer.StateChanged += state =>
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    AppendLog($"  State: {state}"));
+            // _testPlayer.StateChanged += state =>
+            //     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            //         AppendLog($"  State: {state}"));
 
-            _testPlayer.ErrorOccurred += ex =>
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    AppendLog($"  ❌ Error: {ex.Message}"));
+            // _testPlayer.ErrorOccurred += ex =>
+            //     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            //         AppendLog($"  ❌ Error: {ex.Message}"));
 
-            _testPlayer.TrackEnded += () =>
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    AppendLog($"  🏁 Track ended");
-                    IsAudioPlaying = false;
-                });
+            // _testPlayer.TrackEnded += () =>
+            //     Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            //     {
+            //         AppendLog($"  🏁 Track ended");
+            //         IsAudioPlaying = false;
+            //     });
 
             AppendLog($"  → Starting playback...");
             await _testPlayer.PlayAsync(url, track.Id, ct: _audioTestCts.Token);
@@ -668,5 +666,3 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         base.Dispose(disposing);
     }
 }
-
-#endif

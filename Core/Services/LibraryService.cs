@@ -31,7 +31,6 @@ public sealed class LibraryService : IAsyncDisposable
 
     public AppSettings Settings { get; private set; } = new();
 
-    public event Action? OnInitialized;
     public event Action? OnDataChanged;
     public event Action<TrackInfo>? OnTrackUpdated;
 
@@ -92,7 +91,6 @@ public sealed class LibraryService : IAsyncDisposable
         await EnsureLikedPlaylistAsync(ct);
 
         sw.Stop();
-        OnInitialized?.Invoke();
         Log.Info($"[LibraryService] Initialized in {sw.ElapsedMilliseconds}ms");
     }
 

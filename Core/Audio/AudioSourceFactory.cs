@@ -42,9 +42,6 @@ public static class AudioSourceFactory
     /// <summary>Глобальный кэш-менеджер.</summary>
     public static AudioCacheManager? GlobalCache => _globalCacheManager;
 
-    /// <summary>Текущая конфигурация стриминга.</summary>
-    public static StreamingConfig CurrentConfig => _currentConfig;
-
     /// <summary>
     /// Обновляет конфигурацию стриминга.
     /// Влияет на все новые источники (существующие не затрагиваются).
@@ -177,15 +174,6 @@ public static class AudioSourceFactory
         var format = await DetectFormatAsync(url, httpClient, ct);
         if (format == AudioFormat.Unknown)
             throw new NotSupportedException($"Could not detect audio format for: {url}");
-
-        // ── HLS (deprecated) ──
-        if (format == AudioFormat.Hls)
-        {
-            Log.Warn("[AudioSourceFactory] HLS format detected — this is deprecated");
-#pragma warning disable CS0618
-            return new HlsStreamSource(url, httpClient, trackId);
-#pragma warning restore CS0618
-        }
 
         // ── Метаданные потока ──
         var (contentLength, codec, detectedBitrate) =

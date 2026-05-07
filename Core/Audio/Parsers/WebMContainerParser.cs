@@ -49,7 +49,7 @@ public sealed class WebMContainerParser : IContainerParser
         return new AudioFrame
         {
             // Передаём только ту часть памяти, где реально лежат данные фрейма
-            Data = _currentFrameOwner.Memory.Slice(0, block.Value.Length),
+            Data = _currentFrameOwner.Memory[..block.Value.Length],
             TimestampMs = block.Value.TimestampMs,
             DurationMs = 20, // Typical Opus frame
             IsKeyFrame = block.Value.IsKeyFrame

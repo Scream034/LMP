@@ -17,7 +17,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
     private const int MaxNotifications = 50;
     private const int DefaultToastDuration = 4000;
 
-    public ObservableCollection<Notification> Notifications { get; } = [];
+    public ObservableCollection<Notification> Notifications { get; } =[];
 
     public int UnreadCount => Notifications.Count(n => !n.IsRead);
     public bool HasUnread => UnreadCount > 0;
@@ -187,7 +187,6 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         string? argsJson = null;
         if (n.MessageArgs is { Length: > 0 })
         {
-            // Сохраняем как string[] для простоты
             argsJson = JsonSerializer.Serialize(n.MessageArgs.Select(a => a?.ToString()).ToArray());
         }
 
@@ -257,9 +256,6 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         };
     }
 
-    /// <summary>
-    /// DTO для сериализации попыток в JSON.
-    /// </summary>
     private sealed record AttemptDto(string ClientName, bool Success, string? ErrorMessage, DateTime Timestamp);
 
     #endregion
@@ -287,7 +283,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
         _toastCts?.Cancel();
         _toastCts?.Dispose();
         _toastCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var localCts = _toastCts;
+        var localToken = _toastCts.Token;
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -295,23 +291,25 @@ public sealed class NotificationService : ReactiveObject, IDisposable
             this.RaisePropertyChanged(nameof(IsToastVisible));
         });
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(durationMs, localCts.Token);
+        _ = AutoDismissToastAsync(notification, durationMs, localToken);
+    }
 
-                await Dispatcher.UIThread.InvokeAsync(() =>
+    private async Task AutoDismissToastAsync(Notification notification, int durationMs, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(durationMs, ct);
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (CurrentToast == notification)
                 {
-                    if (CurrentToast == notification)
-                    {
-                        CurrentToast = null;
-                        this.RaisePropertyChanged(nameof(IsToastVisible));
-                    }
-                });
-            }
-            catch (OperationCanceledException) { }
-        }, localCts.Token);
+                    CurrentToast = null;
+                    this.RaisePropertyChanged(nameof(IsToastVisible));
+                }
+            });
+        }
+        catch (OperationCanceledException) { }
     }
 
     #endregion

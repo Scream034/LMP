@@ -88,9 +88,6 @@ public partial class YoutubeProvider : IDisposable
 
     public bool IsReady { get; private set; }
 
-    public event Action<string>? OnStatusChanged;
-    public event Action<string>? OnError;
-
     private static readonly Regex YoutubeVideoRegex = _YoutubeVideoRegex();
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
@@ -1899,17 +1896,15 @@ public partial class YoutubeProvider : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void NotifyStatus(string message)
+    private static void NotifyStatus(string message)
     {
         Log.Info(message);
-        OnStatusChanged?.Invoke(message);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void NotifyError(string message)
+    private static void NotifyError(string message)
     {
         Log.Error(message);
-        OnError?.Invoke(message);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

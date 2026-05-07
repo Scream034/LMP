@@ -6,8 +6,27 @@ namespace LMP.Core.Exceptions;
 public class AudioException : Exception
 {
     public AudioException(string message) : base(message) { }
-    public AudioException(string message, Exception inner) : base(message, inner) { }
+    public AudioException(string message, Exception? inner) : base(message, inner) { }
 }
+
+/// <summary>
+/// Бросается когда файл кэша удалён или стал недоступен во время воспроизведения.
+/// </summary>
+public sealed class CacheInvalidatedException : Exception
+{
+    public CacheInvalidatedException(string message) : base(message) { }
+    public CacheInvalidatedException(string message, Exception? inner) : base(message, inner) { }
+}
+
+/// <summary>
+/// Бросается когда аудиоустройство вывода недоступно.
+/// </summary>
+public sealed class AudioDeviceException : Exception
+{
+    public AudioDeviceException(string message) : base(message) { }
+    public AudioDeviceException(string message, Exception? inner) : base(message, inner) { }
+}
+
 
 /// <summary>
 /// Ошибка декодирования аудио.
@@ -29,7 +48,7 @@ public class AudioSourceException : AudioException
 /// <summary>
 /// URL истёк и требует обновления.
 /// </summary>
-public class UrlExpiredException(string expiredUrl, string? trackId = null) 
+public class UrlExpiredException(string expiredUrl, string? trackId = null)
     : AudioSourceException($"URL expired: {expiredUrl[..Math.Min(50, expiredUrl.Length)]}...")
 {
     public string? TrackId { get; } = trackId;
@@ -39,7 +58,7 @@ public class UrlExpiredException(string expiredUrl, string? trackId = null)
 /// <summary>
 /// Неподдерживаемый формат аудио.
 /// </summary>
-public class UnsupportedFormatException(string format) 
+public class UnsupportedFormatException(string format)
     : AudioException($"Unsupported audio format: {format}")
 {
     public string Format { get; } = format;

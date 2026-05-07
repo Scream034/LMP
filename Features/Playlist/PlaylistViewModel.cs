@@ -328,7 +328,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
     protected override async Task SaveMoveAsync(int fromMasterIndex, int toMasterIndex, CancellationToken ct)
     {
         Log.Info($"[Playlist] Saving move {fromMasterIndex}→{toMasterIndex}");
-        await _manager.MovePlaylistTrackAsync(_currentPlaylistId, fromMasterIndex, toMasterIndex);
+        await _manager.MovePlaylistTrackAsync(_currentPlaylistId, fromMasterIndex, toMasterIndex, ct);
         Log.Info("[Playlist] Move saved");
     }
 
@@ -756,7 +756,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
             if (await _manager.MergePlaylistsAsync(_currentPlaylistId, targetId))
                 await _dialog.ShowInfoAsync(SL["Dialog_Success"], SL["Merge_Success_Msg"]);
             else
-                await _dialog.ShowInfoAsync(SL["Dialog_Error"], SL["Merge_Error_Msg"]);
+                await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"], SL["Merge_Error_Msg"]);
         }
     }
 

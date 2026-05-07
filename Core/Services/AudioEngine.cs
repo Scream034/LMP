@@ -1,6 +1,4 @@
-﻿using System.Numerics;
-using System.Runtime.InteropServices;
-using System.Threading.Channels;
+﻿using System.Threading.Channels;
 using LMP.Core.Audio;
 using LMP.Core.Exceptions;
 using LMP.Core.Models;
@@ -29,7 +27,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 {
     #region Constants
 
-    private const int MaxHistorySize = 100;
     private const int CommandQueueCapacity = 32;
     private const int SeekDebounceMs = 100;
     private const int VolumeSaveIntervalMs = 2000;
@@ -46,9 +43,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public const float MaxGain = 4.0f;
 
     /// <summary>
-    /// Целевой уровень для простой нормализации (peak).
+    /// Минимальный интервал между переключениями качества (мс).
+    /// Предотвращает rate limiting YouTube при быстрых переключениях.
     /// </summary>
-    private const float NormalizationTargetPeak = 0.95f;
+    private const int QualitySwitchCooldownMs = 2000;
 
     #endregion
 
@@ -87,11 +85,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private bool _volumeInitialized;
     private CancellationTokenSource? _smoothVolumeCts;
 
-    /// <summary>
-    /// Минимальный интервал между переключениями качества (мс).
-    /// Предотвращает rate limiting YouTube при быстрых переключениях.
-    /// </summary>
-    private const int QualitySwitchCooldownMs = 2000;
+    #endregion
+
+    #region Playback State
+
+    private volatile bool _isSuspended;
 
     /// <summary>
     /// Время последнего переключения качества.
@@ -100,17 +98,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
-    #region Playback State
-
-    private float _normalizationFactor = 1.0f;
-    private volatile bool _isSuspended;
-
-    #endregion
-
     #region Queue
 
     private readonly List<TrackInfo> _queue = new(64);
-    private readonly List<TrackInfo> _history = new(MaxHistorySize);
     private IReadOnlyList<TrackInfo>? _queueSnapshot;
     private int _currentIndex = -1;
 
@@ -151,7 +141,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     #region Events
 
     public event Action<TrackInfo?>? OnTrackChanged;
-    public event Action? OnPlaybackStopped;
     public event Action<TimeSpan>? OnPositionChanged;
     public event Action<TimeSpan>? OnSeekCompleted;
     public event Action<bool, bool>? OnPlaybackStateChanged;
@@ -164,24 +153,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// <summary>
     /// Событие ошибки воспроизведения.
     /// </summary>
-    /// <remarks>
-    /// <para>Типизированное исключение для обработки в <see cref="PlaybackErrorOrchestrator"/>.</para>
-    /// <para>Возможные типы:</para>
-    /// <list type="bullet">
-    ///   <item><see cref="BotDetectionException"/></item>
-    ///   <item><see cref="LoginRequiredException"/></item>
-    ///   <item><see cref="StreamUnavailableException"/></item>
-    ///   <item><see cref="ChunkDownloadFatalException"/></item>
-    ///   <item>Другие <see cref="Exception"/></item>
-    /// </list>
-    /// </remarks>
     public event Action<Exception>? OnErrorOccurred;
-
-    /// <summary>
-    /// Legacy событие для совместимости — только строка сообщения.
-    /// </summary>
-    [Obsolete("Use OnErrorOccurred instead for typed exception handling")]
-    public event Action<string>? OnError;
 
     #endregion
 
@@ -226,11 +198,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _player.Events.BufferStateChanged += state => RaiseOnUI(() => OnBufferStateChanged?.Invoke(state));
         _player.Events.SeekCompleted += t => RaiseOnUI(() => OnSeekCompleted?.Invoke(t));
 
-        // Ошибки из AudioPlayer → пробрасываем в наше событие
+        // Ошибки из AudioPlayer → пробрасываем в наше событие, сохраняя локализованное сообщение
         _player.Events.ErrorOccurred += err =>
         {
-            var exception = err.Exception ?? new Exception(err.Message);
-            RaiseError(exception);
+            var ex = err.Exception;
+            if (ex is AudioDeviceException)
+                RaiseError(new AudioDeviceException(err.Message, ex.InnerException));
+            else if (ex is CacheInvalidatedException)
+                RaiseError(new CacheInvalidatedException(err.Message, ex.InnerException));
+            else
+                RaiseError(new AudioException(err.Message, ex));
         };
     }
 
@@ -342,8 +319,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (track == null) return;
 
-        _normalizationFactor = 1.0f;
-
         await _player.StopAsync();
 
         if (Volatile.Read(ref _session) != session) return;
@@ -374,8 +349,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     cachingSource.Suspend();
                 }
             }
-
-            AddToHistory(track);
         }
         catch (OperationCanceledException)
         {
@@ -431,12 +404,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             // RefreshStreamUrlAsync возвращает РЕАЛЬНЫЙ битрейт из YouTube API
             // (например, KiloBitsPerSecond = 134.2 → округляется до 134)
-            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None);
-
-            if (streamInfo == null)
-                throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
-
-            streamUrl = streamInfo.Value.Url;
+            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None) ?? throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
+            streamUrl = streamInfo.Url;
 
             // ═══ ВСЕГДА сохраняем реальный битрейт в track ═══
             // Раньше сохраняли только при bitrateHint <= 0, что приводило к потере
@@ -444,9 +413,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             // Теперь: streamInfo.Bitrate — это реальный битрейт из YouTube (134),
             // который мы ВСЕГДА записываем в track для будущих вызовов.
             if (bitrateHint <= 0)
-            {
-                bitrateHint = streamInfo.Value.Bitrate;
-            }
+                bitrateHint = streamInfo.Bitrate;
 
             // Сохраняем реальный битрейт в track БЕЗУСЛОВНО.
             // Это необходимо для:
@@ -465,31 +432,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     #region Error Handling
 
     /// <summary>
-    /// Генерирует события ошибки.
-    /// Использует InvokeAsync для гарантированной доставки (не Post).
+    /// Генерирует события ошибки на UI потоке.
     /// </summary>
     private void RaiseError(Exception exception)
     {
         Log.Debug($"[AudioEngine] RaiseError: {exception.GetType().Name}");
-
-        // Для ошибок используем прямой вызов если мы на UI,
-        // иначе InvokeAsync (не Post!) для гарантированной доставки
-        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
-        {
-            OnErrorOccurred?.Invoke(exception);
-            OnError?.Invoke(exception.Message);
-        }
-        else
-        {
-            // InvokeAsync гарантирует выполнение, Post — нет
-            Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                OnErrorOccurred?.Invoke(exception);
-                OnError?.Invoke(exception.Message);
-            });
-        }
+        RaiseOnUI(() => OnErrorOccurred?.Invoke(exception));
     }
-
 
     #endregion
 
@@ -573,14 +522,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         Interlocked.Increment(ref _session);
         _player.Stop();
-        _normalizationFactor = 1.0f;
 
         RaiseOnUI(() =>
         {
             CurrentTrack = null;
             StreamInfo = AudioStreamInfo.Empty;
             OnTrackChanged?.Invoke(null);
-            OnPlaybackStopped?.Invoke();
         });
     }
 
@@ -689,7 +636,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async ValueTask<string?> RefreshUrlCallbackAsync(string trackId, CancellationToken ct)
     {
-        var track = await _library.GetTrackAsync(trackId);
+        var track = await _library.GetTrackAsync(trackId, ct);
         if (track == null) return null;
 
         try
@@ -842,10 +789,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         float targetGainDb = Math.Clamp(settings.TargetGainDb, -20f, 20f);
         gain *= MathF.Pow(10f, targetGainDb / 20f);
 
-        // Применяем нормализацию если включена
-        if (audioSettings.NormalizationEnabled)
-            gain *= _normalizationFactor;
-
         gain = Math.Clamp(gain, 0f, MaxGain);
 
         if (instant || !audioSettings.SmoothVolumeEnabled)
@@ -905,7 +848,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var ct = _smoothVolumeCts.Token;
         float startGain = _currentGain;
         var startTime = DateTime.UtcNow;
-        var duration = TimeSpan.FromMilliseconds(durationMs);
 
         _ = Task.Run(async () =>
         {
@@ -944,96 +886,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             }
         }
         catch (OperationCanceledException) { }
-    }
-
-    #endregion
-
-    #region Normalization
-
-    /// <summary>
-    /// Вычисляет коэффициент нормализации на основе пиковых значений PCM данных.
-    /// Вызывается из AudioPipeline после декодирования первых фреймов.
-    /// </summary>
-    public void ComputeNormalization(ReadOnlySpan<float> samples)
-    {
-        if (!_library.Settings.Audio.NormalizationEnabled || samples.IsEmpty)
-        {
-            _normalizationFactor = 1.0f;
-            return;
-        }
-
-        float peakValue = FindPeakValue(samples);
-
-        if (peakValue > 0.001f && peakValue > NormalizationTargetPeak)
-        {
-            _normalizationFactor = NormalizationTargetPeak / peakValue;
-            Log.Debug($"[AudioEngine] Normalization: peak={peakValue:F3}, factor={_normalizationFactor:F3}");
-        }
-        else
-        {
-            _normalizationFactor = 1.0f;
-        }
-
-        // Переприменяем громкость с новым фактором
-        ApplyVolume(instant: true);
-    }
-
-    private static float FindPeakValue(ReadOnlySpan<float> samples)
-    {
-        float peak = 0f;
-        int i = 0;
-
-        // SIMD поиск максимума
-        if (Vector.IsHardwareAccelerated && samples.Length >= Vector<float>.Count)
-        {
-            var maxVec = Vector<float>.Zero;
-
-            var vectors = MemoryMarshal.Cast<float, Vector<float>>(samples);
-
-            foreach (var vec in vectors)
-            {
-                var abs = Vector.Abs(vec);
-                maxVec = Vector.Max(maxVec, abs);
-            }
-
-            for (int j = 0; j < Vector<float>.Count; j++)
-                peak = MathF.Max(peak, maxVec[j]);
-
-            i = vectors.Length * Vector<float>.Count;
-        }
-
-        // Скалярный хвост
-        for (; i < samples.Length; i++)
-            peak = MathF.Max(peak, MathF.Abs(samples[i]));
-
-        return peak;
-    }
-
-    /// <summary>
-    /// Применяет boost усиление через SIMD (вызывается из AudioCallback).
-    /// </summary>
-    public static void ApplyGainSimd(Span<float> data, float gain)
-    {
-        if (MathF.Abs(gain - 1.0f) < 0.001f) return;
-
-        int i = 0;
-
-        if (Vector.IsHardwareAccelerated && data.Length >= Vector<float>.Count)
-        {
-            var vecGain = new Vector<float>(gain);
-            var vecMin = new Vector<float>(-1.0f);
-            var vecMax = new Vector<float>(1.0f);
-
-            var vectors = MemoryMarshal.Cast<float, Vector<float>>(data);
-
-            for (int j = 0; j < vectors.Length; j++)
-                vectors[j] = Vector.Min(Vector.Max(vectors[j] * vecGain, vecMin), vecMax);
-
-            i = vectors.Length * Vector<float>.Count;
-        }
-
-        for (; i < data.Length; i++)
-            data[i] = Math.Clamp(data[i] * gain, -1f, 1f);
     }
 
     #endregion
@@ -1085,7 +937,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
                 if (streamInfo == null)
                 {
-                    RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
+                    RaiseError(new InvalidOperationException("Failed to switch quality: no stream available"));
                     return;
                 }
 
@@ -1094,12 +946,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 var realBitrate = streamInfo.Value.Bitrate;
                 track.TransientBitrate = realBitrate;
 
-                // ═══ ATOMIC SEEK-BEFORE-PLAY ═══
                 // Передаём seekPosition в PlayAsync — seek выполнится ДО старта backend.
                 // Это устраняет артефакт "щётка": 16-300ms звука с позиции 0
                 // перед seek к правильной позиции.
-                //   await _player.PlayAsync(url, trackId, bitrate, seekPosition: pos);
-                //   ← Seek ДО старта backend, звук сразу с правильной позиции
                 TimeSpan? seekPosition = pos.TotalSeconds > 1 ? pos : null;
 
                 await _player.PlayAsync(
@@ -1116,7 +965,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             catch (Exception ex)
             {
                 Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
-                RaiseOnUI(() => OnError?.Invoke("Failed to switch quality"));
+                RaiseError(ex);
             }
         });
     }
@@ -1312,16 +1161,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             action();
         else
             Avalonia.Threading.Dispatcher.UIThread.Post(action);
-    }
-
-    private void AddToHistory(TrackInfo track)
-    {
-        if (_history.Count > 0 && _history[^1].Id == track.Id) return;
-
-        _history.Add(track);
-
-        if (_history.Count > MaxHistorySize)
-            _history.RemoveAt(0);
     }
 
     private void InvalidateQueueSnapshot() => _queueSnapshot = null;

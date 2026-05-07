@@ -68,7 +68,7 @@ public partial class App : Application
         {
             // В Avalonia 11 иконки загружаются через AssetLoader
             Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://LMP/Assets/app.ico"))),
-            ToolTipText = LocalizationService.Instance["Commnon_AppName"],
+            ToolTipText = LocalizationService.Instance["Common_AppName"],
             IsVisible = false
         };
 

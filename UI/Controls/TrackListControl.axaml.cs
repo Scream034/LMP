@@ -769,10 +769,10 @@ public partial class TrackListControl : UserControl
 
     private void UpdateLocalizedTexts()
     {
-        var l = LocalizationService.Instance;
-        SearchingText = l["Search_Searching"] ?? "Searching...";
-        LoadingMoreText = l["Search_LoadingMore"] ?? "Searching for more";
-        EndOfListText = l["Search_EndOfList"] ?? "End of list";
+        var L = LocalizationService.Instance;
+        SearchingText = L["Search_Searching"] ?? "Searching...";
+        LoadingMoreText = L["Search_LoadingMore"] ?? "Searching for more";
+        EndOfListText = L["Search_EndOfList"] ?? "End of list";
     }
 
     /// <summary>

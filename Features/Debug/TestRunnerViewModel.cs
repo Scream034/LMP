@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Text;
@@ -535,5 +533,3 @@ internal static class StringExtensions
 {
     public static string Repeat(this char c, int count) => new(c, count);
 }
-
-#endif

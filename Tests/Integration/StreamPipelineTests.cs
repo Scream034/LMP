@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
@@ -371,7 +369,7 @@ public static class StreamPipelineTests
         if (hasCipher)
         {
             Log.Info($"  ⚠ URL requires sig decryption (signatureCipher)");
-            Log.Info($"  Signature (first 40): {targetStream.Signature![..Math.Min(40, targetStream.Signature.Length)]}...");
+            Log.Info($"  Signature (first 40): {targetStream.Signature![..Math.Min(40, targetStream.Signature!.Length)]}...");
         }
 
         // ═══ RAW URL Analysis ═══
@@ -398,17 +396,17 @@ public static class StreamPipelineTests
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
         // Тест A: RAW URL + range (без N-token decryption)
-        var testUrlA = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(rawUrl, "range", "0-1023");
-        testUrlA = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "rn", "1");
+        var testUrlA = Core.Youtube.Utils.UrlEx.SetQueryParameter(rawUrl, "range", "0-1023");
+        testUrlA = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "rn", "1");
         await RunTestWithDetails(client, "A. RAW URL (encrypted n)", testUrlA);
 
         // Тест B: RAW URL без n (вообще удалим)
-        var testUrlB = LMP.Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlA, "n");
+        var testUrlB = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlA, "n");
         await RunTestWithDetails(client, "B. RAW URL (n removed)", testUrlB);
 
         // ═══ Теперь расшифровываем n-token ═══
         Log.Info("\n[4] Decrypting n-token...");
-        var nToken = LMP.Core.Youtube.Utils.UrlEx.TryGetQueryParameterValue(rawUrl, "n");
+        var nToken = Core.Youtube.Utils.UrlEx.TryGetQueryParameterValue(rawUrl, "n");
         Log.Info($"  Encrypted n: {nToken}");
 
         if (!string.IsNullOrEmpty(nToken))
@@ -421,15 +419,15 @@ public static class StreamPipelineTests
                 Log.Info($"  Decrypted n: {decryptedN}");
 
                 // Тест C: с расшифрованным n
-                var testUrlC = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "n", decryptedN);
+                var testUrlC = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "n", decryptedN);
                 await RunTestWithDetails(client, "C. RAW URL (n decrypted)", testUrlC);
 
                 // Тест D: с расшифрованным n + убираем мусорные параметры
                 var testUrlD = testUrlC;
-                testUrlD = LMP.Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "ump");
-                testUrlD = LMP.Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "alr");
-                testUrlD = LMP.Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "srfvp");
-                testUrlD = LMP.Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "pot");
+                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "ump");
+                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "alr");
+                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "srfvp");
+                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "pot");
                 await RunTestWithDetails(client, "D. Processed URL (как StreamClient)", testUrlD);
             }
             catch (Exception ex)
@@ -450,8 +448,8 @@ public static class StreamPipelineTests
 
             if (stream != null)
             {
-                var pipelineUrl = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(stream.Url, "range", "0-1023");
-                pipelineUrl = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(pipelineUrl, "rn", "1");
+                var pipelineUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(stream.Url, "range", "0-1023");
+                pipelineUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(pipelineUrl, "rn", "1");
                 await RunTestWithDetails(client, "E. StreamClient pipeline URL", pipelineUrl);
 
                 // Сравниваем что изменилось
@@ -506,8 +504,8 @@ public static class StreamPipelineTests
 
     private static void CompareUrls(string rawUrl, string processedUrl)
     {
-        var rawParams = LMP.Core.Youtube.Utils.UrlEx.GetQueryParameters(rawUrl);
-        var procParams = LMP.Core.Youtube.Utils.UrlEx.GetQueryParameters(processedUrl);
+        var rawParams = Core.Youtube.Utils.UrlEx.GetQueryParameters(rawUrl);
+        var procParams = Core.Youtube.Utils.UrlEx.GetQueryParameters(processedUrl);
 
         var allKeys = rawParams.Keys.Union(procParams.Keys).Order();
         int diffCount = 0;
@@ -538,7 +536,7 @@ public static class StreamPipelineTests
         Log.Info($"  Path: {uri.AbsolutePath}");
         Log.Info($"  URL length: {url.Length} chars");
 
-        var queryParams = LMP.Core.Youtube.Utils.UrlEx.GetQueryParameters(url);
+        var queryParams = Core.Youtube.Utils.UrlEx.GetQueryParameters(url);
 
         Log.Info($"\n  Query parameters ({queryParams.Count}):");
 
@@ -614,8 +612,8 @@ public static class StreamPipelineTests
     /// </summary>
     private static async Task TestStreamDownloadAsync(string url, CancellationToken ct)
     {
-        var testUrl = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(url, "range", "0-1023");
-        testUrl = LMP.Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrl, "rn", "1");
+        var testUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(url, "range", "0-1023");
+        testUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrl, "rn", "1");
 
         using var handler = new HttpClientHandler
         {
@@ -690,5 +688,3 @@ public static class StreamPipelineTests
         if (!condition) throw new Exception(message);
     }
 }
-
-#endif

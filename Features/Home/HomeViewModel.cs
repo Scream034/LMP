@@ -263,7 +263,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         if (wasSpecial) SelectedCategory = Categories.FirstOrDefault(c => c.IsSpecial);
         else if (!string.IsNullOrEmpty(currentQuery)) SelectedCategory = Categories.FirstOrDefault(c => c.Query == currentQuery);
 
-        if (SelectedCategory == null) SelectedCategory = Categories.FirstOrDefault();
+        SelectedCategory ??= Categories.FirstOrDefault();
     }
 
     private void AddCat(string key, string fallback, string query = "", bool special = false)

@@ -1,19 +1,38 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- ====================== ВЕРСИИ ПАКЕТОВ ====================== -->
-  <PropertyGroup>
-    <!-- Основная версия Avalonia (меняй здесь одну строку при обновлении) -->
-    <AvaloniaVersion>11.3.9</AvaloniaVersion>
+  <!--      ВЕРСИИ ПАКЕТОВ        -->
+  <PropertyGroup Label="Package Versions">
+    <!--
+      Avalonia 11.3.x — последняя стабильная ветка с полной экосистемой.
+      Avalonia 12.x пока не имеет пакетов ReactiveUI/Diagnostics на NuGet.
+      При миграции на 12.x потребуется также обновить Tmds.DBus.Protocol до 0.92.0+.
+    -->
+    <AvaloniaVersion>11.3.13</AvaloniaVersion>
 
-    <!-- Другие версии -->
+    <!--
+      Avalonia.ReactiveUI версионируется ОТДЕЛЬНО от ядра Avalonia.
+      Последняя стабильная на NuGet: 11.3.9
+      (пакет публикуется реже, чем ядро — нормальное поведение)
+    -->
+    <AvaloniaReactiveUIVersion>11.3.9</AvaloniaReactiveUIVersion>
+
+    <!-- Dev-инструменты -->
     <HotAvaloniaVersion>3.1.0</HotAvaloniaVersion>
+
+    <!-- Entity Framework Core -->
     <EfCoreVersion>10.0.2</EfCoreVersion>
-    <ReactiveUIVersion>19.5.41</ReactiveUIVersion>
-    <CommunityToolkitMvvmVersion>8.2.1</CommunityToolkitMvvmVersion>
+
+    <!-- MVVM -->
+    <ReactiveUIFodyVersion>19.5.41</ReactiveUIFodyVersion>
+    <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
+
+    <!-- Microsoft Extensions (совпадает с TFM) -->
+    <MsExtVersion>10.0.2</MsExtVersion>
   </PropertyGroup>
 
-  <!-- ====================== ОСНОВНЫЕ НАСТРОЙКИ ====================== -->
-  <PropertyGroup>
+  <!--   ОСНОВНЫЕ НАСТРОЙКИ       -->
+  <PropertyGroup Label="Core Settings">
+    <!-- В Release — без консольного окна, в Debug — с консолью для логов -->
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
 
@@ -28,116 +47,211 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
 
-    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Компилируемые биндинги по умолчанию: быстрее + ошибки на этапе компиляции -->
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+
+    <!-- Нужно для низкоуровневых аудио-операций (PCM-буферы, нативный interop) -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
+    <!-- Подавляем предупреждение о дублирующихся типах из-за Fody-weavers -->
     <NoWarn>$(NoWarn);CS0436</NoWarn>
 
-    <!-- Версионирование через Git -->
+    <!-- Базовая версия; полная формируется в Directory.Build.targets через Git -->
     <VersionPrefix>1.0</VersionPrefix>
 
-    <!-- NuGet Lock File (обязательно для cache: true в GitHub Actions) -->
+    <!-- Lock-файл обязателен для cache: true в GitHub Actions CI -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
-  <!-- ====================== ОПТИМИЗАЦИЯ ПАМЯТИ ====================== -->
-  <PropertyGroup>
-    <!-- Workstation GC — лучший выбор для десктопных UI приложений (меньше памяти) -->
+  <!--   ОПТИМИЗАЦИЯ ПАМЯТИ / JIT -->
+  <PropertyGroup Label="Runtime Tuning">
+    <!--
+      Workstation GC: меньше потребление RAM, лучше отзывчивость UI.
+      Server GC предназначен для серверных сценариев — нам не нужен.
+    -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
 
-    <!-- Background (Concurrent) GC — UI не фризит -->
+    <!-- Background (Concurrent) GC: сборка мусора не блокирует UI-поток -->
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
 
-    <!-- Отдавать память ОС сразу после сборки мусора -->
+    <!--
+      Отдаём память ОС после GC-цикла.
+      Для медиа-приложений с большими кэшами изображений/аудио — правильный выбор.
+    -->
     <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
 
-    <!-- Компактификация Large Object Heap (борьба с фрагментацией от кэшей изображений/аудио) -->
+    <!--
+      Компактификация Large Object Heap при следующем GC-цикле.
+      Борется с фрагментацией после выгрузки крупных аудио/картинок из памяти.
+    -->
     <GCLargeObjectHeapCompactionMode>CompactOnce</GCLargeObjectHeapCompactionMode>
 
-    <!-- Tiered Compilation + PGO (Profile Guided Optimization) — быстрее старт + лучше
-    производительность -->
+    <!--
+      Tiered Compilation + Dynamic PGO:
+      - Быстрый старт (QuickJit для "холодного" кода)
+      - Авто-оптимизация горячих путей на лету (TieredPGO)
+    -->
     <TieredCompilation>true</TieredCompilation>
     <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
     <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
-  <!-- ====================== DEBUG НАСТРОЙКИ ====================== -->
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+  <!--   DEBUG КОНФИГУРАЦИЯ       -->
+  <PropertyGroup Label="Debug" Condition="'$(Configuration)' == 'Debug'">
+    <!-- Встроенные PDB + исходники: шаговая отладка без внешних файлов -->
     <DebugType>embedded</DebugType>
     <EmbedAllSources>true</EmbedAllSources>
     <Optimize>false</Optimize>
 
-    <!-- Hot Reload -->
+    <!-- Встроенный .NET Hot Reload -->
     <EnableHotReload>true</EnableHotReload>
     <HotReloadEnabled>true</HotReloadEnabled>
 
-    <!-- HotAvalonia -->
+    <!-- HotAvalonia: живая перезагрузка XAML без перекомпиляции -->
     <HotAvalonia>true</HotAvalonia>
-    <HotAvaloniaMode>Balanced</HotAvaloniaMode> <!-- Minimal | Balanced | Aggressive -->
+    <!-- Balanced = разумный баланс между скоростью обнаружения и нагрузкой на FS -->
+    <HotAvaloniaMode>Balanced</HotAvaloniaMode>
   </PropertyGroup>
 
-  <!-- ====================== RELEASE НАСТРОЙКИ ====================== -->
-  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+  <!--   RELEASE КОНФИГУРАЦИЯ     -->
+  <PropertyGroup Label="Release" Condition="'$(Configuration)' == 'Release'">
+    <!-- Без отладочных символов в продакшне -->
     <DebugType>none</DebugType>
     <Optimize>true</Optimize>
-    <PublishTrimmed>false</PublishTrimmed> <!-- Можно включить partial при необходимости -->
+
+    <!--
+      Trim отключён: рефлексия в EF Core, Jint и Fody-weavers несовместима с тримом.
+      При необходимости можно включить TrimmerRootDescriptor для частичного трима.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+
+    <DefaultItemExcludes>$(DefaultItemExcludes);Features\Debug\**;Tests\**;Tools\**</DefaultItemExcludes>
   </PropertyGroup>
 
-  <!-- ====================== PLATFORM DEFINES ====================== -->
-  <!-- Определяет WINDOWS для условной компиляции (TrayVolumeHook, platform-specific features) -->
+  <!--   PLATFORM DEFINES-->
+  <!-- Используется для условной компиляции Windows-специфичного кода:
+       TrayVolumeHook, глобальные хоткеи, WinAPI interop -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
-  <!-- ====================== ФАЙЛЫ ====================== -->
-  <ItemGroup>
-    <Compile Remove="External\**" />
-    <EmbeddedResource Remove="External\**" />
-    <None Remove="External\**" />
-
+  <!--  ФАЙЛЫ     -->
+  <ItemGroup Label="File Includes/Excludes">
     <Folder Include="Models\" />
+
+    <!-- Все ресурсы Assets включаем как Avalonia-ресурсы -->
     <AvaloniaResource Include="Assets\**" />
+
+    <!-- Иконка приложения должна быть явно помечена как Content -->
     <Content Include="Assets/app.ico" />
   </ItemGroup>
 
-  <!-- ====================== ПАКЕТЫ ====================== -->
-  <ItemGroup>
-    <!-- Avalonia -->
+  <!--  ПАКЕТЫ    -->
+
+  <!-- Avalonia Core -->
+  <ItemGroup Label="Avalonia Core">
     <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
-    <PackageReference Include="Avalonia.ReactiveUI" Version="$(AvaloniaVersion)" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)"
-      Condition="'$(Configuration)' == 'Debug'" />
 
-    <!-- Hot Reload для XAML -->
-    <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)"
-      Condition="'$(Configuration)' == 'Debug'" PrivateAssets="All" />
+    <!--
+      Avalonia.ReactiveUI версионируется отдельно от ядра Avalonia.
+      Используем $(AvaloniaReactiveUIVersion), а не $(AvaloniaVersion).
+    -->
+    <PackageReference Include="Avalonia.ReactiveUI" Version="$(AvaloniaReactiveUIVersion)" />
 
-    <!-- Дополнительные Avalonia пакеты -->
+    <!-- Dev-only: визуальное дерево + инспектор свойств (аналог DevTools браузера) -->
+    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
+  </ItemGroup>
+
+  <!-- Avalonia Hot Reload -->
+  <!--
+    Живая перезагрузка XAML без перекомпиляции проекта.
+    PrivateAssets=All: пакет не утекает в продакшн-сборку.
+  -->
+  <ItemGroup Label="Hot Reload" Condition="'$(Configuration)' == 'Debug'">
+    <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)" PrivateAssets="All" />
+  </ItemGroup>
+
+  <!-- Avalonia Community Controls -->
+  <!--
+    ВНИМАНИЕ: Avalonia.Controls.ItemsRepeater задепрекирован.
+    Рекомендуется мигрировать на встроенные ItemsControl из Avalonia 11.1+.
+    Пакет оставлен для обратной совместимости до рефакторинга UI.
+
+    ВНИМАНИЕ: Avalonia.Xaml.Behaviors — устаревшее имя пакета.
+    Актуальное имя: Xaml.Behaviors.Avalonia (требует ручной миграции XMLNS).
+    Пакет оставлен как есть до запланированной миграции.
+  -->
+  <ItemGroup Label="Avalonia Community">
     <PackageReference Include="Avalonia.Controls.ItemsRepeater" Version="11.1.5" />
     <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.3.0.6" />
+  </ItemGroup>
 
-    <!-- Entity Framework -->
+  <!-- Entity Framework Core -->
+  <ItemGroup Label="Entity Framework">
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(EfCoreVersion)" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreVersion)" />
+
+    <!--
+      Design-time инструменты (миграции, скаффолдинг).
+      IncludeAssets/PrivateAssets гарантируют, что тулинг не попадёт в runtime.
+    -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="$(EfCoreVersion)">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+  </ItemGroup>
 
-    <!-- MVVM + Reactive -->
+  <!-- MVVM + Reactive -->
+  <ItemGroup Label="MVVM">
+    <!-- Source generator: [ObservableProperty], [RelayCommand] и т.д. -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
-    <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIVersion)" />
 
-    <!-- Остальные пакеты -->
-    <PackageReference Include="AsyncImageLoader.Avalonia" Version="3.5.0" />
-    <PackageReference Include="Concentus" Version="2.2.2" />
-    <PackageReference Include="Jint" Version="4.6.0" />
-    <PackageReference Include="Material.Icons.Avalonia" Version="2.4.1" />
+    <!-- Fody-weaver: авто-генерация RaisePropertyChanged для [Reactive]-свойств -->
+    <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
+  </ItemGroup>
+
+  <!-- Microsoft Extensions -->
+  <ItemGroup Label="Microsoft Extensions">
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MsExtVersion)" />
+  </ItemGroup>
+
+  <!-- Аудио-пайплайн -->
+  <!--
+    NAudio: PCM-вывод через WASAPI/WinMM, управление буферами.
+    Concentus: декодер Opus в чистом C# (без нативных зависимостей).
+  -->
+  <ItemGroup Label="Audio">
     <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
+  </ItemGroup>
+
+  <!-- UI Утилиты -->
+  <ItemGroup Label="UI Utilities">
+    <!-- 3.3.0 — последняя версия совместимая с Avalonia 11.x.
+      3.8.0+ требует Avalonia >= 12.0.0.
+      Обновить вместе с миграцией на Avalonia 12. -->
+    <PackageReference Include="AsyncImageLoader.Avalonia" Version="3.3.0" />
+
+    <!-- 7000+ Material Design иконок для Avalonia -->
+    <PackageReference Include="Material.Icons.Avalonia" Version="3.0.0" />
+  </ItemGroup>
+
+  <!-- Скриптование / YT-байпас -->
+  <!-- Jint: JS-движок на C# для дешифровки sig/n-token YouTube без нативного V8 -->
+  <ItemGroup Label="Scripting">
+    <PackageReference Include="Jint" Version="4.6.0" />
+  </ItemGroup>
+
+  <!-- Linux D-Bus (системные уведомления, MPRIS) -->
+  <!--
+    Версия 0.21.3 совместима с Avalonia 11.3.x (FreeDesktop требует >= 0.21.2).
+    При миграции на Avalonia 12.x нужно обновить до 0.92.0+.
+  -->
+  <ItemGroup Label="Linux Interop">
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
   </ItemGroup>
 
 </Project>

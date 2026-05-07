@@ -1011,7 +1011,7 @@ internal sealed partial class TrayManager : IDisposable
 
                     _popupWindow.PropertyChanged += (_, e) =>
                     {
-                        if (e.Property == Window.IsVisibleProperty)
+                        if (e.Property == Avalonia.Visual.IsVisibleProperty)
                             _isPopupVisible = _popupWindow.IsVisible;
                     };
                 }

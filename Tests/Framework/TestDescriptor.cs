@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Reflection;
 
 namespace LMP.Tests.Framework;
@@ -87,5 +85,3 @@ public sealed record TestResult
         ? $"{Duration.TotalMilliseconds:F0}ms"
         : $"{Duration.TotalSeconds:F1}s";
 }
-
-#endif

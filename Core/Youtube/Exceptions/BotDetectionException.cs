@@ -17,11 +17,6 @@ public sealed class BotDetectionException(string message, TimeSpan remaining) : 
     public DateTime CooldownEndsAt { get; } = DateTime.UtcNow + remaining;
 
     /// <summary>
-    /// Ключ локализации для сообщения.
-    /// </summary>
-    public const string LocalizationKey = "Error_BotDetection_Message";
-
-    /// <summary>
     /// Форматирует оставшееся время для отображения.
     /// </summary>
     public string FormatRemainingTime()

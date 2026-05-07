@@ -1,5 +1,3 @@
-#if DEBUG
-
 namespace LMP.Tests.Framework;
 
 /// <summary>
@@ -79,5 +77,3 @@ public static class TestGroups
     public const string Pipeline = "Pipeline";
     public const string Cache = "Cache";
 }
-
-#endif

@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Collections.Frozen;
 using System.Reflection;
 
@@ -197,5 +195,3 @@ public static class TestDiscovery
         return new string(buffer[..pos]);
     }
 }
-
-#endif

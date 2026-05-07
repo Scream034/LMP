@@ -162,11 +162,11 @@ public sealed class AudioQualityToStringConverter : IValueConverter
     {
         if (value is AudioQualityPreference preference)
         {
-            var loc = LocalizationService.Instance;
+            var L = LocalizationService.Instance;
             return preference switch
             {
-                AudioQualityPreference.BestAvailable => loc["Quality_BestAvailable"],
-                AudioQualityPreference.Standard => loc["Quality_Standard"],
+                AudioQualityPreference.BestAvailable => L["Quality_BestAvailable"],
+                AudioQualityPreference.Standard => L["Quality_Standard"],
                 _ => preference.ToString()
             };
         }

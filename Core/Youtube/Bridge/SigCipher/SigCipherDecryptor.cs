@@ -4,17 +4,44 @@ using LMP.Core.Youtube.Bridge.Common;
 
 namespace LMP.Core.Youtube.Bridge.SigCipher;
 
-public sealed partial class SigCipherDecryptor(PlayerContextManager playerManager) : JsDecryptorBase<SigCipherDecryptor>(playerManager, G.FilePath.SigCipherCache, 500, 100)
+/// <summary>
+/// Дешифратор SigCipher (подписей) YouTube.
+/// <para>
+/// Стратегии (в порядке приоритета):
+/// 1. Manifest (native C#, zero JS) - максимально быстро.
+/// 2. Extractor - парсинг JS без исполнения (создает Manifest).
+/// 3. Solver - разовое исполнение JS для получения эталона, затем генерация Manifest.
+/// 4. Persistent JS engines - fallback, если всё остальное сломалось.
+/// </para>
+/// </summary>
+public sealed partial class SigCipherDecryptor(PlayerContextManager playerManager) 
+    : JsDecryptorBase<SigCipherDecryptor>(playerManager, G.FilePath.SigCipherCache, 500, 100)
 {
     private SigCipherManifest? _manifest;
     private string? _manifestCachePath;
 
+    /// <summary>
+    /// Эталонная подпись для Solver'а и тестирования Jint движков.
+    /// Включает все символы английского алфавита и цифры для точного маппинга операций.
+    /// </summary>
+    private const string TestSignature = 
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" +
+        "qrstu";
+
+    // ═══════════════════════════════════════════════════════════════
+    // PUBLIC API
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Расшифровывает подпись (signature) видео потока.
+    /// </summary>
     public async ValueTask<string> DecipherAsync(string signature, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(signature)) return signature;
         if (Cache.TryGet(signature, out var cached)) return cached;
 
-        await EnsureInitializedAsync(ct);
+        await EnsureInitializedAsync(ct).ConfigureAwait(false);
 
         // Tier 1: Manifest (native C#, zero JS)
         if (_manifest is not null)
@@ -42,6 +69,10 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
 
         return signature;
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════
 
     protected override void InitializeCore(PlayerContext context)
     {
@@ -95,7 +126,7 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
                 context,
                 funcName,
                 fn => BuildSigWrapperScript(fn, callNumber),
-                BuildTestSignature(),
+                TestSignature,
                 BuildSigBundle);
         }
 
@@ -104,7 +135,7 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
     }
 
     /// <summary>
-    /// Saves diagnostic bundle for analysis even when manifest extraction succeeded.
+    /// Сохраняет диагностический бандл для ручного анализа.
     /// </summary>
     private void SaveDiagBundle(string baseJs, string funcName)
     {
@@ -120,12 +151,43 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         }
     }
 
+    /// <summary>
+    /// Локальная реализация сохранения диагностических скриптов.
+    /// Исправляет проблему CS0103.
+    /// </summary>
+    private void SaveDiagScript(string type, string code, string funcName)
+    {
+        try
+        {
+            if (CurrentPlayerVersion is null) return;
+            
+            Directory.CreateDirectory(DiagFolder);
+            var path = Path.Combine(DiagFolder, $"player_{CurrentPlayerVersion}_{type}.js");
+            
+            File.WriteAllText(path, $$"""
+                // ═══════════════════════════════════════════════════════════
+                // SIGCIPHER {{type.ToUpper()}} — AUTO-GENERATED
+                // Player version: {{CurrentPlayerVersion}}
+                // Entry function: {{funcName}}
+                // Generated: {{DateTime.UtcNow:O}}
+                // ═══════════════════════════════════════════════════════════
+                
+                {{code}}
+                """);
+        }
+        catch { /* ignore */ }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // WRAPPER SCRIPT & BUNDLE
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Генерирует JS-обертку для вызова функции дешифровки.
+    /// Безопасно переопределяет window.__decryptorTransform для Jint.
+    /// </summary>
     private static string BuildSigWrapperScript(string funcName, int? callNumber) => $$"""
-        function __decryptorTransform(s) {
+        window.__decryptorTransform = function(s) {
             try {
                 var f = window['{{funcName}}'];
                 if (typeof f !== 'function') return s;
@@ -147,14 +209,17 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
                       """)}}
                 return (typeof r === 'string' && r !== s && r.length > 0) ? r : s;
             } catch(e) { return s; }
-        }
+        };
         """;
 
+    /// <summary>
+    /// Ищет специфический числовой аргумент, с которым плеер вызывает функцию.
+    /// (Zero-allocation парсинг через Span).
+    /// </summary>
     private static int? FindCallNumber(string baseJs, string funcName)
     {
         var span = baseJs.AsSpan();
-        var target = string.Concat(funcName, "(");
-        var targetSpan = target.AsSpan();
+        var targetSpan = string.Concat(funcName, "(").AsSpan();
 
         int searchFrom = 0;
         while (searchFrom < span.Length)
@@ -188,13 +253,7 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         return null;
     }
 
-    private string? BuildSigBundle(string baseJs, string funcName) =>
-        BuildDefaultBundle(baseJs, funcName);
-
-    private static string BuildTestSignature() =>
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
-        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" +
-        "qrstu";
+    private string? BuildSigBundle(string baseJs, string funcName) => BuildDefaultBundle(baseJs, funcName);
 
     // ═══════════════════════════════════════════════════════════════
     // MANIFEST
@@ -226,7 +285,9 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         try
         {
             if (_manifestCachePath is null) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(_manifestCachePath)!);
+            var dir = Path.GetDirectoryName(_manifestCachePath);
+            if (dir is not null) Directory.CreateDirectory(dir);
+            
             File.WriteAllText(_manifestCachePath, manifest.Serialize());
         }
         catch (Exception ex)
@@ -239,19 +300,22 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
     // SOLVER
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Пытается сгенерировать манифест, выполнив JS один раз с тестовой строкой,
+    /// а затем алгоритмически вычислив операции трансформации.
+    /// </summary>
     private bool TryInitWithSolver(PlayerContext context, string? funcName)
     {
         if (funcName is null) return false;
 
         var callNumber = FindCallNumber(context.BaseJs, funcName);
-        var testSig = BuildTestSignature();
         string? decrypted = null;
 
         // Попытка через bundle
         var bundle = BuildSigBundle(context.BaseJs, funcName);
         if (bundle is not null)
         {
-            decrypted = TryRunOnce(bundle, funcName, testSig, callNumber);
+            decrypted = TryRunOnce(bundle, funcName, TestSignature, callNumber);
             if (decrypted is not null)
                 SaveDiagScript("solver_bundle", bundle, funcName);
         }
@@ -260,12 +324,12 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         if (decrypted is null)
         {
             var modifiedJs = InjectWindowExport(context.BaseJs, funcName);
-            decrypted = TryRunOnce(modifiedJs, funcName, testSig, callNumber);
+            decrypted = TryRunOnce(modifiedJs, funcName, TestSignature, callNumber);
         }
 
         if (decrypted is null) return false;
 
-        var ops = SigCipherSolver.Solve(testSig, decrypted);
+        var ops = SigCipherSolver.Solve(TestSignature, decrypted);
         if (ops is null || ops.Count < 3) return false;
 
         _manifest = new SigCipherManifest(context.Version, ops, "solver");
@@ -273,6 +337,10 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         return true;
     }
 
+    /// <summary>
+    /// Изолированное, разовое выполнение JS-кода для Solver'а.
+    /// Движок сразу же утилизируется.
+    /// </summary>
     private static string? TryRunOnce(string jsCode, string funcName, string testInput, int? callNumber)
     {
         Engine? engine = null;
@@ -303,11 +371,16 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         }
     }
 
+    /// <summary>
+    /// Если работает запасной вариант (Jint), асинхронно пытаемся вычислить 
+    /// манифест в фоне, чтобы в будущем отказаться от движков и ускорить процесс.
+    /// </summary>
     private void TrySolveInBackground(string encrypted, string decrypted)
     {
         if (_manifest is not null || CurrentPlayerVersion is null) return;
 
-        Task.Run(() =>
+        // Fire-and-Forget. Ловим все ошибки, чтобы не уронить процесс.
+        _ = Task.Run(() =>
         {
             try
             {
@@ -331,10 +404,8 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
                     _manifest = manifest;
                     SaveManifest(manifest);
 
-                    BundleEngine?.Dispose();
-                    BundleEngine = null;
-                    FullEngine?.Dispose();
-                    FullEngine = null;
+                    // Очищаем Jint движки, они больше не нужны
+                    ForceDisposeEngines();
 
                     Log.Info($"[SigCipher] Background solver succeeded: {manifest}");
                 }

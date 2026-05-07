@@ -16,7 +16,7 @@ public static class AudioConstants
     /// <summary>Максимум чанков в RAM (32 × 64KB = 2MB RAM на трек).</summary>
     public const int MaxRamChunks = 32;
 
-    /// <summary>Расстояние от текущей позиции для eviction чанков из RAM.</summary>
+    /// <summary>Расстояние от текущей позиции для вытеснения (eviction) чанков из RAM.</summary>
     public const int RamEvictionDistance = 10;
 
     // ═══════════════════════════════════════════════════════
@@ -32,7 +32,7 @@ public static class AudioConstants
     /// <summary>Чанков загружать при seek (instant seek UX).</summary>
     public const int SeekPreloadChunks = 2;
 
-    /// <summary>Интервал проверки preload loop (ms).</summary>
+    /// <summary>Интервал проверки preload loop (мс).</summary>
     public const int PreloadIntervalMs = 1000;
 
     /// <summary>Максимум параллельных загрузок чанков (баланс скорость/RAM).</summary>
@@ -74,7 +74,7 @@ public static class AudioConstants
     /// <summary>Количество каналов по умолчанию (stereo).</summary>
     public const int DefaultChannels = 2;
 
-    /// <summary>Буфер декодирования (samples, не байты).</summary>
+    /// <summary>Буфер декодирования (сэмплы на канал, не байты).</summary>
     public const int DecoderBufferFrames = 8192;
 
     /// <summary>Кадров пропустить после seek для Opus (pre-skip compensation).</summary>
@@ -83,30 +83,33 @@ public static class AudioConstants
     /// <summary>Кадров пропустить после seek для AAC (encoder delay).</summary>
     public const int SkipFramesAfterSeekAac = 5;
 
-    /// <summary>Таймаут graceful shutdown декодера (ms).</summary>
+    /// <summary>Таймаут graceful shutdown декодера (мс).</summary>
     public const int DecoderStopTimeoutMs = 500;
 
     // ═══════════════════════════════════════════════════════
     // PLAYBACK BUFFER SETTINGS — PCM циклический буфер
     // ═══════════════════════════════════════════════════════
 
+    /// <summary>Максимально допустимое усиление громкости плеера (Gain).</summary>
+    public const float MaxVolumeGain = 4.0f;
+
     /// <summary>Размер PCM буфера в секундах (2s = smooth playback).</summary>
     public const int BufferSizeSeconds = 2;
 
-    /// <summary>Минимальный буфер для старта воспроизведения (ms).</summary>
-    public const int MinBufferMs = 300;
+    /// <summary>Минимальный буфер для старта воспроизведения (мс).</summary>
+    public const int MinBufferMs = 100;
 
-    /// <summary>Минимальный буфер для возобновления после seek (ms).</summary>
+    /// <summary>Минимальный буфер для возобновления после seek (мс).</summary>
     public const int MinSeekResumeBufferMs = 80;
 
     // ═══════════════════════════════════════════════════════
     // POSITION REPORTING — UI обновления
     // ═══════════════════════════════════════════════════════
 
-    /// <summary>Интервал обновления позиции по умолчанию (ms).</summary>
+    /// <summary>Интервал обновления позиции по умолчанию (мс).</summary>
     public const int DefaultPositionUpdateIntervalMs = 200;
 
-    /// <summary>Интервал проверки buffer state (ms).</summary>
+    /// <summary>Интервал проверки состояния буфера (мс).</summary>
     public const int BufferStateUpdateIntervalMs = 500;
 
     // ═══════════════════════════════════════════════════════
@@ -116,7 +119,7 @@ public static class AudioConstants
     /// <summary>Максимум попыток повтора операций.</summary>
     public const int MaxRetryAttempts = 3;
 
-    /// <summary>Задержка между попытками (ms).</summary>
+    /// <summary>Задержка между попытками (мс).</summary>
     public const int RetryDelayMs = 1_000;
 
     // ═══════════════════════════════════════════════════════
@@ -126,13 +129,13 @@ public static class AudioConstants
     /// <summary>Имя файла метаданных кэша.</summary>
     public const string CacheMetadataFileName = "cache_index.json";
 
-    /// <summary>Расширение файлов кэша.</summary>
+    /// <summary>Расширение файлов аудио кэша.</summary>
     public const string CacheFileExtension = ".audio";
 
-    /// <summary>Интервал автосохранения индекса кэша (ms).</summary>
+    /// <summary>Интервал автосохранения индекса кэша (мс).</summary>
     public const int CacheAutoSaveIntervalMs = 30_000;
 
-    /// <summary>Таймаут блокировки при сохранении индекса (ms).</summary>
+    /// <summary>Таймаут блокировки при сохранении индекса (мс).</summary>
     public const int CacheSaveLockTimeoutMs = 100;
 
     /// <summary>Размер буфера для файловых операций (64KB).</summary>
@@ -141,59 +144,55 @@ public static class AudioConstants
     /// <summary>Порог очистки кэша (80% от максимума).</summary>
     public const double CacheCleanupThreshold = 0.8;
 
+    // ═══════════════════════════════════════════════════════
+    // BITRATE NORMALIZATION THRESHOLDS
+    // ═══════════════════════════════════════════════════════
+
+    public const int BitrateThresholdLow = 50;
+    public const int BitrateNormLow = 48;
+
+    public const int BitrateThresholdMedLow = 80;
+    public const int BitrateNormMedLow = 64;
+
+    public const int BitrateThresholdStandardAac = 110;
+    public const int BitrateNormStandardAac = 96;
+
+    public const int BitrateThresholdStandardOpus = 140;
+    public const int BitrateNormStandardOpus = 128;
+
+    public const int BitrateThresholdHigh = 180;
+    public const int BitrateNormHigh = 160;
+
+    public const int BitrateThresholdVeryHigh = 260;
+    public const int BitrateNormVeryHigh = 256;
+
+    public const int BitrateNormMax = 320;
+
     /// <summary>
     /// Нормализация битрейта для кэш-ключей.
-    /// 
-    /// <para><b>ЕДИНСТВЕННЫЙ ИСТОЧНИК ИСТИНЫ</b> для нормализации битрейта.
-    /// Используется в <see cref="AudioSourceFactory.BuildCacheKey"/>
-    /// и <see cref="Cache.AudioCacheManager.BuildCacheKey"/>.</para>
-    /// 
-    /// <para>Группирует близкие битрейты в стандартные bucket'ы,
-    /// чтобы один трек не дублировался в кэше из-за minor различий
-    /// (например, 127kbps и 128kbps → оба → 128).</para>
+    /// <para>Группирует близкие битрейты в стандартные bucket'ы.</para>
     /// </summary>
-    /// <param name="bitrate">Битрейт в kbps.</param>
-    /// <returns>Нормализованный битрейт.</returns>
     public static int NormalizeBitrate(int bitrate) => bitrate switch
     {
-        <= 0 => 0,        // Неизвестный — не нормализуем, 0 = "любой"
-        < 50 => 48,       // ~48kbps (Opus low)
-        < 80 => 64,       // ~64kbps (Opus medium-low)
-        < 110 => 96,      // ~96kbps (AAC standard)
-        < 140 => 128,     // ~128kbps (Opus standard)
-        < 180 => 160,     // ~160kbps (Opus high / AAC high)
-        < 260 => 256,     // ~256kbps (Opus very high)
-        _ => 320          // 320kbps+
+        <= 0 => 0,
+        < BitrateThresholdLow => BitrateNormLow,
+        < BitrateThresholdMedLow => BitrateNormMedLow,
+        < BitrateThresholdStandardAac => BitrateNormStandardAac,
+        < BitrateThresholdStandardOpus => BitrateNormStandardOpus,
+        < BitrateThresholdHigh => BitrateNormHigh,
+        < BitrateThresholdVeryHigh => BitrateNormVeryHigh,
+        _ => BitrateNormMax
     };
-
-    // ═══════════════════════════════════════════════════════
-    // HLS SETTINGS — Deprecated
-    // ═══════════════════════════════════════════════════════
-
-    /// <summary>Сегментов для упреждающей загрузки в HLS.</summary>
-    [Obsolete("HLS is deprecated. See HlsStreamSource.")]
-    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
-    public const int HlsPrefetchSegments = 3;
-
-    /// <summary>Длительность AAC фрейма (ms) для HLS (~1024 samples @ 44.1kHz).</summary>
-    [Obsolete("HLS is deprecated. See HlsStreamSource.")]
-    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
-    public const int HlsAacFrameDurationMs = 23;
-
-    /// <summary>Интервал проверки HLS prefetch (ms).</summary>
-    [Obsolete("HLS is deprecated. See HlsStreamSource.")]
-    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
-    public const int HlsPrefetchIntervalMs = 500;
 
     // ═══════════════════════════════════════════════════════
     // FORMAT DETECTION — Magic bytes для форматов
     // ═══════════════════════════════════════════════════════
 
-    /// <summary>Размер заголовка для определения формата (bytes).</summary>
+    /// <summary>Размер заголовка для определения формата (в байтах).</summary>
     public const int FormatDetectionHeaderSize = 12;
 
     /// <summary>WebM: EBML header magic bytes.</summary>
-    public static ReadOnlySpan<byte> WebMMagic => [0x1A, 0x45, 0xDF, 0xA3];
+    public static ReadOnlySpan<byte> WebMMagic =>[0x1A, 0x45, 0xDF, 0xA3];
 
     /// <summary>MP4: 'ftyp' box identifier at offset 4.</summary>
     public static ReadOnlySpan<byte> Mp4FtypMagic => "ftyp"u8;
@@ -205,8 +204,7 @@ public static class AudioConstants
     // AAC DECODER TABLES
     // ═══════════════════════════════════════════════════════
 
-    private static readonly int[] AacSampleRates =
-    [
+    private static readonly int[] AacSampleRates =[
         96000, 88200, 64000, 48000, 44100, 32000,
         24000, 22050, 16000, 12000, 11025, 8000
     ];

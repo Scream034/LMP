@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.SigCipher;
@@ -364,5 +362,3 @@ public static class SigCipherTests
         if (!condition) throw new Exception(message);
     }
 }
-
-#endif

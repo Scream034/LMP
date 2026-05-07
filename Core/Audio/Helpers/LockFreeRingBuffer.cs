@@ -179,7 +179,7 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
         // Копируем вторую часть (с начала массива) при wrap-around
         if (toWrite > firstPart)
         {
-            data.Slice(firstPart, toWrite - firstPart)
+            data[firstPart..toWrite]
                 .CopyTo(_buffer.AsSpan(0, toWrite - firstPart));
         }
 
@@ -223,7 +223,7 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
         if (toRead > firstPart)
         {
             _buffer.AsSpan(0, toRead - firstPart)
-                .CopyTo(output.Slice(firstPart, toRead - firstPart));
+                .CopyTo(output[firstPart..toRead]);
         }
 
         // Memory Barrier: освобождаем место (двигаем Tail) ПОСЛЕ чтения.

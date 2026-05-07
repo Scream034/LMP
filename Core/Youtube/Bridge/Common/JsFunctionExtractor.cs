@@ -103,10 +103,7 @@ internal static partial class JsFunctionExtractor
             var dictName = DetectDictArrayName(entryDef);
 
             // ═══ Thin wrapper fallback — multi-level ═══
-            if (dictName is null)
-            {
-                dictName = FindDictArrayInDependencies(fullJs, entryDef, maxDepth: 3);
-            }
+            dictName ??= FindDictArrayInDependencies(fullJs, entryDef, maxDepth: 3);
 
             string? dictArrayCode = null;
 
@@ -275,8 +272,18 @@ internal static partial class JsFunctionExtractor
 
             if (dictArrayCode is not null) sb.AppendLine(dictArrayCode);
 
+            /// <summary>
+            /// Генерирует guard-переменную, которая безопасна для любого использования:
+            /// - Вызов как функция: guardVar(...) → не крашится
+            /// - Доступ к свойствам: guardVar.x → возвращает undefined (через Proxy)
+            /// - typeof guardVar → "function"
+            /// - Числовые операции: guardVar + 1 → NaN (допустимо)
+            /// 
+            /// Используем Proxy-обёртку _sink (определена в BrowserStubs),
+            /// но в бандле _sink может быть недоступен — используем простую функцию-заглушку.
+            /// </summary>
             foreach (var guardVar in guardVars)
-                sb.Append("var ").Append(guardVar).AppendLine("=0;");
+                sb.Append("var ").Append(guardVar).AppendLine("=function(){};");
 
             foreach (var kv in unsafeDefs)
             {

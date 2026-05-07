@@ -316,11 +316,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 string.Equals(p.BgPrimary, currentTheme.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(p.BgSecondary, currentTheme.BgSecondary, StringComparison.OrdinalIgnoreCase));
 
-            if (matchingPreset == null)
-            {
-                matchingPreset = ThemePresets.FirstOrDefault(p =>
+            matchingPreset ??= ThemePresets.FirstOrDefault(p =>
                     string.Equals(p.Name, currentTheme.Name, StringComparison.OrdinalIgnoreCase));
-            }
 
             SelectedPreset = matchingPreset ?? ThemePresets.FirstOrDefault();
             HasUnsavedThemeChanges = false;

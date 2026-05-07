@@ -1,48 +1,6 @@
 <Project>
   <PropertyGroup>
-    <!-- Базовая версия -->
     <VersionPrefix>1.0</VersionPrefix>
-    
-    <!-- Автогенерация версии из даты и Git -->
     <VersionSuffix Condition="'$(Configuration)' == 'Debug'">dev</VersionSuffix>
   </PropertyGroup>
-
-  <!-- Git информация -->
-  <Target Name="SetGitInfo" BeforeTargets="GenerateAssemblyInfo" Condition="Exists('.git')">
-    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true">
-      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
-    </Exec>
-    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true">
-      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortHash" />
-    </Exec>
-    <Exec Command="git log -1 --format=%%ci" ConsoleToMSBuild="true" IgnoreExitCode="true">
-      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitDate" />
-    </Exec>
-    
-    <PropertyGroup>
-      <GitCommitCount Condition="'$(GitCommitCount)' == ''">0</GitCommitCount>
-      <GitShortHash Condition="'$(GitShortHash)' == ''">unknown</GitShortHash>
-      
-      <!-- Версия: 1.0.{commit_count} -->
-      <Version>$(VersionPrefix).$(GitCommitCount)</Version>
-      <AssemblyVersion>$(VersionPrefix).$(GitCommitCount).0</AssemblyVersion>
-      <FileVersion>$(VersionPrefix).$(GitCommitCount).0</FileVersion>
-      
-      <!-- Информационная версия с Git hash -->
-      <InformationalVersion Condition="'$(Configuration)' == 'Debug'">$(Version)-dev+$(GitShortHash)</InformationalVersion>
-      <InformationalVersion Condition="'$(Configuration)' != 'Debug'">$(Version)+$(GitShortHash)</InformationalVersion>
-    </PropertyGroup>
-    
-    <Message Importance="High" Text="Version: $(Version) ($(GitCommitCount) commits, $(GitShortHash))" />
-  </Target>
-
-  <!-- Fallback без Git -->
-  <Target Name="SetFallbackVersion" BeforeTargets="GenerateAssemblyInfo" Condition="!Exists('.git')">
-    <PropertyGroup>
-      <Version>$(VersionPrefix).0</Version>
-      <AssemblyVersion>$(VersionPrefix).0.0</AssemblyVersion>
-      <FileVersion>$(VersionPrefix).0.0</FileVersion>
-      <InformationalVersion>$(Version)-local</InformationalVersion>
-    </PropertyGroup>
-  </Target>
 </Project>

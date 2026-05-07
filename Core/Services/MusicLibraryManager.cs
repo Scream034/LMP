@@ -363,7 +363,7 @@ public class MusicLibraryManager : ReactiveObject
                     {
                         Log.Error($"[Sync] Failed to remove track from cloud: {ex.Message}");
                     }
-                });
+                }, ct);
             }
             else
             {

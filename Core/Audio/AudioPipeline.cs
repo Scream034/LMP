@@ -3,6 +3,7 @@ using LMP.Core.Audio.Backends;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Helpers;
 using LMP.Core.Audio.Interfaces;
+using LMP.Core.Exceptions;
 using LMP.Core.Models;
 using static LMP.Core.Audio.AudioConstants;
 
@@ -10,66 +11,74 @@ namespace LMP.Core.Audio;
 
 /// <summary>
 /// Полный конвейер воспроизведения: Source → Decoder → PCM Buffer → Backend.
-/// 
-/// <para><b>Lifecycle:</b></para>
-/// <list type="number">
-///   <item><see cref="CreateAsync(string, string?, int, Func{CancellationToken, Task{string?}}?, AudioPlayerOptions, IPlaybackBackend, CancellationToken)"/>
-///     — создаёт source, decoder, переиспользует shared backend</item>
-///   <item><see cref="StartDecoding"/> — запускает decoder loop (выделенный поток)</item>
-///   <item><see cref="ActivateFillLoop"/> — активирует fill loop для warmup</item>
-///   <item><see cref="WaitForBackendWarmup"/> — ждёт заполнения BufferedWaveProvider</item>
-///   <item><see cref="Start"/> — запускает backend (waveOut.Play)</item>
-///   <item><see cref="StopDecodingAsync"/> — останавливает decoder loop (для seek)</item>
-///   <item><see cref="Flush"/> — очищает PCM buffer и backend buffer</item>
-///   <item><see cref="DisposeAsync"/> — освобождает source, decoder, buffers.
-///     Shared backend НЕ уничтожается.</item>
-/// </list>
-/// 
-/// <para><b>Warmup Protocol:</b></para>
-/// <para>Для предотвращения артефактов при старте трека:</para>
-/// <code>
-/// pipeline.StartDecoding(...);           // Decoder начинает наполнять PCM RingBuffer
-/// await pipeline.WaitForBufferAsync(...); // PCM RingBuffer набрал минимум данных
-/// pipeline.ActivateFillLoop();           // Fill loop начинает перекачку → BufferedWaveProvider
-/// pipeline.WaitForBackendWarmup(3000);   // BufferedWaveProvider набрал ≥200ms
-/// pipeline.Start();                      // waveOut.Play() — безопасно, буфер полон
-/// </code>
-/// 
-/// <para><b>Shared Backend:</b></para>
-/// <para>Pipeline НЕ владеет backend'ом при <c>ownsBackend=false</c>.
-/// Backend переиспользуется между треками через <see cref="IPlaybackBackend.Reinitialize"/>
-/// в фабричном методе. При dispose pipeline только останавливает и flush'ит backend.</para>
 /// </summary>
 public sealed class AudioPipeline : IAsyncDisposable
 {
-    #region Fields
+    #region Constants
 
-    private readonly IAudioSource _source;
-    private readonly IAudioDecoder _decoder;
-    private readonly IPlaybackBackend _backend;
-    private readonly LockFreeRingBuffer<float> _pcmBuffer;
-    private readonly float[] _decodeBuffer;
-    private readonly AudioStreamInfo _streamInfo;
-    private readonly CancellationTokenSource _lifetimeCts;
+    /// <summary>Максимальная длина TrackId для логирования.</summary>
+    private const int ShortTrackIdLength = 8;
+
+    /// <summary>Максимальное количество пропусков цикла перед принудительной задержкой при полном буфере.</summary>
+    private const int MaxYieldsBeforeDelay = 4;
+
+    /// <summary>Задержка (мс) потока декодера, если буфер полностью заполнен.</summary>
+    private const int BufferFullDelayMs = 5;
+
+    /// <summary>Задержка (мс) при ожидании опустошения буфера (drain).</summary>
+    private const int DrainDelayMs = 50;
+
+    /// <summary>Задержка (мс) при ожидании минимального заполнения буфера при старте.</summary>
+    private const int WaitBufferDelayMs = 10;
 
     /// <summary>
-    /// true = backend создан этим pipeline и будет уничтожен при dispose.
-    /// false = backend shared (принадлежит AudioPlayer), только stop+flush при dispose.
+    /// HResult код ERROR_FILE_NOT_FOUND (0x80070002).
+    /// Используется для идентификации удалённого кэш-файла через IOException.
     /// </summary>
-    private readonly bool _ownsBackend;
+    private const int HResultFileNotFound = unchecked((int)0x80070002);
+
+    /// <summary>
+    /// HResult код ERROR_PATH_NOT_FOUND (0x80070003).
+    /// Используется для идентификации удалённой директории кэша через IOException.
+    /// </summary>
+    private const int HResultPathNotFound = unchecked((int)0x80070003);
+
+    #endregion
+
+    #region Fields
+
+    /// <summary>Источник сырых аудио-фреймов (сеть, кэш, файл).</summary>
+    private readonly IAudioSource _source;
+
+    /// <summary>Декодер (Opus, AAC).</summary>
+    private readonly IAudioDecoder _decoder;
+
+    /// <summary>Абстракция над системным аудио (WaveOut, WASAPI, etc).</summary>
+    private readonly IPlaybackBackend _backend;
+
+    /// <summary>Потокобезопасный циклический буфер для PCM сэмплов (float).</summary>
+    private readonly LockFreeRingBuffer<float> _pcmBuffer;
+
+    /// <summary>Временный массив для хранения данных одной операции декодирования.</summary>
+    private readonly float[] _decodeBuffer;
+
+    /// <summary>Метаинформация об аудиопотоке (битрейт, кодек и т.д.).</summary>
+    private readonly AudioStreamInfo _streamInfo;
+
+    /// <summary>Общий CTS для контроля времени жизни пайплайна.</summary>
+    private readonly CancellationTokenSource _lifetimeCts;
 
     private CancellationTokenSource? _decoderCts;
     private Task? _decoderTask;
     private volatile bool _disposed;
 
+    /// <summary>Количество фреймов, которые нужно пропустить после seek (encoder delay).</summary>
     private int _skipFramesCounter;
+
+    /// <summary>Общее количество успешно декодированных и отправленных в буфер сэмплов.</summary>
     private long _decodedSamples;
 
-    /// <summary>
-    /// Target timestamp для post-seek skipping.
-    /// Фреймы с timestamp < этого значения пропускаются (не пишутся в PCM buffer).
-    /// -1 = не активен.
-    /// </summary>
+    /// <summary>Target timestamp для точного позиционирования. Фреймы с timestamp ниже этого пропускаются.</summary>
     private long _seekTargetMs = -1;
 
     #endregion
@@ -89,6 +98,9 @@ public sealed class AudioPipeline : IAsyncDisposable
     public int BackendBufferedSamples => _backend.BufferedSamples;
     public int BufferedSamples => _pcmBuffer.Count;
 
+    /// <summary>Токен отмены времени жизни pipeline. Отменяется при Dispose или потере устройства.</summary>
+    public CancellationToken LifetimeToken => _lifetimeCts.Token;
+
     #endregion
 
     #region Constructor
@@ -100,8 +112,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         LockFreeRingBuffer<float> pcmBuffer,
         float[] decodeBuffer,
         AudioStreamInfo streamInfo,
-        CancellationTokenSource lifetimeCts,
-        bool ownsBackend)
+        CancellationTokenSource lifetimeCts)
     {
         _source = source;
         _decoder = decoder;
@@ -110,7 +121,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         _decodeBuffer = decodeBuffer;
         _streamInfo = streamInfo;
         _lifetimeCts = lifetimeCts;
-        _ownsBackend = ownsBackend;
     }
 
     #endregion
@@ -122,10 +132,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Backend переиспользуется через <see cref="IPlaybackBackend.Reinitialize"/>
     /// и НЕ уничтожается при dispose pipeline.
     /// </summary>
-    /// <param name="sharedBackend">Shared backend из AudioPlayer. 
-    /// Reinitialize вызывается автоматически — fast path (~0ms) если формат совпадает,
-    /// slow path (~50-200ms) если sampleRate/channels изменились.
-    /// После Reinitialize backend в остановленном состоянии — fill loop деактивирован.</param>
     public static async Task<AudioPipeline> CreateAsync(
         string url,
         string? trackId,
@@ -153,11 +159,10 @@ public sealed class AudioPipeline : IAsyncDisposable
                 lifetimeCts.Token);
 
             if (!await source.InitializeAsync(lifetimeCts.Token))
-                throw new Exceptions.AudioSourceException("Failed to initialize audio source");
+                throw new AudioSourceException("Failed to initialize audio source");
 
             decoder = CreateDecoder(source);
 
-            // Размер буфера — степень двойки для LockFreeRingBuffer
             int rawSize = decoder.SampleRate * decoder.Channels * BufferSizeSeconds;
             int bufferSize = RoundUpToPowerOf2(rawSize);
             var pcmBuffer = new LockFreeRingBuffer<float>(bufferSize);
@@ -168,14 +173,13 @@ public sealed class AudioPipeline : IAsyncDisposable
 
             var pipeline = new AudioPipeline(
                 source, decoder, sharedBackend, pcmBuffer, decodeBuffer,
-                streamInfo, lifetimeCts, ownsBackend: false);
+                streamInfo, lifetimeCts);
 
-            // Reinitialize backend для нового трека
-            // Fast path если формат совпадает (обычно Opus 48kHz/2ch → Opus 48kHz/2ch)
-            // После Reinitialize backend в остановленном состоянии:
-            // fill loop деактивирован, waveOut не играет.
-            // Вызывающий код должен использовать warmup protocol.
             sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
+
+            // Подписываемся на потерю устройства во время воспроизведения
+            if (sharedBackend is NAudioBackend naBackend)
+                naBackend.SetDeviceLostCallback(pipeline.NotifyDeviceLost);
 
             Log.Info($"[AudioPipeline] Created (shared backend): {streamInfo.FormatDisplay}");
 
@@ -186,90 +190,21 @@ public sealed class AudioPipeline : IAsyncDisposable
             CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
             throw;
         }
-        catch (Exception ex)
+        catch (AudioDeviceException)
         {
+            // Пробрасываем напрямую — не оборачиваем в AudioSourceException,
+            // чтобы HandlePlayAsync и HandleError могли поймать правильный тип.
             CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
-
-            if (ex is Exceptions.AudioSourceException)
-                throw;
-
-            throw new Exceptions.AudioSourceException("Failed to initialize audio source", ex);
-        }
-    }
-
-    /// <summary>
-    /// Создаёт pipeline с СОБСТВЕННЫМ backend (legacy, для обратной совместимости).
-    /// Backend уничтожается при dispose pipeline.
-    /// </summary>
-    public static async Task<AudioPipeline> CreateAsync(
-        string url,
-        string? trackId,
-        int bitrateHint,
-        Func<CancellationToken, Task<string?>>? urlRefresher,
-        AudioPlayerOptions options,
-        CancellationToken ct)
-    {
-        var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-        IAudioSource? source = null;
-        IAudioDecoder? decoder = null;
-        IPlaybackBackend? backend = null;
-        float[]? decodeBuffer = null;
-
-        try
-        {
-            source = await AudioSourceFactory.CreateAsync(
-                url,
-                Http.SharedHttpClient.Instance,
-                urlRefresher,
-                trackId,
-                bitrateHint,
-                options.StreamingConfig,
-                lifetimeCts.Token);
-
-            if (!await source.InitializeAsync(lifetimeCts.Token))
-                throw new Exceptions.AudioSourceException("Failed to initialize audio source");
-
-            decoder = CreateDecoder(source);
-            backend = CreateBackend(options);
-
-            int rawSize = decoder.SampleRate * decoder.Channels * BufferSizeSeconds;
-            int bufferSize = RoundUpToPowerOf2(rawSize);
-            var pcmBuffer = new LockFreeRingBuffer<float>(bufferSize);
-
-            decodeBuffer = ArrayPool<float>.Shared.Rent(DecoderBufferFrames * decoder.Channels);
-
-            var streamInfo = BuildStreamInfo(source, trackId, bitrateHint);
-
-            var pipeline = new AudioPipeline(
-                source, decoder, backend, pcmBuffer, decodeBuffer,
-                streamInfo, lifetimeCts, ownsBackend: true);
-
-            backend.Initialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
-
-            Log.Info($"[AudioPipeline] Created (owned backend): {streamInfo.FormatDisplay}");
-
-            return pipeline;
-        }
-        catch (Youtube.Exceptions.StreamUnavailableException)
-        {
-            CleanupOnError(source, decoder, backend, decodeBuffer, lifetimeCts);
             throw;
         }
         catch (Exception ex)
         {
-            CleanupOnError(source, decoder, backend, decodeBuffer, lifetimeCts);
-
-            if (ex is Exceptions.AudioSourceException)
-                throw;
-
-            throw new Exceptions.AudioSourceException("Failed to initialize audio source", ex);
+            CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
+            if (ex is AudioSourceException) throw;
+            throw new AudioSourceException("Failed to initialize audio source", ex);
         }
     }
 
-    /// <summary>
-    /// Cleanup при ошибке для shared backend — НЕ dispose'ит backend.
-    /// </summary>
     private static void CleanupOnErrorPartial(
         IAudioSource? source,
         IAudioDecoder? decoder,
@@ -280,39 +215,10 @@ public sealed class AudioPipeline : IAsyncDisposable
         {
             decoder?.Dispose();
             source?.Dispose();
-            if (decodeBuffer != null)
-                ArrayPool<float>.Shared.Return(decodeBuffer);
+            if (decodeBuffer != null) ArrayPool<float>.Shared.Return(decodeBuffer);
             lifetimeCts.Dispose();
         }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPipeline] Cleanup error: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Cleanup при ошибке для owned backend — dispose'ит backend.
-    /// </summary>
-    private static void CleanupOnError(
-        IAudioSource? source,
-        IAudioDecoder? decoder,
-        IPlaybackBackend? backend,
-        float[]? decodeBuffer,
-        CancellationTokenSource lifetimeCts)
-    {
-        try
-        {
-            backend?.Dispose();
-            decoder?.Dispose();
-            source?.Dispose();
-            if (decodeBuffer != null)
-                ArrayPool<float>.Shared.Return(decodeBuffer);
-            lifetimeCts.Dispose();
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPipeline] Cleanup error: {ex.Message}");
-        }
+        catch (Exception ex) { Log.Warn($"[AudioPipeline] Cleanup error: {ex.Message}"); }
     }
 
     private static IAudioDecoder CreateDecoder(IAudioSource source)
@@ -331,30 +237,10 @@ public sealed class AudioPipeline : IAsyncDisposable
     private static AacDecoder CreateAacDecoder(IAudioSource source, int rate, int ch)
     {
         var dec = new AacDecoder(rate, ch);
-        if (source.DecoderConfig != null)
-            dec.Initialize(source.DecoderConfig);
+        if (source.DecoderConfig != null) dec.Initialize(source.DecoderConfig);
         return dec;
     }
 
-    private static IPlaybackBackend CreateBackend(AudioPlayerOptions options)
-    {
-        if (options.UseNullBackend)
-            return new NullAudioBackend();
-
-        try
-        {
-            return new NAudioBackend();
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPipeline] NAudio init failed: {ex.Message}, using NullBackend");
-            return new NullAudioBackend();
-        }
-    }
-
-    /// <summary>
-    /// Строит <see cref="AudioStreamInfo"/> с РЕАЛЬНЫМ битрейтом (не нормализованным).
-    /// </summary>
     private static AudioStreamInfo BuildStreamInfo(IAudioSource source, string? trackId, int bitrateHint)
     {
         var cacheEntry = !string.IsNullOrEmpty(trackId)
@@ -376,23 +262,10 @@ public sealed class AudioPipeline : IAsyncDisposable
             };
         }
 
-        int bitrate;
-        if (bitrateHint > 0)
-        {
-            bitrate = bitrateHint;
-        }
-        else if (cacheEntry is { Bitrate: > 0 })
-        {
-            bitrate = cacheEntry.Bitrate;
-        }
-        else if (source is Sources.CachingStreamSource { Bitrate: > 0 } cachingSource)
-        {
-            bitrate = cachingSource.Bitrate;
-        }
-        else
-        {
-            bitrate = source.Codec == AudioCodec.Opus ? 128 : 96;
-        }
+        int bitrate = bitrateHint > 0 ? bitrateHint :
+                      cacheEntry is { Bitrate: > 0 } ? cacheEntry.Bitrate :
+                      source is Sources.CachingStreamSource { Bitrate: > 0 } cachingSource ? cachingSource.Bitrate :
+                      source.Codec == AudioCodec.Opus ? 128 : 96;
 
         return new AudioStreamInfo
         {
@@ -407,6 +280,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         };
     }
 
+    /// <summary>Округляет число до ближайшей большей степени двойки (требование LockFreeRingBuffer).</summary>
     private static int RoundUpToPowerOf2(int value)
     {
         value--;
@@ -420,16 +294,27 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #endregion
 
+    #region Device Loss
+
+    /// <summary>
+    /// Вызывается когда аудиоустройство пропало во время воспроизведения
+    /// (callback от <see cref="NAudioBackend"/>).
+    /// Отменяет lifetime CTS — декодер получит OperationCanceledException и завершится.
+    /// </summary>
+    internal void NotifyDeviceLost()
+    {
+        if (_disposed) return;
+        Log.Error("[AudioPipeline] Audio device lost during playback");
+        try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    #endregion
+
     #region Decoder Loop
 
     /// <summary>
-    /// Запускает decoder loop на ВЫДЕЛЕННОМ потоке с повышенным приоритетом.
-    /// 
-    /// <para><b>Почему не Task.Run:</b></para>
-    /// <para>ThreadPool потоки деприоритезируются ОС когда приложение свёрнуто
-    /// (EcoQoS на Windows 11, THREAD_PRIORITY_IDLE для фоновых процессов).
-    /// Выделенный поток с <see cref="ThreadPriority.AboveNormal"/> сохраняет
-    /// приоритет и гарантирует бесперебойное декодирование.</para>
+    /// Запускает decoder loop на ВЫДЕЛЕННОМ потоке с повышенным приоритетом
+    /// для предотвращения подтормаживаний от ОС.
     /// </summary>
     public void StartDecoding(
         Func<CancellationToken, Task<string?>>? urlRefresher,
@@ -446,31 +331,21 @@ public sealed class AudioPipeline : IAsyncDisposable
         _decoderCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
 
         var token = _decoderCts.Token;
+        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // TaskCompletionSource для отслеживания завершения потока
-        var tcs = new TaskCompletionSource<object?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var trackIdShort = _streamInfo.TrackId?.Length > 8
-            ? _streamInfo.TrackId[..8]
+        var trackIdShort = _streamInfo.TrackId?.Length > ShortTrackIdLength
+            ? _streamInfo.TrackId[..ShortTrackIdLength]
             : _streamInfo.TrackId ?? "?";
 
         var decoderThread = new Thread(() =>
         {
             try
             {
-                DecoderLoopAsync(urlRefresher, options, onTrackEnded, onError, token)
-                    .GetAwaiter().GetResult();
+                DecoderLoopAsync(urlRefresher, options, onTrackEnded, onError, token).GetAwaiter().GetResult();
                 tcs.TrySetResult(null);
             }
-            catch (OperationCanceledException)
-            {
-                tcs.TrySetCanceled();
-            }
-            catch (Exception ex)
-            {
-                tcs.TrySetException(ex);
-            }
+            catch (OperationCanceledException) { tcs.TrySetCanceled(); }
+            catch (Exception ex) { tcs.TrySetException(ex); }
         })
         {
             Name = $"Decoder-{trackIdShort}",
@@ -489,35 +364,28 @@ public sealed class AudioPipeline : IAsyncDisposable
         var cts = _decoderCts;
         var task = _decoderTask;
 
-        if (cts == null || task == null)
-            return;
+        if (cts == null || task == null) return;
 
-        try { cts.Cancel(); }
-        catch (ObjectDisposedException) { }
+        try { cts.Cancel(); } catch (ObjectDisposedException) { }
 
-        try
-        {
-            await task.WaitAsync(timeout);
-        }
-        catch (TimeoutException)
-        {
-            Log.Warn("[AudioPipeline] Decoder stop timeout");
-        }
+        try { await task.WaitAsync(timeout); }
+        catch (TimeoutException) { Log.Warn("[AudioPipeline] Decoder stop timeout"); }
         catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPipeline] Decoder stop error: {ex.Message}");
-        }
+        catch (Exception ex) { Log.Warn($"[AudioPipeline] Decoder stop error: {ex.Message}"); }
 
         _decoderTask = null;
         _decoderCts = null;
 
-        try { cts.Dispose(); }
-        catch (ObjectDisposedException) { }
+        try { cts.Dispose(); } catch (ObjectDisposedException) { }
 
         Log.Debug("[AudioPipeline] Decoder stopped");
     }
 
+    /// <summary>
+    /// Основной цикл декодирования. Читает фреймы из source, декодирует и пишет в pcmBuffer.
+    /// IOException с кодом "файл не найден" трактуется как фатальная ошибка кэша
+    /// и выбрасывает <see cref="CacheInvalidatedException"/> без retry.
+    /// </summary>
     private async Task DecoderLoopAsync(
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
@@ -526,20 +394,11 @@ public sealed class AudioPipeline : IAsyncDisposable
         CancellationToken ct)
     {
         var previousLatencyMode = System.Runtime.GCSettings.LatencyMode;
-
-        try
-        {
-            System.Runtime.GCSettings.LatencyMode =
-                System.Runtime.GCLatencyMode.SustainedLowLatency;
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[AudioPipeline] Could not set GC latency mode: {ex.Message}");
-        }
+        try { System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency; }
+        catch (Exception ex) { Log.Debug($"[AudioPipeline] Could not set GC latency mode: {ex.Message}"); }
 
         int retryCount = 0;
         int backoffCount = 0;
-        const int MaxYieldBeforeDelay = 4;
 
         try
         {
@@ -547,34 +406,29 @@ public sealed class AudioPipeline : IAsyncDisposable
             {
                 ct.ThrowIfCancellationRequested();
 
-                // Проверка места в буфере
                 if (_pcmBuffer.Available < _decoder.MaxFrameSize * _decoder.Channels)
                 {
-                    if (backoffCount < MaxYieldBeforeDelay)
+                    if (backoffCount < MaxYieldsBeforeDelay)
                     {
                         await Task.Yield();
                         backoffCount++;
                     }
                     else
                     {
-                        await Task.Delay(5, ct);
+                        await Task.Delay(BufferFullDelayMs, ct);
                     }
                     continue;
                 }
 
                 backoffCount = 0;
-
-                // Чтение фрейма из source
                 AudioFrame? frame;
+
                 try
                 {
                     frame = await _source.ReadFrameAsync(ct);
                     retryCount = 0;
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
+                catch (OperationCanceledException) { break; }
                 catch (Exceptions.UrlExpiredException) when (urlRefresher != null)
                 {
                     var newUrl = await urlRefresher(ct);
@@ -585,15 +439,21 @@ public sealed class AudioPipeline : IAsyncDisposable
                     }
                     throw;
                 }
-                catch (Exceptions.ChunkDownloadFatalException)
+                catch (Exceptions.ChunkDownloadFatalException) { throw; }
+                catch (FileNotFoundException ex)
                 {
-                    throw;
+                    Log.Warn($"[AudioPipeline] Cache file deleted during playback: {ex.Message}");
+                    throw new CacheInvalidatedException("Cache file was deleted during playback.", ex);
                 }
-                catch (IOException ex) when (retryCount++ < options.MaxRetryAttempts)
+                catch (DirectoryNotFoundException ex)
                 {
-                    Log.Warn($"[AudioPipeline] Read retry {retryCount}: {ex.Message}");
-                    await Task.Delay(options.RetryDelay, ct);
-                    continue;
+                    Log.Warn($"[AudioPipeline] Cache directory deleted during playback: {ex.Message}");
+                    throw new CacheInvalidatedException("Cache directory was deleted during playback.", ex);
+                }
+                catch (IOException ex) when (IsCacheFileMissing(ex))
+                {
+                    Log.Warn($"[AudioPipeline] Cache IO error (file gone): {ex.Message}");
+                    throw new CacheInvalidatedException("Cache file became unavailable during playback.", ex);
                 }
                 catch (Exception ex) when (retryCount++ < options.MaxRetryAttempts)
                 {
@@ -604,25 +464,14 @@ public sealed class AudioPipeline : IAsyncDisposable
 
                 if (frame == null)
                 {
-                    if (ct.IsCancellationRequested)
-                    {
-                        Log.Debug("[AudioPipeline] Decoder cancelled, skipping track end");
-                        break;
-                    }
-
+                    if (ct.IsCancellationRequested) break;
                     await DrainBufferAsync(ct);
-
-                    if (ct.IsCancellationRequested)
-                    {
-                        Log.Debug("[AudioPipeline] Decoder cancelled during drain, skipping track end");
-                        break;
-                    }
+                    if (ct.IsCancellationRequested) break;
 
                     onTrackEnded?.Invoke();
                     break;
                 }
 
-                // Декодирование
                 try
                 {
                     int skipCount = Volatile.Read(ref _skipFramesCounter);
@@ -641,11 +490,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                     long seekTarget = Volatile.Read(ref _seekTargetMs);
                     if (seekTarget >= 0)
                     {
-                        if (frame.Value.TimestampMs < seekTarget)
-                        {
-                            continue;
-                        }
-
+                        if (frame.Value.TimestampMs < seekTarget) continue;
                         Volatile.Write(ref _seekTargetMs, -1L);
                     }
 
@@ -656,18 +501,17 @@ public sealed class AudioPipeline : IAsyncDisposable
                         Interlocked.Add(ref _decodedSamples, totalSamples);
                     }
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"[AudioPipeline] Decode error (non-fatal): {ex.Message}");
-                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { Log.Warn($"[AudioPipeline] Decode error (non-fatal): {ex.Message}"); }
             }
         }
         catch (OperationCanceledException) { }
         catch (ObjectDisposedException) { }
+        catch (CacheInvalidatedException ex)
+        {
+            Log.Warn($"[AudioPipeline] Playback stopped: cache invalidated ({ex.Message})");
+            onError?.Invoke(ex);
+        }
         catch (Exception ex)
         {
             Log.Error($"[AudioPipeline] Decoder fatal: {ex.Message}", ex);
@@ -675,16 +519,21 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
         finally
         {
-            try { System.Runtime.GCSettings.LatencyMode = previousLatencyMode; }
-            catch { }
+            try { System.Runtime.GCSettings.LatencyMode = previousLatencyMode; } catch { }
         }
     }
+
+    /// <summary>
+    /// Определяет является ли IOException следствием отсутствия файла по HResult.
+    /// </summary>
+    private static bool IsCacheFileMissing(IOException ex) =>
+        ex.HResult is HResultFileNotFound or HResultPathNotFound;
 
     private async Task DrainBufferAsync(CancellationToken ct)
     {
         while (!_pcmBuffer.IsEmpty && !ct.IsCancellationRequested)
         {
-            await Task.Delay(50, ct);
+            await Task.Delay(DrainDelayMs, ct);
         }
     }
 
@@ -692,23 +541,13 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Playback Control
 
-    /// <summary>
-    /// Активирует fill loop для перекачки данных PCM RingBuffer → BufferedWaveProvider.
-    /// НЕ запускает воспроизведение. Первый шаг warmup protocol.
-    /// </summary>
     public void ActivateFillLoop()
     {
         if (_disposed) return;
         _backend.ActivateFillLoop();
     }
 
-    /// <summary>
-    /// Ожидает наполнения BufferedWaveProvider минимальным количеством данных.
-    /// Второй шаг warmup protocol. Блокирует вызывающий поток.
-    /// </summary>
-    /// <param name="timeoutMs">Максимальное время ожидания (мс).</param>
-    /// <returns>true если буфер прогрет, false если таймаут.</returns>
-    public bool WaitForBackendWarmup(int timeoutMs = 3000)
+    public bool WaitForBackendWarmup(int timeoutMs = 100)
     {
         if (_disposed) return false;
         return _backend.WaitForWarmup(timeoutMs);
@@ -717,25 +556,20 @@ public sealed class AudioPipeline : IAsyncDisposable
     public void Start()
     {
         if (_disposed) return;
-
         _backend.Start();
-
         Log.Debug("[AudioPipeline] Backend started");
     }
 
     public void Stop()
     {
         if (_disposed) return;
-
         _backend.Stop();
-
         Log.Debug("[AudioPipeline] Backend stopped");
     }
 
     public void Flush()
     {
         if (_disposed) return;
-
         _backend.Flush();
         _pcmBuffer.Clear();
     }
@@ -746,16 +580,9 @@ public sealed class AudioPipeline : IAsyncDisposable
         _backend.Volume = Math.Min(volume, 1f);
     }
 
-    /// <summary>
-    /// Подготавливает decoder к seek: устанавливает skip frames counter
-    /// и target timestamp для точного позиционирования.
-    /// </summary>
     public void PrepareForSeek(long targetMs = -1)
     {
-        int skipFrames = _source.Codec == AudioCodec.Opus
-            ? SkipFramesAfterSeekOpus
-            : 0;
-
+        int skipFrames = _source.Codec == AudioCodec.Opus ? SkipFramesAfterSeekOpus : 0;
         Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
         Volatile.Write(ref _seekTargetMs, targetMs);
     }
@@ -769,13 +596,6 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Audio Callback
 
-    /// <summary>
-    /// Callback вызываемый fill loop из NAudioBackend.
-    /// Читает PCM данные из ring buffer и возвращает количество прочитанных фреймов.
-    /// 
-    /// <para>Если буфер пуст — заполняет тишиной. Это предотвращает щелчки
-    /// при buffer underrun (например, при старте трека когда decoder ещё не заполнил буфер).</para>
-    /// </summary>
     private int AudioCallback(Span<float> buffer)
     {
         if (_disposed)
@@ -801,8 +621,8 @@ public sealed class AudioPipeline : IAsyncDisposable
         int waited = 0;
         while (_pcmBuffer.Count < minSamples && waited < maxWaitMs && !ct.IsCancellationRequested)
         {
-            await Task.Delay(10, ct);
-            waited += 10;
+            await Task.Delay(WaitBufferDelayMs, ct);
+            waited += WaitBufferDelayMs;
         }
     }
 
@@ -815,50 +635,28 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
 
-        try { _lifetimeCts.Cancel(); }
-        catch (ObjectDisposedException) { }
-
-        try { _decoderCts?.Cancel(); }
-        catch (ObjectDisposedException) { }
+        try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
+        try { _decoderCts?.Cancel(); } catch (ObjectDisposedException) { }
 
         if (_decoderTask != null)
         {
-            try
-            {
-                await _decoderTask.WaitAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs));
-            }
+            try { await _decoderTask.WaitAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs)); }
             catch { }
         }
 
-        // Backend: зависит от ownership
-        if (_ownsBackend)
-        {
-            _backend.Dispose();
-        }
-        else
-        {
-            try
-            {
-                _backend.Stop();
-                _backend.Flush();
-            }
-            catch (ObjectDisposedException) { }
-            catch (Exception ex)
-            {
-                Log.Debug($"[AudioPipeline] Backend stop/flush on dispose: {ex.Message}");
-            }
-        }
+        // Never-stop: не останавливаем backend.
+        // Flush выставит gate=false, provider вернёт тишину сам.
+        try { _backend.Flush(); }
+        catch (ObjectDisposedException) { }
+        catch (Exception ex) { Log.Debug($"[AudioPipeline] Backend flush on dispose: {ex.Message}"); }
 
         _decoder.Dispose();
         await _source.DisposeAsync();
 
         ArrayPool<float>.Shared.Return(_decodeBuffer);
 
-        try { _decoderCts?.Dispose(); }
-        catch (ObjectDisposedException) { }
-
-        try { _lifetimeCts.Dispose(); }
-        catch (ObjectDisposedException) { }
+        try { _decoderCts?.Dispose(); } catch (ObjectDisposedException) { }
+        try { _lifetimeCts.Dispose(); } catch (ObjectDisposedException) { }
 
         Log.Debug("[AudioPipeline] Disposed");
     }

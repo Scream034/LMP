@@ -179,16 +179,13 @@ internal sealed class MusicBrowseResponse
     private void ParseShelfContent(JsonElement shelf, string? title)
     {
         var displayTitle = title;
-        if (displayTitle == null)
-        {
-            displayTitle = shelf.GetPropertyOrNull("header")
+        displayTitle ??= shelf.GetPropertyOrNull("header")
                 ?.GetPropertyOrNull("musicCarouselShelfBasicHeaderRenderer")
                 ?.GetPropertyOrNull("title")
                 ?.GetPropertyOrNull("runs")
                 ?.GetFirstArrayElementOrNull()
                 ?.GetPropertyOrNull("text")?.GetStringOrNull()
                 ?? "Tracks";
-        }
 
         var contents = shelf.GetPropertyOrNull("contents");
         if (contents != null)
@@ -206,10 +203,7 @@ internal sealed class MusicBrowseResponse
         var playlistItemData = json.GetPropertyOrNull("playlistItemData");
 
         var id = playlistItemData?.GetPropertyOrNull("videoId")?.GetStringOrNull();
-        if (id == null)
-        {
-            id = json.FindFirstDescendantProperty("videoId")?.GetStringOrNull();
-        }
+        id ??= json.FindFirstDescendantProperty("videoId")?.GetStringOrNull();
 
         if (id == null) return null;
 

@@ -1,0 +1,13 @@
+{
+    "files.exclude": {
+        "bin/": true,
+        "obj/": true,
+        "publish/": true,
+        "publish-dev/": true,
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/.DS_Store": true,
+        "**/Thumbs.db": true
+    }
+}

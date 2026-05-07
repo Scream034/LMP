@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -496,5 +494,3 @@ public sealed class TestConfig
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 }
-
-#endif

@@ -11,12 +11,15 @@ namespace LMP.Core.Youtube.Bridge.Common;
 ///   <item><c>decrypt(nToken)</c> → <c>Args = []</c></item>
 /// </list>
 /// </summary>
+/// <param name="Args">Массив магических чисел.</param>
 internal sealed record MagicNumbers(int[] Args)
 {
     /// <summary>Нет числовых аргументов.</summary>
     public static MagicNumbers None { get; } = new([]);
 
     /// <summary>Конструктор для двух magic numbers (наиболее частый случай).</summary>
+    /// <param name="r">Первое число.</param>
+    /// <param name="p">Второе число.</param>
     public MagicNumbers(int r, int p) : this([r, p]) { }
 
     /// <summary>Есть ли хотя бы один числовой аргумент.</summary>
@@ -26,13 +29,14 @@ internal sealed record MagicNumbers(int[] Args)
     /// Формирует строку аргументов для вставки в JS-массив.
     /// <para>Примеры:</para>
     /// <list type="bullet">
-    ///   <item><c>[48, 8079]</c> → <c>"48, 8079, "</c></item>
-    ///   <item><c>[]</c> → <c>""</c></item>
+    ///   <item><c>[48, 8079]</c> → <c>"48, 8079"</c></item>
+    ///   <item><c>[]</c> → <c>"undefined"</c> (для корректного JS-массива без пустых слотов)</item>
     /// </list>
     /// </summary>
+    /// <returns>JS-совместимая строка элементов массива.</returns>
     public string ToJsArgPrefix() => Args.Length == 0
-        ? ""
-        : string.Join(", ", Args) + ", ";
+        ? "undefined"
+        : string.Join(", ", Args);
 
     /// <inheritdoc/>
     public override string ToString() => Args.Length == 0

@@ -1,5 +1,3 @@
-#if DEBUG
-
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Tests.Framework;
@@ -96,5 +94,3 @@ public static class CacheTests
         if (!condition) throw new Exception(message);
     }
 }
-
-#endif

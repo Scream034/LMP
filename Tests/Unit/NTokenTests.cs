@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.NToken;
@@ -347,5 +345,3 @@ internal sealed class FixedPlayerContextManager : PlayerContextManager
         return Task.FromResult(_fixedContext);
     }
 }
-
-#endif

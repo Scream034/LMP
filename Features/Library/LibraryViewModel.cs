@@ -549,7 +549,7 @@ public sealed class LibraryViewModel : ViewModelBase
                 await _notifications.ShowToastAsync(
                     "Sync_Complete_Title",
                     "Sync_Success_Msg",
-                    Core.Models.NotificationSeverity.Success,
+                    NotificationSeverity.Success,
                     durationMs: 5000,
                     messageArgs: [importedCount, mergedCount]);
             }
@@ -566,7 +566,7 @@ public sealed class LibraryViewModel : ViewModelBase
                 await _notifications.ShowToastAsync(
                     "Dialog_Error_Title",
                     "Sync_Error_API",
-                    Core.Models.NotificationSeverity.Error,
+                    NotificationSeverity.Error,
                     durationMs: 6000,
                     messageArgs: [ex.Message]);
             }

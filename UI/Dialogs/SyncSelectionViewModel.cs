@@ -62,20 +62,20 @@ public class SyncSelectionViewModel : ViewModelBase
         ISet<string> existingLocalNames,
         IReadOnlyDictionary<string, int>? trackCounts = null)
     {
-        var l = LocalizationService.Instance;
+        var L = LocalizationService.Instance;
 
         // Инициализация списков шаблонов
         ConflictTemplates =
         [
-            new SyncActionOption(MergeAction.Merge, l["Sync_Action_Merge"]),
-            new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_CreateNew"]),
-            new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
+            new SyncActionOption(MergeAction.Merge, L["Sync_Action_Merge"]),
+            new SyncActionOption(MergeAction.Duplicate, L["Sync_Action_CreateNew"]),
+            new SyncActionOption(MergeAction.Skip, L["Sync_Action_Skip"])
         ];
 
         NewTemplates =
         [
-            new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_Import"]),
-            new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
+            new SyncActionOption(MergeAction.Duplicate, L["Sync_Action_Import"]),
+            new SyncActionOption(MergeAction.Skip, L["Sync_Action_Skip"])
         ];
 
         // Дефолтные шаблоны (как было раньше: Merge для конфликтов, Import для новых)

@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Tests.Framework;
@@ -547,5 +545,3 @@ public static class SigCipherSolverTests
         if (!condition) throw new Exception(message);
     }
 }
-
-#endif

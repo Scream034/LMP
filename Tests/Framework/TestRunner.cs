@@ -1,5 +1,3 @@
-#if DEBUG
-
 using System.Diagnostics;
 
 namespace LMP.Tests.Framework;
@@ -179,5 +177,3 @@ public sealed class TestRunner
             : Task.CompletedTask;
     }
 }
-
-#endif

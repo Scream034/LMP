@@ -5,26 +5,139 @@
             "label": "build: debug",
             "type": "shell",
             "command": "cmd.exe",
-            "args": ["/c", "${workspaceFolder}\\build.bat", "debug", "nopause"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "group": { "kind": "build", "isDefault": true },
+            "args": [
+                "/c",
+                "${workspaceFolder}\\build.bat",
+                "debug",
+                "nopause"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
             "problemMatcher": "$msCompile"
         },
         {
             "label": "build: optimized",
             "type": "shell",
             "command": "cmd.exe",
-            "args": ["/c", "${workspaceFolder}\\build.bat", "optimized", "nopause"],
-            "options": { "cwd": "${workspaceFolder}" },
+            "args": [
+                "/c",
+                "${workspaceFolder}\\build.bat",
+                "optimized",
+                "nopause"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "group": "build",
             "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "build: release",
+            "type": "shell",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\build.bat",
+                "release",
+                "nopause"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "check: dead events",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\Tools\\find-dead-events.ps1"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "check: dead code",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\Tools\\find-dead-code.ps1",
+                "-Project",
+                "${workspaceFolder}\\LMP.csproj"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "check: dead l10n",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\Tools\\find-dead-l10n.ps1"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": true
+            },
+            "problemMatcher": []
         },
         {
             "label": "watch",
             "type": "shell",
             "command": "dotnet",
-            "args": ["watch", "run", "--project", "LMP.csproj", "--configuration", "Debug"],
-            "options": { "cwd": "${workspaceFolder}" },
+            "args": [
+                "watch",
+                "run",
+                "--project",
+                "LMP.csproj",
+                "--configuration",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "isBackground": true,
             "problemMatcher": "$msCompile",
             "presentation": {
