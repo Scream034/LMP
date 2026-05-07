@@ -5,6 +5,11 @@ using ReactiveUI;
 
 namespace LMP.UI.Dialogs;
 
+/// <summary>
+/// ViewModel диалога редактирования плейлиста.
+/// Оборачивает <see cref="PlaylistEditorViewModel"/> и обрабатывает
+/// три возможных исхода: сохранение, создание копии, отмена.
+/// </summary>
 public sealed class EditPlaylistDialogViewModel : ViewModelBase
 {
     public PlaylistEditorViewModel Editor { get; }
@@ -23,6 +28,16 @@ public sealed class EditPlaylistDialogViewModel : ViewModelBase
         IReadOnlyList<TrackInfo>? playlistTracks = null)
     {
         Editor = PlaylistEditorViewModel.ForEdit(playlist, isAuthenticated, playlistTracks);
+
+        // Провязка callback создания копии.
+        // Собираем текущие данные редактора и возвращаем результат с флагом ShouldCreateCopy.
+        // PlaylistEditService создаст новый локальный плейлист вместо редактирования оригинала.
+        Editor.OnCreateCopy = () =>
+        {
+            var result = Editor.ToResult();
+            result.ShouldCreateCopy = true;
+            OnResult?.Invoke(result);
+        };
 
         SaveCommand = CreateCommand(ReactiveCommand.Create(() =>
         {

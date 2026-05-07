@@ -1072,10 +1072,10 @@ public sealed class Mp4ContainerParser : IContainerParser
         int channelConfig = (asc[1] >> 3) & 0x0F;
 
         int[] sampleRates =
-        {
+        [
             96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
             16000, 12000, 11025, 8000, 7350, 0, 0, 0
-        };
+        ];
 
         int baseSampleRate = samplingFrequencyIndex < sampleRates.Length
             ? sampleRates[samplingFrequencyIndex] : 0;
@@ -1093,7 +1093,7 @@ public sealed class Mp4ContainerParser : IContainerParser
 
         if (channelConfig > 0 && channelConfig <= 7)
         {
-            int[] channelCounts = { 0, 1, 2, 3, 4, 5, 6, 8 };
+            int[] channelCounts = [0, 1, 2, 3, 4, 5, 6, 8];
             _channels = channelCounts[channelConfig];
         }
     }

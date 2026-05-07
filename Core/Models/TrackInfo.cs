@@ -202,6 +202,8 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     /// <summary>
     /// Обновляет метаданные из свежего объекта.
+    /// Игнорирует пустые значения и предотвращает затирание статуса лайка
+    /// ответами API, не содержащими пользовательского контекста.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void UpdateMetadata(TrackInfo fresh)
@@ -229,6 +231,14 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
         if (!string.IsNullOrEmpty(fresh.ChannelId) && fresh.ChannelId != ChannelId)
             ChannelId = fresh.ChannelId;
+
+        // Повышаем статус лайка. API плейлистов/поиска возвращает IsLiked = false,
+        // поэтому мы не должны перезаписывать локальный true на false.
+        if (fresh.IsLiked && !IsLiked)
+            IsLiked = true;
+
+        if (fresh.IsDisliked && !IsDisliked)
+            IsDisliked = true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

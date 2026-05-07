@@ -352,9 +352,9 @@ internal sealed class PlaylistSyncController(HttpClient http)
 
     #region Playlist Tracks (WEB_REMIX client)
 
-    /// <summary>
+     /// <summary>
     /// Fetches all tracks from a playlist with setVideoId for sync/removal.
-    /// Uses WEB_REMIX client (musicResponsiveListItemRenderer).
+    /// Uses WEB client to ensure non-music videos are not hidden.
     /// </summary>
     public async Task<List<RemoteTrackInfo>> GetPlaylistTracksAsync(
         string playlistId,
@@ -364,37 +364,55 @@ internal sealed class PlaylistSyncController(HttpClient http)
             ? playlistId
             : "VL" + playlistId;
 
-        var root = await PostMusicAsync("browse", writer =>
+        var root = await PostWebAsync("browse", writer =>
         {
             writer.WriteString("browseId", browseId);
         }, ct);
 
         var results = new List<RemoteTrackInfo>(64);
-        ParsePlaylistTracks(root, results);
+        ParseWebPlaylistTracks(root, results);
 
         // Handle continuation
-        var continuation = ExtractMusicContinuationToken(root);
+        var continuation = ExtractWebContinuationToken(root);
         int page = 0;
 
         while (!string.IsNullOrEmpty(continuation) && page < 50)
         {
             ct.ThrowIfCancellationRequested();
 
-            var contRoot = await PostMusicAsync("browse", writer =>
+            var contRoot = await PostWebAsync("browse", writer =>
             {
                 writer.WriteString("continuation", continuation);
             }, ct);
 
             int prevCount = results.Count;
-            ParsePlaylistTracks(contRoot, results);
+            ParseWebPlaylistTracks(contRoot, results);
             if (results.Count == prevCount) break;
 
-            continuation = ExtractMusicContinuationToken(contRoot);
+            continuation = ExtractWebContinuationToken(contRoot);
             page++;
         }
 
         Log.Debug($"[PlaylistSync] Fetched {results.Count} tracks for playlist {playlistId}");
         return results;
+    }
+
+    private static void ParseWebPlaylistTracks(JsonElement root, List<RemoteTrackInfo> results)
+    {
+        // Ищем все playlistVideoRenderer в ответе (это работает и для первой страницы, и для continuation)
+        var renderers = new List<JsonElement>();
+        root.EnumerateDescendantProperties("playlistVideoRenderer", renderers);
+
+        foreach (var renderer in renderers)
+        {
+            var videoId = renderer.GetPropertyOrNull("videoId")?.GetStringOrNull();
+            var setVideoId = renderer.GetPropertyOrNull("setVideoId")?.GetStringOrNull();
+
+            if (!string.IsNullOrEmpty(videoId) && !string.IsNullOrEmpty(setVideoId))
+            {
+                results.Add(new RemoteTrackInfo(videoId, setVideoId, results.Count));
+            }
+        }
     }
 
     private static void ParsePlaylistTracks(JsonElement root, List<RemoteTrackInfo> results)

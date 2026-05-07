@@ -605,7 +605,7 @@ public sealed class LibraryService : IAsyncDisposable
             if (newTrackIds.Count > 0)
             {
                 await _playlists.AddTracksAsync(playlist.Id, newTrackIds, ct);
-                Log.Debug($"[LibraryService] Добавлено {newTrackIds.Count} треков в плейлист '{playlist.Name}'");
+                Log.Debug($"[LibraryService] Add {newTrackIds.Count} tracks into playlist'{playlist.Name}'");
             }
         }
 

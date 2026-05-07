@@ -9,7 +9,7 @@ namespace LMP.Features.Library;
 
 /// <summary>
 /// ViewModel карточки плейлиста в библиотеке.
-/// 
+///
 /// <para><b>Ответственность:</b></para>
 /// <list type="bullet">
 ///   <item>Отображение данных плейлиста (название, обложка, кол-во треков, статус синхронизации)</item>
@@ -17,7 +17,7 @@ namespace LMP.Features.Library;
 ///   <item>Анимация появления (IsVisible + CSS-transition)</item>
 ///   <item>Реактивное обновление при изменении данных через <see cref="UpdateFrom"/></item>
 /// </list>
-/// 
+///
 /// <para><b>Жизненный цикл:</b></para>
 /// <para>Создаётся в <see cref="LibraryViewModel.CreatePlaylistCardVm"/>,
 /// обновляется через <see cref="UpdateFrom"/>,
@@ -74,8 +74,12 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>Можно ли удалить (всё кроме Liked).</summary>
     public bool CanDelete => Playlist.Id != LibraryService.LikedPlaylistId;
 
-    /// <summary>Можно ли редактировать (IsEditable и не Liked).</summary>
-    public bool CanEdit => Playlist.IsEditable && Playlist.Id != LibraryService.LikedPlaylistId;
+    /// <summary>
+    /// Можно ли открыть диалог редактирования.
+    /// Liked-плейлист редактируем — обложка, цвет и описание доступны для изменения.
+    /// Только CloudPublic-плейлисты полностью заблокированы.
+    /// </summary>
+    public bool CanEdit => Playlist.IsEditable;
 
     /// <summary>Это плейлист «Понравившиеся» (специальный UI).</summary>
     public bool IsLikedPlaylist => Playlist.Id == LibraryService.LikedPlaylistId;
@@ -145,13 +149,10 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         _onDelete = onDelete;
         _onEdit = onEdit;
 
-        // Инициализация реактивных свойств
         Name = playlist.Name;
         TrackCount = trackCount;
         ThumbnailUrl = UpscaleThumbnailUrl(playlist.ThumbnailUrl);
         IsSynced = playlist.IsFromAccount;
-
-        // ═══ Команды ═══
 
         OpenCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
@@ -179,14 +180,10 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             if (!_isDisposed && _onEdit != null) await _onEdit(Playlist);
         }));
 
-        // ═══ Реактивные подписки ═══
-
-        // Обновляем форматированный текст при изменении количества треков
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)))
             .DisposeWith(Disposables);
 
-        // Обновляем видимость обложки/placeholder при смене URL
         this.WhenAnyValue(x => x.ThumbnailUrl)
             .Subscribe(_ =>
             {
@@ -195,7 +192,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             })
             .DisposeWith(Disposables);
 
-        // Подписка на смену языка для пересчёта склонения
         _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
     }
@@ -206,7 +202,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     /// <summary>
     /// Обновляет все отображаемые данные карточки из свежего объекта плейлиста.
-    /// 
+    ///
     /// <para><b>Обновляемые поля:</b></para>
     /// <list type="bullet">
     ///   <item>Название (<c>Name</c> + <c>StoredName</c>)</item>
@@ -214,7 +210,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     ///   <item>Обложка (<c>ThumbnailUrl</c> с upscale)</item>
     ///   <item>Статус синхронизации (<c>IsSynced</c> + <c>SyncMode</c> + <c>YoutubeId</c>)</item>
     /// </list>
-    /// 
+    ///
     /// <para><b>Оптимизация:</b> каждое поле обновляется только при реальном изменении,
     /// чтобы не вызывать лишних уведомлений <c>PropertyChanged</c>.</para>
     /// </summary>
@@ -224,20 +220,15 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     {
         if (_isDisposed) return;
 
-        // Название
         if (Name != playlist.Name)
         {
             Playlist.StoredName = playlist.StoredName;
             Name = playlist.Name;
         }
 
-        // Количество треков
         if (TrackCount != trackCount)
-        {
             TrackCount = trackCount;
-        }
 
-        // Обложка (с upscale YouTube-превью до maxres)
         var newUrl = UpscaleThumbnailUrl(playlist.ThumbnailUrl);
         if (ThumbnailUrl != newUrl)
         {
@@ -245,7 +236,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             ThumbnailUrl = newUrl;
         }
 
-        // Статус синхронизации (может измениться при link/unlink)
         if (IsSynced != playlist.IsFromAccount)
         {
             Playlist.SyncMode = playlist.SyncMode;

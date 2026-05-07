@@ -26,6 +26,10 @@ public enum CoverMode
     File
 }
 
+/// <summary>
+/// ViewModel редактора плейлиста. Используется как для создания, так и для редактирования.
+/// Создаётся через фабричные методы <see cref="ForCreate"/> и <see cref="ForEdit"/>.
+/// </summary>
 public sealed class PlaylistEditorViewModel : ViewModelBase
 {
     [Reactive] public string Name { get; set; }
@@ -54,9 +58,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     /// </summary>
     [Reactive] public string? ComputedColor { get; private set; }
 
-    /// <summary>
-    /// Кисть превью вычисленного цвета.
-    /// </summary>
+    /// <summary>Кисть превью вычисленного цвета.</summary>
     [Reactive] public IBrush ComputedColorPreviewBrush { get; private set; } = Brushes.Transparent;
 
     /// <summary>
@@ -65,16 +67,46 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     /// </summary>
     [Reactive] public bool IsRecalculatingColor { get; set; }
 
-    /// <summary>
-    /// Команда пересчёта доминантного цвета из текущей обложки.
-    /// </summary>
+    /// <summary>Команда пересчёта доминантного цвета из текущей обложки.</summary>
     public ReactiveCommand<Unit, Unit> RecalculateColorCommand { get; }
+
+    // ═══ System Playlist ═══
+
+    /// <summary>
+    /// true если редактируется системный плейлист (например «Понравившиеся»).
+    /// Для системных плейлистов имя задаётся локализацией и недоступно для ручного ввода.
+    /// </summary>
+    public bool IsSystemPlaylist { get; }
+
+    /// <summary>
+    /// Разрешено ли редактировать имя плейлиста.
+    /// false для системных плейлистов — имя управляется <see cref="LocalizationService"/>.
+    /// </summary>
+    public bool IsNameEditable { get; }
+
+    // ═══ For Edit / Create Copy ═══
+
+    /// <summary>
+    /// true если VM создана для редактирования существующего плейлиста.
+    /// Используется в UI для отображения кнопки «Создать копию».
+    /// </summary>
+    public bool IsForEdit { get; }
+
+    /// <summary>
+    /// Callback, вызываемый при нажатии кнопки «Создать копию».
+    /// Устанавливается в <see cref="EditPlaylistDialogViewModel"/>.
+    /// </summary>
+    public Action? OnCreateCopy { get; set; }
+
+    /// <summary>
+    /// Создаёт локальную копию плейлиста с текущими данными из редактора.
+    /// Копия всегда локальная (без привязки к YouTube).
+    /// </summary>
+    public ReactiveCommand<Unit, Unit> CreateCopyCommand { get; }
 
     // ═══ Cover Mode ═══
 
-    /// <summary>
-    /// Текущий режим выбора обложки: URL, из треков, или файл.
-    /// </summary>
+    /// <summary>Текущий режим выбора обложки: URL, из треков, или файл.</summary>
     [Reactive] public CoverMode SelectedCoverMode { get; set; } = CoverMode.Url;
 
     /// <summary>true если выбран режим ручного URL.</summary>
@@ -166,7 +198,8 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         bool hasYoutubeBinding = false,
         IReadOnlyList<TrackInfo>? playlistTracks = null,
         Playlist? originalPlaylist = null,
-        bool isForEdit = false)
+        bool isForEdit = false,
+        bool isSystemPlaylist = false)
     {
         Name = name;
         ThumbnailUrl = thumbnailUrl;
@@ -175,6 +208,9 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         _originalDescription = description;
         _originalPlaylist = originalPlaylist;
         _isForEdit = isForEdit;
+        IsForEdit = isForEdit;
+        IsSystemPlaylist = isSystemPlaylist;
+        IsNameEditable = !isSystemPlaylist;
         ComputedColor = computedColor;
         ShowSyncSection = showSync;
         IsSyncedToCloud = isSynced;
@@ -182,16 +218,13 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         IsAuthenticated = isAuthenticated;
         HasYoutubeBinding = hasYoutubeBinding;
 
-        // Инициализация превью вычисленного цвета
         ComputedColorPreviewBrush = TryParseColor(computedColor);
 
-        // Инициализация CoverPicker если есть треки с обложками
         HasTracksCoverOption = playlistTracks != null && playlistTracks.Any(t => t.HasThumbnail);
         if (HasTracksCoverOption)
         {
             CoverPicker = new PlaylistCoverPickerViewModel(playlistTracks!);
 
-            // Когда мозаика применена — обновляем ThumbnailUrl
             CoverPicker.WhenAnyValue(x => x.ResultPath)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .ObserveOn(RxApp.MainThreadScheduler)
@@ -203,10 +236,8 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
                 .DisposeWith(Disposables);
         }
 
-        // ═══ Команда выбора файла ═══
         SelectFileCommand = CreateCommand(ReactiveCommand.CreateFromTask(SelectFileAsync));
 
-        // ═══ Команда пересчёта цвета из обложки ═══
         var canRecalculate = this.WhenAnyValue(
             x => x.ThumbnailUrl,
             x => x.IsRecalculatingColor,
@@ -215,7 +246,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         RecalculateColorCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(RecalculateColorFromCoverAsync, canRecalculate));
 
-        // ═══ Команда загрузки обложки в YouTube ═══
         var canUpload = this.WhenAnyValue(
             x => x.ThumbnailUrl,
             x => x.IsRecalculatingColor,
@@ -225,7 +255,12 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         UploadThumbnailCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(UploadThumbnailAsync, canUpload));
 
-        // ═══ Синхронизация CoverMode ↔ Bool свойств ═══
+        // ═══ Команда создания копии ═══
+        CreateCopyCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            OnCreateCopy?.Invoke();
+        }));
+
         this.WhenAnyValue(x => x.SelectedCoverMode)
             .Subscribe(mode =>
             {
@@ -235,27 +270,22 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             })
             .DisposeWith(Disposables);
 
-        // Валидация при изменении любого поля
         this.WhenAnyValue(x => x.Name, x => x.ThumbnailUrl, x => x.CustomColor)
             .Subscribe(_ => UpdateValidation())
             .DisposeWith(Disposables);
 
-        // Кнопка Save активна только если нет ошибок
         CanSave = this.WhenAnyValue(x => x.HasErrors, errors => !errors);
 
-        // ═══ Превью обложки — с поддержкой локальных путей ═══
         this.WhenAnyValue(x => x.ThumbnailUrl)
             .Throttle(TimeSpan.FromMilliseconds(400))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(UpdateThumbnailPreview)
             .DisposeWith(Disposables);
 
-        // ═══ Обновление видимости кнопки загрузки обложки ═══
         this.WhenAnyValue(x => x.ThumbnailUrl)
             .Subscribe(_ => UpdateUploadButtonVisibility())
             .DisposeWith(Disposables);
 
-        // Debounce превью цвета
         this.WhenAnyValue(x => x.CustomColor)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -281,7 +311,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     /// <summary>
     /// Загружает текущую обложку в YouTube через Scotty Upload Protocol.
     /// Используется для ручной загрузки без синхронизации всего плейлиста.
-    /// 
+    ///
     /// <para><b>Поддерживаемые источники:</b></para>
     /// <list type="bullet">
     ///   <item>HTTP/HTTPS URL — скачивается, затем загружается</item>
@@ -300,7 +330,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             return;
         }
 
-        IsRecalculatingColor = true; // Переиспользуем для блокировки UI
+        IsRecalculatingColor = true;
         ClearError();
 
         try
@@ -311,25 +341,20 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             byte[] imageData;
             string mimeType = "image/jpeg";
 
-            // ═══ Скачиваем/читаем изображение ═══
             if (IsHttpUrl(ThumbnailUrl))
             {
-                // HTTP URL — скачиваем
                 using var httpClient = new HttpClient();
                 httpClient.Timeout = TimeSpan.FromSeconds(15);
 
                 var response = await httpClient.GetAsync(ThumbnailUrl);
                 response.EnsureSuccessStatusCode();
-
                 imageData = await response.Content.ReadAsByteArrayAsync();
 
-                // Определяем MIME-тип из Content-Type
                 if (response.Content.Headers.ContentType?.MediaType is { } contentType)
                     mimeType = contentType;
             }
             else if (ThumbnailUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
             {
-                // file:// URI
                 var uri = new Uri(ThumbnailUrl);
                 var localPath = uri.LocalPath;
 
@@ -344,7 +369,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             }
             else if (Path.IsPathRooted(ThumbnailUrl) && File.Exists(ThumbnailUrl))
             {
-                // Абсолютный путь к файлу
                 imageData = await File.ReadAllBytesAsync(ThumbnailUrl);
                 mimeType = GetMimeTypeFromExtension(Path.GetExtension(ThumbnailUrl));
             }
@@ -354,31 +378,26 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
                 return;
             }
 
-            // ═══ Валидация размера ═══
             if (imageData.Length == 0)
             {
                 SetError(SL["EditPlaylist_EmptyImage"] ?? "Image file is empty");
                 return;
             }
 
-            if (imageData.Length > 20 * 1024 * 1024) // 20MB
+            if (imageData.Length > 20 * 1024 * 1024)
             {
                 SetError(SL["PlaylistSync_ThumbnailTooLarge"] ?? "Image too large (max 20MB)");
                 return;
             }
 
-            // ═══ Загружаем через Scotty Upload Protocol ═══
             var success = await youtube.UploadPlaylistThumbnailAsync(
                 _originalPlaylist.YoutubeId, imageData, mimeType);
 
             if (success)
             {
                 Log.Info($"[PlaylistEditor] Thumbnail uploaded for {_originalPlaylist.YoutubeId}");
-                // Показываем временное сообщение об успехе
                 ErrorMessage = "✓ " + (SL["PlaylistSync_ThumbnailUploaded"] ?? "Thumbnail uploaded to YouTube");
-                HasErrors = false; // Не блокируем кнопку Save
-
-                // Очищаем сообщение через 3 секунды
+                HasErrors = false;
                 _ = ClearSuccessMessageAsync();
             }
             else
@@ -405,11 +424,8 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         try
         {
             await Task.Delay(3000);
-            // Очищаем только если это наше сообщение об успехе
             if (ErrorMessage?.StartsWith("✓") == true)
-            {
                 ErrorMessage = null;
-            }
         }
         catch { /* ignore */ }
     }
@@ -424,7 +440,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         ".webp" => "image/webp",
         ".gif" => "image/gif",
         ".bmp" => "image/bmp",
-        _ => "image/jpeg" // Fallback
+        _ => "image/jpeg"
     };
 
     #endregion
@@ -475,9 +491,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
     #region Thumbnail Preview
 
-    /// <summary>
-    /// Определяет, является ли URL HTTP/HTTPS ссылкой.
-    /// </summary>
+    /// <summary>Определяет, является ли URL HTTP/HTTPS ссылкой.</summary>
     private static bool IsHttpUrl(string url) =>
         url.StartsWith(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
         url.StartsWith(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
@@ -519,7 +533,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             return;
         }
 
-        // ═══ HTTP/HTTPS → AsyncImageLoader ═══
         if (IsHttpUrl(url))
         {
             HasThumbnailPreview = true;
@@ -531,7 +544,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             return;
         }
 
-        // ═══ avares:// → AsyncImageLoader ═══
         if (url.StartsWith("avares://", StringComparison.OrdinalIgnoreCase))
         {
             HasThumbnailPreview = true;
@@ -543,7 +555,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             return;
         }
 
-        // ═══ Локальный файл ═══
         var localPath = ResolveLocalPath(url);
         if (localPath != null && File.Exists(localPath))
         {
@@ -572,7 +583,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             return;
         }
 
-        // ═══ Нераспознанный источник ═══
         HasThumbnailPreview = false;
         IsPreviewHttp = false;
         IsPreviewLocal = false;
@@ -599,11 +609,11 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = SL["CoverPicker_SelectFile"] ?? "Выберите изображение",
+            Title = SL["CoverPicker_SelectFile"] ?? "Select image",
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType(SL["CoverPicker_ImageFiles"] ?? "Изображения")
+                new FilePickerFileType(SL["CoverPicker_ImageFiles"] ?? "Images")
                 {
                     Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"],
                     MimeTypes = ["image/png", "image/jpeg", "image/webp", "image/bmp"]
@@ -618,8 +628,6 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
         SelectedFilePath = filePath;
         ThumbnailUrl = filePath;
-
-        // Немедленное обновление превью (без ожидания debounce)
         UpdateThumbnailPreview(filePath);
     }
 
@@ -649,8 +657,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(ThumbnailUrl)
-            && !IsValidUri(ThumbnailUrl))
+        if (!string.IsNullOrWhiteSpace(ThumbnailUrl) && !IsValidUri(ThumbnailUrl))
         {
             SetError(SL["Error_InvalidUrl"] ?? "Invalid cover URL format");
             return;
@@ -674,7 +681,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
     /// <summary>
     /// Проверяет, является ли строка валидным источником изображения.
-    /// 
+    ///
     /// <para><b>Допустимые форматы:</b></para>
     /// <list type="bullet">
     ///   <item><c>http://</c> / <c>https://</c> — URL из интернета</item>
@@ -682,7 +689,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     ///   <item><c>file://</c> — явный file URI</item>
     ///   <item>Абсолютный путь файловой системы (C:\..., /home/...)</item>
     /// </list>
-    /// 
+    ///
     /// <para><b>ВАЖНО:</b> <c>Uri.TryCreate</c> с <c>UriKind.Absolute</c> парсит
     /// hex-строки вида "F1A2B3..." как scheme "f" с хостом "1a2b3...:80",
     /// что приводит к HTTP-запросам на несуществующие хосты.
@@ -692,12 +699,9 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
     {
         if (string.IsNullOrWhiteSpace(url)) return false;
 
-        // Локальный абсолютный путь — проверяем ДО Uri.TryCreate,
-        // т.к. "C:\path" парсится как URI со scheme "c"
         if (Path.IsPathRooted(url))
             return true;
 
-        // URI с проверкой scheme по белому списку
         if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
             return uri.Scheme switch
@@ -738,6 +742,9 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
     #region Factory Methods
 
+    /// <summary>
+    /// Создаёт VM для создания нового плейлиста.
+    /// </summary>
     public static PlaylistEditorViewModel ForCreate() =>
         new(name: "", thumbnailUrl: null, customColor: null, description: null,
             computedColor: null,
@@ -745,24 +752,42 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
             isAuthenticated: false, hasYoutubeBinding: false,
             playlistTracks: null,
             originalPlaylist: null,
-            isForEdit: false);
+            isForEdit: false,
+            isSystemPlaylist: false);
 
+    /// <summary>
+    /// Создаёт VM для редактирования существующего плейлиста.
+    /// </summary>
+    /// <param name="playlist">Редактируемый плейлист из БД.</param>
+    /// <param name="isAuthenticated">Авторизован ли пользователь в YouTube.</param>
+    /// <param name="playlistTracks">
+    /// Треки плейлиста для <see cref="PlaylistCoverPickerViewModel"/>.
+    /// null — вкладка «Из треков» скрыта.
+    /// </param>
     public static PlaylistEditorViewModel ForEdit(
         Playlist playlist,
         bool isAuthenticated,
-        IReadOnlyList<TrackInfo>? playlistTracks = null) =>
-        new(name: playlist.Name,
+        IReadOnlyList<TrackInfo>? playlistTracks = null)
+    {
+        var isSystem = LibraryService.IsSystemPlaylist(playlist.Id);
+
+        return new(
+            name: playlist.Name,
             thumbnailUrl: playlist.ThumbnailUrl,
             customColor: playlist.CustomColor,
             description: playlist.Description,
             computedColor: playlist.ComputedColor,
-            showSync: isAuthenticated || playlist.IsFromAccount,
+            // Sync-секция скрыта для системных плейлистов:
+            // «Понравившиеся» управляется через like/unlike API, а не прямой привязкой к YouTube.
+            showSync: !isSystem && (isAuthenticated || playlist.IsFromAccount),
             isSynced: playlist.IsFromAccount,
             isAuthenticated: isAuthenticated,
             hasYoutubeBinding: !string.IsNullOrEmpty(playlist.YoutubeId),
             playlistTracks: playlistTracks,
             originalPlaylist: playlist,
-            isForEdit: true);
+            isForEdit: true,
+            isSystemPlaylist: isSystem);
+    }
 
     #endregion
 

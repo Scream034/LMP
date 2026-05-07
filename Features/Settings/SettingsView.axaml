@@ -80,7 +80,7 @@
 
                         <!-- Language -->
                         <Grid ColumnDefinitions="*, Auto">
-                            <TextBlock Classes="label" Text="{Binding L[Language]}" />
+                            <TextBlock Classes="label" Text="{Binding L[Settings_Language]}" />
                             <ComboBox Grid.Column="1" ItemsSource="{Binding Languages}"
                                 SelectedItem="{Binding SelectedLanguage}"
                                 DisplayMemberBinding="{Binding Name}" MinWidth="200" />

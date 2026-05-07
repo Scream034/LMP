@@ -16,7 +16,12 @@
                 FontSize="13" FontWeight="SemiBold"
                 Foreground="{DynamicResource TextSecondaryBrush}" />
             <TextBox Text="{Binding Name, Mode=TwoWay}"
-                Watermark="{Binding L[Library_PlaylistNameHint]}" />
+                Watermark="{Binding L[Library_PlaylistNameHint]}"
+                IsReadOnly="{Binding IsSystemPlaylist}" />
+            <TextBlock Text="{Binding L[EditPlaylist_SystemNameHint]}"
+                FontSize="11"
+                Foreground="{DynamicResource TextMutedBrush}"
+                IsVisible="{Binding IsSystemPlaylist}" />
         </StackPanel>
 
         <!-- ═══ Description ═══ -->
@@ -101,12 +106,10 @@
                                     HorizontalAlignment="Center"
                                     VerticalAlignment="Center"
                                     IsVisible="{Binding !HasThumbnailPreview}" />
-                                <!-- HTTP URL → AsyncImageLoader -->
                                 <Image asyncImage:ImageLoader.Source="{Binding ThumbnailPreviewUrl}"
                                     Stretch="UniformToFill"
                                     Width="36" Height="36"
                                     IsVisible="{Binding IsPreviewHttp}" />
-                                <!-- Local file → Bitmap напрямую -->
                                 <Image Source="{Binding LocalPreviewBitmap}"
                                     Stretch="UniformToFill"
                                     Width="36" Height="36"
@@ -138,7 +141,6 @@
                                     Width="18" Height="18" />
                             </Button>
                         </Grid>
-                        <!-- Превью выбранного файла -->
                         <Border Width="80" Height="80"
                             CornerRadius="6" ClipToBounds="True"
                             Background="{DynamicResource BgSkeletonBrush}"
@@ -161,7 +163,7 @@
                             <Panel>
                                 <mi:MaterialIcon Kind="CloudUpload" Width="14" Height="14"
                                     IsVisible="{Binding !IsRecalculatingColor}" />
-                                <mi:MaterialIcon Kind="Loading" Width="14" Height="14"
+                                <mi:MaterialIcon Kind="Sync" Width="14" Height="14"
                                     IsVisible="{Binding IsRecalculatingColor}"
                                     Classes="spinning" />
                             </Panel>
@@ -203,15 +205,12 @@
                 FontSize="13" FontWeight="SemiBold"
                 Foreground="{DynamicResource TextSecondaryBrush}" />
             <Grid ColumnDefinitions="*, Auto, Auto">
-                <!-- Вычисленный цвет (readonly) -->
                 <TextBox Grid.Column="0"
                     Text="{Binding ComputedColor, Mode=OneWay}"
                     IsReadOnly="True"
                     Watermark="{Binding L[EditPlaylist_ComputedColorNone]}"
                     FontSize="12"
                     Foreground="{DynamicResource TextMutedBrush}" />
-
-                <!-- Превью вычисленного цвета -->
                 <Border Grid.Column="1"
                     Width="32" Height="32"
                     CornerRadius="6"
@@ -219,8 +218,6 @@
                     BorderBrush="{DynamicResource BgHighlightBrush}"
                     BorderThickness="1"
                     Background="{Binding ComputedColorPreviewBrush}" />
-
-                <!-- Кнопка пересчёта из обложки -->
                 <Button Grid.Column="2"
                     Command="{Binding RecalculateColorCommand}"
                     Padding="6"
@@ -229,7 +226,7 @@
                     <Panel>
                         <mi:MaterialIcon Kind="Refresh" Width="18" Height="18"
                             IsVisible="{Binding !IsRecalculatingColor}" />
-                        <mi:MaterialIcon Kind="Loading" Width="18" Height="18"
+                        <mi:MaterialIcon Kind="Sync" Width="18" Height="18"
                             IsVisible="{Binding IsRecalculatingColor}"
                             Classes="spinning" />
                     </Panel>
@@ -291,6 +288,20 @@
                 </Border>
             </StackPanel>
         </Border>
+
+        <!-- ═══ Create Copy ═══ -->
+        <!-- Видна только при редактировании. Создаёт локальную копию без привязки к YouTube. -->
+        <Button Command="{Binding CreateCopyCommand}"
+            IsVisible="{Binding IsForEdit}"
+            HorizontalAlignment="Left"
+            Padding="10,6"
+            Margin="0,4,0,0"
+            Classes="ghost-btn">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <mi:MaterialIcon Kind="ContentCopy" Width="14" Height="14" />
+                <TextBlock Text="{Binding L[EditPlaylist_CreateCopy]}" FontSize="12" />
+            </StackPanel>
+        </Button>
 
         <!-- ═══ Validation Error / Success Message ═══ -->
         <TextBlock Text="{Binding ErrorMessage}"

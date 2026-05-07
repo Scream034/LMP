@@ -251,7 +251,7 @@
                         <Panel>
                             <mi:MaterialIcon Kind="Sync" Width="20" Height="20"
                                 IsVisible="{Binding !IsSyncing}" />
-                            <mi:MaterialIcon Kind="Loading" Width="20" Height="20"
+                            <mi:MaterialIcon Kind="Sync" Width="20" Height="20"
                                 IsVisible="{Binding IsSyncing}"
                                 Classes="spinning" />
                         </Panel>

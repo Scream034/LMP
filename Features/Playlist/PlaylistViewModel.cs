@@ -373,7 +373,7 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         ThumbnailUrl = playlist.ThumbnailUrl;
         Description = playlist.Description;
         CanEdit = playlist.IsEditable;
-        IsCloud = playlist.IsFromAccount;
+        IsCloud = playlist.IsFromAccount && !IsLikedPlaylist; 
         IsReadOnly = !playlist.IsEditable;
         IsLikedPlaylist = playlistId == LibraryService.LikedPlaylistId;
 
@@ -449,13 +449,13 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                     await notifications.ShowToastAsync(
                         titleKey: "Playlist_SyncComplete_Toast_Title",
                         messageKey: "Playlist_SyncSuccess_Details",
-                        messageArgs: new object[]
-                        {
+                        messageArgs:
+                        [
                             result.TracksAddedLocally,
                             result.TracksAddedToCloud,
                             result.TracksRemovedLocally,
                             result.TracksRemovedFromCloud
-                        },
+                        ],
                         severity: NotificationSeverity.Success,
                         durationMs: 4000);
 

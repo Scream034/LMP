@@ -39,8 +39,26 @@ public partial class YoutubeUserDataService
                     Log.Info("[Sync] Fetching Music Likes (LM) from YouTube Music...");
                     try
                     {
+                        // 1. Получаем официальные лайки из YTM
                         likedTracks = await _provider.GetClient().Music.GetLikedTracksAsync();
                         Log.Info($"[Sync] Got {likedTracks.Count} music likes from LM.");
+
+                        // 2. ДОПОЛНЕНИЕ: Подтягиваем лайки из обычного YouTube (LL), 
+                        // чтобы найти треки, которые недоступны в YTM, но являются музыкой.
+                        Log.Info("[Sync] Fetching standard YouTube likes (LL) to find missing YTM tracks...");
+                        var allLikes = await GetAllLikedVideosAsync();
+
+                        // Создаем HashSet для быстрого поиска (O(1))
+                        var ytmTrackIds = new HashSet<string>(likedTracks.Select(t => t.Id));
+
+                        // Находим треки, которые: 1) Музыка 2) Их нет в выдаче YTM
+                        var missingMusicTracks = allLikes.FindAll(t => t.IsMusic && !ytmTrackIds.Contains(t.Id));
+
+                        if (missingMusicTracks.Count > 0)
+                        {
+                            Log.Info($"[Sync] Found {missingMusicTracks.Count} additional music tracks in standard LL playlist.");
+                            likedTracks.AddRange(missingMusicTracks);
+                        }
                     }
                     catch (Exception ex)
                     {

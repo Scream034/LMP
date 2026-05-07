@@ -449,7 +449,8 @@ public sealed class LibraryViewModel : ViewModelBase
             var allPlaylists = await _library.GetAllPlaylistsAsync(ct);
             var existingLocal = allPlaylists
                 .Where(p => p.IsLocal)
-                .ToDictionary(p => p.Name, p => p);
+                .GroupBy(p => p.Name, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
             var localNames = new HashSet<string>(existingLocal.Keys, StringComparer.Ordinal);
 
             var decisions = await _dialog.ShowSyncSelectionAsync(playlistsToImport, localNames);
@@ -560,7 +561,7 @@ public sealed class LibraryViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            Log.Error($"[Library] Ошибка синхронизации: {ex.Message}");
+            Log.Error($"[Library] Sync error: {ex.Message}");
             if (!_isDisposed)
             {
                 await _notifications.ShowToastAsync(
@@ -796,7 +797,7 @@ public sealed class LibraryViewModel : ViewModelBase
 
                     // ═══ НАСТОЯЩИЙ YIELD: отдаём управление рендеру ═══
                     await Dispatcher.UIThread.InvokeAsync(
-                        () => { }, 
+                        () => { },
                         DispatcherPriority.Background);
 
                     int startIdx = initialBatch + (batch * BatchSize);

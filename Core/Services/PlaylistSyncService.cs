@@ -1,5 +1,3 @@
-// Core/Services/PlaylistSyncService.cs
-
 using LMP.Core.Models;
 using LMP.Core.Youtube.Music;
 using LMP.Core.Youtube.Playlists;
@@ -13,16 +11,24 @@ namespace LMP.Core.Services;
 /// <para><b>Зачем нужен:</b></para>
 /// <para>
 /// Ранее синхронизация была размазана по <c>MusicLibraryManager</c> (массовая),
-/// <c>PlaylistEditService</c> (привязка/отвязка) и <c>PlaylistViewModel</c> (кнопка Refresh пустая).
+/// <c>PlaylistEditService</c> (привязка/отвязка) и <c>PlaylistViewModel</c> (кнопка Refresh).
 /// Этот сервис — единый источник истины для синхронизации конкретного плейлиста.
 /// </para>
 ///
 /// <para><b>Архитектура:</b></para>
 /// <list type="number">
-///   <item>BuildPreviewAsync — загрузить diff между локальным и облачным состоянием</item>
+///   <item><see cref="BuildPreviewAsync"/> — загрузить diff между локальным и облачным состоянием</item>
 ///   <item>ShowSyncPlaylistDialog — показать пользователю что изменилось</item>
-///   <item>ApplyAsync — применить выбранную стратегию</item>
+///   <item><see cref="ApplyAsync"/> — применить выбранную стратегию</item>
 /// </list>
+///
+/// <para><b>Важно про источники данных треков:</b></para>
+/// <para>
+/// Для diff используется <c>GetVideosAsync</c> (только воспроизводимые треки, без удалённых).
+/// Для sync-операций используется <c>GetPlaylistItemsWithSetVideoIdAsync</c> (нужен SetVideoId).
+/// Это намеренное разделение: удалённые видео должны игнорироваться в diff,
+/// иначе они всегда будут показываться как «только в YouTube» после каждого merge.
+/// </para>
 /// </summary>
 public sealed class PlaylistSyncService
 {
@@ -56,12 +62,11 @@ public sealed class PlaylistSyncService
     /// </summary>
     /// <param name="playlistId">ID локального плейлиста.</param>
     /// <param name="ct">Токен отмены.</param>
-    /// <returns>Результат синхронизации, null если отменено пользователем.</returns>
+    /// <returns>Результат синхронизации, null если пользователь отменил диалог.</returns>
     public async Task<PlaylistSyncResult?> SyncWithDialogAsync(
         string playlistId,
         CancellationToken ct = default)
     {
-        // ═══ STEP 1: Валидация ═══
         var playlist = await _library.GetPlaylistAsync(playlistId, ct);
         if (playlist == null)
             return PlaylistSyncResult.Fail("Playlist not found");
@@ -77,13 +82,11 @@ public sealed class PlaylistSyncService
             return PlaylistSyncResult.Fail(
                 SL["Playlist_SyncNotAuth"] ?? "Not authenticated");
 
-        // ═══ STEP 2: Построить preview (diff) ═══
         var preview = await BuildPreviewAsync(playlist, ct);
         if (preview == null)
             return PlaylistSyncResult.Fail(
                 SL["Playlist_SyncFetchFailed"] ?? "Failed to fetch playlist data from YouTube");
 
-        // Если нет различий — уведомляем и выходим
         if (!preview.HasAnyDifference)
         {
             await _dialog.ShowInfoAsync(
@@ -92,18 +95,16 @@ public sealed class PlaylistSyncService
             return PlaylistSyncResult.NoChanges();
         }
 
-        // ═══ STEP 3: Показать диалог выбора стратегии ═══
         var options = await _dialog.ShowPlaylistSyncDialogAsync(preview);
         if (options == null)
-            return null; // Пользователь отменил
+            return null;
 
-        // ═══ STEP 4: Применить стратегию ═══
         return await ApplyAsync(playlist, preview, options, ct);
     }
 
     /// <summary>
-    /// Синхронизация без диалога — используется при первичной привязке.
-    /// Стратегия задаётся программно.
+    /// Синхронизация без диалога — используется при первичной привязке плейлиста к YouTube.
+    /// Стратегия задаётся программно без участия пользователя.
     /// </summary>
     public async Task<PlaylistSyncResult> SyncDirectAsync(
         string playlistId,
@@ -133,11 +134,24 @@ public sealed class PlaylistSyncService
     ///
     /// <para><b>Алгоритм:</b></para>
     /// <list type="number">
-    ///   <item>Загрузка метаданных плейлиста из YouTube (название, описание, обложка)</item>
-    ///   <item>Загрузка списка треков из YouTube (с setVideoId)</item>
-    ///   <item>Загрузка локальных track IDs из БД</item>
-    ///   <item>Вычисление diff: local-only, cloud-only, common</item>
+    ///   <item>Параллельно загружает: метаданные из YouTube, воспроизводимые треки (GetVideosAsync),
+    ///         setVideoId-список и локальные track IDs</item>
+    ///   <item>Строит множества cloud/local для O(n) diff по воспроизводимым трекам</item>
+    ///   <item>Нормализует thumbnail URL (strip query string) для стабильного сравнения</item>
     /// </list>
+    ///
+    /// <para><b>Почему GetVideosAsync а не GetPlaylistItemsWithSetVideoIdAsync для diff:</b></para>
+    /// <para>
+    /// <c>GetPlaylistItemsWithSetVideoIdAsync</c> возвращает ВСЕ элементы плейлиста, включая
+    /// удалённые и недоступные видео. Они всегда будут показываться как «только в YouTube»,
+    /// создавая ложный diff после каждого успешного merge.
+    /// <c>GetVideosAsync</c> возвращает только реально доступные треки — именно их
+    /// обрабатывают стратегии sync (Merge, ReplaceLocal, ReplaceCloud).
+    /// </para>
+    ///
+    /// <para><b>Thumbnail URL:</b></para>
+    /// <para>YouTube нестабильно меняет query-параметры (sqp=...) при каждом запросе.
+    /// Нормализуем до base URL для стабильного сравнения.</para>
     /// </summary>
     private async Task<PlaylistSyncPreview?> BuildPreviewAsync(
         Playlist playlist,
@@ -147,34 +161,39 @@ public sealed class PlaylistSyncService
         {
             YoutubeProvider.ThrowIfInCooldown();
 
-            // Параллельно загружаем метаданные и треки из YouTube + локальные треки
+            var client = _youtube.GetClient();
+            var plId = new PlaylistId(playlist.YoutubeId!);
+
+            // Параллельно загружаем все данные:
+            // - метаданные (имя, описание, обложка)
+            // - воспроизводимые треки для diff (те же, что обрабатывают стратегии sync)
+            // - setVideoId-список (нужен только для операций удаления в Apply)
+            // - локальные track IDs
             var metadataTask = GetCloudMetadataAsync(playlist.YoutubeId!, ct);
-            var cloudTracksTask = _youtube.GetPlaylistItemsWithSetVideoIdAsync(
-                playlist.YoutubeId!, ct);
+            var cloudVideosTask = client.Playlists.GetVideosAsync(plId, ct).CollectAsync().AsTask();
+            var remoteItemsTask = _youtube.GetPlaylistItemsWithSetVideoIdAsync(playlist.YoutubeId!, ct);
             var localTrackIdsTask = _library.GetPlaylistTrackIdsAsync(playlist.Id, ct);
 
-            await Task.WhenAll(metadataTask, cloudTracksTask, localTrackIdsTask);
+            await Task.WhenAll(metadataTask, cloudVideosTask, remoteItemsTask, localTrackIdsTask);
 
             var metadata = await metadataTask;
-            var cloudTracks = await cloudTracksTask;
+            var cloudVideos = await cloudVideosTask;
             var localTrackIds = await localTrackIdsTask;
 
             if (metadata == null)
                 return null;
 
-            // Строим множества для diff
-            // YouTube хранит raw video ID, у нас — "yt_{videoId}"
-            var cloudVideoIds = new HashSet<string>(cloudTracks.Count, StringComparer.Ordinal);
-            for (int i = 0; i < cloudTracks.Count; i++)
-                cloudVideoIds.Add("yt_" + cloudTracks[i].VideoId);
+            // Строим множество облачных ID по воспроизводимым трекам
+            // (те же данные, что будут обработаны стратегиями sync)
+            var cloudVideoIds = new HashSet<string>(cloudVideos.Count, StringComparer.Ordinal);
+            for (int i = 0; i < cloudVideos.Count; i++)
+                cloudVideoIds.Add(cloudVideos[i].Id);
 
             var localIdSet = new HashSet<string>(localTrackIds, StringComparer.Ordinal);
 
             int commonCount = 0;
             int cloudOnlyCount = 0;
-            int localOnlyCount = 0;
 
-            // Cloud-only: есть в YouTube, нет локально
             foreach (var cloudId in cloudVideoIds)
             {
                 if (localIdSet.Contains(cloudId))
@@ -183,12 +202,15 @@ public sealed class PlaylistSyncService
                     cloudOnlyCount++;
             }
 
-            // Local-only: есть локально, нет в YouTube
+            int localOnlyCount = 0;
             foreach (var localId in localIdSet)
             {
                 if (!cloudVideoIds.Contains(localId))
                     localOnlyCount++;
             }
+
+            Log.Debug($"[PlaylistSync] Diff: common={commonCount}, " +
+                      $"cloudOnly={cloudOnlyCount}, localOnly={localOnlyCount}");
 
             return new PlaylistSyncPreview
             {
@@ -196,6 +218,7 @@ public sealed class PlaylistSyncService
                 CloudName = metadata.Value.Name,
                 LocalDescription = playlist.Description,
                 CloudDescription = metadata.Value.Description,
+                // Сохраняем оригинальные URL для отображения в диалоге
                 LocalThumbnailUrl = playlist.ThumbnailUrl,
                 CloudThumbnailUrl = metadata.Value.ThumbnailUrl,
                 LocalOnlyTrackCount = localOnlyCount,
@@ -211,8 +234,24 @@ public sealed class PlaylistSyncService
     }
 
     /// <summary>
+    /// Нормализует URL обложки для стабильного сравнения.
+    /// Убирает query string (sqp=..., v=...) — YouTube меняет их при каждом запросе.
+    /// </summary>
+    private static string? NormalizeThumbnailUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+
+        if (url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
+            var queryIndex = url.IndexOf('?');
+            return queryIndex >= 0 ? url[..queryIndex] : url;
+        }
+
+        return url;
+    }
+
+    /// <summary>
     /// Загружает метаданные плейлиста из YouTube (название, описание, обложка).
-    /// Использует PlaylistClient.GetAsync() — уже умеет парсить Description.
     /// </summary>
     private async Task<(string Name, string? Description, string? ThumbnailUrl)?> GetCloudMetadataAsync(
         string youtubeId,
@@ -254,28 +293,23 @@ public sealed class PlaylistSyncService
             int tracksRemovedLocally = 0;
             int tracksRemovedFromCloud = 0;
 
-            // ═══ Метаданные ═══
             metadataChanged = await SyncMetadataAsync(playlist, preview, options, ct);
 
-            // ═══ Треки ═══
             if (options.SyncTracks)
             {
-                var trackResult = options.Strategy switch
-                {
-                    PlaylistSyncStrategy.ReplaceLocal =>
-                        await ReplaceLocalTracksAsync(playlist, ct),
-                    PlaylistSyncStrategy.ReplaceCloud =>
-                        await ReplaceCloudTracksAsync(playlist, ct),
-                    PlaylistSyncStrategy.Merge =>
-                        await MergeTracksAsync(playlist, ct),
-                    _ => (0, 0, 0, 0)
-                };
-
-                // Деструктуризация tuple по позициям
-                (tracksAddedLocally, tracksAddedToCloud, tracksRemovedLocally, tracksRemovedFromCloud) = trackResult;
+                (tracksAddedLocally, tracksAddedToCloud, tracksRemovedLocally, tracksRemovedFromCloud)
+                    = options.Strategy switch
+                    {
+                        PlaylistSyncStrategy.ReplaceLocal =>
+                            await ReplaceLocalTracksAsync(playlist, ct),
+                        PlaylistSyncStrategy.ReplaceCloud =>
+                            await ReplaceCloudTracksAsync(playlist, ct),
+                        PlaylistSyncStrategy.Merge =>
+                            await MergeTracksAsync(playlist, ct),
+                        _ => (0, 0, 0, 0)
+                    };
             }
 
-            // ═══ Сохраняем обновлённый плейлист ═══
             if (metadataChanged || tracksAddedLocally > 0 || tracksRemovedLocally > 0)
             {
                 playlist.UpdatedAt = DateTime.Now;
@@ -308,9 +342,12 @@ public sealed class PlaylistSyncService
 
     /// <summary>
     /// Синхронизирует метаданные по выбранным полям.
-    /// Направление определяется стратегией:
-    /// - ReplaceLocal / Merge: YouTube → Local
-    /// - ReplaceCloud: Local → YouTube
+    ///
+    /// <para><b>Направление:</b></para>
+    /// <list type="bullet">
+    ///   <item>ReplaceLocal / Merge → YouTube → Local</item>
+    ///   <item>ReplaceCloud → Local → YouTube</item>
+    /// </list>
     /// </summary>
     private async Task<bool> SyncMetadataAsync(
         Playlist playlist,
@@ -321,19 +358,16 @@ public sealed class PlaylistSyncService
         bool changed = false;
         bool isCloudSource = options.Strategy != PlaylistSyncStrategy.ReplaceCloud;
 
-        // ═══ Название ═══
         if (options.SyncName && preview.NameDiffers)
         {
             if (isCloudSource)
             {
-                // YouTube → Local
                 playlist.Name = preview.CloudName;
                 changed = true;
                 Log.Info($"[PlaylistSync] Name updated locally: '{preview.CloudName}'");
             }
             else
             {
-                // Local → YouTube
                 try
                 {
                     await _youtube.RenamePlaylistAsync(playlist.YoutubeId!, playlist.Name);
@@ -346,19 +380,16 @@ public sealed class PlaylistSyncService
             }
         }
 
-        // ═══ Описание ═══
         if (options.SyncDescription && preview.DescriptionDiffers)
         {
             if (isCloudSource)
             {
-                // YouTube → Local
                 playlist.Description = preview.CloudDescription;
                 changed = true;
                 Log.Info("[PlaylistSync] Description updated locally");
             }
             else
             {
-                // Local → YouTube
                 try
                 {
                     var client = _youtube.GetClient();
@@ -373,44 +404,41 @@ public sealed class PlaylistSyncService
             }
         }
 
-        // ═══ Обложка ═══
         if (options.SyncThumbnail)
         {
             if (isCloudSource)
             {
-                // YouTube → Local: скачиваем URL
+                // Сравниваем нормализованные URL для определения реального различия,
+                // но сохраняем оригинальный URL из YouTube
+                var cloudNorm = NormalizeThumbnailUrl(preview.CloudThumbnailUrl);
+                var localNorm = NormalizeThumbnailUrl(playlist.ThumbnailUrl);
+
                 if (!string.IsNullOrEmpty(preview.CloudThumbnailUrl) &&
-                    !string.Equals(preview.CloudThumbnailUrl, playlist.ThumbnailUrl, StringComparison.Ordinal))
+                    !string.Equals(cloudNorm, localNorm, StringComparison.OrdinalIgnoreCase))
                 {
                     playlist.ThumbnailUrl = preview.CloudThumbnailUrl;
-                    playlist.ComputedColor = null; // Пересчитается при отображении
+                    playlist.ComputedColor = null;
                     changed = true;
                     Log.Info("[PlaylistSync] Thumbnail updated locally from YouTube");
                 }
             }
             else
             {
-                // Local → YouTube: загружаем файл
                 if (!string.IsNullOrEmpty(playlist.ThumbnailUrl))
                 {
                     try
                     {
-                        var uploadSuccess = await UploadThumbnailToYoutubeAsync(
+                        var success = await UploadThumbnailToYoutubeAsync(
                             playlist.YoutubeId!, playlist.ThumbnailUrl, ct);
 
-                        if (uploadSuccess)
-                        {
+                        if (success)
                             Log.Info("[PlaylistSync] Thumbnail uploaded to YouTube");
-                        }
                         else
-                        {
-                            Log.Warn("[PlaylistSync] Thumbnail upload to YouTube failed (non-critical)");
-                        }
+                            Log.Warn("[PlaylistSync] Thumbnail upload to YouTube skipped or failed");
                     }
                     catch (Exception ex)
                     {
-                        Log.Error($"[PlaylistSync] Thumbnail upload to YouTube failed: {ex.Message}");
-                        // Не фатально — продолжаем синхронизацию
+                        Log.Error($"[PlaylistSync] Thumbnail upload failed: {ex.Message}");
                     }
                 }
             }
@@ -425,26 +453,32 @@ public sealed class PlaylistSyncService
 
     /// <summary>
     /// YouTube → Local: полностью заменить локальные треки облачными.
+    ///
+    /// <para><b>Алгоритм:</b></para>
+    /// <list type="number">
+    ///   <item>Параллельно загружает воспроизводимые треки и setVideoId-список</item>
+    ///   <item>Удаляет все локальные треки из плейлиста</item>
+    ///   <item>Добавляет облачные воспроизводимые треки</item>
+    ///   <item>Сохраняет setVideoId в БД единым батчем</item>
+    /// </list>
     /// </summary>
     private async Task<(int AddedLocally, int AddedToCloud, int RemovedLocally, int RemovedFromCloud)>
         ReplaceLocalTracksAsync(Playlist playlist, CancellationToken ct)
     {
         var youtubeId = playlist.YoutubeId!;
-
-        // Загружаем треки из YouTube через PlaylistClient (полные метаданные)
         var client = _youtube.GetClient();
         var plId = new PlaylistId(youtubeId);
 
-        // ValueTask → IReadOnlyList (CollectAsync возвращает ValueTask)
-        var cloudTracks = await client.Playlists.GetVideosAsync(plId, ct).CollectAsync();
+        var cloudTracksTask = client.Playlists.GetVideosAsync(plId, ct).CollectAsync().AsTask();
+        var remoteItemsTask = _youtube.GetPlaylistItemsWithSetVideoIdAsync(youtubeId, ct);
+        var localTrackIdsTask = _library.GetPlaylistTrackIdsAsync(playlist.Id, ct);
 
-        // Загружаем облачные треки с setVideoId для будущих операций удаления
-        var remoteItems = await _youtube.GetPlaylistItemsWithSetVideoIdAsync(youtubeId, ct);
+        await Task.WhenAll(cloudTracksTask, remoteItemsTask, localTrackIdsTask);
 
-        // Получаем текущие локальные треки
-        var localTrackIds = await _library.GetPlaylistTrackIdsAsync(playlist.Id, ct);
+        var cloudTracks = await cloudTracksTask;
+        var remoteItems = await remoteItemsTask;
+        var localTrackIds = await localTrackIdsTask;
 
-        // Удаляем все локальные треки из плейлиста
         int removedLocally = 0;
         for (int i = 0; i < localTrackIds.Count; i++)
         {
@@ -452,7 +486,6 @@ public sealed class PlaylistSyncService
             removedLocally++;
         }
 
-        // Добавляем облачные треки
         int addedLocally = 0;
         for (int i = 0; i < cloudTracks.Count; i++)
         {
@@ -462,34 +495,43 @@ public sealed class PlaylistSyncService
             addedLocally++;
         }
 
-        // Сохраняем setVideoId для каждого трека
         if (remoteItems.Count > 0)
         {
             var mappings = new List<(string TrackId, string SetVideoId)>(remoteItems.Count);
             for (int i = 0; i < remoteItems.Count; i++)
             {
                 var item = remoteItems[i];
-                mappings.Add(("yt_" + item.VideoId, item.SetVideoId));
+                if (!string.IsNullOrEmpty(item.SetVideoId))
+                    mappings.Add(("yt_" + item.VideoId, item.SetVideoId));
             }
-            await _library.UpdateSetVideoIdsAsync(playlist.Id, mappings, ct);
+
+            if (mappings.Count > 0)
+                await _library.UpdateSetVideoIdsAsync(playlist.Id, mappings, ct);
         }
 
-        Log.Info($"[PlaylistSync] ReplaceLocal: removed {removedLocally}, added {addedLocally}");
+        Log.Info($"[PlaylistSync] ReplaceLocal: removed={removedLocally}, added={addedLocally}");
         return (addedLocally, 0, removedLocally, 0);
     }
 
     /// <summary>
     /// Local → YouTube: полностью заменить облачные треки локальными.
+    ///
+    /// <para><b>Ограничение:</b> локальные файлы (не YouTube-треки) пропускаются —
+    /// их нельзя добавить в YouTube-плейлист.</para>
     /// </summary>
     private async Task<(int AddedLocally, int AddedToCloud, int RemovedLocally, int RemovedFromCloud)>
         ReplaceCloudTracksAsync(Playlist playlist, CancellationToken ct)
     {
         var youtubeId = playlist.YoutubeId!;
 
-        // Загружаем текущие облачные треки с setVideoId
-        var remoteTracks = await _youtube.GetPlaylistItemsWithSetVideoIdAsync(youtubeId, ct);
+        var remoteTracksTask = _youtube.GetPlaylistItemsWithSetVideoIdAsync(youtubeId, ct);
+        var localTrackIdsTask = _library.GetPlaylistTrackIdsAsync(playlist.Id, ct);
 
-        // Удаляем все треки из YouTube-плейлиста (batch)
+        await Task.WhenAll(remoteTracksTask, localTrackIdsTask);
+
+        var remoteTracks = await remoteTracksTask;
+        var localTrackIds = await localTrackIdsTask;
+
         int removedFromCloud = 0;
         if (remoteTracks.Count > 0)
         {
@@ -501,60 +543,46 @@ public sealed class PlaylistSyncService
             removedFromCloud = setVideoIds.Count;
         }
 
-        // Загружаем локальные треки в YouTube (batch)
-        var localTrackIds = await _library.GetPlaylistTrackIdsAsync(playlist.Id, ct);
-        int addedToCloud = 0;
-
-        // Фильтруем только YouTube-треки (локальные файлы нельзя загрузить)
         var ytTrackIds = new List<string>(localTrackIds.Count);
         for (int i = 0; i < localTrackIds.Count; i++)
         {
-            if (localTrackIds[i].StartsWith("yt_"))
+            if (localTrackIds[i].StartsWith("yt_", StringComparison.Ordinal))
                 ytTrackIds.Add(localTrackIds[i]);
         }
 
+        int addedToCloud = 0;
         if (ytTrackIds.Count > 0)
         {
-            var setVideoIds = await _youtube.AddTracksToPlaylistAsync(youtubeId, ytTrackIds);
+            var newSetVideoIds = await _youtube.AddTracksToPlaylistAsync(youtubeId, ytTrackIds);
             addedToCloud = ytTrackIds.Count;
 
-            // Сохраняем новые setVideoId
-            if (setVideoIds.Count > 0)
+            var mappings = new List<(string TrackId, string SetVideoId)>(newSetVideoIds.Count);
+            for (int i = 0; i < newSetVideoIds.Count && i < ytTrackIds.Count; i++)
             {
-                var mappings = new List<(string TrackId, string SetVideoId)>(setVideoIds.Count);
-                for (int i = 0; i < setVideoIds.Count && i < ytTrackIds.Count; i++)
-                {
-                    if (!string.IsNullOrEmpty(setVideoIds[i]))
-                        mappings.Add((ytTrackIds[i], setVideoIds[i]!));
-                }
-                if (mappings.Count > 0)
-                    await _library.UpdateSetVideoIdsAsync(playlist.Id, mappings, ct);
+                if (!string.IsNullOrEmpty(newSetVideoIds[i]))
+                    mappings.Add((ytTrackIds[i], newSetVideoIds[i]!));
             }
+
+            if (mappings.Count > 0)
+                await _library.UpdateSetVideoIdsAsync(playlist.Id, mappings, ct);
         }
 
-        Log.Info($"[PlaylistSync] ReplaceCloud: removed {removedFromCloud}, added {addedToCloud}");
+        Log.Info($"[PlaylistSync] ReplaceCloud: removed={removedFromCloud}, added={addedToCloud}");
         return (0, addedToCloud, 0, removedFromCloud);
     }
 
     /// <summary>
-    /// Двусторонний merge: добавить отсутствующие треки в обе стороны.
+    /// Двусторонний merge: добавить отсутствующие треки в обе стороны без удаления.
     ///
-    /// <para><b>Алгоритм:</b></para>
-    /// <list type="number">
-    ///   <item>Загрузить облачные треки (с полными метаданными)</item>
-    ///   <item>Загрузить локальные track IDs</item>
-    ///   <item>Cloud-only → добавить локально</item>
-    ///   <item>Local-only → добавить в YouTube</item>
-    ///   <item>Сохранить setVideoId для всех треков</item>
-    /// </list>
+    /// <para><b>SetVideoId:</b> сохраняются единым батчем после всех операций
+    /// чтобы минимизировать количество запросов к БД.</para>
     /// </summary>
     private async Task<(int AddedLocally, int AddedToCloud, int RemovedLocally, int RemovedFromCloud)>
-      MergeTracksAsync(Playlist playlist, CancellationToken ct)
+        MergeTracksAsync(Playlist playlist, CancellationToken ct)
     {
         var youtubeId = playlist.YoutubeId!;
         var client = _youtube.GetClient();
 
-        // ValueTask требует AsTask() для Task.WhenAll
         var cloudFullTask = client.Playlists.GetVideosAsync(
             new PlaylistId(youtubeId), ct).CollectAsync().AsTask();
         var remoteItemsTask = _youtube.GetPlaylistItemsWithSetVideoIdAsync(youtubeId, ct);
@@ -567,6 +595,10 @@ public sealed class PlaylistSyncService
         var localTrackIds = await localTrackIdsTask;
 
         var localIdSet = new HashSet<string>(localTrackIds, StringComparer.Ordinal);
+
+        var cloudIdSet = new HashSet<string>(cloudTracks.Count, StringComparer.Ordinal);
+        for (int i = 0; i < cloudTracks.Count; i++)
+            cloudIdSet.Add(cloudTracks[i].Id);
 
         // ═══ Cloud-only → добавить локально ═══
         int addedLocally = 0;
@@ -582,46 +614,47 @@ public sealed class PlaylistSyncService
         }
 
         // ═══ Local-only → добавить в YouTube ═══
-        var cloudIdSet = new HashSet<string>(cloudTracks.Count, StringComparer.Ordinal);
-        for (int i = 0; i < cloudTracks.Count; i++)
-            cloudIdSet.Add(cloudTracks[i].Id);
-
         var toUpload = new List<string>();
         for (int i = 0; i < localTrackIds.Count; i++)
         {
             var trackId = localTrackIds[i];
-            if (trackId.StartsWith("yt_") && !cloudIdSet.Contains(trackId))
+            if (trackId.StartsWith("yt_", StringComparison.Ordinal) &&
+                !cloudIdSet.Contains(trackId))
+            {
                 toUpload.Add(trackId);
+            }
         }
 
         int addedToCloud = 0;
+        var uploadMappings = new List<(string TrackId, string SetVideoId)>();
+
         if (toUpload.Count > 0)
         {
             var newSetVideoIds = await _youtube.AddTracksToPlaylistAsync(youtubeId, toUpload);
             addedToCloud = toUpload.Count;
 
-            // Сохраняем setVideoId для загруженных треков
-            var uploadMappings = new List<(string TrackId, string SetVideoId)>();
             for (int i = 0; i < newSetVideoIds.Count && i < toUpload.Count; i++)
             {
                 if (!string.IsNullOrEmpty(newSetVideoIds[i]))
                     uploadMappings.Add((toUpload[i], newSetVideoIds[i]!));
             }
-            if (uploadMappings.Count > 0)
-                await _library.UpdateSetVideoIdsAsync(playlist.Id, uploadMappings, ct);
         }
 
-        // ═══ Сохраняем setVideoId для существующих облачных треков ═══
-        if (remoteItems.Count > 0)
+        // ═══ Сохраняем setVideoId единым батчем ═══
+        var allMappings = new List<(string TrackId, string SetVideoId)>(
+            remoteItems.Count + uploadMappings.Count);
+
+        for (int i = 0; i < remoteItems.Count; i++)
         {
-            var existingMappings = new List<(string TrackId, string SetVideoId)>(remoteItems.Count);
-            for (int i = 0; i < remoteItems.Count; i++)
-            {
-                var item = remoteItems[i];
-                existingMappings.Add(("yt_" + item.VideoId, item.SetVideoId));
-            }
-            await _library.UpdateSetVideoIdsAsync(playlist.Id, existingMappings, ct);
+            var item = remoteItems[i];
+            if (!string.IsNullOrEmpty(item.SetVideoId))
+                allMappings.Add(("yt_" + item.VideoId, item.SetVideoId));
         }
+
+        allMappings.AddRange(uploadMappings);
+
+        if (allMappings.Count > 0)
+            await _library.UpdateSetVideoIdsAsync(playlist.Id, allMappings, ct);
 
         Log.Info($"[PlaylistSync] Merge: +{addedLocally} local, +{addedToCloud} cloud");
         return (addedLocally, addedToCloud, 0, 0);
@@ -633,7 +666,7 @@ public sealed class PlaylistSyncService
 
     /// <summary>
     /// Загружает локальную обложку в YouTube.
-    /// Поддерживает HTTP URL (скачивает) и локальные файлы.
+    /// Поддерживает HTTP URL (скачивает) и локальные файлы (читает напрямую).
     /// </summary>
     private async Task<bool> UploadThumbnailToYoutubeAsync(
         string youtubePlaylistId,
@@ -643,25 +676,20 @@ public sealed class PlaylistSyncService
         byte[] imageData;
         string mimeType = "image/jpeg";
 
-        // ═══ Скачиваем/читаем изображение ═══
         if (thumbnailUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
         {
-            // HTTP URL — скачиваем
             using var httpClient = new HttpClient();
             httpClient.Timeout = TimeSpan.FromSeconds(15);
 
             var response = await httpClient.GetAsync(thumbnailUrl, ct);
             response.EnsureSuccessStatusCode();
-
             imageData = await response.Content.ReadAsByteArrayAsync(ct);
 
-            // Определяем MIME-тип из Content-Type
             if (response.Content.Headers.ContentType?.MediaType is { } contentType)
                 mimeType = contentType;
         }
         else if (thumbnailUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
         {
-            // file:// URI
             var uri = new Uri(thumbnailUrl);
             var localPath = uri.LocalPath;
 
@@ -676,20 +704,18 @@ public sealed class PlaylistSyncService
         }
         else if (Path.IsPathRooted(thumbnailUrl) && File.Exists(thumbnailUrl))
         {
-            // Абсолютный путь к файлу
             imageData = await File.ReadAllBytesAsync(thumbnailUrl, ct);
             mimeType = GetMimeTypeFromExtension(Path.GetExtension(thumbnailUrl));
         }
         else
         {
-            Log.Warn($"[PlaylistSync] Invalid thumbnail URL: {thumbnailUrl}");
+            Log.Warn($"[PlaylistSync] Invalid thumbnail URL for upload: {thumbnailUrl}");
             return false;
         }
 
-        // ═══ Валидация размера ═══
         if (imageData.Length == 0)
         {
-            Log.Warn("[PlaylistSync] Thumbnail is empty");
+            Log.Warn("[PlaylistSync] Thumbnail is empty, skipping upload");
             return false;
         }
 
@@ -699,13 +725,12 @@ public sealed class PlaylistSyncService
             return false;
         }
 
-        // ═══ Загружаем через Scotty ═══
         return await _youtube.UploadPlaylistThumbnailAsync(
             youtubePlaylistId, imageData, mimeType);
     }
 
     /// <summary>
-    /// Определяет MIME-тип по расширению файла.
+    /// Определяет MIME-тип по расширению файла изображения.
     /// </summary>
     private static string GetMimeTypeFromExtension(string extension) => extension.ToLowerInvariant() switch
     {
@@ -713,7 +738,8 @@ public sealed class PlaylistSyncService
         ".png" => "image/png",
         ".webp" => "image/webp",
         ".gif" => "image/gif",
-        _ => "image/jpeg" // Fallback
+        ".bmp" => "image/bmp",
+        _ => "image/jpeg"
     };
 
     #endregion

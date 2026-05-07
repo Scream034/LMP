@@ -132,14 +132,14 @@ public static class SigCipherTests
                     new SigCipherOperation(SigCipherOpType.Swap, 56),
                     new SigCipherOperation(SigCipherOpType.Splice, 1) },
 
-            new[] { new SigCipherOperation(SigCipherOpType.Swap, 51),
+            [ new SigCipherOperation(SigCipherOpType.Swap, 51),
                     new SigCipherOperation(SigCipherOpType.Swap, 44),
                     new SigCipherOperation(SigCipherOpType.Reverse, 0),
-                    new SigCipherOperation(SigCipherOpType.Splice, 1) },
+                    new SigCipherOperation(SigCipherOpType.Splice, 1) ],
 
-            new[] { new SigCipherOperation(SigCipherOpType.Reverse, 0),
+            [ new SigCipherOperation(SigCipherOpType.Reverse, 0),
                     new SigCipherOperation(SigCipherOpType.Swap, 48),
-                    new SigCipherOperation(SigCipherOpType.Splice, 2) },
+                    new SigCipherOperation(SigCipherOpType.Splice, 2) ],
         };
 
         const string testInput =

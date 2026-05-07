@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:dialogs="using:LMP.UI.Dialogs"
              xmlns:mi="using:Material.Icons.Avalonia"
+             xmlns:asyncImage="using:AsyncImageLoader"
              x:Class="LMP.UI.Dialogs.Content.SyncPlaylistDialogContent"
              x:DataType="dialogs:SyncPlaylistDialogViewModel">
 
@@ -12,7 +13,7 @@
             Padding="24"
             Width="560"
             MinHeight="420"
-            MaxHeight="680">
+            MaxHeight="720">
 
         <Grid RowDefinitions="Auto, *, Auto">
 
@@ -32,9 +33,9 @@
             <!-- Content -->
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
                           Padding="0,0,6,0">
-                <StackPanel Spacing="16">
+                <StackPanel Spacing="14">
 
-                    <!-- Diff Preview -->
+                    <!-- ═══ Diff Preview ═══ -->
                     <Border Background="{DynamicResource BgElevatedBrush}"
                             CornerRadius="8" Padding="14,12">
                         <StackPanel Spacing="10">
@@ -81,17 +82,15 @@
                             </StackPanel>
 
                             <!-- Треки diff -->
-                            <StackPanel Spacing="4"
+                            <StackPanel Orientation="Horizontal" Spacing="6"
                                         IsVisible="{Binding HasTrackDiff}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon Kind="MusicNote"
-                                                     Width="16" Height="16"
-                                                     Foreground="{DynamicResource TextMutedBrush}"
-                                                     VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding TrackDiffSummary}"
-                                               FontSize="12"
-                                               Foreground="{DynamicResource TextSecondaryBrush}" />
-                                </StackPanel>
+                                <mi:MaterialIcon Kind="MusicNote"
+                                                 Width="16" Height="16"
+                                                 Foreground="{DynamicResource TextMutedBrush}"
+                                                 VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding TrackDiffSummary}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
 
                             <!-- Нет различий -->
@@ -102,7 +101,93 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Strategy selector -->
+                    <!-- ═══ Thumbnail Diff ═══ -->
+                    <!-- Показываем всегда когда есть хотя бы одна обложка.
+                         Если обложки одинаковы — показывает одну обложку без diff-лейблов. -->
+                    <Border Background="{DynamicResource BgElevatedBrush}"
+                            CornerRadius="8" Padding="14,12"
+                            IsVisible="{Binding HasThumbnailSection}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="{Binding L[Playlist_SyncField_Thumbnail]}"
+                                       FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                            <!-- Две обложки рядом когда diff есть -->
+                            <Grid ColumnDefinitions="*, Auto, *"
+                                  IsVisible="{Binding ThumbnailDiffers}">
+
+                                <!-- Локальная обложка -->
+                                <StackPanel Grid.Column="0" Spacing="6" HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding L[Playlist_SyncField_Local]}"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource TextMutedBrush}"
+                                               HorizontalAlignment="Center" />
+                                    <Border Width="100" Height="100"
+                                            CornerRadius="6" ClipToBounds="True"
+                                            Background="{DynamicResource BgSkeletonBrush}">
+                                        <Panel>
+                                            <mi:MaterialIcon Kind="ImageOutline"
+                                                             Width="32" Height="32"
+                                                             Foreground="{DynamicResource TextMutedBrush}"
+                                                             HorizontalAlignment="Center"
+                                                             VerticalAlignment="Center"
+                                                             IsVisible="{Binding LocalThumbnailPreviewUrl,
+                                                                 Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                                            <Image asyncImage:ImageLoader.Source="{Binding LocalThumbnailPreviewUrl}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding LocalThumbnailPreviewUrl,
+                                                       Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </Panel>
+                                    </Border>
+                                </StackPanel>
+
+                                <!-- Стрелка между обложками -->
+                                <mi:MaterialIcon Grid.Column="1" Kind="ArrowRight"
+                                                 Width="20" Height="20"
+                                                 Foreground="{DynamicResource TextMutedBrush}"
+                                                 VerticalAlignment="Center"
+                                                 Margin="12,16,12,0" />
+
+                                <!-- Облачная обложка -->
+                                <StackPanel Grid.Column="2" Spacing="6" HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding L[Playlist_SyncField_Cloud]}"
+                                               FontSize="10"
+                                               Foreground="{DynamicResource AccentBrush}"
+                                               HorizontalAlignment="Center" />
+                                    <Border Width="100" Height="100"
+                                            CornerRadius="6" ClipToBounds="True"
+                                            Background="{DynamicResource BgSkeletonBrush}">
+                                        <Panel>
+                                            <mi:MaterialIcon Kind="ImageOutline"
+                                                             Width="32" Height="32"
+                                                             Foreground="{DynamicResource TextMutedBrush}"
+                                                             HorizontalAlignment="Center"
+                                                             VerticalAlignment="Center"
+                                                             IsVisible="{Binding CloudThumbnailPreviewUrl,
+                                                                 Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                                            <Image asyncImage:ImageLoader.Source="{Binding CloudThumbnailPreviewUrl}"
+                                                   Stretch="UniformToFill"
+                                                   IsVisible="{Binding CloudThumbnailPreviewUrl,
+                                                       Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </Panel>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Одна обложка когда diff нет -->
+                            <StackPanel HorizontalAlignment="Center" Spacing="6"
+                                        IsVisible="{Binding !ThumbnailDiffers}">
+                                <Border Width="100" Height="100"
+                                        CornerRadius="6" ClipToBounds="True"
+                                        Background="{DynamicResource BgSkeletonBrush}">
+                                    <Image asyncImage:ImageLoader.Source="{Binding CloudThumbnailPreviewUrl}"
+                                           Stretch="UniformToFill" />
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ═══ Strategy selector ═══ -->
                     <StackPanel Spacing="5">
                         <TextBlock Text="{Binding L[Playlist_SyncStrategy]}"
                                    FontSize="13" FontWeight="SemiBold"
@@ -129,7 +214,6 @@
                             </ComboBoxItem>
                         </ComboBox>
 
-                        <!-- Описание стратегии -->
                         <TextBlock Text="{Binding StrategyDescription}"
                                    FontSize="11"
                                    Foreground="{DynamicResource TextMutedBrush}"
@@ -137,7 +221,7 @@
                                    Margin="0,2,0,0" />
                     </StackPanel>
 
-                    <!-- Field checkboxes -->
+                    <!-- ═══ Field checkboxes ═══ -->
                     <StackPanel Spacing="5">
                         <TextBlock Text="{Binding L[Playlist_SyncFields]}"
                                    FontSize="13" FontWeight="SemiBold"
