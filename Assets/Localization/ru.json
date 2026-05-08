@@ -173,6 +173,8 @@
   "Playlist_SyncFailed": "Ошибка синхронизации",
   "Playlist_SyncComplete_Toast_Title": "Синхронизация завершена",
   "Playlist_SyncSuccess_Details": "↓ {0} локально  ↑ {1} в облако  ✗ {2}/{3} удалено",
+  "Playlist_CopyLink_NotLinked": "Привяжите плейлист к YouTube чтобы получить ссылку",
+  "Playlist_LinkCopied": "Ссылка скопирована!",
 
   "EditPlaylist_Title": "Редактировать плейлист",
   "EditPlaylist_Name": "Название",

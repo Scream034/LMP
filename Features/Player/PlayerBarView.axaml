@@ -5,6 +5,7 @@
     xmlns:asyncImage="using:AsyncImageLoader"
     xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:vm="using:LMP.Features.Player"
+    xmlns:controls="using:LMP.UI.Controls"
     x:CompileBindings="True"
     x:DataType="vm:PlayerBarViewModel"
     Focusable="True"
@@ -557,40 +558,12 @@
                         </Popup>
                     </Panel>
 
-                    <!-- Copy -->
-                    <Panel>
-                        <Button
-                            x:Name="CopyButton"
-                            Width="36" Height="36"
-                            Classes="icon-btn"
-                            Command="{Binding CopyLinkCommand}"
-                            CornerRadius="18"
-                            ToolTip.Tip="{Binding CopyTooltip}"
-                            ToolTip.Placement="Top"
-                            ToolTip.VerticalOffset="-6">
-                            <mi:MaterialIcon Width="16" Height="16"
-                                Classes.active="{Binding IsCopyHighlighted}"
-                                Kind="ContentCopy" />
-                        </Button>
-                        <Popup
-                            HorizontalOffset="-15"
-                            IsLightDismissEnabled="False"
-                            IsOpen="{Binding IsCopyHintVisible}"
-                            Placement="Top"
-                            PlacementTarget="{Binding #CopyButton}"
-                            VerticalOffset="-8">
-                            <Border Classes="mode-hint"
-                                Classes.visible="{Binding IsCopyHintVisible}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon Width="14" Height="14"
-                                        Foreground="{DynamicResource AccentBrush}" Kind="Check" />
-                                    <TextBlock FontSize="12" FontWeight="SemiBold"
-                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                        Text="{Binding L[Track_Copied]}" />
-                                </StackPanel>
-                            </Border>
-                        </Popup>
-                    </Panel>
+                    <controls:CopyLinkButton
+                        CopyUrl="{Binding CurrentTrackUrl}"
+                        SuccessText="{Binding L[Track_Copied]}"
+                        ToolTipText="{Binding L[Track_CopyLink]}"
+                        ButtonSize="36"
+                        IconSize="16" />
                 </StackPanel>
 
                 <!--  Divider  -->

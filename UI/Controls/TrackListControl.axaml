@@ -1,231 +1,139 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:i="using:Avalonia.Xaml.Interactivity"
-    xmlns:b="using:LMP.Core.Behaviors"
     xmlns:svm="using:LMP.Features.Shared"
-    xmlns:asyncImage="using:AsyncImageLoader"
+    xmlns:h="using:LMP.Core.Helpers"
     x:Class="LMP.UI.Controls.TrackListControl"
     x:Name="Root"
     x:CompileBindings="True">
 
-    <Grid>
-        <!-- 1. СОСТОЯНИЕ ЗАГРУЗКИ -->
-        <Panel IsVisible="{Binding IsLoading, ElementName=Root}" ZIndex="10">
-            <Panel IsVisible="{Binding EnableSmoothLoading, ElementName=Root}">
-                <ContentControl Classes="loading-initial"
-                    IsVisible="{Binding !UseSearchLoader, ElementName=Root}" />
-                <Grid HorizontalAlignment="Stretch" Margin="0,20"
-                    IsVisible="{Binding UseSearchLoader, ElementName=Root}">
-                    <StackPanel Classes="breathing skeleton-list-container">
-                        <ContentControl Classes="track-skeleton-row" />
-                        <ContentControl Classes="track-skeleton-row" />
-                        <ContentControl Classes="track-skeleton-row" />
-                        <ContentControl Classes="track-skeleton-row" />
-                        <ContentControl Classes="track-skeleton-row" />
-                    </StackPanel>
-                    <Canvas IsHitTestVisible="False" HorizontalAlignment="Center"
-                        Width="300" Height="200">
-                        <mi:MaterialIcon Kind="Magnify" Width="32" Height="32"
-                            Classes="scanner-smooth" />
-                    </Canvas>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                        VerticalAlignment="Bottom" Margin="0,280,0,0">
-                        <TextBlock Text="{Binding SearchingText, ElementName=Root}"
-                            FontSize="13" FontWeight="SemiBold"
-                            Foreground="{DynamicResource AccentBrush}" Opacity="0.8" />
-                    </StackPanel>
-                </Grid>
-            </Panel>
-            <ProgressBar IsIndeterminate="True"
-                Width="150"
-                VerticalAlignment="Center"
-                HorizontalAlignment="Center"
-                Foreground="{DynamicResource AccentBrush}"
-                IsVisible="{Binding !EnableSmoothLoading, ElementName=Root}" />
-        </Panel>
+    <UserControl.Resources>
+        <MenuFlyout x:Key="SharedTrackMenuFlyout"
+            x:DataType="svm:TrackItemViewModel"
+            Opened="OnMenuFlyoutOpened"
+            Closed="OnMenuFlyoutClosed">
 
-        <!-- 2. ОСНОВНОЙ КОНТЕНТ -->
-        <Grid IsVisible="{Binding !IsLoading, ElementName=Root}">
-            <ListBox x:Name="MainListBox"
-                Classes="track-list"
+            <MenuItem Header="{Binding L[Player_Play]}" Command="{Binding PlayCommand}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="Play" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="{Binding L[Queue_Add]}" Command="{Binding AddToQueueCommand}"
+                IsVisible="{Binding ShowAddToQueue}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="PlaylistPlus" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="{Binding L[AddToPlaylist_Title]}"
+                Command="{Binding AddToPlaylistCommand}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="PlaylistPlus" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator Classes="menu-separator" />
+            <MenuItem Header="{Binding L[Track_StartRadio]}" Command="{Binding StartRadioCommand}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="RadioTower" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="{Binding L[Track_CopyLink]}" Command="{Binding CopyLinkCommand}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="LinkVariant" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="{Binding DownloadStatusText}"
+                Command="{Binding SaveToDownloadsCommand}"
+                IsEnabled="{Binding !Track.IsDownloaded}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon
+                        Kind="{Binding Track.IsDownloaded,
+                        Converter={StaticResource BoolToIconConverter},
+                        ConverterParameter='Check|Download'}" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator Classes="menu-separator" IsVisible="{Binding IsPlaylistContext}" />
+            <MenuItem Header="{Binding L[Playlist_RemoveFrom]}" Classes="danger"
+                Command="{Binding RemoveFromPlaylistCommand}"
+                IsVisible="{Binding IsPlaylistContext}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="PlaylistRemove" />
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator Classes="menu-separator" IsVisible="{Binding IsQueueContext}" />
+            <MenuItem Header="{Binding L[Queue_Remove]}" Classes="danger"
+                Command="{Binding RemoveFromQueueCommand}"
+                IsVisible="{Binding IsQueueContext}">
+                <MenuItem.Icon>
+                    <mi:MaterialIcon Kind="Close" />
+                </MenuItem.Icon>
+            </MenuItem>
+        </MenuFlyout>
+    </UserControl.Resources>
+
+    <!--
+        ScrollViewer НЕ здесь — он ВСЕГДА в родительском View.
+        ItemsRepeater находит ScrollViewer-предка через visual tree →
+        получает реальный viewport → виртуализация работает (~15 элементов).
+    -->
+    <Panel>
+        <StackPanel IsVisible="{Binding !IsLoading, ElementName=Root}">
+
+            <!-- ═══ ITEMS REPEATER ═══ -->
+            <ItemsRepeater x:Name="MainRepeater"
                 ItemsSource="{Binding Items, ElementName=Root}"
-                Background="Transparent"
-                SelectionMode="Single"
-                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                ScrollViewer.VerticalScrollBarVisibility="{Binding ScrollVisibility, ElementName=Root}"
                 DragDrop.AllowDrop="{Binding EnableReordering, ElementName=Root}"
-                PointerPressed="OnListBoxPointerPressed"
-                PointerMoved="OnListBoxPointerMoved"
-                PointerReleased="OnListBoxPointerReleased"
                 DragDrop.DragOver="OnDragOver"
                 DragDrop.Drop="OnDrop"
                 DragDrop.DragLeave="OnDragLeave">
 
-                <!-- VirtualizingStackPanel для ленивой отрисовки -->
-                <ListBox.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <VirtualizingStackPanel />
-                    </ItemsPanelTemplate>
-                </ListBox.ItemsPanel>
+                <ItemsRepeater.Layout>
+                    <StackLayout Spacing="0" />
+                </ItemsRepeater.Layout>
 
-                <!--
-                    Футер ВНУТРИ ListBox.Template — скроллится вместе с контентом.
-                    DockPanel: футер внизу, ItemsPresenter забирает оставшееся пространство.
-                    ВАЖНО: ItemsPresenter без DockPanel.Dock = Fill (по умолчанию).
-                    Это НЕ ломает виртуализацию, т.к. VirtualizingStackPanel получает
-                    Infinity height от ScrollViewer и виртуализирует внутри себя.
-                -->
-                <ListBox.Template>
-                    <ControlTemplate TargetType="ListBox">
-                        <Border Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}">
-                            <ScrollViewer Name="PART_ScrollViewer"
-                                HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
-                                VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
-                                <DockPanel>
-                                    <!-- Футер: докнут снизу, появляется только при загрузке или конце списка -->
-                                    <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,16"
-                                        DataContext="{Binding #Root}">
-                                        <StackPanel.IsVisible>
-                                            <MultiBinding Converter="{x:Static BoolConverters.Or}">
-                                                <Binding Path="IsLoadingMore" />
-                                                <Binding Path="IsFooterVisible" />
-                                            </MultiBinding>
-                                        </StackPanel.IsVisible>
-
-                                        <!-- Сетевая загрузка -->
-                                        <StackPanel Orientation="Horizontal"
-                                            HorizontalAlignment="Center" Margin="0,16,0,24"
-                                            Opacity="0.6"
-                                            IsVisible="{Binding IsFetchingFromNetwork}">
-                                            <TextBlock Text="{Binding LoadingMoreText}"
-                                                FontSize="13"
-                                                Foreground="{DynamicResource TextMutedBrush}" />
-                                            <TextBlock Text="." FontSize="13"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Classes="loading-dot1" Margin="2,0,0,0" />
-                                            <TextBlock Text="." FontSize="13"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Classes="loading-dot2" />
-                                            <TextBlock Text="." FontSize="13"
-                                                Foreground="{DynamicResource AccentBrush}"
-                                                Classes="loading-dot3" />
-                                        </StackPanel>
-
-                                        <!-- Скелетоны загрузки -->
-                                        <ContentControl Classes="loading-skeletons">
-                                            <ContentControl.IsVisible>
-                                                <MultiBinding
-                                                    Converter="{x:Static BoolConverters.And}">
-                                                    <Binding Path="IsLoadingMore" />
-                                                    <Binding Path="!IsFetchingFromNetwork" />
-                                                </MultiBinding>
-                                            </ContentControl.IsVisible>
-                                        </ContentControl>
-
-                                        <!-- Конец списка -->
-                                        <Border IsVisible="{Binding IsFooterVisible}"
-                                            Margin="0,16,0,32"
-                                            HorizontalAlignment="Center" Opacity="0.5">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <mi:MaterialIcon Kind="CheckCircle" Width="16"
-                                                    Height="16"
-                                                    Foreground="{DynamicResource TextMutedBrush}" />
-                                                <TextBlock Text="{Binding EndOfListText}"
-                                                    Foreground="{DynamicResource TextMutedBrush}"
-                                                    FontSize="13" />
-                                            </StackPanel>
-                                        </Border>
-                                    </StackPanel>
-
-                                    <!-- ItemsPresenter: без DockPanel.Dock → Fill, получает всё оставшееся -->
-                                    <ItemsPresenter Name="PART_ItemsPresenter"
-                                        ItemsPanel="{TemplateBinding ItemsPanel}"
-                                        Margin="{TemplateBinding Padding}" />
-                                </DockPanel>
-                            </ScrollViewer>
-                        </Border>
-                    </ControlTemplate>
-                </ListBox.Template>
-
-                <i:Interaction.Behaviors>
-                    <b:InfiniteScrollBehavior
-                        Command="{Binding LoadMoreCommand, ElementName=Root}"
-                        IsEnabled="{Binding UseInternalScroll, ElementName=Root}"
-                        Threshold="300" />
-                </i:Interaction.Behaviors>
-
-                <ListBox.ItemTemplate>
+                <ItemsRepeater.ItemTemplate>
                     <DataTemplate x:DataType="svm:TrackItemViewModel">
                         <Border Classes="track-row"
                             Classes.is-active="{Binding IsActive}"
                             Classes.menu-open="{Binding IsMenuOpen}"
-                            PointerReleased="OnTrackRowPointerReleased">
+                            Height="60"
+                            UseLayoutRounding="True"
+                            PointerPressed="OnItemPointerPressed"
+                            PointerMoved="OnItemPointerMoved"
+                            PointerReleased="OnItemPointerReleased">
 
                             <Grid ColumnDefinitions="Auto, *, Auto, Auto, 60"
                                 Background="Transparent">
 
                                 <!-- КОЛОНКА 0: Обложка -->
-                                <Button Grid.Column="0"
-                                    Classes="cover-btn"
+                                <Button Grid.Column="0" Classes="cover-btn"
                                     Command="{Binding PlayCommand}"
-                                    Width="44" Height="44"
-                                    Margin="0,0,12,0"
+                                    Width="44" Height="44" Margin="0,0,12,0"
                                     ToolTip.Tip="{Binding L[Player_Play]}">
                                     <Panel>
                                         <Border CornerRadius="6" ClipToBounds="True"
                                             Background="{DynamicResource BgSkeletonBrush}">
-                                            <!-- Отложенная загрузка: null при быстром скролле -->
-                                            <Image Stretch="UniformToFill"
-                                                Width="44" Height="44">
-                                                <asyncImage:ImageLoader.Source>
-                                                    <MultiBinding
-                                                        Converter="{StaticResource DeferredUrlConverter}">
-                                                        <Binding Path="ThumbnailUrl" />
-                                                        <Binding Path="IsScrollingFast"
-                                                            ElementName="Root" />
-                                                    </MultiBinding>
-                                                </asyncImage:ImageLoader.Source>
-                                            </Image>
+                                            <Image Stretch="UniformToFill" Width="44" Height="44"
+                                                RenderOptions.BitmapInterpolationMode="LowQuality"
+                                                h:DebouncedImage.Source="{Binding ThumbnailUrl}" />
                                         </Border>
-                                        <Panel Classes="cover-overlay">
-                                            <Panel.IsVisible>
-                                                <MultiBinding
-                                                    Converter="{x:Static BoolConverters.Or}">
-                                                    <Binding Path="IsActive" />
-                                                    <Binding Path="$parent[Button].IsPointerOver" />
-                                                </MultiBinding>
-                                            </Panel.IsVisible>
-
+                                        <Panel Classes="cover-overlay" IsHitTestVisible="False">
                                             <Border CornerRadius="6"
                                                 Background="{DynamicResource BgOverlayBrush}" />
-
-                                            <mi:MaterialIcon Kind="Play"
-                                                Classes="play-icon"
-                                                Width="24" Height="24"
+                                            <mi:MaterialIcon
+                                                Kind="{Binding IsPlaying,
+                                                Converter={StaticResource BoolToIconConverter},
+                                                ConverterParameter='Pause|Play'}"
+                                                Classes="play-icon" Width="24" Height="24"
                                                 Foreground="{DynamicResource TextPrimaryBrush}"
-                                                IsVisible="{Binding !IsPlaying}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center" />
-                                            <mi:MaterialIcon Kind="Pause"
-                                                Classes="play-icon"
-                                                Width="24" Height="24"
-                                                Foreground="{DynamicResource TextPrimaryBrush}"
-                                                IsVisible="{Binding IsPlaying}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center" />
                                         </Panel>
                                         <Border IsVisible="{Binding IsPlaying}"
-                                            Width="12" Height="12"
-                                            CornerRadius="6"
+                                            Width="12" Height="12" CornerRadius="6"
                                             Background="{DynamicResource AccentBrush}"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Bottom"
-                                            Margin="0,0,2,2">
-                                            <mi:MaterialIcon Kind="VolumeHigh"
-                                                Width="8" Height="8"
+                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            Margin="0,0,2,2" IsHitTestVisible="False">
+                                            <mi:MaterialIcon Kind="VolumeHigh" Width="8" Height="8"
                                                 Foreground="{DynamicResource TextDarkBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center" />
@@ -234,157 +142,108 @@
                                 </Button>
 
                                 <!-- КОЛОНКА 1: Информация -->
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                                    <TextBlock Text="{Binding Title}"
-                                        Classes="track-title"
-                                        TextTrimming="CharacterEllipsis"
-                                        MaxLines="1"
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center"
+                                    Spacing="2" IsHitTestVisible="False">
+                                    <TextBlock Text="{Binding Title}" Classes="track-title"
+                                        TextTrimming="CharacterEllipsis" MaxLines="1"
                                         FontSize="14" />
                                     <TextBlock Text="{Binding Author}"
                                         Foreground="{DynamicResource TextMutedBrush}"
-                                        TextTrimming="CharacterEllipsis"
-                                        MaxLines="1"
+                                        TextTrimming="CharacterEllipsis" MaxLines="1"
                                         FontSize="12" />
                                 </StackPanel>
 
                                 <!-- КОЛОНКА 2: Статус -->
-                                <Panel Grid.Column="2" VerticalAlignment="Center" Margin="8,0">
+                                <Panel Grid.Column="2" VerticalAlignment="Center"
+                                    Margin="8,0" IsHitTestVisible="False">
                                     <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
-                                        IsVisible="{Binding IsDownloaded}"
+                                        IsVisible="{Binding Track.IsDownloaded}"
                                         ToolTip.Tip="{Binding L[Track_Downloaded]}" />
-
                                     <mi:MaterialIcon Kind="CloudCheck" Width="16" Height="16"
                                         Foreground="{DynamicResource AccentBrush}"
                                         ToolTip.Tip="{Binding L[Track_Cached]}">
                                         <mi:MaterialIcon.IsVisible>
                                             <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                                <Binding Path="IsCached" />
-                                                <Binding Path="!IsDownloaded" />
+                                                <Binding Path="Track.IsCached" />
+                                                <Binding Path="!Track.IsDownloaded" />
                                             </MultiBinding>
                                         </mi:MaterialIcon.IsVisible>
                                     </mi:MaterialIcon>
-
                                     <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
-                                        Width="32" Height="3"
-                                        IsVisible="{Binding IsDownloading}"
+                                        Width="32" Height="3" IsVisible="{Binding IsDownloading}"
                                         Foreground="{DynamicResource AccentBrush}" />
                                 </Panel>
 
                                 <!-- КОЛОНКА 3: Лайк -->
-                                <Button Grid.Column="3"
-                                    Classes="icon-btn like-btn"
-                                    Classes.is-liked="{Binding IsLiked}"
+                                <Button Grid.Column="3" Classes="icon-btn like-btn"
+                                    Classes.is-liked="{Binding Track.IsLiked}"
                                     Command="{Binding ToggleLikeCommand}"
                                     ToolTip.Tip="{Binding L[Track_ToggleLike]}">
                                     <mi:MaterialIcon
-                                        Kind="{Binding IsLiked, Converter={StaticResource BoolToIconConverter}, ConverterParameter='Heart|HeartOutline'}"
+                                        Kind="{Binding Track.IsLiked,
+                                        Converter={StaticResource BoolToIconConverter},
+                                        ConverterParameter='Heart|HeartOutline'}"
                                         Width="16" Height="16" />
                                 </Button>
 
                                 <!-- КОЛОНКА 4: Длительность + Меню -->
                                 <Panel Grid.Column="4">
                                     <TextBlock Text="{Binding FormattedDuration}"
-                                        Classes="duration-text"
-                                        VerticalAlignment="Center"
+                                        Classes="duration-text" VerticalAlignment="Center"
                                         HorizontalAlignment="Right"
                                         Foreground="{DynamicResource TextMutedBrush}"
-                                        FontSize="12"
-                                        Margin="0,0,8,0" />
-
-                                    <Button x:Name="MoreMenuButton"
-                                        Classes="icon-btn more-btn"
-                                        HorizontalAlignment="Right"
-                                        Background="Transparent"
-                                        Width="32" Height="32"
+                                        FontSize="12" Margin="0,0,8,0"
+                                        IsHitTestVisible="False" />
+                                    <Button Classes="icon-btn more-btn"
+                                        HorizontalAlignment="Right" Width="32" Height="32"
+                                        Click="OnMoreButtonClicked"
                                         ToolTip.Tip="{Binding L[Track_MoreOptions]}">
                                         <mi:MaterialIcon Kind="DotsHorizontal" Width="20"
                                             Height="20"
                                             Foreground="{DynamicResource TextPrimaryBrush}" />
-
-                                        <Button.Flyout>
-                                            <MenuFlyout Placement="BottomEdgeAlignedRight"
-                                                Opened="OnMenuFlyoutOpened"
-                                                Closed="OnMenuFlyoutClosed">
-
-                                                <MenuItem Header="{Binding L[Player_Play]}"
-                                                    Command="{Binding PlayCommand}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon Kind="Play" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                                <MenuItem Header="{Binding L[Queue_Add]}"
-                                                    Command="{Binding AddToQueueCommand}"
-                                                    IsVisible="{Binding ShowAddToQueue}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon Kind="PlaylistPlus" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                                <MenuItem Header="{Binding L[AddToPlaylist_Title]}"
-                                                    Command="{Binding AddToPlaylistCommand}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon Kind="PlaylistPlus" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                                <Separator Classes="menu-separator" />
-
-                                                <MenuItem Header="{Binding L[Track_StartRadio]}"
-                                                    Command="{Binding StartRadioCommand}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon Kind="RadioTower" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                                <MenuItem Header="{Binding DownloadStatusText}"
-                                                    Command="{Binding SaveToDownloadsCommand}"
-                                                    IsEnabled="{Binding !IsDownloaded}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon
-                                                            Kind="{Binding IsDownloaded, 
-                                                                Converter={StaticResource BoolToIconConverter}, 
-                                                                ConverterParameter='Check|Download'}" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                                <Separator Classes="menu-separator"
-                                                    IsVisible="{Binding IsPlaylistContext}" />
-
-                                                <MenuItem
-                                                    Header="{Binding L[Playlist_RemoveFrom]}"
-                                                    Classes="danger"
-                                                    Command="{Binding RemoveFromPlaylistCommand}"
-                                                    IsVisible="{Binding IsPlaylistContext}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon Kind="PlaylistRemove" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                                <Separator Classes="menu-separator"
-                                                    IsVisible="{Binding IsQueueContext}" />
-
-                                                <MenuItem
-                                                    Header="{Binding L[Queue_Remove]}"
-                                                    Classes="danger"
-                                                    Command="{Binding RemoveFromQueueCommand}"
-                                                    IsVisible="{Binding IsQueueContext}">
-                                                    <MenuItem.Icon>
-                                                        <mi:MaterialIcon Kind="Close" />
-                                                    </MenuItem.Icon>
-                                                </MenuItem>
-
-                                            </MenuFlyout>
-                                        </Button.Flyout>
                                     </Button>
                                 </Panel>
-
                             </Grid>
                         </Border>
                     </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
-        </Grid>
-    </Grid>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
+
+            <!-- ═══ FOOTER ═══ -->
+            <StackPanel Margin="0,8,0,16"
+                DataContext="{Binding #Root}"
+                IsHitTestVisible="False">
+                <StackPanel.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                        <Binding Path="IsLoadingMore" />
+                        <Binding Path="IsFooterVisible" />
+                    </MultiBinding>
+                </StackPanel.IsVisible>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0,16,0,24" Opacity="0.6"
+                    IsVisible="{Binding IsFetchingFromNetwork}">
+                    <TextBlock Text="{Binding LoadingMoreText}" FontSize="13"
+                        Foreground="{DynamicResource TextMutedBrush}" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="loading-dot1" Margin="2,0,0,0" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="loading-dot2" />
+                    <TextBlock Text="." FontSize="13" Foreground="{DynamicResource AccentBrush}"
+                        Classes="loading-dot3" />
+                </StackPanel>
+
+                <Border IsVisible="{Binding IsFooterVisible}"
+                    Margin="0,16,0,32" HorizontalAlignment="Center" Opacity="0.5">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
+                            Foreground="{DynamicResource TextMutedBrush}" />
+                        <TextBlock Text="{Binding EndOfListText}"
+                            Foreground="{DynamicResource TextMutedBrush}" FontSize="13" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </StackPanel>
+    </Panel>
 </UserControl>

@@ -185,48 +185,45 @@ public sealed class TrackRegistry
         Log.Info("[TrackRegistry] Hydrating from database...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        var allLoaded = new List<TrackInfo>(2200);
+        // Три независимых запроса к БД параллельно вместо последовательных await.
+        // Суммарное время = max(t_liked, t_downloaded, t_recent) вместо t_liked + t_downloaded + t_recent.
+        var likedTask = _repository.GetLikedAsync(1000, 0, ct);
+        var downloadTask = _repository.GetDownloadedAsync(1000, 0, ct);
+        var recentTask = _repository.GetRecentlyPlayedAsync(100, ct);
 
-        var liked = await _repository.GetLikedAsync(1000, 0, ct);
-        allLoaded.AddRange(liked);
+        await Task.WhenAll(likedTask, downloadTask, recentTask);
 
-        var downloaded = await _repository.GetDownloadedAsync(1000, 0, ct);
-        allLoaded.AddRange(downloaded);
+        var allLoaded = new List<TrackInfo>(
+            likedTask.Result.Count + downloadTask.Result.Count + recentTask.Result.Count);
 
-        var recent = await _repository.GetRecentlyPlayedAsync(100, ct);
-        allLoaded.AddRange(recent);
+        allLoaded.AddRange(likedTask.Result);
+        allLoaded.AddRange(downloadTask.Result);
+        allLoaded.AddRange(recentTask.Result);
 
         var allIds = new HashSet<string>(allLoaded.Count, StringComparer.Ordinal);
         for (int i = 0; i < allLoaded.Count; i++)
             allIds.Add(allLoaded[i].Id);
 
         Dictionary<string, HashSet<string>>? playlistsMap = null;
-
         if (_playlists != null && allIds.Count > 0)
-        {
             playlistsMap = await _playlists.GetPlaylistsForTracksAsync(allIds, ct);
-        }
 
         for (int i = 0; i < allLoaded.Count; i++)
         {
             var t = allLoaded[i];
 
             if (playlistsMap != null && playlistsMap.TryGetValue(t.Id, out var pls))
-            {
                 t.InPlaylists = pls;
-            }
 
             var canonical = RegisterOrUpdate(t);
             UpdatePinStatusInternal(canonical);
         }
 
-        // Массовая гидрация кэш-статуса через AudioCacheManager
         var audioCache = GetAudioCache();
         audioCache?.HydrateCacheStatus(_pinned.Values);
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} pinned tracks in {sw.ElapsedMilliseconds}ms");
-
         MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", _pinned.Count * 1024);
     }
 

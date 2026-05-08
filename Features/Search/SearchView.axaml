@@ -15,10 +15,7 @@
         <!-- ═══ HEADER ═══ -->
         <StackPanel Grid.Row="0" Margin="24,20,24,8" Spacing="12">
 
-            <!-- Row 1: Search Box + Source Buttons + Force Refresh -->
             <Grid ColumnDefinitions="*, Auto">
-
-                <!-- Search Box (растягивается) -->
                 <TextBox Classes="search-box"
                     Watermark="{Binding L[Search_Placeholder]}"
                     Text="{Binding SearchQuery}"
@@ -39,63 +36,56 @@
                     </TextBox.InnerRightContent>
                 </TextBox>
 
-                <!-- Source Buttons + Force Refresh (справа от search box) -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="12,0,0,0">
-
-                    <!-- YT Music -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                    Margin="12,0,0,0">
                     <Button Classes="icon-btn"
-                        Classes.active="{Binding Source, Converter={StaticResource EnumToBool}, ConverterParameter=YouTubeMusic}"
-                        Command="{Binding SetSourceCommand}" CommandParameter="YouTubeMusic"
-                        ToolTip.Tip="YouTube Music"
-                        Width="36" Height="36">
+                        Classes.active="{Binding Source,
+                        Converter={StaticResource EnumToBool},
+                        ConverterParameter=YouTubeMusic}"
+                        Command="{Binding SetSourceCommand}"
+                        CommandParameter="YouTubeMusic"
+                        ToolTip.Tip="YouTube Music" Width="36" Height="36">
                         <mi:MaterialIcon Kind="Music" Width="18" Height="18" />
                     </Button>
-
-                    <!-- YouTube -->
                     <Button Classes="icon-btn"
-                        Classes.active="{Binding Source, Converter={StaticResource EnumToBool}, ConverterParameter=YouTube}"
-                        Command="{Binding SetSourceCommand}" CommandParameter="YouTube"
-                        ToolTip.Tip="YouTube"
-                        Width="36" Height="36">
+                        Classes.active="{Binding Source,
+                        Converter={StaticResource EnumToBool},
+                        ConverterParameter=YouTube}"
+                        Command="{Binding SetSourceCommand}"
+                        CommandParameter="YouTube"
+                        ToolTip.Tip="YouTube" Width="36" Height="36">
                         <mi:MaterialIcon Kind="Youtube" Width="18" Height="18" />
                     </Button>
-
-                    <!-- Local -->
                     <Button Classes="icon-btn"
-                        Classes.active="{Binding Source, Converter={StaticResource EnumToBool}, ConverterParameter=Local}"
-                        Command="{Binding SetSourceCommand}" CommandParameter="Local"
-                        ToolTip.Tip="{Binding L[Search_LocalFiles]}"
-                        Width="36" Height="36">
+                        Classes.active="{Binding Source,
+                        Converter={StaticResource EnumToBool},
+                        ConverterParameter=Local}"
+                        Command="{Binding SetSourceCommand}"
+                        CommandParameter="Local"
+                        ToolTip.Tip="{Binding L[Search_LocalFiles]}" Width="36" Height="36">
                         <mi:MaterialIcon Kind="FolderMusic" Width="18" Height="18" />
                     </Button>
-
-                    <!-- Separator -->
                     <Border Width="1" Height="20"
                         Background="{DynamicResource BgHighlightBrush}"
                         Margin="4,0" VerticalAlignment="Center"
                         IsVisible="{Binding ShowForceSearchButton}" />
-
-                    <!-- Force Refresh -->
                     <Button Classes="icon-btn"
                         Command="{Binding ForceSearchCommand}"
                         IsVisible="{Binding ShowForceSearchButton}"
-                        ToolTip.Tip="{Binding L[Search_ForceRefresh]}"
-                        Width="36" Height="36">
+                        ToolTip.Tip="{Binding L[Search_ForceRefresh]}" Width="36" Height="36">
                         <mi:MaterialIcon Kind="Refresh" Width="18" Height="18"
                             Foreground="{DynamicResource AccentBrush}" />
                     </Button>
                 </StackPanel>
             </Grid>
 
-            <!-- Row 2: Status Indicators (Offline / Cache) -->
             <StackPanel Orientation="Horizontal" Spacing="16"
                 IsVisible="{Binding IsOfflineMode}">
                 <StackPanel Orientation="Horizontal" Spacing="6" Opacity="0.8">
                     <mi:MaterialIcon Kind="WifiOff" Width="14" Height="14"
                         Foreground="{DynamicResource SystemWarnOrangeBrush}" />
-                    <TextBlock
-                        Text="{Binding L[Search_OfflineMode]}"
-                        FontSize="12" Foreground="{DynamicResource SystemWarnOrangeBrush}" />
+                    <TextBlock Text="{Binding L[Search_OfflineMode]}" FontSize="12"
+                        Foreground="{DynamicResource SystemWarnOrangeBrush}" />
                 </StackPanel>
             </StackPanel>
 
@@ -107,11 +97,8 @@
                     Foreground="{DynamicResource TextMutedBrush}" />
             </StackPanel>
 
-            <!-- Row 3: Recent Searches (чипы с крестиком) -->
-            <!-- FIX: Используем DataContext="{Binding}" на ItemsControl чтобы сохранить контекст -->
             <ItemsControl ItemsSource="{Binding RecentSearches}"
-                Margin="0,4,0,0"
-                IsVisible="{Binding !IsOfflineMode}"
+                Margin="0,4,0,0" IsVisible="{Binding !IsOfflineMode}"
                 DataContext="{Binding}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -122,13 +109,10 @@
                     <DataTemplate x:DataType="x:String">
                         <Border Classes="search-chip" Margin="0,0,6,6">
                             <Grid ColumnDefinitions="Auto, Auto">
-                                <!-- Текст чипа (кликабельный) -->
                                 <Button Grid.Column="0" Classes="search-chip-text"
                                     Content="{Binding}"
                                     Command="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).HistoryClickCommand}"
                                     CommandParameter="{Binding}" />
-
-                                <!-- Крестик удаления -->
                                 <Button Grid.Column="1" Classes="search-chip-close"
                                     Command="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).RemoveHistoryCommand}"
                                     CommandParameter="{Binding}"
@@ -141,17 +125,17 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
-            <!-- Error Message -->
             <Border
-                IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8" Padding="12"
-                Margin="0,4,0,0">
+                IsVisible="{Binding ErrorMessage,
+                Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8"
+                Padding="12" Margin="0,4,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <mi:MaterialIcon Kind="AlertCircle" Width="18" Height="18"
                         Foreground="{DynamicResource SystemErrorBrush}" />
                     <TextBlock Text="{Binding ErrorMessage}"
-                        Foreground="{DynamicResource SystemErrorBrush}" VerticalAlignment="Center"
-                        FontSize="13" />
+                        Foreground="{DynamicResource SystemErrorBrush}"
+                        VerticalAlignment="Center" FontSize="13" />
                 </StackPanel>
             </Border>
         </StackPanel>
@@ -159,8 +143,11 @@
         <!-- ═══ RESULTS LIST ═══ -->
         <ScrollViewer Grid.Row="1" Margin="24,0">
             <i:Interaction.Behaviors>
-                <b:InfiniteScrollBehavior Command="{Binding LoadMoreCommand}" Threshold="300" />
+                <b:InfiniteScrollBehavior
+                    Command="{Binding LoadMoreCommand}"
+                    Threshold="300" />
             </i:Interaction.Behaviors>
+
             <controls:TrackListControl
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"
@@ -168,7 +155,6 @@
                 IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
                 ReachedEnd="{Binding ReachedEnd}"
                 LoadMoreCommand="{Binding LoadMoreCommand}"
-                UseInternalScroll="False"
                 UseSearchLoader="True"
                 EnableSmoothLoading="{Binding EnableSmoothLoading}" />
         </ScrollViewer>

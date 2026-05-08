@@ -1,6 +1,5 @@
 #if WINDOWS
 using System.Runtime.InteropServices;
-using Avalonia.Controls;
 using LMP.Core.Helpers;
 using LMP.Core.Services;
 

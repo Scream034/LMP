@@ -10,16 +10,13 @@
       "args": [],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
-
       "justMyCode": true,
       "suppressJITOptimizations": true,
-
       "logging": {
         "moduleLoad": false,
         "exceptions": true,
         "programOutput": true
       },
-
       "symbolOptions": {
         "searchMicrosoftSymbolServer": false,
         "searchNuGetOrgSymbolServer": false,
@@ -28,14 +25,29 @@
         ]
       }
     },
-
+    {
+      "name": "🚀 Release (Performance Test)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build: release",
+      "program": "${workspaceFolder}/bin/Release/net10.0/LMP.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "justMyCode": false,
+      "suppressJITOptimizations": false,
+      "logging": {
+        "moduleLoad": false,
+        "exceptions": false,
+        "programOutput": true
+      }
+    },
     {
       "name": "🎵 Watch (Hot Reload) + Attach",
       "type": "coreclr",
       "request": "attach",
       "preLaunchTask": "watch",
       "processId": "${command:pickProcess}",
-
       "justMyCode": true,
       "logging": {
         "moduleLoad": false,

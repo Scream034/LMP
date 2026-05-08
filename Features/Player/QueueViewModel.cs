@@ -31,6 +31,8 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     // LIFECYCLE: Флаг для пропуска UI-обновлений когда окно свёрнуто
     private volatile bool _isSuspended;
 
+    private TrackItemViewModel? _currentActiveVm;
+
     /// <summary>
     /// True когда очередь действительно пуста (нет треков вообще).
     /// Показывает "Очередь пуста" с иконкой.
@@ -60,12 +62,12 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     public ReactiveCommand<Unit, Unit> SaveQueueToPlaylistCommand { get; }
 
     public QueueViewModel(
-        AudioEngine audio,
-        DownloadService downloads,
-        DialogService dialog,
-        MusicLibraryManager manager,
-        LibraryService library,
-        TrackViewModelFactory vmFactory)
+      AudioEngine audio,
+      DownloadService downloads,
+      DialogService dialog,
+      MusicLibraryManager manager,
+      LibraryService library,
+      TrackViewModelFactory vmFactory)
     {
         _audio = audio;
         _downloads = downloads;
@@ -81,27 +83,24 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
         {
             foreach (var item in QueueItems)
             {
-                if (!item.IsDownloaded)
+                if (!item.IsDownloading)
                     _downloads.StartDownload(item.Track);
             }
         }));
 
         RemoveTrackCommand = CreateCommand(ReactiveCommand.Create<TrackItemViewModel>(item =>
-        {
-            _audio.RemoveFromQueue(item.Track);
-        }));
+            _audio.RemoveFromQueue(item.Track)));
 
         MoveItemCommand = CreateCommand(ReactiveCommand.Create<(int oldIndex, int newIndex)>(tuple =>
         {
-            if (!CanReorderItems) return;
-            MoveItem(tuple.oldIndex, tuple.newIndex);
+            if (CanReorderItems) MoveItem(tuple.oldIndex, tuple.newIndex);
         }));
 
         SaveQueueToPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             SaveQueueToPlaylistAsync,
             this.WhenAnyValue(x => x.IsEmpty, empty => !empty)));
 
-        // Подписка на изменения очереди из AudioEngine
+        // Изменения очереди из AudioEngine
         Observable.FromEvent(
                 h => _audio.OnQueueChanged += h,
                 h => _audio.OnQueueChanged -= h)
@@ -109,28 +108,58 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(_ =>
             {
-                if (_isSuspended) return;
-
-                if (!_isMovingInternally)
-                {
-                    RefreshFromAudioEngine();
-                }
+                if (_isSuspended || _isMovingInternally) return;
+                RefreshFromAudioEngine();
             })
             .DisposeWith(Disposables);
 
-        // Подписка на смену текущего трека
+        // Smart Parent: смена трека — O(1), обновляем ровно 2 VM
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ =>
+            .Subscribe(t =>
             {
-                if (_isSuspended) return;
-                UpdateActiveStates();
+                if (!_isSuspended) UpdatePlaybackState(t, _audio.IsPlaying);
             })
             .DisposeWith(Disposables);
 
-        // Фильтрация с дебаунсом
+        // Smart Parent: смена состояния воспроизведения — O(1)
+        Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
+                h => (a, b) => h((a, b)),
+                h => _audio.OnPlaybackStateChanged += h,
+                h => _audio.OnPlaybackStateChanged -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(x =>
+            {
+                if (!_isSuspended) UpdatePlaybackState(_audio.CurrentTrack, x.Item1);
+            })
+            .DisposeWith(Disposables);
+
+        // Smart Parent: прогресс загрузки — O(1)
+        Observable.FromEvent<Action<string, float>, (string, float)>(
+                h => (id, p) => h((id, p)),
+                h => _downloads.OnProgress += h,
+                h => _downloads.OnProgress -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(x =>
+            {
+                if (!_isSuspended) UpdateDownloadState(x.Item1, true, x.Item2);
+            })
+            .DisposeWith(Disposables);
+
+        Observable.FromEvent<Action<string, bool, string?>, (string, bool, string?)>(
+                h => (id, ok, path) => h((id, ok, path)),
+                h => _downloads.OnCompleted += h,
+                h => _downloads.OnCompleted -= h)
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(x =>
+            {
+                if (!_isSuspended) UpdateDownloadState(x.Item1, false, 0);
+            })
+            .DisposeWith(Disposables);
+
+        // Фильтрация
         this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
             .ObserveOn(RxApp.MainThreadScheduler)
@@ -142,6 +171,31 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
             .DisposeWith(Disposables);
 
         RefreshFromAudioEngine();
+    }
+
+    // O(1) Обновление состояния воспроизведения
+    private void UpdatePlaybackState(TrackInfo? currentTrack, bool isPlaying)
+    {
+        if (_currentActiveVm != null && _currentActiveVm.Id != currentTrack?.Id)
+        {
+            _currentActiveVm.SetActive(false, false);
+            _currentActiveVm = null;
+        }
+
+        if (currentTrack != null)
+        {
+            _currentActiveVm ??= _vmCache.GetValueOrDefault(currentTrack.Id);
+            _currentActiveVm?.SetActive(true, isPlaying);
+        }
+    }
+
+    // O(1) Обновление прогресса скачивания
+    private void UpdateDownloadState(string trackId, bool isDownloading, float progress)
+    {
+        if (_vmCache.TryGetValue(trackId, out var vm))
+        {
+            vm.SetDownloadState(isDownloading, progress);
+        }
     }
 
     private async Task SaveQueueToPlaylistAsync()
@@ -219,7 +273,7 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
                 _vmCache[track.Id] = vm;
             }
 
-            vm.SetActive(track.Id == currentId);
+            vm.SetActive(track.Id == currentId, _audio.IsPlaying);
             newItems.Add(vm);
             usedIds.Add(track.Id);
         }
@@ -297,15 +351,6 @@ public class QueueViewModel : ViewModelBase, IDisposable, IFilterable
     private void PlayFromQueue(TrackInfo track)
     {
         _ = _audio.PlayTrackAsync(track);
-    }
-
-    private void UpdateActiveStates()
-    {
-        var currentId = _audio.CurrentTrack?.Id;
-        foreach (var item in QueueItems)
-        {
-            item.SetActive(item.Id == currentId);
-        }
     }
 
     protected override void Dispose(bool disposing)

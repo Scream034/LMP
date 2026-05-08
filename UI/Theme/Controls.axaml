@@ -462,7 +462,6 @@
         <Setter Property="MinWidth" Value="180" />
     </Style>
 
-    <!-- Полностью переопределяем шаблон MenuItem: плоское меню без шеврона -->
     <Style Selector="MenuItem">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="Background" Value="Transparent" />
@@ -470,9 +469,14 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <ControlTemplate TargetType="MenuItem">
+                <!--
+                AccentTransparentBrush вместо Transparent:
+                тот же RGB что у Accent, alpha=0.
+                BrushTransition интерполирует RGB линейно без вспышки через белый.
+            -->
                 <Border Name="PART_LayoutRoot"
                     Background="Transparent"
-                    BorderBrush="Transparent"
+                    BorderBrush="{DynamicResource AccentTransparentBrush}"
                     BorderThickness="1"
                     CornerRadius="6"
                     Padding="{TemplateBinding Padding}">
@@ -483,14 +487,12 @@
                     </Border.Transitions>
 
                     <Grid ColumnDefinitions="24, *, Auto">
-                        <!-- Icon -->
                         <ContentPresenter Name="PART_IconPresenter"
                             Content="{TemplateBinding Icon}"
                             Width="16" Height="16"
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center" />
 
-                        <!-- Header -->
                         <ContentPresenter Name="PART_HeaderPresenter"
                             Grid.Column="1"
                             Content="{TemplateBinding Header}"
@@ -498,7 +500,6 @@
                             HorizontalAlignment="Left"
                             RecognizesAccessKey="True" />
 
-                        <!-- Input Gesture Text -->
                         <TextBlock Name="PART_InputGestureText"
                             Grid.Column="2"
                             Text="{TemplateBinding InputGesture}"
@@ -512,7 +513,6 @@
         </Setter>
     </Style>
 
-    <!-- Hover & Pressed: фон ВСЕГДА Transparent, меняется только BorderBrush -->
     <Style Selector="MenuItem:pointerover /template/ Border#PART_LayoutRoot">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -522,24 +522,25 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- Disabled State -->
     <Style Selector="MenuItem:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
 
-    <!-- Иконки внутри MenuItem -->
     <Style Selector="MenuItem mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
         <Setter Property="Width" Value="16" />
         <Setter Property="Height" Value="16" />
     </Style>
 
-    <!-- Danger (Удалить) -->
+    <!-- Danger: SystemErrorTransparentBrush → SystemErrorBrush (без вспышки) -->
     <Style Selector="MenuItem.danger">
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBrush}" />
     </Style>
     <Style Selector="MenuItem.danger mi|MaterialIcon">
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBrush}" />
+    </Style>
+    <Style Selector="MenuItem.danger /template/ Border#PART_LayoutRoot">
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorTransparentBrush}" />
     </Style>
     <Style Selector="MenuItem.danger:pointerover /template/ Border#PART_LayoutRoot">
         <Setter Property="Background" Value="Transparent" />

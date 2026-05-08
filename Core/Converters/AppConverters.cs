@@ -9,6 +9,7 @@ using Avalonia.Platform;
 using Avalonia.Media.Imaging;
 using Avalonia.Controls;
 using Avalonia.Data;
+using Avalonia;
 
 namespace LMP.Core.Converters;
 
@@ -65,52 +66,59 @@ public sealed class VolumeToIconConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
 
+/// <summary>
+/// Конвертирует bool в одно из двух значений по параметру "TrueValue|FalseValue".
+/// Кэширует результат парсинга параметра: Split + TryParse/Find вызываются
+/// один раз на уникальный параметр вместо каждого вызова конвертера.
+/// </summary>
 public sealed class BoolToSelectorConverter : IValueConverter
 {
+    /// <summary>
+    /// Кэш разобранных пар параметров. Ключ — строка параметра, значение — пара строк.
+    /// Параметров конечное число (~10-15 в приложении).
+    /// </summary>
+    private static readonly Dictionary<string, (string TrueVal, string FalseVal)> _pairCache = [];
+
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        if (value is bool b && parameter is string options)
+        if (value is not bool b || parameter is not string key) return null;
+
+        if (!_pairCache.TryGetValue(key, out var pair))
         {
-            var parts = options.Split('|');
-            if (parts.Length == 2)
-            {
-                var resultString = b ? parts[0] : parts[1];
-
-                // Если просят иконку
-                if (targetType == typeof(MaterialIconKind) || targetType == typeof(object))
-                {
-                    if (Enum.TryParse<MaterialIconKind>(resultString, true, out var iconKind))
-                        return iconKind;
-                }
-
-                // Если просят цвет (IBrush)
-                if (typeof(IBrush).IsAssignableFrom(targetType))
-                {
-                    // 1. Пытаемся найти в ресурсах приложения
-                    if (Avalonia.Application.Current != null && Avalonia.Application.Current.TryFindResource(resultString, out var res))
-                    {
-                        if (res is IBrush brush) return brush;
-                        if (res is Color color) return new SolidColorBrush(color);
-                    }
-
-                    // 2. Если не ресурс, пытаемся распарсить как HEX
-                    try
-                    {
-                        return SolidColorBrush.Parse(resultString);
-                    }
-                    catch
-                    {
-                        return Brushes.Transparent;
-                    }
-                }
-
-                return resultString;
-            }
+            var sep = key.IndexOf('|');
+            pair = sep >= 0
+                ? (key[..sep], key[(sep + 1)..])
+                : (key, key);
+            _pairCache[key] = pair;
         }
-        return null;
+
+        var chosen = b ? pair.TrueVal : pair.FalseVal;
+
+        // MaterialIconKind
+        if (targetType == typeof(MaterialIconKind) || targetType == typeof(object))
+        {
+            if (Enum.TryParse<MaterialIconKind>(chosen, true, out var iconKind))
+                return iconKind;
+        }
+
+        // IBrush
+        if (typeof(IBrush).IsAssignableFrom(targetType))
+        {
+            if (Application.Current?.TryFindResource(chosen, out var res) == true)
+            {
+                if (res is IBrush brush) return brush;
+                if (res is Color color) return new SolidColorBrush(color);
+            }
+
+            try { return SolidColorBrush.Parse(chosen); }
+            catch { return Brushes.Transparent; }
+        }
+
+        return chosen;
     }
 
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotImplementedException();
 }
 
 public sealed class BoolToCursorConverter : IValueConverter
@@ -411,23 +419,51 @@ public sealed class BoolToFontWeightConverter : IValueConverter
 
 /// <summary>
 /// Конвертирует bool в MaterialIconKind.
-/// Параметр: "TrueIcon|FalseIcon", например "Heart|HeartOutline"
+/// Параметр: "TrueIcon|FalseIcon", например "Heart|HeartOutline".
+/// 
+/// Кэширует результат парсинга параметра: string.Split('|') + Enum.TryParse
+/// вызываются один раз на уникальный параметр вместо ~160 раз за цикл рециклинга
+/// (8 конвертеров × 20 видимых элементов).
 /// </summary>
 public sealed class BoolToIconConverter : IValueConverter
 {
+    /// <summary>
+    /// Кэш: "Heart|HeartOutline" → (MaterialIconKind.Heart, MaterialIconKind.HeartOutline).
+    /// Параметров конечное число (~5-8 в приложении), словарь не растёт бесконтрольно.
+    /// </summary>
+    private static readonly Dictionary<string, (MaterialIconKind TrueIcon, MaterialIconKind FalseIcon)?> _cache = [];
+
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        if (value is bool b && parameter is string options)
+        if (value is not bool b || parameter is not string key)
+            return MaterialIconKind.Help;
+
+        if (!_cache.TryGetValue(key, out var pair))
         {
-            var parts = options.Split('|');
-            if (parts.Length == 2)
-            {
-                var iconName = b ? parts[0] : parts[1];
-                if (Enum.TryParse<MaterialIconKind>(iconName, true, out var iconKind))
-                    return iconKind;
-            }
+            pair = ParseIconPair(key);
+            _cache[key] = pair;
         }
-        return MaterialIconKind.Help; // fallback
+
+        return pair.HasValue
+            ? (b ? pair.Value.TrueIcon : pair.Value.FalseIcon)
+            : MaterialIconKind.Help;
+    }
+
+    private static (MaterialIconKind, MaterialIconKind)? ParseIconPair(string options)
+    {
+        var separatorIndex = options.IndexOf('|');
+        if (separatorIndex < 0) return null;
+
+        var truePart = options.AsSpan(0, separatorIndex);
+        var falsePart = options.AsSpan(separatorIndex + 1);
+
+        if (Enum.TryParse<MaterialIconKind>(truePart, true, out var trueIcon) &&
+            Enum.TryParse<MaterialIconKind>(falsePart, true, out var falseIcon))
+        {
+            return (trueIcon, falseIcon);
+        }
+
+        return null;
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

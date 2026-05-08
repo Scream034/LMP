@@ -11,8 +11,7 @@ public enum PlaylistSyncMode
     CloudPublic
 }
 
-// Реализуем IBatchItem и ISearchResult
-public class Playlist : IBatchItem, ISearchResult
+public sealed class Playlist : IBatchItem, ISearchResult
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
 
@@ -64,7 +63,6 @@ public class Playlist : IBatchItem, ISearchResult
 
     [JsonIgnore] public bool IsLocal => SyncMode == PlaylistSyncMode.LocalOnly || SyncMode == PlaylistSyncMode.TwoWaySync;
     [JsonIgnore] public bool IsFromAccount => SyncMode == PlaylistSyncMode.TwoWaySync;
-    [JsonIgnore] public bool IsFakeAccountSource => SyncMode == PlaylistSyncMode.CloudPublic;
     [JsonIgnore] public bool IsEditable => SyncMode != PlaylistSyncMode.CloudPublic;
 
     public DateTime CreatedAt { get; set; } = DateTime.Now;

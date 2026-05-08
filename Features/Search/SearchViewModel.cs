@@ -198,9 +198,7 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
 
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
-        if (_isDisposed) return [];
-
-        if (Source == ContentSource.Local || TotalCount >= MaxResults)
+        if (_isDisposed || Source == ContentSource.Local || TotalCount >= MaxResults)
             return [];
 
         var currentFilter = GetSearchFilter();
@@ -214,63 +212,47 @@ public sealed class SearchViewModel : PaginatedViewModel<TrackInfo, TrackItemVie
         if (_searchSession == null && !string.IsNullOrEmpty(_currentQuery))
         {
             var existingIds = GetLoadedItemsIds();
-            _searchSession = _youtube.CreateSearchSession(_currentQuery, MaxResults, currentFilter, existingIds);
+            _searchSession = _youtube.CreateSearchSession(
+                _currentQuery, MaxResults, currentFilter, existingIds);
         }
 
-        if (_searchSession != null && _searchSession.HasMore)
+        if (_searchSession == null || !_searchSession.HasMore) return [];
+
+        try
         {
-            try
+            var newTracks = await _searchSession.FetchNextBatchAsync(ScrollBatchSize, ct);
+            if (ct.IsCancellationRequested || _isDisposed) return [];
+
+            if (Source == ContentSource.YouTubeMusic)
+                foreach (var t in newTracks) t.IsMusic = true;
+
+            if (newTracks.Count > 0)
             {
-                var newTracks = await _searchSession.FetchNextBatchAsync(ScrollBatchSize, ct);
+                AudioSourceFactory.GlobalCache?.HydrateCacheStatus(newTracks);
 
-                if (ct.IsCancellationRequested || _isDisposed) return [];
-
-                if (Source == ContentSource.YouTubeMusic)
+                if (LibService.Settings.EnableSearchCache)
                 {
-                    foreach (var t in newTracks) t.IsMusic = true;
+                    var snapshot = GetItemsSnapshot();
+                    var all = new List<TrackInfo>(snapshot.Count + newTracks.Count);
+                    all.AddRange(snapshot);
+                    all.AddRange(newTracks);
+                    _ = _searchCache.SetAsync(_currentQuery, SourceToSearchSource(), all);
+
+                    var imageUrls = newTracks.Take(10)
+                        .Select(static t => t.ThumbnailUrl)
+                        .Where(static u => !string.IsNullOrEmpty(u));
+                    _ = _imageCache.PrefetchAsync(imageUrls!, ct);
                 }
-
-                if (newTracks.Count > 0)
-                {
-                    AudioSourceFactory.GlobalCache?.HydrateCacheStatus(newTracks);
-
-                    if (LibService.Settings.EnableSearchCache)
-                    {
-                        var currentItems = GetItemsSnapshot();
-                        var allTracks = currentItems.Concat(newTracks).ToList();
-                        _ = _searchCache.SetAsync(_currentQuery, SourceToSearchSource(), allTracks);
-
-                        var imageUrls = newTracks.Take(10)
-                            .Select(static t => t.ThumbnailUrl)
-                            .Where(static u => !string.IsNullOrEmpty(u));
-                        _ = _imageCache.PrefetchAsync(imageUrls!, ct);
-                    }
-                }
-
-                if (!_searchSession.HasMore)
-                {
-                    SetCanFetchMore(false);
-                }
-
-                return newTracks;
             }
-            catch (OperationCanceledException)
-            {
-                return [];
-            }
-            catch (HttpRequestException)
-            {
-                ErrorMessage = SL["Search_NetworkError"];
-                return [];
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[Search] FetchMore error: {ex.Message}");
-                return [];
-            }
+
+            if (!_searchSession.HasMore)
+                SetCanFetchMore(false);
+
+            return newTracks;
         }
-
-        return [];
+        catch (OperationCanceledException) { return []; }
+        catch (HttpRequestException) { ErrorMessage = SL["Search_NetworkError"]; return []; }
+        catch (Exception ex) { Log.Error($"[Search] FetchMore error: {ex.Message}"); return []; }
     }
 
     private SearchSource SourceToSearchSource() => Source switch

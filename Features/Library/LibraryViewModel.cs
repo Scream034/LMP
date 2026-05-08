@@ -823,9 +823,10 @@ public sealed class LibraryViewModel : ViewModelBase
     #region Фабрика карточек
 
     private PlaylistCardViewModel CreatePlaylistCardVm(
-        Core.Models.Playlist playlist, int trackCount)
+     Core.Models.Playlist playlist, int trackCount)
     {
         return new PlaylistCardViewModel(
+            _auth,
             playlist,
             trackCount,
             onOpen: _mainWindow.NavigateToPlaylist,

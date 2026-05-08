@@ -1,16 +1,13 @@
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Library"
-    xmlns:mi="using:Material.Icons.Avalonia"
-    xmlns:controls="using:LMP.UI.Controls">
+    xmlns:controls="using:LMP.UI.Controls"
+    xmlns:mi="using:Material.Icons.Avalonia">
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- PLAYLIST CARD HOVER STYLES                                          -->
-    <!-- Hover определяется на card-root (весь Border карточки).            -->
-    <!-- Это гарантирует что hover не пропадает при наведении на кнопки.    -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
 
-    <!-- Базовое состояние карточки -->
     <Style Selector="ContentControl.playlist-card Border.card-root">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="Transparent" />
@@ -21,12 +18,10 @@
         </Setter>
     </Style>
 
-    <!-- При hover: только акцентная обводка, фон НЕ меняется -->
     <Style Selector="ContentControl.playlist-card Border.card-root:pointerover">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- Action bar: всегда занимает место, но невидим по умолчанию -->
     <Style Selector="ContentControl.playlist-card Panel.action-bar">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="Transitions">
@@ -36,7 +31,6 @@
         </Setter>
     </Style>
 
-    <!-- Показываем action bar при hover на всей карточке -->
     <Style Selector="ContentControl.playlist-card Border.card-root:pointerover Panel.action-bar">
         <Setter Property="Opacity" Value="1" />
     </Style>
@@ -49,18 +43,17 @@
         <Setter Property="ContentTemplate">
             <Setter.Value>
                 <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                    <!-- Главный Border с классом card-root для стилей hover -->
                     <Border Classes="card-root"
                         CornerRadius="8"
                         BorderThickness="1.5"
                         Width="160" Height="248"
                         Margin="0,0,16,16"
-                        ClipToBounds="True"
+                        ClipToBounds="False"
                         Cursor="Hand">
 
                         <Grid RowDefinitions="*, Auto">
 
-                            <!-- ═══ MAIN CONTENT (кликабельная область) ═══ -->
+                            <!-- ═══ MAIN CONTENT ═══ -->
                             <Button Grid.Row="0"
                                 Command="{Binding OpenCommand}"
                                 Background="Transparent"
@@ -73,39 +66,35 @@
                                 Cursor="Hand">
                                 <StackPanel>
 
-                                    <!-- ═══ COVER IMAGE ═══ -->
                                     <Border Width="136" Height="136" CornerRadius="4"
                                         ClipToBounds="True"
                                         Margin="0,0,0,10">
                                         <Panel Background="{DynamicResource BgHighlightBrush}">
 
-                                            <!-- Placeholder Icon (если нет обложки) -->
                                             <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
                                                 Height="64"
                                                 Foreground="{DynamicResource TextMutedBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
-                                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource NullToVisible}, ConverterParameter='invert'}" />
+                                                IsVisible="{Binding ThumbnailUrl,
+                                                Converter={StaticResource NullToVisible},
+                                                ConverterParameter='invert'}" />
 
-                                            <!-- 1. HTTP URL (Web) -->
                                             <Image
-                                                controls:QualityImage.Source="{Binding ThumbnailUrl}"
-                                                controls:QualityImage.Quality="High"
                                                 Stretch="UniformToFill"
-                                                IsVisible="{Binding ThumbnailUrl, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='http'}" />
+                                                IsVisible="{Binding ThumbnailUrl,
+                                                Converter={StaticResource StringStartsWithConverter},
+                                                ConverterParameter='http'}" />
 
-                                            <!-- 2. Local File / avares (Всё остальное что не http и
-                                            не null) -->
                                             <Image
-                                                Source="{Binding ThumbnailUrl, Converter={StaticResource BitmapAssetConverter}}"
+                                                Source="{Binding ThumbnailUrl,
+                                                Converter={StaticResource BitmapAssetConverter}}"
                                                 Stretch="UniformToFill">
                                                 <Image.IsVisible>
                                                     <MultiBinding
                                                         Converter="{x:Static BoolConverters.And}">
-                                                        <!-- Есть URL -->
                                                         <Binding Path="ThumbnailUrl"
                                                             Converter="{StaticResource NullToVisible}" />
-                                                        <!-- И это НЕ http -->
                                                         <Binding Path="ThumbnailUrl"
                                                             Converter="{StaticResource StringStartsWithConverter}"
                                                             ConverterParameter="!http" />
@@ -113,17 +102,16 @@
                                                 </Image.IsVisible>
                                             </Image>
 
-                                            <!-- Liked Playlist Heart (поверх обложки или вместо) -->
                                             <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
                                                 Foreground="{DynamicResource AccentBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
-                                                IsVisible="{Binding Id, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='liked'}" />
-
+                                                IsVisible="{Binding Id,
+                                                Converter={StaticResource StringStartsWithConverter},
+                                                ConverterParameter='liked'}" />
                                         </Panel>
                                     </Border>
 
-                                    <!-- ═══ TITLE & TRACK COUNT ═══ -->
                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
                                         FontSize="13"
                                         TextTrimming="CharacterEllipsis" MaxLines="1"
@@ -135,14 +123,12 @@
                             </Button>
 
                             <!-- ═══ BOTTOM ACTION BAR ═══ -->
-                            <!-- Всегда занимает место в layout, видимость через Opacity -->
                             <Panel Grid.Row="1" Classes="action-bar"
                                 Margin="8,2,8,8"
                                 Height="32">
 
                                 <UniformGrid Rows="1" HorizontalAlignment="Stretch">
 
-                                    <!-- Add to Queue -->
                                     <Button Command="{Binding AddToQueueCommand}"
                                         Classes="ghost-btn"
                                         HorizontalAlignment="Stretch"
@@ -151,7 +137,14 @@
                                         <mi:MaterialIcon Kind="PlaylistPlus" Width="18" Height="18" />
                                     </Button>
 
-                                    <!-- Delete -->
+                                    <controls:CopyLinkButton
+                                        CopyUrl="{Binding YoutubeUrl}"
+                                        IsVisible="{Binding CanCopyLink}"
+                                        SuccessText="{Binding L[Playlist_LinkCopied]}"
+                                        ToolTipText="{Binding L[Track_CopyLink]}"
+                                        ButtonSize="32"
+                                        IconSize="16" />
+
                                     <Button Command="{Binding DeleteCommand}"
                                         Classes="ghost-btn"
                                         HorizontalAlignment="Stretch"
@@ -160,7 +153,6 @@
                                         ToolTip.Tip="{Binding L[Button_Delete]}">
                                         <mi:MaterialIcon Kind="DeleteOutline" Width="18" Height="18" />
                                     </Button>
-
                                 </UniformGrid>
                             </Panel>
                         </Grid>

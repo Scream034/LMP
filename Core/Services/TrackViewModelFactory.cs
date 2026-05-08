@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Buffers;
+using System.Collections.Concurrent;
 using LMP.Core.Models;
 using LMP.Features.Shared;
 
@@ -106,7 +107,6 @@ public class TrackViewModelFactory
             _audio,
             _downloads,
             _manager,
-            _library,
             _dialog,
             playAction);
     }
@@ -129,30 +129,38 @@ public class TrackViewModelFactory
 
     public int CleanupCache()
     {
-        var deadKeys = new List<string>();
+        // ArrayPool устраняет аллокацию List<string> на каждый вызов очистки.
+        // _cache.Count может измениться — берём с запасом через Count + 16.
+        var deadKeys = ArrayPool<string>.Shared.Rent(_cache.Count + 16);
+        int deadCount = 0;
 
-        foreach (var kvp in _cache)
+        try
         {
-            if (!kvp.Value.TryGetTarget(out var target) || target.IsDisposed)
+            foreach (var kvp in _cache)
             {
-                deadKeys.Add(kvp.Key);
+                if (!kvp.Value.TryGetTarget(out var target) || target.IsDisposed)
+                {
+                    if (deadCount < deadKeys.Length)
+                        deadKeys[deadCount++] = kvp.Key;
+                }
             }
-        }
 
-        foreach (var key in deadKeys)
+            for (int i = 0; i < deadCount; i++)
+                _cache.TryRemove(deadKeys[i], out _);
+
+            if (deadCount > 0)
+            {
+                MemoryDiagnostics.SetBytes("TrackVM.CacheSize", _cache.Count);
+                Log.Debug($"[TrackFactory] Cleaned {deadCount} dead references.");
+            }
+
+            return deadCount;
+        }
+        finally
         {
-            _cache.TryRemove(key, out _);
+            ArrayPool<string>.Shared.Return(deadKeys, clearArray: true);
         }
-
-        if (deadKeys.Count > 0)
-        {
-            MemoryDiagnostics.SetBytes("TrackVM.CacheSize", _cache.Count);
-            Log.Debug($"[TrackFactory] Cleaned {deadKeys.Count} dead references.");
-        }
-
-        return deadKeys.Count;
     }
-
 
     /// <summary>
     /// Полная очистка с dispose всех VM.

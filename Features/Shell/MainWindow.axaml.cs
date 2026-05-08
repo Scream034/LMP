@@ -5,11 +5,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
+using Material.Icons;
+using Material.Icons.Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 
@@ -92,6 +95,15 @@ public partial class MainWindow : Window
     private NativeMenuItem? _exitItem;
 #endif
 
+    private readonly Canvas? _copyHintCanvas;
+    private readonly Border? _copyHintOverlay;
+    private readonly TextBlock? _copyHintText;
+    private readonly MaterialIcon? _copyHintIcon;
+    private CancellationTokenSource? _copyHintCts;
+
+    private const int CopyHintDurationMs = 1800;
+    private const int CopyHintFadeDurationMs = 150;
+
     #endregion
 
     #region Constructor & Init
@@ -100,9 +112,21 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        _copyHintCanvas = this.FindControl<Canvas>("CopyHintCanvas");
+        _copyHintOverlay = this.FindControl<Border>("CopyHintOverlay");
+        _copyHintText = this.FindControl<TextBlock>("CopyHintText");
+        _copyHintIcon = this.FindControl<MaterialIcon>("CopyHintIcon");
+
+        // Трекинг позиции курсора для позиционирования toast
+        var rootGrid = this.FindControl<Grid>("RootGrid") ?? Content as Grid;
+        if (rootGrid != null)
+            MousePositionHelper.Attach(rootGrid);
+
         PropertyChanged += MainWindow_PropertyChanged;
         Deactivated += OnWindowDeactivated;
         Activated += OnWindowActivated;
+
+        CopyHintService.Instance.HintRequested += OnCopyHintRequested;
     }
 
     private void InitializeComponent()
@@ -1054,6 +1078,141 @@ public partial class MainWindow : Window
 
     #endregion
 
+    #region Copy Hint
+
+    /// <summary>
+    /// Получает запрос от любого VM или контрола.
+    /// Всегда гарантирует выполнение на UI-потоке.
+    /// </summary>
+    private void OnCopyHintRequested(string text, CopyHintKind kind, Point? cursorPosition)
+    {
+        if (!Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => OnCopyHintRequested(text, kind, cursorPosition));
+            return;
+        }
+
+        ShowCopyHint(text, kind, cursorPosition);
+    }
+
+    /// <summary>
+    /// Показывает toast у позиции курсора или в нижнем центре окна как fallback.
+    /// CTS отменяет предыдущий цикл при быстрых запросах.
+    /// </summary>
+    private async void ShowCopyHint(string text, CopyHintKind kind, Point? cursorPosition)
+    {
+        if (_copyHintOverlay is null || _copyHintText is null || _copyHintCanvas is null)
+        {
+            Log.Warn("[CopyHint] Controls not resolved, skipping");
+            return;
+        }
+
+        _copyHintCts?.Cancel();
+        _copyHintCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _copyHintCts = cts;
+
+        try
+        {
+            ApplyCopyHintKind(kind);
+            _copyHintText.Text = text;
+
+            // Показываем для измерения размера
+            _copyHintOverlay.IsVisible = true;
+            _copyHintOverlay.Opacity = 0;
+
+            // Один кадр — дать layout-движку измерить размер overlay
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
+                () => { }, Avalonia.Threading.DispatcherPriority.Render);
+
+            PositionHint(cursorPosition);
+
+            _copyHintOverlay.Opacity = 1;
+
+            await Task.Delay(CopyHintDurationMs, cts.Token);
+
+            _copyHintOverlay.Opacity = 0;
+            await Task.Delay(CopyHintFadeDurationMs, cts.Token);
+
+            _copyHintOverlay.IsVisible = false;
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// Позиционирует toast над точкой курсора с коррекцией выхода за границы окна.
+    /// Если сверху места недостаточно, перемещает подсказку под курсор.
+    /// </summary>
+    private void PositionHint(Point? cursorPosition)
+    {
+        if (_copyHintCanvas is null || _copyHintOverlay is null)
+            return;
+
+        double hintWidth = _copyHintOverlay.DesiredSize.Width;
+        double hintHeight = _copyHintOverlay.DesiredSize.Height;
+        double canvasWidth = _copyHintCanvas.Bounds.Width;
+        double canvasHeight = _copyHintCanvas.Bounds.Height;
+
+        if (cursorPosition is null)
+        {
+            // Fallback: Центр-низ
+            double fallbackX = Math.Max(8, (canvasWidth - hintWidth) * 0.5);
+            double fallbackY = Math.Max(8, canvasHeight - hintHeight - 120);
+            Canvas.SetLeft(_copyHintOverlay, fallbackX);
+            Canvas.SetTop(_copyHintOverlay, fallbackY);
+            return;
+        }
+
+        double x = cursorPosition.Value.X - (hintWidth / 2); // Центрируем по горизонтали относительно курсора
+
+        // Пытаемся разместить НАД курсором (с отступом 12px)
+        double y = cursorPosition.Value.Y - hintHeight - 12;
+
+        // Проверка выхода за верхнюю границу
+        if (y < 8)
+        {
+            // Если места сверху нет, прыгаем ПОД курсор (+24px)
+            y = cursorPosition.Value.Y + 24;
+        }
+
+        // Ограничиваем X, чтобы не вылезти за края окна
+        x = Math.Clamp(x, 8, canvasWidth - hintWidth - 8);
+
+        // Ограничиваем Y (на случай очень длинных списков)
+        y = Math.Clamp(y, 8, canvasHeight - hintHeight - 8);
+
+        Canvas.SetLeft(_copyHintOverlay, x);
+        Canvas.SetTop(_copyHintOverlay, y);
+    }
+
+    /// <summary>
+    /// Применяет иконку и цвет по типу hint-а без биндинга — нет боксинга.
+    /// </summary>
+    private void ApplyCopyHintKind(CopyHintKind kind)
+    {
+        if (_copyHintIcon is null || _copyHintOverlay is null) return;
+
+        var (iconKind, resourceKey) = kind switch
+        {
+            CopyHintKind.Warning => (MaterialIconKind.AlertCircleOutline, "SystemWarnOrangeBrush"),
+            CopyHintKind.Error => (MaterialIconKind.CloseCircleOutline, "SystemErrorRedBrush"),
+            _ => (MaterialIconKind.CheckCircleOutline, "AccentBrush")
+        };
+
+        _copyHintIcon.Kind = iconKind;
+
+        if (Application.Current?.Resources.TryGetResource(
+                resourceKey, Application.Current.ActualThemeVariant, out var res) == true
+            && res is IBrush brush)
+        {
+            _copyHintIcon.Foreground = brush;
+            _copyHintOverlay.BorderBrush = brush;
+        }
+    }
+
+    #endregion
+
     #region Dispose
 
     protected override void OnClosed(EventArgs e)
@@ -1076,6 +1235,16 @@ public partial class MainWindow : Window
         PropertyChanged -= MainWindow_PropertyChanged;
         Deactivated -= OnWindowDeactivated;
         Activated -= OnWindowActivated;
+
+        CopyHintService.Instance.HintRequested -= OnCopyHintRequested;
+        _copyHintCts?.Cancel();
+        _copyHintCts?.Dispose();
+
+        if (_copyHintOverlay != null)
+        {
+            _copyHintOverlay.IsVisible = false;
+            _copyHintOverlay.Opacity = 0;
+        }
 
         base.OnClosed(e);
     }

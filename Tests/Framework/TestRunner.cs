@@ -20,9 +20,6 @@ public sealed class TestRunner
     /// <summary>Вызывается после завершения каждого теста.</summary>
     public event Action<TestDescriptor, TestResult>? TestCompleted;
 
-    /// <summary>Вызывается после завершения всех тестов в batch.</summary>
-    public event Action<IReadOnlyList<TestResult>>? BatchCompleted;
-
     public TestRunner(IServiceProvider services)
     {
         _services = services;
@@ -73,7 +70,6 @@ public sealed class TestRunner
             results.Add(result);
         }
 
-        BatchCompleted?.Invoke(results);
         return results;
     }
 

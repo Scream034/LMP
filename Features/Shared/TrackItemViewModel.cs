@@ -1,34 +1,24 @@
-﻿using System.Reactive;
-using System.Reactive.Disposables;
-using System.Reactive.Linq;
-using LMP.Core.Audio;
+﻿using System.ComponentModel;
+using System.Windows.Input;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using Microsoft.Extensions.DependencyInjection;
+using LMP.Core.Audio;
+using LMP.Core.Helpers;
+using LMP.UI.Controls;
 
 namespace LMP.Features.Shared;
 
 public sealed class TrackItemViewModel : ViewModelBase
 {
-    #region Fields
-
-    private readonly LibraryService _library;
     private readonly AudioEngine _audio;
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
     private readonly DialogService _dialog;
-
-    private readonly ObservableAsPropertyHelper<bool> _isLiked;
-    private readonly ObservableAsPropertyHelper<bool> _isDownloaded;
-    private readonly ObservableAsPropertyHelper<bool> _isCached;
-
     private Action<TrackInfo>? _onPlay;
-
-    #endregion
-
-    #region Properties - Core
 
     public TrackInfo Track { get; }
     public bool IsDisposed { get; private set; }
@@ -43,32 +33,10 @@ public sealed class TrackItemViewModel : ViewModelBase
         ? Duration.ToString(@"h\:mm\:ss")
         : Duration.ToString(@"m\:ss");
 
-    #endregion
-
-    #region Properties - State
-
-    public bool IsLiked => _isLiked.Value;
-    public bool IsDownloaded => _isDownloaded.Value;
-    public bool IsCached => _isCached.Value;
-
-    #endregion
-
-    #region Properties - Playback State
-
     [Reactive] public bool IsActive { get; private set; }
     [Reactive] public bool IsPlaying { get; private set; }
-
-    #endregion
-
-    #region Properties - Download Progress
-
     [Reactive] public bool IsDownloading { get; private set; }
     [Reactive] public float DownloadProgress { get; private set; }
-
-    #endregion
-
-    #region Properties - UI State
-
     [Reactive] public bool IsMenuOpen { get; set; }
     [Reactive] public bool IsSelected { get; set; }
     [Reactive] public bool IsPlaylistContext { get; set; }
@@ -80,43 +48,32 @@ public sealed class TrackItemViewModel : ViewModelBase
     {
         get
         {
-            if (IsDownloaded) return L["Track_Downloaded"] ?? "Downloaded";
-            if (IsCached) return L["Track_SaveToFolder"] ?? "Save to folder";
+            if (Track.IsDownloaded) return L["Track_Downloaded"] ?? "Downloaded";
+            if (Track.IsCached) return L["Track_SaveToFolder"] ?? "Save to folder";
             return L["Track_Download"] ?? "Download";
         }
     }
-
-    #endregion
-
-    #region Properties - Actions
 
     public Action<TrackInfo>? StartRadioAction { get; set; }
     public Action<TrackInfo>? RemoveFromPlaylistAction { get; set; }
     public string? SourceContextId { get; set; }
 
-    #endregion
-
-    #region Commands
-
-    public ReactiveCommand<Unit, Unit> PlayCommand { get; }
-    public ReactiveCommand<Unit, Unit> ToggleLikeCommand { get; }
-    public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
-    public ReactiveCommand<Unit, Unit> StartRadioCommand { get; }
-    public ReactiveCommand<Unit, Unit> SaveToDownloadsCommand { get; }
-    public ReactiveCommand<Unit, Unit> RemoveFromPlaylistCommand { get; }
-    public ReactiveCommand<Unit, Unit> RemoveFromQueueCommand { get; }
-    public ReactiveCommand<Unit, Unit> AddToPlaylistCommand { get; }
-
-    #endregion
-
-    #region Constructor
+    // ICommand вместо ReactiveCommand: ~6x меньше объектов на каждую команду.
+    public ICommand PlayCommand { get; }
+    public ICommand ToggleLikeCommand { get; }
+    public ICommand AddToQueueCommand { get; }
+    public ICommand StartRadioCommand { get; }
+    public ICommand SaveToDownloadsCommand { get; }
+    public ICommand RemoveFromPlaylistCommand { get; }
+    public ICommand RemoveFromQueueCommand { get; }
+    public ICommand AddToPlaylistCommand { get; }
+    public ICommand CopyLinkCommand { get; }
 
     public TrackItemViewModel(
         TrackInfo track,
         AudioEngine audio,
         DownloadService downloads,
         MusicLibraryManager manager,
-        LibraryService library,
         DialogService dialog,
         Action<TrackInfo>? onPlay = null)
     {
@@ -124,104 +81,37 @@ public sealed class TrackItemViewModel : ViewModelBase
         _audio = audio;
         _manager = manager;
         _downloads = downloads;
-        _library = library;
         _dialog = dialog;
         _onPlay = onPlay;
 
-        // ObservableAsPropertyHelper - используем Disposables из ViewModelBase
-        _isLiked = Track.WhenAnyValue(x => x.IsLiked)
-            .ToProperty(this, x => x.IsLiked)
-            .DisposeWith(Disposables);
+        PlayCommand = new TrackAsyncCommand(PlayAsync);
+        ToggleLikeCommand = new TrackAsyncCommand(() => _manager.ToggleLikeAsync(Track));
+        AddToQueueCommand = new TrackSyncCommand(() => _audio.Enqueue(Track));
+        StartRadioCommand = new TrackSyncCommand(() => StartRadioAction?.Invoke(Track));
+        SaveToDownloadsCommand = new TrackAsyncCommand(SaveToDownloadsAsync);
+        AddToPlaylistCommand = new TrackAsyncCommand(AddToPlaylistAsync);
+        CopyLinkCommand = new TrackAsyncCommand(CopyLinkAsync);
 
-        _isDownloaded = Track.WhenAnyValue(x => x.IsDownloaded)
-            .ToProperty(this, x => x.IsDownloaded)
-            .DisposeWith(Disposables);
+        RemoveFromPlaylistCommand = new TrackSyncCommand(() =>
+        {
+            if (IsPlaylistContext) RemoveFromPlaylistAction?.Invoke(Track);
+        });
 
-        _isCached = Track.WhenAnyValue(x => x.IsCached)
-            .ToProperty(this, x => x.IsCached)
-            .DisposeWith(Disposables);
+        RemoveFromQueueCommand = new TrackSyncCommand(() =>
+        {
+            if (IsQueueContext) _audio.RemoveFromQueue(Track);
+        });
 
-        Track.WhenAnyValue(x => x.IsDownloaded, x => x.IsCached)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(DownloadStatusText)))
-            .DisposeWith(Disposables);
-
-        // Audio subscriptions
-        Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
-                h => _audio.OnTrackChanged += h,
-                h => _audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(t => UpdatePlaybackState(t, _audio.IsPlaying))
-            .DisposeWith(Disposables);
-
-        Observable.FromEvent<Action<bool, bool>, (bool, bool)>(
-                h => (a, b) => h((a, b)),
-                h => _audio.OnPlaybackStateChanged += h,
-                h => _audio.OnPlaybackStateChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(x => UpdatePlaybackState(_audio.CurrentTrack, x.Item1))
-            .DisposeWith(Disposables);
-
-        // Download subscriptions
-        Observable.FromEvent<Action<string, float>, (string, float)>(
-                h => (id, p) => h((id, p)),
-                h => _downloads.OnProgress += h,
-                h => _downloads.OnProgress -= h)
-            .Where(x => x.Item1 == Id)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(x =>
-            {
-                IsDownloading = true;
-                DownloadProgress = x.Item2;
-            })
-            .DisposeWith(Disposables);
-
-        Observable.FromEvent<Action<string, bool, string?>, (string, bool, string?)>(
-                h => (id, ok, path) => h((id, ok, path)),
-                h => _downloads.OnCompleted += h,
-                h => _downloads.OnCompleted -= h)
-            .Where(x => x.Item1 == Id)
-            .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                IsDownloading = false;
-                DownloadProgress = 0;
-            })
-            .DisposeWith(Disposables);
-
-        // Initialize state
-        IsDownloading = _downloads.IsDownloading(track.Id);
-        if (IsDownloading) DownloadProgress = _downloads.GetProgress(track.Id);
-        UpdatePlaybackState(_audio.CurrentTrack, _audio.IsPlaying);
-
-        // Commands - используем CreateCommand из ViewModelBase
-        PlayCommand = CreateCommand(ReactiveCommand.CreateFromTask(PlayAsync));
-        ToggleLikeCommand = CreateCommand(ReactiveCommand.CreateFromTask(() => _manager.ToggleLikeAsync(Track)));
-        AddToQueueCommand = CreateCommand(ReactiveCommand.Create(() => _audio.Enqueue(Track)));
-        StartRadioCommand = CreateCommand(ReactiveCommand.Create(() => StartRadioAction?.Invoke(Track)));
-        SaveToDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(SaveToDownloadsAsync));
-        AddToPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(AddToPlaylistAsync));
-
-        RemoveFromPlaylistCommand = CreateCommand(
-            ReactiveCommand.Create(
-                () => RemoveFromPlaylistAction?.Invoke(Track),
-                this.WhenAnyValue(x => x.IsPlaylistContext)));
-
-        RemoveFromQueueCommand = CreateCommand(
-            ReactiveCommand.Create(
-                () => _audio.RemoveFromQueue(Track),
-                this.WhenAnyValue(x => x.IsQueueContext)));
-
-        // UI state subscriptions
-        this.WhenAnyValue(x => x.IsQueueContext)
-            .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowAddToQueue)))
-            .DisposeWith(Disposables);
+        Track.PropertyChanged += OnTrackPropertyChanged;
 
         MemoryDiagnostics.TrackInstance("TrackVM.Created");
     }
 
-    #endregion
-
-    #region Command Handlers
+    private void OnTrackPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(Track.IsDownloaded) or nameof(Track.IsCached))
+            this.RaisePropertyChanged(nameof(DownloadStatusText));
+    }
 
     private async Task PlayAsync()
     {
@@ -238,51 +128,38 @@ public sealed class TrackItemViewModel : ViewModelBase
         if (Track.IsCached)
         {
             var cache = AudioSourceFactory.GlobalCache;
-            if (cache == null)
-            {
-                Log.Warn("[TrackItem] AudioCache not initialized");
-                return;
-            }
+            if (cache == null) return;
 
             bool success = await cache.ExportTrackToDownloadsAsync(
                 Track.Id,
-                async (trackId) => await _library.GetTrackAsync(trackId),
-                async (t) => await _library.AddOrUpdateTrackAsync(t));
+                async id => await Program.Services.GetRequiredService<LibraryService>().GetTrackAsync(id),
+                async t => await Program.Services.GetRequiredService<LibraryService>().AddOrUpdateTrackAsync(t));
 
-            if (success)
-            {
-                // Обновляем UI
-                var updated = await _library.GetTrackAsync(Track.Id);
-                if (updated != null)
-                {
-                    Track.LocalPath = updated.LocalPath;
-                    Track.IsDownloaded = updated.IsDownloaded;
-                    this.RaisePropertyChanged(nameof(Track));
-                    this.RaisePropertyChanged(nameof(IsDownloaded));
-                    this.RaisePropertyChanged(nameof(DownloadStatusText));
-                }
-            }
+            if (success) Track.IsDownloaded = true;
         }
         else
         {
             _downloads.StartDownload(Track);
         }
     }
-    #endregion
 
-    #region Methods
-
-    private void UpdatePlaybackState(TrackInfo? currentTrack, bool isPlaying)
-    {
-        bool isMe = currentTrack?.Id == Id;
-        IsActive = isMe;
-        IsPlaying = isMe && isPlaying;
-    }
-
-    public void SetActive(bool isActive)
+    /// <summary>
+    /// Вызывается Smart Parent-ом при смене трека или состояния воспроизведения. O(1).
+    /// </summary>
+    public void SetActive(bool isActive, bool isPlaying)
     {
         IsActive = isActive;
-        IsPlaying = isActive && _audio.IsPlaying;
+        IsPlaying = isActive && isPlaying;
+    }
+
+    /// <summary>
+    /// Вызывается Smart Parent-ом при обновлении прогресса загрузки. O(1).
+    /// </summary>
+    public void SetDownloadState(bool isDownloading, float progress)
+    {
+        IsDownloading = isDownloading;
+        DownloadProgress = progress;
+        if (!isDownloading) this.RaisePropertyChanged(nameof(DownloadStatusText));
     }
 
     public void UpdatePlayAction(Action<TrackInfo>? onPlay) => _onPlay = onPlay;
@@ -293,34 +170,50 @@ public sealed class TrackItemViewModel : ViewModelBase
         if (selectedIds.Count == 0) return;
 
         foreach (var playlistId in selectedIds)
-        {
             await _manager.AddTrackToPlaylistAsync(playlistId, Track);
-        }
     }
 
-    #endregion
+    /// <summary>
+    /// Копирует ссылку на трек и показывает hint через CopyHintService.
+    /// Anchor не передаём — TrackListControl передаёт его через перегрузку.
+    /// </summary>
+    private async Task CopyLinkAsync()
+    {
+        if (IsDisposed) return;
 
-    #region IDisposable
+        var url = Track.Url;
+        if (string.IsNullOrEmpty(url))
+            url = $"https://www.youtube.com/watch?v={Track.GetRawId()}";
+
+        if (string.IsNullOrEmpty(url))
+        {
+            CopyHintService.Instance.Show(
+                L["Track_CopyLink_NoUrl"] ?? "No link available",
+                CopyHintKind.Warning,
+                null);
+            return;
+        }
+
+        await Clipboard.SetTextAsync(url);
+
+        CopyHintService.Instance.Show(
+            L["Track_Copied"] ?? "Copied!",
+            CopyHintKind.Success,
+            null); // ИСПОЛЬЗУЕМ ДЕФОЛТНОЕ ПОЛОЖЕНИЕ
+    }
 
     protected override void Dispose(bool disposing)
     {
         if (IsDisposed) return;
-
         if (disposing)
         {
-            // Log.Debug($"[TrackVM] Disposing {Id} ({Title})");
-
-            // Очищаем делегаты
+            Track.PropertyChanged -= OnTrackPropertyChanged;
             _onPlay = null;
             StartRadioAction = null;
             RemoveFromPlaylistAction = null;
-
             MemoryDiagnostics.UntrackInstance("TrackVM.Created");
         }
-
-        base.Dispose(disposing);  // Это вызовет Disposables.Dispose()
+        base.Dispose(disposing);
         IsDisposed = true;
     }
-
-    #endregion
 }

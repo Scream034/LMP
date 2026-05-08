@@ -1,6 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Reactive;
-using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Services;
 using ReactiveUI;
@@ -8,6 +6,13 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.ViewModels;
 
+/// <summary>
+/// Базовый ViewModel для списков треков с виртуализацией, фильтрацией и перетаскиванием.
+/// 
+/// Пагинация намеренно удалена: VirtualizingStackPanel создаёт только ~15-20 контейнеров
+/// независимо от размера коллекции, поэтому загрузка всех данных сразу дешевле и проще
+/// чем батчинг с InfiniteScroll.
+/// </summary>
 public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase, IFilterable
     where TViewModel : class, IDisposable
     where TSource : notnull
@@ -16,8 +21,9 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     protected readonly LibraryService LibService;
 
+    // Мастер-список всех ID в правильном порядке (source of truth для порядка).
     private List<string> _masterIds = [];
-    private readonly Dictionary<string, TSource> _loadedSources = [];
+    private readonly Dictionary<string, TSource> _sources = [];
     private readonly Dictionary<string, TViewModel> _vmCache = [];
     private CancellationTokenSource? _loadCts;
     private bool _isDisposed;
@@ -26,15 +32,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #region Properties
 
-    protected virtual int BatchSize => LibService.Settings.LoadBatchSize > 0
-        ? LibService.Settings.LoadBatchSize
-        : 30;
-
     [Reactive] public bool IsLoading { get; protected set; }
-    [Reactive] public bool IsLoadingMore { get; protected set; }
-    [Reactive] public bool HasMoreItems { get; protected set; }
-    [Reactive] public bool ReachedEnd { get; protected set; }
-    [Reactive] public bool EnableSmoothLoading { get; set; }
 
     public string FilterQuery
     {
@@ -50,11 +48,12 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     public ObservableCollection<TViewModel> Items { get; } = [];
 
     protected int TotalCount => _masterIds.Count;
-    protected int LoadedCount { get; private set; }
 
+    /// <summary>
+    /// Сортировка и перетаскивание доступны только при отсутствии фильтра.
+    /// С фильтром индексы видимых элементов не совпадают с мастер-списком.
+    /// </summary>
     public bool CanReorder => string.IsNullOrWhiteSpace(FilterQuery);
-
-    public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
 
     #endregion
 
@@ -63,16 +62,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected ReorderableViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
-        EnableSmoothLoading = LibService.Settings.EnableSmoothLoading;
-
-        var canLoadMore = this.WhenAnyValue(
-            x => x.IsLoadingMore,
-            x => x.IsLoading,
-            x => x.HasMoreItems,
-            (more, init, hasMore) => !more && !init && hasMore);
-
-        // FIX: Используем CreateCommand из базового класса
-        LoadMoreCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadNextBatchAsync, canLoadMore));
     }
 
     #endregion
@@ -82,52 +71,72 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected abstract string GetItemId(TSource item);
     protected abstract TViewModel CreateViewModel(TSource item);
     protected abstract bool MatchesFilter(TSource item, string query);
+
+    /// <summary>
+    /// Загрузка данных по списку ID. Реализуется в наследнике (БД, сеть и т.д.).
+    /// </summary>
     protected abstract Task<List<TSource>> LoadItemsByIdsAsync(IEnumerable<string> ids, CancellationToken ct);
+
     protected virtual Task SaveMoveAsync(int fromIndex, int toIndex, CancellationToken ct) => Task.CompletedTask;
 
     #endregion
 
     #region Initialization
 
+    /// <summary>
+    /// Инициализация по списку ID: загружает все данные одним запросом, затем строит Items.
+    /// Skeleton-first: IsLoading управляется снаружи до вызова этого метода.
+    /// </summary>
     protected async Task InitializeAsync(List<string> allIds, CancellationToken ct = default)
     {
         if (_isDisposed) return;
 
         CancelLoading();
         _loadCts = new CancellationTokenSource();
+        var linkedCt = CancellationTokenSource.CreateLinkedTokenSource(_loadCts.Token, ct).Token;
 
         _masterIds = [.. allIds];
-        _loadedSources.Clear();
-        LoadedCount = 0;
+        _sources.Clear();
 
         foreach (var vm in _vmCache.Values)
             vm.Dispose();
         _vmCache.Clear();
         Items.Clear();
 
-        UpdateState();
+        if (_masterIds.Count == 0) return;
 
-        if (_masterIds.Count > 0)
+        try
         {
-            await LoadNextBatchAsync();
+            var loaded = await LoadItemsByIdsAsync(_masterIds, linkedCt);
+            if (linkedCt.IsCancellationRequested) return;
+
+            foreach (var item in loaded)
+                _sources[GetItemId(item)] = item;
+
+            RebuildVisibleItems();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Error($"[ReorderableVM] Load error: {ex.Message}");
         }
     }
 
+    /// <summary>
+    /// Инициализация с уже загруженными данными (например, из кэша).
+    /// </summary>
     protected void InitializeWithData(IEnumerable<TSource> items)
     {
         if (_isDisposed) return;
 
         CancelLoading();
 
-        var itemsList = items.ToList();
-        _masterIds = [.. itemsList.Select(GetItemId)];
+        var list = items.ToList();
+        _masterIds = [.. list.Select(GetItemId)];
 
-        _loadedSources.Clear();
-        foreach (var item in itemsList)
-        {
-            _loadedSources[GetItemId(item)] = item;
-        }
-        LoadedCount = itemsList.Count;
+        _sources.Clear();
+        foreach (var item in list)
+            _sources[GetItemId(item)] = item;
 
         foreach (var vm in _vmCache.Values)
             vm.Dispose();
@@ -135,109 +144,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         Items.Clear();
 
         RebuildVisibleItems();
-        UpdateState();
-    }
-
-    #endregion
-
-    #region Loading
-
-    private async Task LoadNextBatchAsync()
-    {
-        if (_isDisposed || IsLoadingMore || LoadedCount >= _masterIds.Count)
-            return;
-
-        IsLoadingMore = true;
-
-        try
-        {
-            var ct = _loadCts?.Token ?? CancellationToken.None;
-
-            var idsToLoad = _masterIds
-                .Skip(LoadedCount)
-                .Take(BatchSize)
-                .Where(id => !_loadedSources.ContainsKey(id))
-                .ToList();
-
-            if (idsToLoad.Count == 0)
-            {
-                LoadedCount = _masterIds.Count;
-                UpdateState();
-                return;
-            }
-
-            var loaded = await LoadItemsByIdsAsync(idsToLoad, ct);
-            if (ct.IsCancellationRequested) return;
-
-            foreach (var item in loaded)
-            {
-                var id = GetItemId(item);
-                _loadedSources[id] = item;
-            }
-
-            LoadedCount += BatchSize;
-            if (LoadedCount > _masterIds.Count)
-                LoadedCount = _masterIds.Count;
-
-            AppendNewItemsToVisible(loaded);
-            UpdateState();
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Reorderable] Load error: {ex.Message}");
-        }
-        finally
-        {
-            IsLoadingMore = false;
-        }
-    }
-
-    private void AppendNewItemsToVisible(IEnumerable<TSource> newItems)
-    {
-        var query = FilterQuery;
-        foreach (var item in newItems)
-        {
-            if (!MatchesFilter(item, query)) continue;
-
-            var id = GetItemId(item);
-            if (_vmCache.ContainsKey(id)) continue;
-
-            var vm = CreateViewModel(item);
-            _vmCache[id] = vm;
-
-            int insertIndex = FindInsertIndex(id);
-            if (insertIndex >= 0 && insertIndex <= Items.Count)
-                Items.Insert(insertIndex, vm);
-            else
-                Items.Add(vm);
-        }
-    }
-
-    private int FindInsertIndex(string itemId)
-    {
-        int masterIndex = _masterIds.IndexOf(itemId);
-        if (masterIndex < 0) return Items.Count;
-
-        for (int i = 0; i < Items.Count; i++)
-        {
-            var existingId = GetVmId(Items[i]);
-            int existingMasterIndex = _masterIds.IndexOf(existingId);
-
-            if (existingMasterIndex > masterIndex)
-                return i;
-        }
-
-        return Items.Count;
-    }
-
-    private string GetVmId(TViewModel vm)
-    {
-        foreach (var kvp in _vmCache)
-        {
-            if (ReferenceEquals(kvp.Value, vm))
-                return kvp.Key;
-        }
-        return "";
     }
 
     #endregion
@@ -247,15 +153,12 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected void RebuildVisibleItems()
     {
         var query = FilterQuery;
-        var newVisible = new List<TViewModel>();
+        var newVisible = new List<TViewModel>(_masterIds.Count);
 
         foreach (var id in _masterIds)
         {
-            if (!_loadedSources.TryGetValue(id, out var source))
-                continue;
-
-            if (!MatchesFilter(source, query))
-                continue;
+            if (!_sources.TryGetValue(id, out var source)) continue;
+            if (!MatchesFilter(source, query)) continue;
 
             if (!_vmCache.TryGetValue(id, out var vm))
             {
@@ -269,6 +172,11 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         SyncVisibleItems(newVisible);
     }
 
+    /// <summary>
+    /// In-place синхронизация Items с новым списком.
+    /// Минимизирует количество CollectionChanged событий:
+    /// заменяет по индексу вместо Clear + AddRange.
+    /// </summary>
     private void SyncVisibleItems(List<TViewModel> newItems)
     {
         while (Items.Count > newItems.Count)
@@ -294,45 +202,32 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     public void MoveItem(int oldIndex, int newIndex)
     {
-        if (oldIndex == newIndex) return;
-        if (oldIndex < 0 || oldIndex >= Items.Count) return;
-        if (newIndex < 0 || newIndex >= Items.Count) return;
+        if (!ValidateMove(oldIndex, newIndex)) return;
 
-        if (!CanReorder)
-        {
-            Log.Warn("[Move] Cannot reorder with active filter");
-            return;
-        }
-
-        var movingVm = Items[oldIndex];
-        var movingId = GetVmId(movingVm);
+        var movingId = GetVmId(Items[oldIndex]);
         if (string.IsNullOrEmpty(movingId)) return;
 
-        Log.Info($"[Move] {oldIndex} → {newIndex}");
+        // Синхронизируем мастер-список и видимый список атомарно
+        int masterOld = _masterIds.IndexOf(movingId);
+        int masterNew = GetMasterIndexForVisualTarget(newIndex, oldIndex);
 
-        _masterIds.RemoveAt(oldIndex);
-        _masterIds.Insert(newIndex, movingId);
+        if (masterOld >= 0 && masterNew >= 0 && masterOld != masterNew)
+        {
+            _masterIds.RemoveAt(masterOld);
+            _masterIds.Insert(masterNew, movingId);
+        }
 
         Items.Move(oldIndex, newIndex);
     }
 
     public async Task MoveItemAsync(int oldIndex, int newIndex)
     {
-        if (oldIndex == newIndex) return;
-        if (oldIndex < 0 || oldIndex >= Items.Count) return;
-        if (newIndex < 0 || newIndex >= Items.Count) return;
+        if (!ValidateMove(oldIndex, newIndex)) return;
 
-        if (!CanReorder)
-        {
-            Log.Warn("[Move] Cannot reorder with active filter");
-            return;
-        }
-
-        var movingVm = Items[oldIndex];
-        var movingId = GetVmId(movingVm);
+        var movingId = GetVmId(Items[oldIndex]);
         if (string.IsNullOrEmpty(movingId)) return;
 
-        Log.Info($"[Move] {oldIndex} → {newIndex}");
+        int masterOld = _masterIds.IndexOf(movingId);
 
         _masterIds.RemoveAt(oldIndex);
         _masterIds.Insert(newIndex, movingId);
@@ -340,45 +235,68 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         try
         {
-            await SaveMoveAsync(oldIndex, newIndex, CancellationToken.None);
-            Log.Info("[Move] Saved to DB");
+            await SaveMoveAsync(masterOld, newIndex, CancellationToken.None);
+            Log.Info("[Reorderable] Move saved to DB");
         }
         catch (Exception ex)
         {
-            Log.Error($"[Move] Save failed: {ex.Message}");
+            Log.Error($"[Reorderable] Save move failed: {ex.Message}");
+
+            // Rollback при ошибке
             _masterIds.RemoveAt(newIndex);
             _masterIds.Insert(oldIndex, movingId);
             Items.Move(newIndex, oldIndex);
         }
     }
 
+    private bool ValidateMove(int oldIndex, int newIndex)
+    {
+        if (!CanReorder)
+        {
+            Log.Warn("[Reorderable] Cannot reorder with active filter");
+            return false;
+        }
+
+        return oldIndex != newIndex
+            && oldIndex >= 0 && oldIndex < Items.Count
+            && newIndex >= 0 && newIndex < Items.Count;
+    }
+
+    private int GetMasterIndexForVisualTarget(int visualTarget, int visualSource)
+    {
+        // При наличии скрытых (отфильтрованных) элементов визуальный индекс
+        // не равен мастер-индексу — пересчитываем через ID видимого элемента.
+        if (visualTarget >= Items.Count) return _masterIds.Count - 1;
+        var targetId = GetVmId(Items[visualTarget]);
+        return string.IsNullOrEmpty(targetId) ? visualTarget : _masterIds.IndexOf(targetId);
+    }
+
     #endregion
 
     #region Helpers
+
+    protected TViewModel? GetCachedVm(string id) => _vmCache.GetValueOrDefault(id);
+
+    protected List<TSource> GetLoadedItemsSnapshot() =>
+        [.. _masterIds.Where(_sources.ContainsKey).Select(id => _sources[id])];
+
+    protected List<string> GetAllIds() => [.. _masterIds];
+
+    private string GetVmId(TViewModel vm)
+    {
+        foreach (var kvp in _vmCache)
+        {
+            if (ReferenceEquals(kvp.Value, vm)) return kvp.Key;
+        }
+        return string.Empty;
+    }
 
     protected void CancelLoading()
     {
         _loadCts?.Cancel();
         _loadCts?.Dispose();
         _loadCts = null;
-        IsLoading = false;
-        IsLoadingMore = false;
     }
-
-    private void UpdateState()
-    {
-        HasMoreItems = LoadedCount < _masterIds.Count;
-        ReachedEnd = !HasMoreItems && _masterIds.Count > 0;
-    }
-
-    protected List<TSource> GetLoadedItemsSnapshot()
-    {
-        return [.. _masterIds
-            .Where(_loadedSources.ContainsKey)
-            .Select(id => _loadedSources[id])];
-    }
-
-    protected List<string> GetAllIds() => [.. _masterIds];
 
     #endregion
 
@@ -390,13 +308,16 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         if (disposing)
         {
-            Log.Debug($"[ReorderableVM] Disposing, cleaning {_vmCache.Count} cached VMs");
+            Log.Debug($"[ReorderableVM] Disposing {_vmCache.Count} cached VMs");
 
             CancelLoading();
 
+            foreach (var vm in _vmCache.Values)
+                vm.Dispose();
+
             _vmCache.Clear();
             Items.Clear();
-            _loadedSources.Clear();
+            _sources.Clear();
             _masterIds.Clear();
         }
 

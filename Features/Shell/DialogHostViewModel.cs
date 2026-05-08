@@ -1,5 +1,4 @@
 using Avalonia.Threading;
-using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI.Fody.Helpers;
 

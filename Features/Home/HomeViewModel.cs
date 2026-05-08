@@ -75,7 +75,11 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         UpdateGreeting();
 
-        _languageChangedHandler = (_, _) => InitializeCategories();
+        _languageChangedHandler = (_, _) =>
+        {
+            UpdateGreeting();
+            InitializeCategories();
+        };
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
         InitializeCategories();
@@ -129,18 +133,24 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         _fetchOffset += 50;
 
         var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
-
         if (ct.IsCancellationRequested) return [];
 
         var result = newTracks.Skip(TotalCount).ToList();
 
         if (result.Count > 0)
         {
-            _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, [.. GetItemsSnapshot(), .. result]);
+            var snapshot = GetItemsSnapshot();
+            var all = new List<TrackInfo>(snapshot.Count + result.Count);
+            all.AddRange(snapshot);
+            all.AddRange(result);
+            _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, all);
 
-            var imageUrls = result.Take(10).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
+            var imageUrls = result.Take(10)
+                .Select(static t => t.ThumbnailUrl)
+                .Where(static u => !string.IsNullOrEmpty(u));
             _ = _imageCache.PrefetchAsync(imageUrls, ct);
         }
+
         UpdateStats();
         return result;
     }
@@ -245,39 +255,44 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         Greeting = SL[key];
     }
 
+    /// <summary>
+    /// Обновляет имена категорий in-place вместо Clear() + Add().
+    /// Clear() → 14 CollectionChanged → сброс SelectedCategory → лишний LoadTracksAsync.
+    /// In-place: ноль лишних событий.
+    /// </summary>
     private void InitializeCategories()
     {
-        var currentQuery = SelectedCategory?.Query;
-        var wasSpecial = SelectedCategory?.IsSpecial == true;
+        ReadOnlySpan<(string key, string fallback, string query, bool special)> defs =
+        [
+            ("Category_RecentlyPlayed", "Recently Played", "",                        true),
+        ("Category_Trending",       "Trending",        "trending music 2024",     false),
+        ("Category_Pop",            "Pop",             "pop hits 2024",           false),
+        ("Category_HipHop",         "Hip-Hop",         "hip hop 2024",            false),
+        ("Category_Electronic",     "Electronic",      "electronic music",        false),
+        ("Category_LoFi",           "Lo-Fi",           "lofi hip hop chill beats", false),
+        ("Category_Rock",           "Rock",            "rock music",              false),
+    ];
 
-        Categories.Clear();
+        for (int i = Categories.Count; i < defs.Length; i++)
+            Categories.Add(new CategoryItem());
 
-        AddCat("Category_RecentlyPlayed", "Recently Played", special: true);
-        AddCat("Category_Trending", "Trending", "trending music 2024");
-        AddCat("Category_Pop", "Pop", "pop hits 2024");
-        AddCat("Category_HipHop", "Hip-Hop", "hip hop 2024");
-        AddCat("Category_Electronic", "Electronic", "electronic music");
-        AddCat("Category_LoFi", "Lo-Fi", "lofi hip hop chill beats");
-        AddCat("Category_Rock", "Rock", "rock music");
+        for (int i = 0; i < defs.Length; i++)
+        {
+            var (key, fallback, query, special) = defs[i];
+            var name = SL[key];
+            if (string.IsNullOrEmpty(name) || name == key) name = fallback;
 
-        if (wasSpecial) SelectedCategory = Categories.FirstOrDefault(c => c.IsSpecial);
-        else if (!string.IsNullOrEmpty(currentQuery)) SelectedCategory = Categories.FirstOrDefault(c => c.Query == currentQuery);
+            var cat = Categories[i];
+            cat.Name = name;
+            cat.Query = query;
+            cat.IsSpecial = special;
+            cat.LocKey = key;
+        }
+
+        while (Categories.Count > defs.Length)
+            Categories.RemoveAt(Categories.Count - 1);
 
         SelectedCategory ??= Categories.FirstOrDefault();
-    }
-
-    private void AddCat(string key, string fallback, string query = "", bool special = false)
-    {
-        var name = SL[key];
-        if (string.IsNullOrEmpty(name) || name == key) name = fallback;
-
-        Categories.Add(new CategoryItem
-        {
-            Name = name,
-            Query = query,
-            IsSpecial = special,
-            LocKey = key
-        });
     }
 
     private void UpdateStats()
@@ -312,9 +327,9 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     #endregion
 }
 
-public sealed class CategoryItem
+public sealed class CategoryItem : ReactiveObject
 {
-    public string Name { get; set; } = string.Empty;
+    [Reactive] public string Name { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public bool IsSpecial { get; set; }
     public string LocKey { get; set; } = "";

@@ -31,7 +31,7 @@ namespace LMP.Features.Player;
 /// </summary>
 public sealed class PlayerBarViewModel : ViewModelBase
 {
-     #region Constants - UI & UX
+    #region Constants - UI & UX
 
     /// <summary>Задержка для предотвращения дребезга при переключении треков (мс)</summary>
     private const int NavigationDebounceMs = 300;
@@ -159,6 +159,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool IsNavigating { get; private set; }
     [Reactive] public bool IsTrackResetting { get; private set; }
 
+    /// <summary>URL текущего трека для CopyLinkButton. Null если трека нет.</summary>
+    public string? CurrentTrackUrl => CurrentTrack?.Url;
+
     public string SafeTitle => CurrentTrack?.Title ?? SL["Player_NotPlaying"];
     public string SafeAuthor => CurrentTrack?.Author ?? "";
     public string? SafeThumbnail => CurrentTrack?.ThumbnailUrl;
@@ -275,11 +278,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     [Reactive] public bool IsRepeatHintVisible { get; private set; }
     [Reactive] public string RepeatHintText { get; private set; } = "";
-    [Reactive] public bool IsShuffleHintVisible { get; private set; }[Reactive] public string ShuffleHintText { get; private set; } = "";
+    [Reactive] public bool IsShuffleHintVisible { get; private set; }
+    [Reactive] public string ShuffleHintText { get; private set; } = "";
     [Reactive] public bool IsLikeHintVisible { get; private set; }
     [Reactive] public string LikeHintText { get; private set; } = "";
-    [Reactive] public bool IsCopyHintVisible { get; private set; }
-    [Reactive] public bool IsCopyHighlighted { get; private set; }
 
     #endregion
 
@@ -289,7 +291,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool ShowStreamInfo { get; private set; }
     [Reactive] public string DownloadSpeedText { get; private set; } = "";
 
-    public ObservableCollection<StreamOption> AvailableFormats { get; } =[];
+    public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 
     #endregion
 
@@ -317,8 +319,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public string LikeTooltip => IsLiked
         ? SL["Track_Unlike"]
         : SL["Track_Like"];
-
-    public static string CopyTooltip => SL["Track_CopyLink"];
 
     public string MuteTooltip => IsMuted
         ? SL["Player_Unmute"]
@@ -526,15 +526,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             }
         }, hasTrackObs));
 
-        CopyLinkCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (CurrentTrack?.Url != null)
-            {
-                await Clipboard.SetTextAsync(CurrentTrack.Url);
-                ShowCopyHint();
-            }
-        }, hasTrackObs));
-
         LoadFormatsCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadFormatsAsync));
 
         SwitchFormatCommand = CreateCommand(ReactiveCommand.CreateFromTask<StreamOption>(async option =>
@@ -739,6 +730,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Unified Hint System
 
+    /// <summary>
+    /// Показывает всплывающую подсказку с заданным текстом и длительностью.
+    /// CTS гарантирует корректную отмену при быстрых повторных вызовах.
+    /// </summary>
     private async void ShowHint(Action<bool> setVisible, Action setText, int durationMs = HintDisplayDurationMs)
     {
         _activeHintCts?.Cancel();
@@ -752,25 +747,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             setVisible(true);
             await Task.Delay(durationMs, cts.Token);
             setVisible(false);
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    private async void ShowCopyHint()
-    {
-        _activeHintCts?.Cancel();
-        _activeHintCts?.Dispose();
-        var cts = new CancellationTokenSource();
-        _activeHintCts = cts;
-
-        try
-        {
-            IsCopyHighlighted = true;
-            IsCopyHintVisible = true;
-            await Task.Delay(CopyHighlightDurationMs, cts.Token);
-            IsCopyHighlighted = false;
-            await Task.Delay(HintDisplayDurationMs - CopyHighlightDurationMs, cts.Token);
-            IsCopyHintVisible = false;
         }
         catch (OperationCanceledException) { }
     }
@@ -820,7 +796,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private void ResetBufferState()
     {
         BufferProgressPercent = 0;
-        BufferedRanges =[];
+        BufferedRanges = [];
         IsFullyBuffered = false;
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
     }
@@ -1279,6 +1255,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(SafeAuthor));
         this.RaisePropertyChanged(nameof(SafeThumbnail));
         this.RaisePropertyChanged(nameof(PlayPauseTooltip));
+        this.RaisePropertyChanged(nameof(CurrentTrackUrl));
     }
 
     private static string FormatTime(TimeSpan time) =>
@@ -1301,7 +1278,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             var (currentFormat, currentBitrate, _) = _audio.GetCurrentStreamInfo();
 
             var cache = AudioSourceFactory.GlobalCache;
-            var cachedFormats = cache?.GetCachedFormats(CurrentTrack.Id) ??[];
+            var cachedFormats = cache?.GetCachedFormats(CurrentTrack.Id) ?? [];
 
             AvailableFormats.Clear();
 
@@ -1366,7 +1343,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(NextTooltip));
         this.RaisePropertyChanged(nameof(RepeatTooltip));
         this.RaisePropertyChanged(nameof(LikeTooltip));
-        this.RaisePropertyChanged(nameof(CopyTooltip));
         this.RaisePropertyChanged(nameof(TrackNumberTooltip));
         this.RaisePropertyChanged(nameof(DurationTooltip));
         this.RaisePropertyChanged(nameof(L));

@@ -329,5 +329,43 @@
             VerticalOffset="8">
             <notifications:NotificationPanel DataContext="{Binding NotificationPanel}" />
         </Popup>
+
+        <!-- TOAST CANVAS (ZIndex: 2000) — позиционируется у курсора -->
+        <Canvas x:Name="CopyHintCanvas"
+            Grid.Row="0" Grid.RowSpan="3"
+            ZIndex="2000"
+            IsHitTestVisible="False">
+
+            <Border x:Name="CopyHintOverlay"
+                Padding="10,7"
+                Background="{DynamicResource BgElevatedBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                BoxShadow="0 4 20 0 #70000000"
+                MaxWidth="260"
+                IsVisible="False"
+                Opacity="0">
+
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                    </Transitions>
+                </Border.Transitions>
+
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <mi:MaterialIcon x:Name="CopyHintIcon"
+                        Width="14" Height="14"
+                        VerticalAlignment="Center" />
+                    <TextBlock x:Name="CopyHintText"
+                        FontSize="12"
+                        FontWeight="SemiBold"
+                        VerticalAlignment="Center"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        TextWrapping="Wrap"
+                        MaxWidth="200"
+                        MaxLines="2" />
+                </StackPanel>
+            </Border>
+        </Canvas>
     </Grid>
 </Window>

@@ -1,5 +1,6 @@
 ﻿using System.Reactive;
 using System.Reactive.Disposables;
+using LMP.Core.Helpers;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI;
@@ -26,6 +27,8 @@ namespace LMP.Features.Library;
 public sealed class PlaylistCardViewModel : ViewModelBase
 {
     #region Приватные поля
+
+    private readonly CookieAuthService _auth;
 
     private readonly Func<string, Task>? _onDelete;
     private readonly Func<Core.Models.Playlist, Task>? _onEdit;
@@ -55,6 +58,21 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     /// <summary>URL обложки (реактивное, с upscale для YouTube-превью).</summary>
     [Reactive] public string? ThumbnailUrl { get; private set; }
+
+    /// <summary>YouTube URL плейлиста для CopyLinkButton. Null если не привязан.</summary>
+    public string? YoutubeUrl
+    {
+        get
+        {
+            // Если это плейлист "Понравившиеся" и пользователь вошел в аккаунт, даём ссылку на системный плейлист LM
+            if (IsLikedPlaylist && _auth.IsAuthenticated)
+                return "https://www.youtube.com/playlist?list=LM";
+
+            return string.IsNullOrEmpty(Playlist.YoutubeId)
+                ? null
+                : $"https://www.youtube.com/playlist?list={Playlist.YoutubeId}";
+        }
+    }
 
     /// <summary>Количество треков в плейлисте.</summary>
     [Reactive] public int TrackCount { get; set; }
@@ -122,6 +140,9 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>Открыть диалог редактирования плейлиста.</summary>
     public ReactiveCommand<Unit, Unit> EditCommand { get; }
 
+    /// <summary>Скопировать ссылку на плейлист. Используется в ContextMenu (ПКМ).</summary>
+    public ReactiveCommand<Unit, Unit> CopyLinkCommand { get; }
+
     #endregion
 
     #region Конструктор
@@ -134,6 +155,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <param name="onDelete">Callback удаления (опционально).</param>
     /// <param name="onEdit">Callback редактирования (опционально).</param>
     public PlaylistCardViewModel(
+        CookieAuthService auth,
         Core.Models.Playlist playlist,
         int trackCount,
         Action<string> onOpen,
@@ -143,6 +165,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         Func<Core.Models.Playlist, Task>? onEdit = null)
     {
         Playlist = playlist;
+        _auth = auth;
         _onOpen = onOpen;
         _addToQueueAction = addToQueueAction;
         _playAction = playAction;
@@ -152,7 +175,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         Name = playlist.Name;
         TrackCount = trackCount;
         ThumbnailUrl = UpscaleThumbnailUrl(playlist.ThumbnailUrl);
-        IsSynced = playlist.IsFromAccount;
+        IsSynced = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
 
         OpenCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
@@ -161,9 +184,9 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
         var canDelete = this.WhenAnyValue(x => x.CanDelete);
         DeleteCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
-        {
-            if (!_isDisposed && _onDelete != null) await _onDelete(Playlist.Id);
-        }, canDelete));
+            {
+                if (!_isDisposed && _onDelete != null) await _onDelete(Playlist.Id);
+            }, canDelete));
 
         AddToQueueCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
         {
@@ -179,6 +202,19 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         {
             if (!_isDisposed && _onEdit != null) await _onEdit(Playlist);
         }));
+
+        CopyLinkCommand = CreateCommand(ReactiveCommand.CreateFromTask(
+            async () =>
+            {
+                if (_isDisposed || string.IsNullOrEmpty(YoutubeUrl)) return;
+
+                await Clipboard.SetTextAsync(YoutubeUrl);
+
+                CopyHintService.Instance.Show(
+                    LocalizationService.Instance["Playlist_LinkCopied"] ?? "Copied!",
+                    CopyHintKind.Success);
+            },
+            this.WhenAnyValue(x => x.YoutubeUrl, url => !string.IsNullOrEmpty(url))));
 
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)))
@@ -236,11 +272,12 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             ThumbnailUrl = newUrl;
         }
 
-        if (IsSynced != playlist.IsFromAccount)
+        bool newSynced = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
+        if (IsSynced != newSynced)
         {
             Playlist.SyncMode = playlist.SyncMode;
             Playlist.YoutubeId = playlist.YoutubeId;
-            IsSynced = playlist.IsFromAccount;
+            IsSynced = newSynced;
         }
     }
 

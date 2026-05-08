@@ -16,8 +16,6 @@ namespace LMP.Core.Youtube.Music;
 internal sealed class PlaylistSyncController(HttpClient http)
 {
     private const string WebApiUrl = "https://www.youtube.com/youtubei/v1";
-    private const string MusicApiUrl = "https://music.youtube.com/youtubei/v1";
-
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
 
     // WEB context bytes
@@ -59,33 +57,6 @@ internal sealed class PlaylistSyncController(HttpClient http)
         writer.WriteEndObject(); // context
     }
 
-    /// <summary>
-    /// WEB_REMIX context for playlist track fetching (musicResponsiveListItemRenderer).
-    /// </summary>
-    private void WriteMusicContext(Utf8JsonWriter writer)
-    {
-        writer.WritePropertyName(Utf8Context);
-        writer.WriteStartObject();
-
-        writer.WritePropertyName(Utf8Client);
-        writer.WriteStartObject();
-        writer.WriteString(Utf8ClientName, Utf8WebRemix);
-        writer.WriteString(Utf8ClientVersion, YoutubeHttpHandler.MusicClientVersion);
-        writer.WriteString(Utf8Hl, YoutubeHttpHandler.GetHl());
-        writer.WriteString(Utf8Gl, YoutubeHttpHandler.GetGl());
-
-        if (!string.IsNullOrEmpty(VisitorData))
-            writer.WriteString("visitorData", VisitorData);
-
-        writer.WriteEndObject(); // client
-
-        writer.WritePropertyName(Utf8User);
-        writer.WriteStartObject();
-        writer.WriteEndObject(); // user
-
-        writer.WriteEndObject(); // context
-    }
-
     #endregion
 
     #region HTTP
@@ -123,39 +94,6 @@ internal sealed class PlaylistSyncController(HttpClient http)
 
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         return await Json.ParseAsync(stream, ct);
-    }
-
-    private async Task<JsonElement> PostMusicAsync(
-        string endpoint,
-        Action<Utf8JsonWriter> writeBody,
-        CancellationToken ct)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{MusicApiUrl}/{endpoint}");
-
-        if (!string.IsNullOrEmpty(VisitorData))
-            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, VisitorData);
-
-        request.Content = CreateJsonContent(writer =>
-        {
-            WriteMusicContext(writer);
-            writeBody(writer);
-        });
-
-        using var response = await http.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-
-        using var stream = await response.Content.ReadAsStreamAsync(ct);
-        var root = await Json.ParseAsync(stream, ct);
-
-        // Update visitor data from response
-        var newVd = root.GetPropertyOrNull("responseContext")
-            ?.GetPropertyOrNull("visitorData")
-            ?.GetStringOrNull();
-        if (!string.IsNullOrWhiteSpace(newVd) && newVd != VisitorData)
-            VisitorData = newVd;
-
-        return root;
     }
 
     #endregion
@@ -413,121 +351,6 @@ internal sealed class PlaylistSyncController(HttpClient http)
                 results.Add(new RemoteTrackInfo(videoId, setVideoId, results.Count));
             }
         }
-    }
-
-    private static void ParsePlaylistTracks(JsonElement root, List<RemoteTrackInfo> results)
-    {
-        JsonElement? contentsArray = null;
-
-        // Path 1: Initial browse response
-        var tabs = root.GetPropertyOrNull("contents")
-            ?.GetPropertyOrNull("singleColumnBrowseResultsRenderer")
-            ?.GetPropertyOrNull("tabs");
-
-        if (tabs?.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var tab in tabs.Value.EnumerateArray())
-            {
-                var sectionContents = tab.GetPropertyOrNull("tabRenderer")
-                    ?.GetPropertyOrNull("content")
-                    ?.GetPropertyOrNull("sectionListRenderer")
-                    ?.GetPropertyOrNull("contents");
-
-                if (sectionContents?.ValueKind != JsonValueKind.Array) continue;
-
-                foreach (var section in sectionContents.Value.EnumerateArray())
-                {
-                    var shelfContents = section.GetPropertyOrNull("musicPlaylistShelfRenderer")
-                        ?.GetPropertyOrNull("contents");
-
-                    if (shelfContents?.ValueKind == JsonValueKind.Array)
-                    {
-                        contentsArray = shelfContents;
-                        break;
-                    }
-                }
-                if (contentsArray != null) break;
-            }
-        }
-
-        // Path 2: Continuation response
-        contentsArray ??= root.GetPropertyOrNull("continuationContents")
-            ?.GetPropertyOrNull("musicPlaylistShelfContinuation")
-            ?.GetPropertyOrNull("contents");
-
-        if (contentsArray?.ValueKind != JsonValueKind.Array) return;
-
-        foreach (var item in contentsArray.Value.EnumerateArray())
-        {
-            var renderer = item.GetPropertyOrNull("musicResponsiveListItemRenderer");
-            if (renderer == null) continue;
-
-            var playlistItemData = renderer.Value.GetPropertyOrNull("playlistItemData");
-            if (playlistItemData == null) continue;
-
-            var videoId = playlistItemData.Value.GetPropertyOrNull("videoId")?.GetStringOrNull();
-            var setVideoId = playlistItemData.Value
-                .GetPropertyOrNull("playlistSetVideoId")?.GetStringOrNull();
-
-            if (!string.IsNullOrEmpty(videoId) && !string.IsNullOrEmpty(setVideoId))
-            {
-                results.Add(new RemoteTrackInfo(videoId, setVideoId, results.Count));
-            }
-        }
-    }
-
-    private static string? ExtractMusicContinuationToken(JsonElement root)
-    {
-        // Path 1: Initial response
-        var tabs = root.GetPropertyOrNull("contents")
-            ?.GetPropertyOrNull("singleColumnBrowseResultsRenderer")
-            ?.GetPropertyOrNull("tabs");
-
-        if (tabs?.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var tab in tabs.Value.EnumerateArray())
-            {
-                var sections = tab.GetPropertyOrNull("tabRenderer")
-                    ?.GetPropertyOrNull("content")
-                    ?.GetPropertyOrNull("sectionListRenderer")
-                    ?.GetPropertyOrNull("contents");
-
-                if (sections?.ValueKind != JsonValueKind.Array) continue;
-
-                foreach (var section in sections.Value.EnumerateArray())
-                {
-                    var contArray = section.GetPropertyOrNull("musicPlaylistShelfRenderer")
-                        ?.GetPropertyOrNull("continuations");
-                    if (contArray?.ValueKind != JsonValueKind.Array) continue;
-
-                    foreach (var cont in contArray.Value.EnumerateArray())
-                    {
-                        var token = cont.GetPropertyOrNull("nextContinuationData")
-                            ?.GetPropertyOrNull("continuation")
-                            ?.GetStringOrNull();
-                        if (!string.IsNullOrEmpty(token)) return token;
-                    }
-                }
-            }
-        }
-
-        // Path 2: Continuation response
-        var contCont = root.GetPropertyOrNull("continuationContents")
-            ?.GetPropertyOrNull("musicPlaylistShelfContinuation")
-            ?.GetPropertyOrNull("continuations");
-
-        if (contCont?.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var cont in contCont.Value.EnumerateArray())
-            {
-                var token = cont.GetPropertyOrNull("nextContinuationData")
-                    ?.GetPropertyOrNull("continuation")
-                    ?.GetStringOrNull();
-                if (!string.IsNullOrEmpty(token)) return token;
-            }
-        }
-
-        return null;
     }
 
     #endregion

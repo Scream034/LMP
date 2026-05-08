@@ -169,9 +169,10 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                                <Border Width="220" Margin="10"
+                                <Border
                                     Classes="playlist-card-inner"
                                     Classes.visible="{Binding IsVisible}"
+                                    Margin="10"
                                     Tag="{Binding DataContext, ElementName=LibraryRoot}">
 
                                     <Border.ContextMenu>
@@ -205,6 +206,13 @@
                                                     <mi:MaterialIcon Kind="PlaylistPlay" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Track_CopyLink], FallbackValue='Copy link', TargetNullValue='Copy link'}"
+                                                Command="{Binding CopyLinkCommand}">
+                                                <MenuItem.Icon>
+                                                    <mi:MaterialIcon Kind="LinkVariant" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
                                             <Separator Classes="menu-separator" />
                                             <MenuItem
                                                 Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Button_Delete], FallbackValue='Delete', TargetNullValue='Delete'}"
@@ -219,14 +227,13 @@
                                     </Border.ContextMenu>
 
                                     <Grid RowDefinitions="220, Auto">
-                                        <!-- Cover: строгий квадрат 220x220 -->
+                                        <!-- Cover -->
                                         <Button Grid.Row="0"
                                             Command="{Binding OpenCommand}"
                                             Background="Transparent" BorderThickness="0"
                                             Padding="0" Cursor="Hand"
                                             CornerRadius="8,8,0,0" ClipToBounds="True">
                                             <Panel Width="220" Height="220">
-                                                <!-- Liked: градиент сверху вниз + Heart -->
                                                 <Border IsVisible="{Binding IsLikedPlaylist}"
                                                     Width="220" Height="220">
                                                     <Border.Background>
@@ -247,20 +254,16 @@
                                                         VerticalAlignment="Center"
                                                         Opacity="0.9" />
                                                 </Border>
-
-                                                <!-- Placeholder -->
                                                 <Border
                                                     Background="{DynamicResource BgSkeletonBrush}"
                                                     IsVisible="{Binding ShowPlaceholder}"
                                                     Width="220" Height="220">
-                                                    <mi:MaterialIcon Kind="PlaylistMusic"
-                                                        Width="72" Height="72"
+                                                    <mi:MaterialIcon Kind="PlaylistMusic" Width="72"
+                                                        Height="72"
                                                         Foreground="{DynamicResource TextMutedBrush}"
                                                         HorizontalAlignment="Center"
                                                         VerticalAlignment="Center" />
                                                 </Border>
-
-                                                <!-- Thumbnail -->
                                                 <Image
                                                     controls:QualityImage.Source="{Binding ThumbnailUrl}"
                                                     controls:QualityImage.Quality="High"
@@ -275,20 +278,19 @@
                                             Command="{Binding OpenCommand}"
                                             Background="Transparent" BorderThickness="0"
                                             Padding="14,12"
-                                            HorizontalContentAlignment="Left" Cursor="Hand">
+                                            HorizontalContentAlignment="Left"
+                                            Cursor="Hand">
                                             <StackPanel>
                                                 <TextBlock Text="{Binding Name}"
                                                     FontWeight="SemiBold" FontSize="14"
                                                     TextTrimming="CharacterEllipsis" />
                                                 <StackPanel Orientation="Horizontal" Spacing="6"
                                                     Margin="0,4,0,0">
-                                                    <TextBlock
-                                                        Text="{Binding FormattedTrackCount}"
+                                                    <TextBlock Text="{Binding FormattedTrackCount}"
                                                         FontSize="12"
                                                         Foreground="{DynamicResource TextMutedBrush}" />
-                                                    <!-- CloudCheck tooltip через Tag -->
-                                                    <mi:MaterialIcon Kind="CloudCheck" Width="13"
-                                                        Height="13"
+                                                    <mi:MaterialIcon Kind="CloudCheck"
+                                                        Width="13" Height="13"
                                                         Foreground="{DynamicResource TextMutedBrush}"
                                                         IsVisible="{Binding IsSynced}"
                                                         Tag="{Binding DataContext, ElementName=LibraryRoot}"
@@ -308,7 +310,8 @@
                         <mi:MaterialIcon Kind="PlaylistMusic" Width="64" Height="64"
                             Foreground="{DynamicResource TextMutedBrush}"
                             HorizontalAlignment="Center" />
-                        <TextBlock Text="{Binding L[Library_Empty], FallbackValue=''}" FontSize="16"
+                        <TextBlock Text="{Binding L[Library_Empty], FallbackValue=''}"
+                            FontSize="16"
                             Foreground="{DynamicResource TextSecondaryBrush}"
                             HorizontalAlignment="Center" Margin="0,16,0,0" />
                     </StackPanel>

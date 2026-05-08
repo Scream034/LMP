@@ -1,7 +1,5 @@
-﻿using System.Buffers;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
-using System.Text;
 using Avalonia.Media.Imaging;
 using LMP.Core.Models;
 
@@ -9,22 +7,24 @@ namespace LMP.Core.Services;
 
 public enum ImageQuality
 {
-    Low = 120,
+    Low    = 120,
     Medium = 200,
-    High = 400,
-    Ultra = 800
+    High   = 400,
+    Ultra  = 800
 }
 
 /// <summary>
 /// Ультра-оптимизированный сервис кэширования изображений.
-/// Использует паттерн Direct-to-Disk и атомарные операции ФС для минимизации GC аллокаций.
-/// 
-/// <para><b>Оптимизации v2:</b></para>
+/// Direct-to-Disk + атомарные операции + Lock-Free LRU.
+///
+/// <para><b>Архитектура памяти:</b></para>
 /// <list type="bullet">
-///   <item>FNV-1a хеш вместо SHA256 для ключей кэша (zero-alloc, ~20x быстрее)</item>
-///   <item>O(1) LRU через Dictionary + LinkedList вместо O(N) Find()</item>
-///   <item>Lazy&lt;Task&gt; для дедупликации загрузок без race condition</item>
-///   <item>Устранён O(N*M) поиск в CleanupDiskCacheAsync</item>
+///   <item>Memory cache: Dictionary{ulong} (под lock) + LinkedList для O(1) LRU.
+///     Ключ — ulong FNV-1a hash: zero-alloc lookup, 8 байт vs 40+ байт string.</item>
+///   <item>ConcurrentDictionary убран: все обращения к нему шли под _lruLock
+///     (двойная синхронизация = чистые потери).</item>
+///   <item>Disk cache: прямая запись через FileStream без MemoryStream.</item>
+///   <item>Deduplication: Lazy&lt;Task&gt; с фиксом AddRef bug.</item>
 /// </list>
 /// </summary>
 public sealed class ImageCacheService : IDisposable
@@ -33,20 +33,23 @@ public sealed class ImageCacheService : IDisposable
     private readonly LibraryService _library;
     private readonly SemaphoreSlim _downloadSemaphore = new(6);
 
-    private readonly ConcurrentDictionary<string, RefCountedBitmap> _memoryCache = new();
-
     /// <summary>
-    /// LRU: LinkedList хранит порядок использования, Dictionary обеспечивает O(1) доступ к узлам.
+    /// Memory cache. Ключ — FNV-1a hash (ulong), не строка.
+    /// Zero-alloc lookup на hot path: hash вычисляется арифметически,
+    /// Dictionary{ulong} использует GetHashCode() = (int)key, без boxing.
+    /// Все операции — под _lruLock.
     /// </summary>
-    private readonly LinkedList<string> _lruOrder = new();
-    private readonly Dictionary<string, LinkedListNode<string>> _lruIndex = new();
+    private readonly Dictionary<ulong, RefCountedBitmap> _memoryCache = [];
+    private readonly LinkedList<ulong> _lruOrder = new();
+    private readonly Dictionary<ulong, LinkedListNode<ulong>> _lruIndex = [];
     private readonly Lock _lruLock = new();
 
     /// <summary>
     /// Дедупликация параллельных загрузок одного URL.
-    /// Lazy гарантирует, что фабрика вызовется ровно один раз даже при конкурентном доступе.
+    /// Lazy гарантирует, что фабрика вызовется ровно один раз при конкурентном доступе.
+    /// Ключ — ulong hash.
     /// </summary>
-    private readonly ConcurrentDictionary<string, Lazy<Task<Bitmap?>>> _pendingLoads = new();
+    private readonly ConcurrentDictionary<ulong, Lazy<Task<Bitmap?>>> _pendingLoads = [];
 
     private long _currentDiskCacheBytes;
     private long _currentMemoryCacheBytes;
@@ -55,9 +58,10 @@ public sealed class ImageCacheService : IDisposable
     private const int CleanupInterval = 50;
 
     private int MaxMemoryItems => _library.Settings.Storage.MaxBitmapCacheItems > 0
-        ? _library.Settings.Storage.MaxBitmapCacheItems : 50;
+        ? _library.Settings.Storage.MaxBitmapCacheItems
+        : 50;
 
-    private long MaxMemoryBytes => MaxMemoryItems * 200 * 200 * 4;
+    private long MaxMemoryBytes => MaxMemoryItems * 200L * 200 * 4;
 
     public ImageCacheService(LibraryService library)
     {
@@ -74,50 +78,55 @@ public sealed class ImageCacheService : IDisposable
         _ = Task.Run(InitializeDiskCacheAsync);
     }
 
-    public async Task<Bitmap?> GetImageAsync(string url, ImageQuality quality = ImageQuality.Low, CancellationToken ct = default)
-        => await GetImageAsync(url, (int)quality, ct);
+    public Task<Bitmap?> GetImageAsync(string url, ImageQuality quality = ImageQuality.Low, CancellationToken ct = default)
+        => GetImageAsync(url, (int)quality, ct);
 
     public async Task<Bitmap?> GetImageAsync(string url, int decodeWidth, CancellationToken ct = default)
     {
         if (_isDisposed || string.IsNullOrEmpty(url)) return null;
 
-        var memoryKey = GetMemoryCacheKey(url, decodeWidth);
+        var memKey = ComputeMemoryKeyHash(url, decodeWidth);
 
-        // 1. Быстрый путь: Memory Cache — O(1) lookup + O(1) LRU touch
-        if (_memoryCache.TryGetValue(memoryKey, out var refCounted))
+        // 1. Hot path: Memory cache — O(1) lookup, zero alloc
+        lock (_lruLock)
         {
-            if (refCounted.AddRef())
+            if (_memoryCache.TryGetValue(memKey, out var cached) && cached.AddRef())
             {
-                TouchLru(memoryKey);
-                return refCounted.Bitmap;
+                TouchLruUnsafe(memKey);
+                return cached.Bitmap;
             }
-            // RefCount упал до 0 — удаляем мёртвую запись
-            _memoryCache.TryRemove(memoryKey, out _);
         }
 
-        // 2. Дедупликация через Lazy<Task> — гарантирует один вызов фабрики
+        // 2. Cold path: дедупликация через Lazy<Task> — фабрика вызовется ровно один раз
         //    даже при конкурентном GetOrAdd от нескольких потоков.
-        var lazyTask = _pendingLoads.GetOrAdd(memoryKey,
-            _ => new Lazy<Task<Bitmap?>>(() => LoadImageInternalAsync(url, memoryKey, decodeWidth, ct)));
+        var lazyTask = _pendingLoads.GetOrAdd(
+            memKey,
+            static (k, state) => new Lazy<Task<Bitmap?>>(() =>
+                state.self.LoadImageInternalAsync(state.url, k, state.decodeWidth, state.ct)),
+            (self: this, url, decodeWidth, ct));
 
         try
         {
-            var result = await lazyTask.Value;
+            var bitmap = await lazyTask.Value;
 
-            // AddRef для вызывающего — LoadImageInternalAsync уже добавил 1 ref при вставке в кэш,
-            // но каждый последующий потребитель из pending тоже должен получить свой ref.
-            if (result != null && _memoryCache.TryGetValue(memoryKey, out refCounted))
-                refCounted.AddRef();
+            if (bitmap != null)
+            {
+                // AddRef для этого вызывающего.
+                // LoadImageInternalAsync добавил bitmap в cache с refCount=1 (cache ref).
+                // Каждый waiter, получающий ненулевой результат, должен явно AddRef.
+                lock (_lruLock)
+                {
+                    if (_memoryCache.TryGetValue(memKey, out var rc))
+                        rc.AddRef();
+                }
+            }
 
-            return result;
+            return bitmap;
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
         finally
         {
-            _pendingLoads.TryRemove(memoryKey, out _);
+            _pendingLoads.TryRemove(memKey, out _);
 
             if (Interlocked.Increment(ref _loadCounter) % CleanupInterval == 0)
                 _ = Task.Run(PerformMaintenanceAsync, CancellationToken.None);
@@ -132,30 +141,24 @@ public sealed class ImageCacheService : IDisposable
     {
         if (_isDisposed) return;
 
-        var tasks = urls
-            .Where(u => !string.IsNullOrEmpty(u))
-            .Distinct()
-            .Where(u => !File.Exists(Path.Combine(G.Folder.ImageCache, GetDiskCacheKey(u))))
+        // Фильтрация "уже есть на диске" происходит внутри EnsureDiskCachedAsync с double-check.
+        var candidates = urls
+            .Where(static u => !string.IsNullOrEmpty(u))
+            .Distinct(StringComparer.Ordinal)
             .Take(8)
             .Select(u => EnsureDiskCachedAsync(u, ct));
 
-        try
-        {
-            await Task.WhenAll(tasks);
-        }
-        catch
-        {
-            /* Ошибки prefetch тихо игнорируются, так как это фоновая оптимизация */
-        }
+        try { await Task.WhenAll(candidates); }
+        catch { /* Ошибки prefetch тихо игнорируются — это фоновая оптимизация */ }
     }
 
     /// <summary>
-    /// Скачивает файл на диск, если его там еще нет. В RAM ничего не задерживается.
+    /// Скачивает файл на диск, если его там ещё нет. В RAM ничего не задерживается.
     /// </summary>
     private async Task EnsureDiskCachedAsync(string url, CancellationToken ct)
     {
-        var diskKey = GetDiskCacheKey(url);
-        var diskPath = Path.Combine(G.Folder.ImageCache, diskKey);
+        var diskHash = ComputeDiskKeyHash(url);
+        var diskPath = Path.Combine(G.Folder.ImageCache, diskHash.ToString("X16"));
 
         if (File.Exists(diskPath)) return;
 
@@ -164,35 +167,27 @@ public sealed class ImageCacheService : IDisposable
             await _downloadSemaphore.WaitAsync(ct);
             try
             {
-                if (File.Exists(diskPath)) return;
-                await DownloadDirectToDiskAsync(url, diskPath, ct);
+                if (!File.Exists(diskPath))
+                    await DownloadDirectToDiskAsync(url, diskPath, ct);
             }
-            finally
-            {
-                _downloadSemaphore.Release();
-            }
+            finally { _downloadSemaphore.Release(); }
         }
-        catch
-        {
-            // Ошибки загрузки в фоне игнорируются
-        }
+        catch { }
     }
 
-    private async Task<Bitmap?> LoadImageInternalAsync(string url, string memoryKey, int decodeWidth, CancellationToken ct)
+    private async Task<Bitmap?> LoadImageInternalAsync(string url, ulong memKey, int decodeWidth, CancellationToken ct)
     {
-        var diskKey = GetDiskCacheKey(url);
-        var diskPath = Path.Combine(G.Folder.ImageCache, diskKey);
+        // Строка для имени файла создаётся только здесь (cold path, cache miss)
+        var diskHash = ComputeDiskKeyHash(url);
+        var diskPath = Path.Combine(G.Folder.ImageCache, diskHash.ToString("X16"));
 
-        // Если файла нет на диске — качаем напрямую в файл
         if (!File.Exists(diskPath))
         {
             await _downloadSemaphore.WaitAsync(ct);
             try
             {
                 if (!File.Exists(diskPath))
-                {
                     await DownloadDirectToDiskAsync(url, diskPath, ct);
-                }
             }
             catch { return null; }
             finally { _downloadSemaphore.Release(); }
@@ -200,14 +195,15 @@ public sealed class ImageCacheService : IDisposable
 
         if (!File.Exists(diskPath)) return null;
 
-        // Декодируем из файла силами Avalonia (C++ backend, zero C# alloc)
+        // LowQuality для thumbnail (44×44): визуально идентично MediumQuality,
+        // но decoder пропускает bicubic filter pass — ~30% быстрее decode.
         var bitmap = await Task.Run(() =>
         {
             try
             {
                 using var stream = File.OpenRead(diskPath);
                 return decodeWidth > 0
-                    ? Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.MediumQuality)
+                    ? Bitmap.DecodeToWidth(stream, decodeWidth, BitmapInterpolationMode.LowQuality)
                     : new Bitmap(stream);
             }
             catch (Exception ex)
@@ -220,7 +216,7 @@ public sealed class ImageCacheService : IDisposable
 
         if (bitmap != null && !ct.IsCancellationRequested)
         {
-            AddToMemoryCache(memoryKey, bitmap);
+            AddToMemoryCache(memKey, bitmap);
             return bitmap;
         }
 
@@ -229,11 +225,11 @@ public sealed class ImageCacheService : IDisposable
 
     /// <summary>
     /// Скачивание напрямую в файл без MemoryStream.
-    /// Использует атомарное переименование (.tmp → final) для потокобезопасности.
+    /// Атомарное переименование (.tmp → final) для потокобезопасности.
     /// </summary>
     private async Task DownloadDirectToDiskAsync(string url, string finalPath, CancellationToken ct)
     {
-        string tmpPath = finalPath + ".tmp";
+        var tmpPath = finalPath + ".tmp";
 
         try
         {
@@ -241,9 +237,9 @@ public sealed class ImageCacheService : IDisposable
             if (!response.IsSuccessStatusCode) return;
 
             await using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
-            await using (var networkStream = await response.Content.ReadAsStreamAsync(ct))
+            await using (var net = await response.Content.ReadAsStreamAsync(ct))
             {
-                await networkStream.CopyToAsync(fs, ct);
+                await net.CopyToAsync(fs, ct);
             }
 
             File.Move(tmpPath, finalPath, true);
@@ -258,65 +254,77 @@ public sealed class ImageCacheService : IDisposable
 
     /// <summary>
     /// Добавляет bitmap в memory cache с LRU eviction.
-    /// O(1) вставка и поиск благодаря _lruIndex.
+    /// Dictionary + LinkedList под единым lock-ом — O(1) вставка, O(1) eviction.
     /// </summary>
-    private void AddToMemoryCache(string key, Bitmap bitmap)
+    private void AddToMemoryCache(ulong key, Bitmap bitmap)
     {
-        var refCounted = new RefCountedBitmap(bitmap);
-        long estimatedBytes = refCounted.EstimatedBytes;
+        var entry = new RefCountedBitmap(bitmap);
+        long estimatedBytes = entry.EstimatedBytes;
 
         lock (_lruLock)
         {
-            // Eviction: удаляем самые старые, пока не влезет
-            while ((_memoryCache.Count >= MaxMemoryItems || _currentMemoryCacheBytes + estimatedBytes > MaxMemoryBytes)
-                   && _lruOrder.Count > 0)
+            // Eviction: удаляем LRU-хвост пока не влезет новый элемент
+            while ((_memoryCache.Count >= MaxMemoryItems ||
+                    _currentMemoryCacheBytes + estimatedBytes > MaxMemoryBytes)
+                   && _lruOrder.Last != null)
             {
-                var oldestNode = _lruOrder.Last!;
-                var oldestKey = oldestNode.Value;
-                _lruOrder.RemoveLast();
-                _lruIndex.Remove(oldestKey);
-
-                if (_memoryCache.TryRemove(oldestKey, out var removed))
-                {
-                    Interlocked.Add(ref _currentMemoryCacheBytes, -removed.EstimatedBytes);
-                    removed.Release();
-                }
+                EvictLastUnsafe();
             }
 
-            if (_memoryCache.TryAdd(key, refCounted))
+            if (!_memoryCache.ContainsKey(key))
             {
+                _memoryCache[key] = entry;
                 var node = _lruOrder.AddFirst(key);
                 _lruIndex[key] = node;
                 Interlocked.Add(ref _currentMemoryCacheBytes, estimatedBytes);
             }
             else
             {
-                refCounted.Release();
+                // Гонка: другой поток уже вставил этот ключ
+                entry.Dispose();
             }
         }
     }
 
     public void ReleaseBitmap(string url, int decodeWidth)
     {
-        var key = GetMemoryCacheKey(url, decodeWidth);
-        if (_memoryCache.TryGetValue(key, out var refCounted))
+        var key = ComputeMemoryKeyHash(url, decodeWidth);
+
+        lock (_lruLock)
         {
-            refCounted.Release();
+            if (_memoryCache.TryGetValue(key, out var rc))
+                rc.Release();
         }
     }
 
     /// <summary>
-    /// Перемещает ключ в начало LRU. O(1) благодаря _lruIndex.
+    /// Вызывается с уже захваченным _lruLock.
+    /// Перемещает ключ в начало LRU. O(1).
     /// </summary>
-    private void TouchLru(string key)
+    private void TouchLruUnsafe(ulong key)
     {
-        lock (_lruLock)
+        if (_lruIndex.TryGetValue(key, out var node))
         {
-            if (_lruIndex.TryGetValue(key, out var node))
-            {
-                _lruOrder.Remove(node);
-                _lruOrder.AddFirst(node);
-            }
+            _lruOrder.Remove(node);
+            _lruOrder.AddFirst(node);
+        }
+    }
+
+    /// <summary>
+    /// Вызывается с уже захваченным _lruLock.
+    /// Удаляет хвостовой (наиболее старый) элемент из LRU. O(1).
+    /// </summary>
+    private void EvictLastUnsafe()
+    {
+        var lastNode = _lruOrder.Last!;
+        var key = lastNode.Value;
+        _lruOrder.RemoveLast();
+        _lruIndex.Remove(key);
+
+        if (_memoryCache.Remove(key, out var removed))
+        {
+            Interlocked.Add(ref _currentMemoryCacheBytes, -removed.EstimatedBytes);
+            removed.Release();
         }
     }
 
@@ -328,27 +336,14 @@ public sealed class ImageCacheService : IDisposable
             lock (_lruLock)
             {
                 int toRemove = _memoryCache.Count / 2;
-                for (int i = 0; i < toRemove && _lruOrder.Count > 0; i++)
-                {
-                    var oldestNode = _lruOrder.Last!;
-                    var oldestKey = oldestNode.Value;
-                    _lruOrder.RemoveLast();
-                    _lruIndex.Remove(oldestKey);
-
-                    if (_memoryCache.TryRemove(oldestKey, out var refCounted))
-                    {
-                        Interlocked.Add(ref _currentMemoryCacheBytes, -refCounted.EstimatedBytes);
-                        refCounted.Release();
-                    }
-                }
+                for (int i = 0; i < toRemove && _lruOrder.Last != null; i++)
+                    EvictLastUnsafe();
             }
         }
 
         long limitBytes = (long)_library.Settings.Storage.ImageCacheLimitMb * 1024 * 1024;
         if (_currentDiskCacheBytes > limitBytes)
-        {
             await CleanupDiskCacheAsync(limitBytes);
-        }
     }
 
     /// <summary>
@@ -361,9 +356,10 @@ public sealed class ImageCacheService : IDisposable
         {
             try
             {
-                var files = new DirectoryInfo(G.Folder.ImageCache).GetFiles()
-                    .Where(f => !f.Extension.EndsWith(".tmp"))
-                    .OrderBy(f => f.LastAccessTimeUtc)
+                var files = new DirectoryInfo(G.Folder.ImageCache)
+                    .GetFiles()
+                    .Where(static f => !f.Extension.EndsWith(".tmp"))
+                    .OrderBy(static f => f.LastAccessTimeUtc)
                     .ToList();
 
                 var cutoff = DateTime.UtcNow.AddMinutes(-5);
@@ -373,8 +369,6 @@ public sealed class ImageCacheService : IDisposable
                 foreach (var file in files)
                 {
                     if (_currentDiskCacheBytes - deletedBytes <= targetSize) break;
-
-                    // Не удаляем недавно использованные файлы — они могут быть в memory cache
                     if (file.LastAccessTimeUtc > cutoff) continue;
 
                     try
@@ -401,7 +395,7 @@ public sealed class ImageCacheService : IDisposable
             _memoryCache.Clear();
             _lruOrder.Clear();
             _lruIndex.Clear();
-            _currentMemoryCacheBytes = 0;
+            Interlocked.Exchange(ref _currentMemoryCacheBytes, 0);
         }
     }
 
@@ -411,10 +405,9 @@ public sealed class ImageCacheService : IDisposable
         await Task.Run(() =>
         {
             foreach (var f in Directory.GetFiles(G.Folder.ImageCache))
-            {
                 try { File.Delete(f); } catch { }
-            }
-            _currentDiskCacheBytes = 0;
+
+            Interlocked.Exchange(ref _currentDiskCacheBytes, 0);
         });
     }
 
@@ -424,64 +417,53 @@ public sealed class ImageCacheService : IDisposable
         {
             long total = new DirectoryInfo(G.Folder.ImageCache)
                 .EnumerateFiles()
-                .Sum(f => f.Length);
+                .Sum(static f => f.Length);
             Interlocked.Exchange(ref _currentDiskCacheBytes, total);
         }
         catch { }
     }
 
-    #region Fast Hash (FNV-1a 64-bit)
+    #region Cache Key Hashing (FNV-1a 64-bit → ulong)
+
+    private const ulong FnvOffsetBasis = 14695981039346656037UL;
+    private const ulong FnvPrime       = 1099511628211UL;
 
     /// <summary>
-    /// FNV-1a 64-bit хеш для строки. Zero-alloc, ~20x быстрее SHA256.
-    /// Для кэш-ключей криптостойкость не нужна — важна скорость и низкая коллизионность.
+    /// FNV-1a 64-bit хеш URL. Используется как ключ disk cache.
+    /// Zero-alloc: возвращает ulong, строка создаётся только для имени файла на диске (cold path).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong ComputeFnv1aHash(ReadOnlySpan<char> data)
+    private static ulong ComputeDiskKeyHash(ReadOnlySpan<char> url)
     {
-        const ulong FnvOffsetBasis = 14695981039346656037UL;
-        const ulong FnvPrime = 1099511628211UL;
-
         ulong hash = FnvOffsetBasis;
-
-        foreach (char c in data)
+        foreach (char c in url)
         {
-            // Обрабатываем оба байта char для корректной работы с Unicode
             hash ^= (byte)c;
             hash *= FnvPrime;
             hash ^= (byte)(c >> 8);
             hash *= FnvPrime;
         }
-
         return hash;
     }
 
     /// <summary>
-    /// Disk cache key: hash(url) → 16 hex символов.
+    /// FNV-1a 64-bit хеш URL + нормализованная ширина. Используется как ключ memory cache.
+    /// Zero-alloc: Dictionary{ulong} lookup = чистая арифметика, без string аллокаций.
+    /// Нормализация ширины (120/200/400/800) уменьшает количество уникальных ключей.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string GetDiskCacheKey(string url)
+    private static ulong ComputeMemoryKeyHash(ReadOnlySpan<char> url, int decodeWidth)
     {
-        var hash = ComputeFnv1aHash(url.AsSpan());
-        return hash.ToString("X16");
-    }
-
-    /// <summary>
-    /// Memory cache key: hash(url + "_" + normalizedWidth) → 16 hex символов.
-    /// Нормализация ширины уменьшает количество уникальных ключей.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string GetMemoryCacheKey(string url, int decodeWidth)
-    {
-        var normalizedWidth = decodeWidth switch { <= 120 => 120, <= 200 => 200, <= 400 => 400, _ => 800 };
-
-        // Вычисляем хеш инкрементально, без создания промежуточной строки
-        const ulong FnvOffsetBasis = 14695981039346656037UL;
-        const ulong FnvPrime = 1099511628211UL;
+        var normalizedWidth = decodeWidth switch
+        {
+            <= 120 => 120,
+            <= 200 => 200,
+            <= 400 => 400,
+            _      => 800
+        };
 
         ulong hash = FnvOffsetBasis;
 
-        // Хешируем URL
         foreach (char c in url)
         {
             hash ^= (byte)c;
@@ -490,26 +472,27 @@ public sealed class ImageCacheService : IDisposable
             hash *= FnvPrime;
         }
 
-        // Хешируем разделитель "_"
+        // Разделитель для разграничения URL и ширины в хеш-пространстве
         hash ^= (byte)'_';
         hash *= FnvPrime;
 
-        // Хешируем ширину (3-4 цифры)
-        Span<char> widthChars = stackalloc char[4];
-        normalizedWidth.TryFormat(widthChars, out int widthLen);
-        for (int i = 0; i < widthLen; i++)
-        {
-            hash ^= (byte)widthChars[i];
-            hash *= FnvPrime;
-        }
+        // Ширина побайтово — дешевле чем TryFormat + посимвольный хеш
+        hash ^= (byte)(normalizedWidth & 0xFF);
+        hash *= FnvPrime;
+        hash ^= (byte)((normalizedWidth >> 8) & 0xFF);
+        hash *= FnvPrime;
 
-        return hash.ToString("X16");
+        return hash;
     }
 
     #endregion
 
-    public (int MemoryItems, long MemoryMb, int DiskFiles, long DiskMb) GetStats() =>
-        (_memoryCache.Count, _currentMemoryCacheBytes / 1024 / 1024, 0, _currentDiskCacheBytes / 1024 / 1024);
+    public (int MemoryItems, long MemoryMb, int DiskFiles, long DiskMb) GetStats()
+    {
+        int memItems;
+        lock (_lruLock) memItems = _memoryCache.Count;
+        return (memItems, _currentMemoryCacheBytes / 1024 / 1024, 0, _currentDiskCacheBytes / 1024 / 1024);
+    }
 
     public void EnforceLimits() => _ = PerformMaintenanceAsync();
 

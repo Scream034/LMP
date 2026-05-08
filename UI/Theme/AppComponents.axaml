@@ -99,14 +99,20 @@
     </Style>
     <Style Selector="Button.cover-btn Panel.cover-overlay">
         <Setter Property="Opacity" Value="0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <Style Selector="Button.cover-btn:pointerover Panel.cover-overlay">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
         <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.cover-btn:pointerover Panel.cover-overlay">
+    <Style Selector="Border.track-row.is-active Button.cover-btn Panel.cover-overlay">
         <Setter Property="Opacity" Value="1" />
+        <Setter Property="IsHitTestVisible" Value="True" />
     </Style>
     <Style Selector="Button.cover-btn mi|MaterialIcon.play-icon">
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
@@ -215,14 +221,19 @@
         <Setter Property="Opacity" Value="0" />
     </Style>
 
-    <Style Selector="ListBox.track-list ListBoxItem.dragging">
-        <Setter Property="Opacity" Value="0.5" />
+    <!-- ═══ DRAG & DROP INDICATORS для ItemsRepeater ═══ -->
+    <!-- 
+    TryGetElement() возвращает Border.track-row напрямую (нет ListBoxItem-обёртки).
+    Классы insert-top/insert-bottom/dragging добавляются в TrackListControl.axaml.cs.
+-->
+    <Style Selector="Border.track-row.dragging">
+        <Setter Property="Opacity" Value="0.4" />
     </Style>
-    <Style Selector="ListBox.track-list ListBoxItem.insert-top">
+    <Style Selector="Border.track-row.insert-top">
         <Setter Property="BorderThickness" Value="0,2,0,0" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
-    <Style Selector="ListBox.track-list ListBoxItem.insert-bottom">
+    <Style Selector="Border.track-row.insert-bottom">
         <Setter Property="BorderThickness" Value="0,0,0,2" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>

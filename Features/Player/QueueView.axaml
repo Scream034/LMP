@@ -8,7 +8,7 @@
     x:CompileBindings="True">
 
     <Grid>
-        <!-- Empty State: очередь действительно пуста -->
+        <!-- Empty State -->
         <StackPanel IsVisible="{Binding IsEmpty}" HorizontalAlignment="Center"
             VerticalAlignment="Center" Spacing="16">
             <mi:MaterialIcon Kind="PlaylistMusicOutline" Width="64" Height="64"
@@ -27,15 +27,13 @@
 
             <!-- HEADER -->
             <StackPanel Grid.Row="0" Margin="24,24,24,8" Spacing="12">
-                <!-- Title Row -->
                 <Grid ColumnDefinitions="*, Auto">
                     <StackPanel>
-                        <TextBlock Text="{Binding L[Queue_Title]}" FontSize="24" FontWeight="Bold" />
+                        <TextBlock Text="{Binding L[Queue_Title]}" FontSize="24"
+                            FontWeight="Bold" />
                         <TextBlock Text="{Binding L[Queue_NowPlaying]}" FontSize="12"
                             Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
                     </StackPanel>
-
-                    <!-- Actions -->
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
                         <Button Command="{Binding ShuffleQueueCommand}" Classes="icon-btn"
                             ToolTip.Tip="{Binding L[Queue_Shuffle]}">
@@ -56,38 +54,35 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- TEXT FILTER ONLY -->
                 <controls:FilterBar
                     FilterText="{Binding FilterQuery}"
                     Watermark="{Binding L[Search_LocalFilterTitle]}"
                     Compact="True" />
             </StackPanel>
 
-            <!-- Filter No Results: очередь не пуста, но фильтр ничего не нашёл -->
+            <!-- Filter No Results -->
             <StackPanel Grid.Row="1"
                 IsVisible="{Binding IsFilterEmpty}"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center" Spacing="12">
+                HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
                 <mi:MaterialIcon Kind="MagnifyClose" Width="48" Height="48"
                     Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding L[Search_NoResults]}" FontSize="16"
                     Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center" />
             </StackPanel>
 
-            <!-- List -->
-            <controls:TrackListControl
-                Grid.Row="1"
-                Margin="24,0"
-                Items="{Binding QueueItems}"
-                IsLoading="False"
-                IsLoadingMore="False"
-                ReachedEnd="True"
-                UseInternalScroll="True"
-                EnableSmoothLoading="False"
-                IsQueueContext="True"
-                IsVisible="{Binding !IsFilterEmpty}"
-                EnableReordering="{Binding CanReorderItems}"
-                MoveItemCommand="{Binding MoveItemCommand}" />
+            <!-- List — ScrollViewer здесь, не внутри TrackListControl -->
+            <ScrollViewer Grid.Row="1" Margin="24,0"
+                IsVisible="{Binding !IsFilterEmpty}">
+                <controls:TrackListControl
+                    Items="{Binding QueueItems}"
+                    IsLoading="False"
+                    IsLoadingMore="False"
+                    ReachedEnd="True"
+                    EnableSmoothLoading="False"
+                    IsQueueContext="True"
+                    EnableReordering="{Binding CanReorderItems}"
+                    MoveItemCommand="{Binding MoveItemCommand}" />
+            </ScrollViewer>
         </Grid>
     </Grid>
 </UserControl>
