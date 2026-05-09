@@ -130,48 +130,15 @@ public sealed class PlaylistEditService
         }
 
         // ═══ STEP 2: Rename ═══
-        // Системные плейлисты (Liked) пропускаем:
-        // их Name управляется LocalizationService через getter,
-        // запись StoredName в БД не имеет эффекта на отображаемое имя.
         if (!LibraryService.IsSystemPlaylist(playlistId))
         {
             var newName = result.Name?.Trim();
             if (!string.IsNullOrWhiteSpace(newName) &&
                 !string.Equals(newName, playlist.Name, StringComparison.Ordinal))
             {
-                if (playlist.IsFromAccount && !string.IsNullOrEmpty(playlist.YoutubeId))
-                {
-                    lockNavigation(SL["Playlist_Renaming"] ?? "Renaming...");
-                    try
-                    {
-                        await _youtube.RenamePlaylistAsync(playlist.YoutubeId, newName);
-                        playlist.Name = newName;
-                        changed = true;
-                        Log.Info($"[PlaylistEdit] Renamed on YouTube: {playlist.YoutubeId} → '{newName}'");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error($"[PlaylistEdit] YouTube rename failed: {ex.Message}");
-
-                        await _notifications.ShowToastAsync(
-                            titleKey: "Dialog_Error_Title",
-                            messageKey: "Playlist_RenameCloudFailed",
-                            messageArgs: new object[] { ex.Message },
-                            severity: NotificationSeverity.Error,
-                            durationMs: 5000);
-
-                        _notifications.PlayErrorSound();
-                    }
-                    finally
-                    {
-                        unlockNavigation();
-                    }
-                }
-                else
-                {
-                    playlist.Name = newName;
-                    changed = true;
-                }
+                // Убрана автоматическая отправка на YouTube
+                playlist.Name = newName;
+                changed = true;
             }
         }
 
@@ -208,29 +175,9 @@ public sealed class PlaylistEditService
         // ═══ STEP 3.5: Description ═══
         if (!string.Equals(result.Description?.Trim(), playlist.Description?.Trim(), StringComparison.Ordinal))
         {
-            var newDesc = result.Description?.Trim();
-
-            if (playlist.IsFromAccount && !string.IsNullOrEmpty(playlist.YoutubeId))
-            {
-                try
-                {
-                    await _youtube.EditPlaylistDescriptionAsync(playlist.YoutubeId, newDesc ?? "");
-                    playlist.Description = newDesc;
-                    changed = true;
-                    Log.Info($"[PlaylistEdit] Description updated on YouTube: {playlist.YoutubeId}");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error($"[PlaylistEdit] YouTube description update failed: {ex.Message}");
-                    playlist.Description = newDesc;
-                    changed = true;
-                }
-            }
-            else
-            {
-                playlist.Description = newDesc;
-                changed = true;
-            }
+            // Убрана автоматическая отправка на YouTube
+            playlist.Description = result.Description?.Trim();
+            changed = true;
         }
 
         // ═══ STEP 4: Custom Color ═══
