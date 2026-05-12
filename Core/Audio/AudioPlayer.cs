@@ -178,19 +178,28 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     #region Public API (Non-blocking)
 
-    private void Play(string url, string? trackId = null, int bitrateHint = 0, TimeSpan? seekPosition = null)
+    private void Play(
+        string url,
+        string? trackId = null,
+        int bitrateHint = 0,
+        TimeSpan? seekPosition = null,
+        CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         int session = Interlocked.Increment(ref _sessionId);
         _currentTrackId = trackId;
         SetState(PlayerState.Loading);
-        _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session, seekPosition));
+        _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session, seekPosition, ct));
     }
 
     public Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0,
-        CancellationToken ct = default, TimeSpan? seekPosition = null)
+     CancellationToken ct = default, TimeSpan? seekPosition = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (ct.IsCancellationRequested)
+            return Task.FromCanceled(ct);
+
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         void OnStateChanged(PlaybackState state)
@@ -220,7 +229,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             tcs.TrySetCanceled(ct);
         });
 
-        Play(url, trackId, bitrateHint, seekPosition);
+        Play(url, trackId, bitrateHint, seekPosition, ct);
         return tcs.Task;
     }
 
@@ -357,6 +366,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         Log.Info($"[AudioPlayer] Play: {cmd.TrackId ?? "unknown"}, bitrate hint: {cmd.BitrateHint}");
         SetState(PlayerState.Loading);
 
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            _lifetimeCts.Token,
+            cmd.ExternalCancellationToken);
+        var ct = linkedCts.Token;
+
         var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
         if (oldPipeline != null) await oldPipeline.DisposeAsync();
 
@@ -364,9 +378,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         try
         {
+            ct.ThrowIfCancellationRequested();
+
             var pipeline = await AudioPipeline.CreateAsync(
                 cmd.Url, cmd.TrackId, cmd.BitrateHint, CreateUrlRefresher(),
-                _options, _sharedBackend, _lifetimeCts.Token);
+                _options, _sharedBackend, ct);
 
             int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (cmd.SessionId < currentSession)
@@ -374,6 +390,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 await pipeline.DisposeAsync();
                 return;
             }
+
+            ct.ThrowIfCancellationRequested();
 
             pipeline.SetVolume(_volume);
             _events.RaiseStreamInfo(pipeline.StreamInfo);
@@ -385,7 +403,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             {
                 long seekMs = (long)seekPos.TotalMilliseconds;
                 pipeline.PrepareForSeek(seekMs);
-                if (await pipeline.Source.SeekAsync(seekMs, _lifetimeCts.Token))
+                if (await pipeline.Source.SeekAsync(seekMs, ct))
                 {
                     long targetSamples = (long)(seekMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
                     pipeline.SetDecodedSamplesPosition(targetSamples);
@@ -396,7 +414,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             SetState(PlayerState.Buffering);
 
             int threshold = pipeline.SampleRate * pipeline.Channels * MinBufferMs / 1000;
-            await pipeline.WaitForBufferAsync(threshold, PlayBufferWaitTimeoutMs, _lifetimeCts.Token);
+            await pipeline.WaitForBufferAsync(threshold, PlayBufferWaitTimeoutMs, ct);
 
             currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (cmd.SessionId < currentSession)
@@ -406,14 +424,14 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                 return;
             }
 
+            ct.ThrowIfCancellationRequested();
+
             pipeline.ActivateFillLoop();
             pipeline.Start();
 
             StartTimers();
             SetState(PlayerState.Playing);
 
-            // NotifyDeviceLost() отменяет pipeline.LifetimeToken.
-            // Без этого watch task потеря устройства молчит до следующего действия пользователя.
             WatchPipelineLifetimeAsync(pipeline, cmd.SessionId);
         }
         catch (OperationCanceledException)
@@ -723,7 +741,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         };
     }
 
-    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => _activePipeline?.Source.GetBufferedRanges() ??[];
+    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => _activePipeline?.Source.GetBufferedRanges() ?? [];
 
     #endregion
 

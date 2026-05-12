@@ -171,6 +171,13 @@ public sealed class AudioSettings
     /// Воспроизводить звук при ошибке воспроизведения.
     /// </summary>
     public bool PlayErrorSound { get; set; } = true;
+
+    /// <summary>
+    /// Пропускать треки, требующие сложной расшифровки n-токена.
+    /// При включении: если YouTube требует n-token decryption, трек пропускается
+    /// и воспроизводится следующий в очереди.
+    /// </summary>
+    public bool SkipNTokenTracks { get; set; } = true;
 }
 
 public enum RepeatMode

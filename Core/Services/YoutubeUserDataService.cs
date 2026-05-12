@@ -24,6 +24,14 @@ public partial class YoutubeUserDataService
     /// <summary>
     /// Получает лайкнутые треки в зависимости от режима синхронизации.
     /// </summary>
+    /// <remarks>
+    /// <para><b>MusicOnly:</b> Один запрос VLLM через WEB_REMIX — возвращает только музыку.
+    /// Ранее дополнительно загружался плейлист LL (все лайки YouTube) для поиска "пропущенных"
+    /// треков, что генерировало 10+ лишних HTTP-запросов. Убрано: YTM API — исчерпывающий
+    /// источник музыкальных лайков, дублирование через LL не даёт значимого выигрыша.</para>
+    ///
+    /// <para><b>AllVideos:</b> Загружает LL целиком — все лайкнутые видео включая немузыкальные.</para>
+    /// </remarks>
     public async Task<List<TrackInfo>> GetLikedTracksAsync(
         LikeSyncMode mode = LikeSyncMode.MusicOnly)
     {
@@ -39,26 +47,8 @@ public partial class YoutubeUserDataService
                     Log.Info("[Sync] Fetching Music Likes (LM) from YouTube Music...");
                     try
                     {
-                        // 1. Получаем официальные лайки из YTM
                         likedTracks = await _provider.GetClient().Music.GetLikedTracksAsync();
                         Log.Info($"[Sync] Got {likedTracks.Count} music likes from LM.");
-
-                        // 2. ДОПОЛНЕНИЕ: Подтягиваем лайки из обычного YouTube (LL), 
-                        // чтобы найти треки, которые недоступны в YTM, но являются музыкой.
-                        Log.Info("[Sync] Fetching standard YouTube likes (LL) to find missing YTM tracks...");
-                        var allLikes = await GetAllLikedVideosAsync();
-
-                        // Создаем HashSet для быстрого поиска (O(1))
-                        var ytmTrackIds = new HashSet<string>(likedTracks.Select(t => t.Id));
-
-                        // Находим треки, которые: 1) Музыка 2) Их нет в выдаче YTM
-                        var missingMusicTracks = allLikes.FindAll(t => t.IsMusic && !ytmTrackIds.Contains(t.Id));
-
-                        if (missingMusicTracks.Count > 0)
-                        {
-                            Log.Info($"[Sync] Found {missingMusicTracks.Count} additional music tracks in standard LL playlist.");
-                            likedTracks.AddRange(missingMusicTracks);
-                        }
                     }
                     catch (Exception ex)
                     {
@@ -81,12 +71,11 @@ public partial class YoutubeUserDataService
                     return [];
             }
 
-            // Нормализация ID и пометка лайков
             for (int i = 0; i < likedTracks.Count; i++)
             {
                 var track = likedTracks[i];
                 track.IsLiked = true;
-                if (!track.Id.StartsWith("yt_"))
+                if (!track.Id.StartsWith("yt_", StringComparison.Ordinal))
                     track.Id = "yt_" + track.Id;
             }
 

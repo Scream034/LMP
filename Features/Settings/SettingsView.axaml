@@ -590,6 +590,17 @@
                                 IsChecked="{Binding PlayErrorSound}" />
                         </Grid>
 
+                        <Grid ColumnDefinitions="*, Auto">
+                            <StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_SkipNToken]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_SkipNTokenDesc]}" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1"
+                                IsChecked="{Binding SkipNTokenTracks}" />
+                        </Grid>
+
                     </StackPanel>
                 </Border>
 

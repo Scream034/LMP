@@ -94,7 +94,8 @@ public class PlaylistClient(HttpClient http)
                 if (!encounteredIds.Add(videoId)) continue;
 
                 var title = videoData.Title ?? "";
-                var author = videoData.Author ?? "Unknown";
+                // Используем локализацию
+                var author = videoData.Author ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"];
 
                 var bestThumb = videoData.Thumbnails
                     .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))

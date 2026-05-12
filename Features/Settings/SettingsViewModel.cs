@@ -131,6 +131,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public List<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
     [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
     [Reactive] public bool PlayErrorSound { get; set; }
+    [Reactive] public bool SkipNTokenTracks { get; set; }
 
     #endregion
 
@@ -623,6 +624,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
+        this.WhenAnyValue(x => x.SkipNTokenTracks)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Audio.SkipNTokenTracks = v);
+            })
+            .DisposeWith(Disposables);
+
         this.WhenAnyValue(x => x.DiscordRpcEnabled)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
@@ -700,6 +710,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             PlayErrorSound = s.Audio.PlayErrorSound;
             SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
                                     ?? ErrorBehaviorOptions[0];
+
+            SkipNTokenTracks = s.Audio.SkipNTokenTracks;
 
             IsAuthenticated = _auth.IsAuthenticated;
             RaiseAccountProperties();

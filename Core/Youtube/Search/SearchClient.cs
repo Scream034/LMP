@@ -83,7 +83,8 @@ public class SearchClient(HttpClient http)
             {
                 Id = videoId, // TrackInfo setter автоматически добавит префикс
                 Title = videoData.Title ?? "",
-                Author = videoData.Author ?? "Unknown",
+                // Используем локализацию
+                Author = videoData.Author ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"],
                 ChannelId = videoData.ChannelId,
                 Duration = videoData.Duration ?? TimeSpan.Zero,
                 ThumbnailUrl = thumbUrl,
@@ -162,8 +163,13 @@ public class SearchClient(HttpClient http)
             or SearchFilter.Playlist
             or SearchFilter.MusicPlaylist;
 
-    public IAsyncEnumerable<ISearchResult> GetResultsAsync(string query, CancellationToken ct = default) =>
-        GetResultBatchesAsync(query, SearchFilter.None, ct).FlattenAsync();
+    /// <summary>
+    /// Возвращает результаты поиска через WEB_REMIX с фильтром MusicSong.
+    /// Исключает нерелевантный контент (туториалы, геймплей) силами YTM.
+    /// </summary>
+    public IAsyncEnumerable<ISearchResult> GetResultsAsync(
+        string query, CancellationToken ct = default) =>
+        GetResultBatchesAsync(query, SearchFilter.MusicSong, ct).FlattenAsync();
 
     public IAsyncEnumerable<TrackInfo> GetVideosAsync(string query, CancellationToken ct = default) =>
         GetResultBatchesAsync(query, SearchFilter.Video, ct).FlattenAsync().OfTypeAsync<TrackInfo>();

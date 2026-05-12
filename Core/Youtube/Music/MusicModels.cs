@@ -29,6 +29,18 @@ public sealed class MusicItem
     public string? SetVideoId { get; set; }
 }
 
+/// <summary>
+/// Полный снимок плейлиста из WEB_REMIX за один browse-запрос.
+/// Содержит метаданные и все треки включая недоступные (IsPlayable=false).
+/// </summary>
+public sealed class FullPlaylistSyncData
+{
+    public string? Title { get; init; }
+    public string? Description { get; init; }
+    public string? ThumbnailUrl { get; init; }
+    public List<RemoteTrackInfo> Tracks { get; init; } = [];
+}
+
 internal sealed class MusicBrowseResponse
 {
     public List<MusicShelf> Shelves { get; } = [];
@@ -242,8 +254,11 @@ internal sealed class MusicBrowseResponse
                         ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
                         ?.GetPropertyOrNull("pageType")?.GetStringOrNull();
 
-                    if (pageType == "MUSIC_PAGE_TYPE_ARTIST") author = text;
-                    else if (pageType == "MUSIC_PAGE_TYPE_ALBUM") album = text;
+                    // Поддерживаем как официальных артистов, так и пользовательские каналы
+                    if (pageType is "MUSIC_PAGE_TYPE_ARTIST" or "MUSIC_PAGE_TYPE_USER_CHANNEL")
+                        author = text;
+                    else if (pageType == "MUSIC_PAGE_TYPE_ALBUM")
+                        album = text;
                 }
                 else if (author == null && !ContainsAnyOf(text, "views", "Song", "Video", ":"))
                 {

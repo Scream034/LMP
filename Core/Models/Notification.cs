@@ -10,43 +10,43 @@ public sealed class Notification
 {
     public Guid Id { get; init; } = Guid.NewGuid();
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
-    
+
     /// <summary>
     /// Ключ локализации заголовка (например "Error_Playback_Title").
     /// Если null — используется <see cref="TitleRaw"/>.
     /// </summary>
     public string? TitleKey { get; init; }
-    
+
     /// <summary>
     /// Готовый текст заголовка (fallback если TitleKey не задан).
     /// </summary>
     public string? TitleRaw { get; init; }
-    
+
     /// <summary>
     /// Ключ локализации сообщения.
     /// </summary>
     public string? MessageKey { get; init; }
-    
+
     /// <summary>
     /// Готовый текст сообщения (fallback).
     /// </summary>
     public string? MessageRaw { get; init; }
-    
+
     /// <summary>
     /// Аргументы для форматирования сообщения (string.Format).
     /// </summary>
     public object[]? MessageArgs { get; init; }
-    
+
     /// <summary>
     /// Ключ локализации рекомендации.
     /// </summary>
     public string? RecommendationKey { get; init; }
-    
+
     /// <summary>
     /// Готовый текст рекомендации (fallback).
     /// </summary>
     public string? RecommendationRaw { get; init; }
-    
+
     public NotificationSeverity Severity { get; init; }
     public bool IsRead { get; set; }
     public ObservableCollection<AttemptRecord>? Attempts { get; init; }
@@ -61,8 +61,8 @@ public sealed class Notification
     /// <summary>
     /// Локализованный заголовок (автоматически переводится при смене языка).
     /// </summary>
-    public string Title => !string.IsNullOrEmpty(TitleKey) 
-        ? L[TitleKey] 
+    public string Title => !string.IsNullOrEmpty(TitleKey)
+        ? L[TitleKey]
         : TitleRaw ?? "";
 
     /// <summary>
@@ -76,7 +76,7 @@ public sealed class Notification
                 return MessageRaw ?? "";
 
             var template = L[MessageKey];
-            
+
             if (MessageArgs is { Length: > 0 })
             {
                 try
@@ -88,7 +88,7 @@ public sealed class Notification
                     return template;
                 }
             }
-            
+
             return template;
         }
     }
@@ -96,15 +96,16 @@ public sealed class Notification
     /// <summary>
     /// Локализованная рекомендация.
     /// </summary>
-    public string? Recommendation => !string.IsNullOrEmpty(RecommendationKey) 
-        ? L[RecommendationKey] 
+    public string? Recommendation => !string.IsNullOrEmpty(RecommendationKey)
+        ? L[RecommendationKey]
         : RecommendationRaw;
 
     #endregion
 
     #region UI Helpers
 
-    public bool HasDetails => Attempts?.Count > 0 || !string.IsNullOrEmpty(ExceptionDetails);
+    public bool HasExceptionDetails => !string.IsNullOrWhiteSpace(ExceptionDetails);
+    public bool HasDetails => Attempts?.Count > 0 || HasExceptionDetails;
     public bool HasRecommendation => !string.IsNullOrEmpty(Recommendation);
 
     public string TimeAgo

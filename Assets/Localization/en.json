@@ -304,6 +304,7 @@
   "Track_MoreOptions": "More options",
   "Track_Cached": "Cached (available offline)",
   "Track_SaveToFolder": "Save to folder",
+  "Track_UnknownAuthor": "Unknown Artist",
 
   "Seek_CancelHint": "ESC or Right Click to cancel",
   "Seek_Cancelled": "Seek cancelled",
@@ -374,6 +375,8 @@
   "Settings_AutoSaveDownloadsDesc": "Automatically save fully cached tracks to Downloads folder. Disabled = tracks stay in cache only (saves disk space).",
   "Settings_ClearDownloadsConfirm": "Delete all downloaded tracks? This cannot be undone.",
   "Settings_AdvancedColors": "Advanced Colors",
+  "Settings_SkipNToken": "Skip complex tracks",
+  "Settings_SkipNTokenDesc": "Automatically skip tracks requiring complex YouTube signature decryption (n-token). This speeds up playback, but some tracks will be unavailable.",
 
   "CloseAction_Exit": "Close application",
   "CloseAction_MinimizeToTray": "Minimize to tray",
@@ -476,6 +479,9 @@
   "Notification_ViewDetails": "View details",
   "Notification_CopyError": "Copy error",
   "Notification_CopyTrackUrl": "Copy track link",
+  "Notification_NToken_Title": "Complex decryption",
+  "Notification_NToken_Message": "Track \"{0}\" requires complex YouTube signature decryption. This may take some time or fail.",
+  "Notification_NToken_Skipped": "Track \"{0}\" skipped — requires complex decryption.",
 
   "Attempt_Success": "Success",
   "Attempt_Failed": "Failed",

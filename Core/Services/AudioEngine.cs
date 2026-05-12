@@ -22,6 +22,18 @@ namespace LMP.Core.Services;
 ///   <item>Логирует ошибки</item>
 /// </list>
 /// <para>Решение о реакции принимает <see cref="PlaybackErrorOrchestrator"/>.</para>
+///
+/// <para><b>Session-aware cancellation:</b></para>
+/// <para>Каждая новая операция воспроизведения вызывает <see cref="BeginNewSession"/>,
+/// что отменяет <see cref="_sessionCts"/>. Все сетевые вызовы (YouTube API, n-token
+/// decryption, stream resolution) привязаны к этому токену и мгновенно прерываются
+/// при переключении трека пользователем.</para>
+///
+/// <para><b>Command queue vs playback transition:</b></para>
+/// <para>Command queue сериализует только изменение состояния очереди (O(1) операции).
+/// Сетевой resolve и запуск pipeline выполняются вне очереди через
+/// <see cref="StartPlaybackTransition"/>, что гарантирует мгновенную отзывчивость
+/// управления вне зависимости от состояния сети.</para>
 /// </remarks>
 public sealed class AudioEngine : ViewModelBase, IDisposable
 {
@@ -68,6 +80,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private int _session;
 
+    /// <summary>
+    /// CancellationTokenSource текущей пользовательской сессии воспроизведения.
+    /// Отменяется при каждом <see cref="BeginNewSession"/>, мгновенно прерывая
+    /// все сетевые операции (YouTube API, n-token decryption, pipeline creation).
+    /// </summary>
+    private CancellationTokenSource? _sessionCts;
+    private readonly Lock _sessionLock = new();
+
     #endregion
 
     #region Seek State
@@ -95,6 +115,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// Время последнего переключения качества.
     /// </summary>
     private DateTime _lastQualitySwitchTime = DateTime.MinValue;
+
+    /// <summary>
+    /// Идентификатор сессии, для которой было отправлено предупреждение о n-token.
+    /// Используется для фильтрации ложных уведомлений от отменённых сессий.
+    /// </summary>
+    private int _activeNTokenWarningSession;
+
+    /// <summary>
+    /// Последняя сессия, для которой уже было показано предупреждение.
+    /// Предотвращает дублирование предупреждений при нескольких событиях подряд.
+    /// </summary>
+    private int _lastNTokenWarningSession;
 
     #endregion
 
@@ -136,6 +168,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public double BufferProgress => _player.BufferProgress;
     public bool IsFullyBuffered => _player.IsFullyBuffered;
 
+    /// <summary>
+    /// Текущий фактически применённый gain после кривой громкости,
+    /// boost и пользовательской dB-коррекции.
+    /// Используется UI для отображения реального уровня усиления.
+    /// </summary>
+    public float CurrentGain => _currentGain;
+
     #endregion
 
     #region Events
@@ -154,6 +193,23 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// Событие ошибки воспроизведения.
     /// </summary>
     public event Action<Exception>? OnErrorOccurred;
+
+    /// <summary>
+    /// Событие предупреждения: текущий трек требует сложной расшифровки n-токена.
+    /// Передаёт контекст трека и флаг авто-пропуска.
+    /// Публикуется не более одного раза на сессию воспроизведения.
+    /// </summary>
+    public event Action<NTokenWarningInfo>? OnNTokenDecryptionWarning;
+
+    /// <summary>
+    /// Контекст предупреждения о сложной расшифровке n-токена.
+    /// </summary>
+    /// <param name="Track">Трек, для которого потребовалась расшифровка.</param>
+    /// <param name="WasSkipped">
+    /// Был ли трек автоматически пропущен из-за настройки
+    /// <see cref="AudioSettings.SkipNTokenTracks"/>.
+    /// </param>
+    public readonly record struct NTokenWarningInfo(TrackInfo? Track, bool WasSkipped);
 
     #endregion
 
@@ -175,6 +231,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         });
 
         SubscribeToPlayerEvents();
+        SubscribeToProviderEvents();
         InitializeFromSettings();
 
         _commandQueue = Channel.CreateBounded<Func<Task>>(new BoundedChannelOptions(CommandQueueCapacity)
@@ -198,7 +255,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _player.Events.BufferStateChanged += state => RaiseOnUI(() => OnBufferStateChanged?.Invoke(state));
         _player.Events.SeekCompleted += t => RaiseOnUI(() => OnSeekCompleted?.Invoke(t));
 
-        // Ошибки из AudioPlayer → пробрасываем в наше событие, сохраняя локализованное сообщение
         _player.Events.ErrorOccurred += err =>
         {
             var ex = err.Exception;
@@ -209,6 +265,15 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             else
                 RaiseError(new AudioException(err.Message, ex));
         };
+    }
+
+    /// <summary>
+    /// Подписывает движок на события YoutubeProvider, которые должны быть
+    /// проброшены в UI-слой без прямой привязки к конкретной реализации уведомлений.
+    /// </summary>
+    private void SubscribeToProviderEvents()
+    {
+        _youtube.OnNTokenDecryptionStarted += HandleNTokenDecryptionStarted;
     }
 
     private void InitializeFromSettings()
@@ -234,6 +299,43 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
+    #region Session Management
+
+    /// <summary>
+    /// Начинает новую пользовательскую сессию воспроизведения.
+    /// Все незавершённые сетевые операции предыдущей сессии (YouTube manifest,
+    /// n-token decryption, HLS fallback, pipeline creation) отменяются немедленно.
+    /// </summary>
+    /// <returns>Новый идентификатор сессии.</returns>
+    private int BeginNewSession()
+    {
+        int session = Interlocked.Increment(ref _session);
+
+        lock (_sessionLock)
+        {
+            _sessionCts?.Cancel();
+            _sessionCts?.Dispose();
+            _sessionCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        }
+
+        Volatile.Write(ref _activeNTokenWarningSession, 0);
+        return session;
+    }
+
+    /// <summary>
+    /// Возвращает токен текущей пользовательской сессии.
+    /// Linked с lifetime — отменяется и при Dispose, и при смене трека.
+    /// </summary>
+    private CancellationToken GetSessionToken()
+    {
+        lock (_sessionLock)
+        {
+            return _sessionCts?.Token ?? _lifetimeCts.Token;
+        }
+    }
+
+    #endregion
+
     #region ViewModelBase
 
     /// <summary>
@@ -246,9 +348,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         var pipeline = _player.GetActivePipeline();
         if (pipeline?.Source is Audio.Sources.CachingStreamSource cachingSource)
-        {
             cachingSource.Suspend();
-        }
 
         Log.Debug("[AudioEngine] Suspended (background downloads paused)");
     }
@@ -262,9 +362,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         var pipeline = _player.GetActivePipeline();
         if (pipeline?.Source is Audio.Sources.CachingStreamSource cachingSource)
-        {
             cachingSource.Resume();
-        }
 
         // ═══ Pre-warm HTTP connections после длительной паузы ═══
         // После паузы >30s TCP соединения могут протухнуть.
@@ -301,27 +399,59 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     #region Internal Playback
 
     /// <summary>
-    /// Воспроизводит трек по текущему индексу в очереди.
+    /// Запускает воспроизведение трека по текущему индексу очереди.
+    /// Намеренно синхронный и быстрый: только фиксирует трек и запускает
+    /// cancellable transition. Command queue не блокируется сетевыми операциями.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Обработка ошибок:</b></para>
-    /// <para>Все исключения пробрасываются через <see cref="OnErrorOccurred"/>.
-    /// Этот метод НЕ показывает диалоги и НЕ принимает решения о UI.</para>
-    /// </remarks>
-    private async Task PlayCurrentIndexAsync(int session)
+    private Task PlayCurrentIndexAsync(int session)
     {
         TrackInfo? track;
         lock (_queueLock)
         {
-            if (_currentIndex < 0 || _currentIndex >= _queue.Count) return;
+            if (_currentIndex < 0 || _currentIndex >= _queue.Count)
+                return Task.CompletedTask;
+
             track = _queue[_currentIndex];
         }
 
-        if (track == null) return;
+        if (track != null)
+            StartPlaybackTransition(session, track);
 
-        await _player.StopAsync();
+        return Task.CompletedTask;
+    }
 
-        if (Volatile.Read(ref _session) != session) return;
+    /// <summary>
+    /// Запускает асинхронный переход к выбранному треку вне command queue.
+    /// Это сохраняет мгновенную отзывчивость управления даже при долгих
+    /// сетевых операциях и расшифровке YouTube.
+    /// </summary>
+    private void StartPlaybackTransition(int session, TrackInfo track)
+    {
+        var ct = GetSessionToken();
+        _ = PlayTrackCoreAsync(track, session, ct);
+    }
+
+    /// <summary>
+    /// Выполняет реальный запуск воспроизведения для уже выбранного трека.
+    /// </summary>
+    /// <remarks>
+    /// <para>Все сетевые операции (YouTube manifest, n-token decryption, HLS fallback)
+    /// привязаны к <paramref name="ct"/> текущей пользовательской сессии.
+    /// При переключении трека пользователем <see cref="BeginNewSession"/> отменяет
+    /// этот токен, что немедленно прерывает все незавершённые операции.</para>
+    ///
+    /// <para>Счётчик <see cref="_activeNTokenWarningSession"/> позволяет фильтровать
+    /// ложные предупреждения о n-token от уже отменённых сессий.</para>
+    /// </remarks>
+    private async Task PlayTrackCoreAsync(TrackInfo track, int session, CancellationToken ct)
+    {
+        if (Volatile.Read(ref _session) != session)
+            return;
+
+        _player.Stop();
+
+        if (Volatile.Read(ref _session) != session)
+            return;
 
         RaiseOnUI(() =>
         {
@@ -333,65 +463,67 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         try
         {
-            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track);
+            ct.ThrowIfCancellationRequested();
 
-            if (Volatile.Read(ref _session) != session) return;
+            Volatile.Write(ref _activeNTokenWarningSession, session);
 
-            await _player.PlayAsync(streamUrl, track.Id, bitrateHint, CancellationToken.None);
+            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track, ct);
 
-            // ═══ ИСПРАВЛЕНИЕ: Применяем suspend к новому source если окно свёрнуто ═══
+            if (Volatile.Read(ref _session) != session)
+                return;
+
+            ct.ThrowIfCancellationRequested();
+
+            await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct);
+
             if (_isSuspended)
             {
                 var pipeline = _player.GetActivePipeline();
                 if (pipeline?.Source is Audio.Sources.CachingStreamSource cachingSource)
-                {
-                    // Suspend только background fill, НЕ critical read-ahead
                     cachingSource.Suspend();
-                }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || Volatile.Read(ref _session) != session)
         {
-            Log.Debug("[AudioEngine] PlayCurrentIndex cancelled");
+            Log.Debug($"[AudioEngine] Playback cancelled for track {track.Id}, session={session}");
         }
         catch (Exception ex)
         {
             Log.Error($"[AudioEngine] Play error: {ex.GetType().Name}: {ex.Message}");
             RaiseError(ex);
         }
+        finally
+        {
+            if (Volatile.Read(ref _activeNTokenWarningSession) == session)
+                Volatile.Write(ref _activeNTokenWarningSession, 0);
+        }
     }
 
     /// <summary>
     /// Резолвит URL стрима для трека.
-    /// 
-    /// <para><b>Возвращает РЕАЛЬНЫЙ битрейт</b> (например, 134 kbps), не нормализованный.
-    /// Нормализация (134→128) применяется только внутри <see cref="AudioSourceFactory.BuildCacheKey"/>
-    /// для ключа кэша.</para>
-    /// 
-    /// <para><b>Сохраняет битрейт в <see cref="TrackInfo.TransientBitrate"/></b>
-    /// для корректного resume из tray. При следующем вызове <c>ResolveStreamUrlAsync</c>
-    /// битрейт уже известен и не теряется.</para>
+    ///
+    /// <para><b>Возвращает реальный битрейт</b> (например, 134 kbps), не нормализованный.
+    /// Нормализация применяется только внутри <see cref="AudioSourceFactory.BuildCacheKey"/>.</para>
+    ///
+    /// <para><b>Отмена привязана к сессии</b>: при смене трека пользователем
+    /// <paramref name="ct"/> отменяется, что немедленно прерывает YouTube API запросы.</para>
     /// </summary>
     /// <returns>
-    /// Кортеж (Url, Bitrate) где Bitrate — **реальный** битрейт из YouTube API
-    /// или из CacheEntry (не нормализованный).
+    /// Кортеж (Url, Bitrate) где Bitrate — реальный битрейт из YouTube API
+    /// или из CacheEntry.
     /// </returns>
     /// <exception cref="BotDetectionException">При rate limiting.</exception>
     /// <exception cref="StreamUnavailableException">При недоступности стрима.</exception>
     /// <exception cref="LoginRequiredException">При требовании авторизации.</exception>
-    private async Task<(string Url, int Bitrate)> ResolveStreamUrlAsync(TrackInfo track)
+    private async Task<(string Url, int Bitrate)> ResolveStreamUrlAsync(TrackInfo track, CancellationToken ct)
     {
         string? streamUrl = track.StreamUrl;
         int bitrateHint = track.TransientBitrate;
 
         // ═══ ПРИОРИТЕТ 1: ПОЛНЫЙ КЭШ ═══
-        // FindAnyCachedTrack возвращает CacheEntry с РЕАЛЬНЫМ битрейтом.
         var cached = AudioSourceFactory.FindAnyCachedTrack(track.Id);
         if (cached != null)
         {
-            // ═══ Сохраняем реальный битрейт из кэша в track ═══
-            // Это гарантирует что при resume из tray или пересоздании pipeline
-            // track.TransientBitrate содержит реальный битрейт (134), не 0.
             var cachedBitrate = cached.Value.Entry.Bitrate;
             track.TransientBitrate = cachedBitrate;
 
@@ -399,28 +531,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             return ("", cachedBitrate);
         }
 
-        // ═══ ПРИОРИТЕТ 2: ОБНОВЛЕНИЕ URL ═══
+        ct.ThrowIfCancellationRequested();
+
+        // ═══ ПРИОРИТЕТ 2: СЕТЕВОЙ РЕЗОЛВ ═══
         if (string.IsNullOrEmpty(streamUrl))
         {
-            // RefreshStreamUrlAsync возвращает РЕАЛЬНЫЙ битрейт из YouTube API
-            // (например, KiloBitsPerSecond = 134.2 → округляется до 134)
-            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None) ?? throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
+            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, ct)
+                ?? throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
+
             streamUrl = streamInfo.Url;
 
-            // ═══ ВСЕГДА сохраняем реальный битрейт в track ═══
-            // Раньше сохраняли только при bitrateHint <= 0, что приводило к потере
-            // битрейта при resume из tray (bitrateHint=0 → fallback 128).
-            // Теперь: streamInfo.Bitrate — это реальный битрейт из YouTube (134),
-            // который мы ВСЕГДА записываем в track для будущих вызовов.
             if (bitrateHint <= 0)
                 bitrateHint = streamInfo.Bitrate;
 
-            // Сохраняем реальный битрейт в track БЕЗУСЛОВНО.
-            // Это необходимо для:
-            // 1. Resume из tray: track.TransientBitrate будет 134, не 0
-            // 2. Quality switch UI: сравнение PreferredBitrate vs StreamInfo.Bitrate
-            //    не вызовет бесконечный цикл (оба = 134)
-            // 3. Повторный Play того же трека: bitrateHint передастся корректно
             track.TransientBitrate = bitrateHint;
         }
 
@@ -429,10 +552,45 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #endregion
 
+    #region N-Token Warning
+
+       /// <summary>
+    /// Пробрасывает предупреждение о сложной расшифровке n-токена только для активной сессии.
+    /// Если включён <see cref="AudioSettings.SkipNTokenTracks"/>, текущий трек немедленно
+    /// пропускается. Для skip используется режим userInitiated=true, чтобы не зациклиться
+    /// на том же треке при <see cref="RepeatMode.One"/>.
+    /// </summary>
+    private void HandleNTokenDecryptionStarted()
+    {
+        int activeSession = Volatile.Read(ref _activeNTokenWarningSession);
+        int currentSession = Volatile.Read(ref _session);
+
+        if (activeSession == 0 || activeSession != currentSession)
+            return;
+
+        bool wasSkipped = _library.Settings.Audio.SkipNTokenTracks;
+        bool firstWarningForSession = Interlocked.Exchange(ref _lastNTokenWarningSession, activeSession) != activeSession;
+
+        if (!firstWarningForSession)
+            return;
+
+        var warning = new NTokenWarningInfo(CurrentTrack, wasSkipped);
+        RaiseOnUI(() => OnNTokenDecryptionWarning?.Invoke(warning));
+
+        if (!wasSkipped)
+            return;
+
+        Log.Info($"[AudioEngine] SkipNTokenTracks: skipping {CurrentTrack?.Id ?? "unknown"}");
+
+        _ = Task.Run(() => NavigateAsync(forward: true, userInitiated: true));
+    }
+
+    #endregion
+
     #region Error Handling
 
     /// <summary>
-    /// Генерирует события ошибки на UI потоке.
+    /// Генерирует событие ошибки на UI потоке.
     /// </summary>
     private void RaiseError(Exception exception)
     {
@@ -448,7 +606,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (track == null) return Task.CompletedTask;
 
-        int session = Interlocked.Increment(ref _session);
+        int session = BeginNewSession();
 
         return EnqueueCommandAsync(async () =>
         {
@@ -461,6 +619,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 {
                     _currentIndex = idx;
                     _queue[idx] = track;
+                    InvalidateQueueSnapshot();
                 }
                 else
                 {
@@ -478,7 +637,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public Task StartQueueAsync(IEnumerable<TrackInfo> tracks, TrackInfo startTrack)
     {
-        int session = Interlocked.Increment(ref _session);
+        int session = BeginNewSession();
 
         return EnqueueCommandAsync(async () =>
         {
@@ -508,7 +667,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             }
             else if (_player.State == PlaybackState.Stopped && CurrentTrack != null)
             {
-                int session = Interlocked.Increment(ref _session);
+                int session = BeginNewSession();
                 await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
             }
         }
@@ -520,7 +679,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void Stop()
     {
-        Interlocked.Increment(ref _session);
+        BeginNewSession();
         _player.Stop();
 
         RaiseOnUI(() =>
@@ -540,7 +699,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private async Task NavigateAsync(bool forward, bool userInitiated)
     {
-        int session = Interlocked.Increment(ref _session);
+        int session = BeginNewSession();
         bool canMove;
 
         lock (_queueLock)
@@ -600,10 +759,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     private void HandlePlayerTrackEnded()
     {
-        // Если плеер в состоянии Loading/Buffering/Seeking, значит TrackEnded
-        // пришёл от устаревшего decoder loop (например, при быстром seek).
-        // AudioPlayer уже имеет свою защиту (OnTrackEnded проверяет state),
-        // но дополнительная проверка здесь — defense in depth.
+        // Если плеер в состоянии Loading/Buffering, TrackEnded пришёл
+        // от устаревшего decoder loop. Игнорируем.
         var playerState = _player.State;
         if (playerState is PlaybackState.Loading or PlaybackState.Buffering)
         {
@@ -611,7 +768,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             return;
         }
 
-        int session = Interlocked.Increment(ref _session);
+        int session = BeginNewSession();
 
         _ = Task.Run(async () =>
         {
@@ -639,10 +796,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         var track = await _library.GetTrackAsync(trackId, ct);
         if (track == null) return null;
 
+        // Linked token: отменяется и по incoming ct, и по session
+        var sessionToken = GetSessionToken();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, sessionToken);
+
         try
         {
-            var info = await _youtube.RefreshStreamUrlAsync(track, true, ct);
+            var info = await _youtube.RefreshStreamUrlAsync(track, true, linked.Token);
             return info?.Url;
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Debug("[AudioEngine] URL refresh cancelled");
+            return null;
         }
         catch (Exception ex)
         {
@@ -737,7 +903,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         int currentMax = Math.Max(_library.Settings.MaxVolumeLimit, 100);
 
-        // Не вызываем если значение не изменилось
         if (currentMax == newMaxVolume) return;
 
         lock (_volumeLock)
@@ -785,7 +950,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         float gain = ComputeGain(_volumePercent, maxVolume, audioSettings);
 
-        // Применяем пользовательский gain из настроек
         float targetGainDb = Math.Clamp(settings.TargetGainDb, -20f, 20f);
         gain *= MathF.Pow(10f, targetGainDb / 20f);
 
@@ -808,7 +972,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (audioSettings.VolumeBoostEnabled)
         {
-            // Boost режим: 0-200 = 0-100%, >200 = boost
             if (volumePercent <= VolumeNormalRange)
             {
                 float t = volumePercent / (float)VolumeNormalRange;
@@ -819,7 +982,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             return 1.0f + boostUnits / VolumeNormalRange;
         }
 
-        // Точная настройка: 0-maxVolume = 0-100%
         float normalized = (float)volumePercent / maxVolume;
         return ApplyVolumeCurve(normalized, audioSettings.VolumeCurve);
     }
@@ -896,78 +1058,117 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (CurrentTrack == null) return;
 
-        // ═══ DEBOUNCE: Не переключать чаще чем раз в 2 секунды ═══
-        var now = DateTime.UtcNow;
-        var elapsed = (now - _lastQualitySwitchTime).TotalMilliseconds;
-        if (elapsed < QualitySwitchCooldownMs)
+        int session = BeginNewSession();
+        var ct = GetSessionToken();
+
+        try
         {
-            int waitMs = QualitySwitchCooldownMs - (int)elapsed;
-            Log.Debug($"[AudioEngine] Quality switch debounced, waiting {waitMs}ms");
-            await Task.Delay(waitMs);
+            var now = DateTime.UtcNow;
+            var elapsed = (now - _lastQualitySwitchTime).TotalMilliseconds;
+            if (elapsed < QualitySwitchCooldownMs)
+            {
+                int waitMs = QualitySwitchCooldownMs - (int)elapsed;
+                Log.Debug($"[AudioEngine] Quality switch debounced, waiting {waitMs}ms");
+                await Task.Delay(waitMs, ct);
+            }
+
+            _lastQualitySwitchTime = DateTime.UtcNow;
+
+            var pos = CurrentPosition;
+            var track = CurrentTrack;
+
+            if (track == null) return;
+
+            track.TransientContainer = container;
+            track.TransientBitrate = bitrate;
+
+            if (_library.Settings.RememberTrackFormat)
+            {
+                track.PreferredContainer = container;
+                track.PreferredBitrate = bitrate;
+            }
+
+            Log.Info($"[AudioEngine] Switching quality to {container}/{bitrate}kbps at {pos.TotalSeconds:F1}s");
+
+            await EnqueueCommandAsync(() =>
+            {
+                if (Volatile.Read(ref _session) == session)
+                    StartQualitySwitchTransition(session, track, pos);
+
+                return Task.CompletedTask;
+            });
         }
-        _lastQualitySwitchTime = DateTime.UtcNow;
-
-        var pos = CurrentPosition;
-        var track = CurrentTrack;
-
-        track.TransientContainer = container;
-        track.TransientBitrate = bitrate;
-
-        if (_library.Settings.RememberTrackFormat)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || Volatile.Read(ref _session) != session)
         {
-            track.PreferredContainer = container;
-            track.PreferredBitrate = bitrate;
+            Log.Debug("[AudioEngine] Quality switch cancelled");
         }
+    }
 
-        Log.Info($"[AudioEngine] Switching quality to {container}/{bitrate}kbps at {pos.TotalSeconds:F1}s");
+    /// <summary>
+    /// Запускает смену качества вне command queue.
+    /// Предотвращает блокировку пользовательского управления на время YouTube resolve.
+    /// </summary>
+    private void StartQualitySwitchTransition(int session, TrackInfo track, TimeSpan position)
+    {
+        var ct = GetSessionToken();
+        _ = SwitchQualityCoreAsync(track, position, session, ct);
+    }
 
-        int session = Interlocked.Increment(ref _session);
-
-        await EnqueueCommandAsync(async () =>
+    /// <summary>
+    /// Выполняет сетевой resolve потока для смены качества с поддержкой отмены по сессии.
+    /// </summary>
+    private async Task SwitchQualityCoreAsync(
+        TrackInfo track, TimeSpan position, int session, CancellationToken ct)
+    {
+        try
         {
-            if (Volatile.Read(ref _session) != session) return;
+            _player.Stop();
+            track.StreamUrl = "";
 
-            try
+            Volatile.Write(ref _activeNTokenWarningSession, session);
+
+            ct.ThrowIfCancellationRequested();
+
+            var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, ct)
+                          ?? await _youtube.RefreshStreamUrlAsync(track, true, ct);
+
+            if (streamInfo == null)
             {
-                _player.Stop();
-                track.StreamUrl = "";
-
-                var streamInfo = await _youtube.RefreshStreamUrlAsync(track, false, CancellationToken.None)
-                              ?? await _youtube.RefreshStreamUrlAsync(track, true, CancellationToken.None);
-
-                if (streamInfo == null)
-                {
-                    RaiseError(new InvalidOperationException("Failed to switch quality: no stream available"));
-                    return;
-                }
-
-                if (Volatile.Read(ref _session) != session) return;
-
-                var realBitrate = streamInfo.Value.Bitrate;
-                track.TransientBitrate = realBitrate;
-
-                // Передаём seekPosition в PlayAsync — seek выполнится ДО старта backend.
-                // Это устраняет артефакт "щётка": 16-300ms звука с позиции 0
-                // перед seek к правильной позиции.
-                TimeSpan? seekPosition = pos.TotalSeconds > 1 ? pos : null;
-
-                await _player.PlayAsync(
-                    streamInfo.Value.Url,
-                    track.Id,
-                    realBitrate,
-                    CancellationToken.None,
-                    seekPosition: seekPosition);
+                RaiseError(new InvalidOperationException("Failed to switch quality: no stream available"));
+                return;
             }
-            catch (OperationCanceledException)
-            {
-                Log.Debug("[AudioEngine] Quality switch cancelled");
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
-                RaiseError(ex);
-            }
-        });
+
+            if (Volatile.Read(ref _session) != session)
+                return;
+
+            ct.ThrowIfCancellationRequested();
+
+            var realBitrate = streamInfo.Value.Bitrate;
+            track.TransientBitrate = realBitrate;
+
+            TimeSpan? seekPosition = position.TotalSeconds > 1 ? position : null;
+
+            await _player.PlayAsync(
+                streamInfo.Value.Url,
+                track.Id,
+                realBitrate,
+                ct,
+                seekPosition: seekPosition);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || Volatile.Read(ref _session) != session)
+        {
+            Log.Debug("[AudioEngine] Quality switch cancelled");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[AudioEngine] Quality switch failed: {ex.Message}");
+            RaiseError(ex);
+        }
+        finally
+        {
+            if (Volatile.Read(ref _activeNTokenWarningSession) == session)
+                Volatile.Write(ref _activeNTokenWarningSession, 0);
+        }
     }
 
     #endregion
@@ -976,20 +1177,30 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     public void Enqueue(TrackInfo track)
     {
+        TrackInfo? playbackTrack = null;
+        bool shouldAutoplay = false;
+
         lock (_queueLock)
         {
             if (_queue.Any(t => t.Id == track.Id)) return;
+
             _queue.Add(track);
             InvalidateQueueSnapshot();
+
+            if (CurrentTrack == null && !IsPlaying && !IsLoading)
+            {
+                _currentIndex = _queue.Count - 1;
+                playbackTrack = _queue[_currentIndex];
+                shouldAutoplay = true;
+            }
         }
 
         RaiseOnUI(() => OnQueueChanged?.Invoke());
 
-        if (CurrentTrack == null && !IsPlaying && !IsLoading)
+        if (shouldAutoplay && playbackTrack != null)
         {
-            lock (_queueLock) _currentIndex = _queue.Count - 1;
-            int session = Interlocked.Increment(ref _session);
-            _ = EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+            int session = BeginNewSession();
+            StartPlaybackTransition(session, playbackTrack);
         }
     }
 
@@ -1020,7 +1231,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
             }
 
-            // Текущий трек в начало
             if (current != null)
             {
                 int newIndex = _queue.IndexOf(current);
@@ -1099,7 +1309,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             _queue.RemoveAt(from);
             _queue.Insert(to, item);
 
-            // Корректируем currentIndex
             if (_currentIndex == from)
                 _currentIndex = to;
             else if (from < _currentIndex && to >= _currentIndex)
@@ -1115,6 +1324,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     #endregion
 
     #region Statistics
+
+    internal AudioPipeline? GetActivePipeline() => _player.GetActivePipeline();
 
     public long GetDownloadedBytes() => _player.GetDownloadedBytes();
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => _player.GetBufferedRanges();
@@ -1180,6 +1391,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         if (disposing)
         {
+            _youtube.OnNTokenDecryptionStarted -= HandleNTokenDecryptionStarted;
+
             lock (_seekLock)
             {
                 _seekDebounceCts?.Cancel();
@@ -1188,6 +1401,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
             _smoothVolumeCts?.Cancel();
             _smoothVolumeCts?.Dispose();
+
+            lock (_sessionLock)
+            {
+                _sessionCts?.Cancel();
+                _sessionCts?.Dispose();
+            }
 
             _lifetimeCts.Cancel();
             _lifetimeCts.Dispose();

@@ -92,6 +92,8 @@ public partial class YoutubeProvider : IDisposable
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
+    public event Action? OnNTokenDecryptionStarted;
+
     public YoutubeProvider(
         TrackRegistry trackRegistry,
         LibraryService? libraryService,
@@ -104,6 +106,9 @@ public partial class YoutubeProvider : IDisposable
         AuthService = cookieAuth;
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
+
+        // Пробрасываем событие наверх
+        _nTokenDecryptor.OnComplexDecryptionStarted += () => OnNTokenDecryptionStarted?.Invoke();
 
         if (AuthService != null)
         {
@@ -614,30 +619,33 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Fetches playlist tracks with setVideoId for sync/removal.
-    /// Returns RemoteTrackInfo with videoId, setVideoId, position.
+    /// Получает полный снимок плейлиста за один WEB_REMIX browse-запрос.
+    /// Возвращает метаданные и все треки включая недоступные (IsPlayable=false).
     /// </summary>
-    public async Task<List<RemoteTrackInfo>> GetPlaylistItemsWithSetVideoIdAsync(
-        string youtubePlaylistId, CancellationToken ct = default)
+    public async Task<FullPlaylistSyncData?> GetFullPlaylistDataAsync(
+        string youtubePlaylistId,
+        CancellationToken ct = default)
     {
-        if (AuthService?.IsAuthenticated != true) return [];
+        if (AuthService?.IsAuthenticated != true) return null;
 
         ThrowIfInCooldown();
 
         try
         {
-            // Sync visitor data to sync controller
             _youtube.Sync.VisitorData = _youtube.Music.GetVisitorData();
 
-            var items = await _youtube.Sync.GetPlaylistTracksAsync(youtubePlaylistId, ct);
-            Log.Info($"[Music] Fetched {items.Count} items with setVideoIds for playlist {youtubePlaylistId}");
-            return items;
+            var data = await _youtube.Sync.GetFullPlaylistDataAsync(youtubePlaylistId, ct);
+
+            Log.Info($"[Music] Fetched full playlist data: " +
+                     $"'{data.Title}', {data.Tracks.Count} tracks for {youtubePlaylistId}");
+
+            return data;
         }
         catch (BotDetectionException) { throw; }
         catch (Exception ex)
         {
-            Log.Error($"[Music] Failed to fetch playlist items: {ex.Message}");
-            return [];
+            Log.Error($"[Music] Failed to fetch full playlist data: {ex.Message}");
+            return null;
         }
     }
 
@@ -900,6 +908,11 @@ public partial class YoutubeProvider : IDisposable
     /// <summary>
     /// Получает HLS манифест URL.
     /// </summary>
+    /// <remarks>
+    /// Отмена и типизированные исключения пробрасываются наверх без подавления,
+    /// чтобы вызывающий код мог корректно завершить устаревшую сессию воспроизведения
+    /// и сохранить диагностическую семантику fallback-цепочки.
+    /// </remarks>
     private async Task<string?> GetHlsManifestAsync(string videoId, CancellationToken ct)
     {
         try
@@ -907,6 +920,22 @@ public partial class YoutubeProvider : IDisposable
             var vId = VideoId.Parse(videoId);
             var controller = new VideoController(_currentHttpClient!);
             return await controller.GetHlsManifestUrlAsync(vId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (BotDetectionException)
+        {
+            throw;
+        }
+        catch (StreamUnavailableException)
+        {
+            throw;
+        }
+        catch (LoginRequiredException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -1222,7 +1251,7 @@ public partial class YoutubeProvider : IDisposable
     public async IAsyncEnumerable<List<TrackInfo>> SearchStreamingAsync(
      string query,
      int maxResults = 300,
-     SearchFilter filter = SearchFilter.None,
+     SearchFilter filter = SearchFilter.MusicSong,
      [EnumeratorCancellation] CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query))
@@ -1285,7 +1314,7 @@ public partial class YoutubeProvider : IDisposable
     public async Task<List<TrackInfo>> SearchFastAsync(
      string query,
      int maxResults = 100,
-     SearchFilter filter = SearchFilter.None,
+     SearchFilter filter = SearchFilter.MusicSong,
      CancellationToken ct = default)
     {
         // ─── Проверка cooldown ───
@@ -1328,7 +1357,7 @@ public partial class YoutubeProvider : IDisposable
     public Task<List<TrackInfo>> SearchAsync(
         string query,
         int maxResults = 100,
-        SearchFilter filter = SearchFilter.None)
+        SearchFilter filter = SearchFilter.MusicSong)
     {
         return SearchFastAsync(query, maxResults, filter);
     }
@@ -1476,7 +1505,7 @@ public partial class YoutubeProvider : IDisposable
     public SearchSession CreateSearchSession(
         string query,
         int maxResults = 300,
-        SearchFilter filter = SearchFilter.None,
+        SearchFilter filter = SearchFilter.MusicSong,
         IEnumerable<string>? skipTrackIds = null)
     {
         _currentSearchSession?.Dispose();
@@ -1489,7 +1518,7 @@ public partial class YoutubeProvider : IDisposable
         string query,
         int initialCount = 50,
         int maxResults = 300,
-        SearchFilter filter = SearchFilter.None,
+        SearchFilter filter = SearchFilter.MusicSong,
         CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(query))

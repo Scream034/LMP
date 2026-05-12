@@ -17,7 +17,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
     private const int MaxNotifications = 50;
     private const int DefaultToastDuration = 4000;
 
-    public ObservableCollection<Notification> Notifications { get; } =[];
+    public ObservableCollection<Notification> Notifications { get; } = [];
 
     public int UnreadCount => Notifications.Count(n => !n.IsRead);
     public bool HasUnread => UnreadCount > 0;
@@ -77,12 +77,16 @@ public sealed class NotificationService : ReactiveObject, IDisposable
     #region Public API
 
     public async Task ShowToastAsync(
-        string titleKey,
-        string messageKey,
-        NotificationSeverity severity = NotificationSeverity.Info,
-        int durationMs = 0,
-        object[]? messageArgs = null,
-        CancellationToken ct = default)
+    string titleKey,
+    string messageKey,
+    NotificationSeverity severity = NotificationSeverity.Info,
+    int durationMs = 0,
+    object[]? messageArgs = null,
+    CancellationToken ct = default,
+    string? trackId = null,
+    string? trackTitle = null,
+    string? exceptionDetails = null,
+    string? recommendationKey = null)
     {
         if (durationMs <= 0)
             durationMs = DefaultToastDuration;
@@ -92,7 +96,11 @@ public sealed class NotificationService : ReactiveObject, IDisposable
             TitleKey = titleKey,
             MessageKey = messageKey,
             MessageArgs = messageArgs,
-            Severity = severity
+            Severity = severity,
+            TrackId = trackId,
+            TrackTitle = trackTitle,
+            ExceptionDetails = exceptionDetails,
+            RecommendationKey = recommendationKey
         };
 
         await AddToHistoryAsync(notification);

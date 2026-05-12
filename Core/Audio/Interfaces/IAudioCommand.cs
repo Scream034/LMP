@@ -26,12 +26,17 @@ public interface IAudioCommand
 /// начать воспроизведение с текущей позиции, а не с начала. Без этого поля
 /// между PlayAsync и SeekAsync слышен артефакт — 16-300ms звука с позиции 0.</para>
 /// </param>
+/// <param name="ExternalCancellationToken">
+/// Токен отмены пользовательской сессии воспроизведения.
+/// Позволяет мгновенно прервать запуск устаревшего трека, если пользователь уже переключился.
+/// </param>
 public sealed record PlayCommand(
     string Url,
     string? TrackId,
     int BitrateHint,
     int SessionId,
-    TimeSpan? SeekPosition = null) : IAudioCommand;
+    TimeSpan? SeekPosition = null,
+    CancellationToken ExternalCancellationToken = default) : IAudioCommand;
 
 public sealed record StopCommand(int SessionId) : IAudioCommand;
 

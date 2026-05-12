@@ -287,8 +287,23 @@
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>
 
+                                                    <Border Classes="attempt-row"
+                                                        IsVisible="{Binding HasExceptionDetails}">
+                                                        <ScrollViewer MaxHeight="160"
+                                                            HorizontalScrollBarVisibility="Disabled"
+                                                            VerticalScrollBarVisibility="Auto">
+                                                            <TextBlock
+                                                                Text="{Binding ExceptionDetails}"
+                                                                FontSize="11"
+                                                                FontFamily="Consolas, monospace"
+                                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                                TextWrapping="Wrap"
+                                                                LineHeight="15" />
+                                                        </ScrollViewer>
+                                                    </Border>
+
                                                     <Button Classes="ghost-btn"
-                                                        IsVisible="{Binding ExceptionDetails, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                        IsVisible="{Binding HasExceptionDetails}"
                                                         Command="{Binding $parent[UserControl].DataContext.CopyErrorCommand}"
                                                         CommandParameter="{Binding ExceptionDetails}"
                                                         HorizontalAlignment="Left"

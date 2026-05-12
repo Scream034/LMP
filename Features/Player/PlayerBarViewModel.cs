@@ -37,8 +37,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int NavigationDebounceMs = 300;
     /// <summary>Длительность отображения всплывающих подсказок (мс)</summary>
     private const int HintDisplayDurationMs = 1500;
-    /// <summary>Длительность подсветки кнопки копирования (мс)</summary>
-    private const int CopyHighlightDurationMs = 800;
+
     /// <summary>Интервал обновления слайдера позиции (мс)</summary>
     private const int PositionUpdateThrottleMs = 50;
     /// <summary>Минимальное время отображения состояния сброса трека (мс)</summary>

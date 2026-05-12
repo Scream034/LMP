@@ -37,11 +37,16 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
     private static readonly string[] ArrayMethodMarkers =
         ["'pop'", "'push'", "'reverse'", "'splice'", "'shift'", "'unshift'"];
 
+    public event Action? OnComplexDecryptionStarted;
+
     /// <summary>Расшифровывает N-токен.</summary>
     public async ValueTask<string> DecryptAsync(string nToken, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(nToken)) return nToken;
         if (Cache.TryGet(nToken, out var cached)) return cached;
+
+        // Если мы дошли сюда, значит кэш пуст и сейчас начнётся тяжелая работа
+        OnComplexDecryptionStarted?.Invoke();
 
         await EnsureInitializedAsync(ct).ConfigureAwait(false);
 

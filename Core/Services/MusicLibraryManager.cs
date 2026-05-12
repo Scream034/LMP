@@ -41,7 +41,7 @@ public class MusicLibraryManager : ReactiveObject
     {
         // Получаем канонический объект из registry для консистентного состояния
         var canonical = _library.GetTrack(track.Id) ?? track;
-        
+
         // Определяем ЦЕЛЕВОЕ состояние ДО любых операций
         bool targetLikedState = !canonical.IsLiked;
 
@@ -187,7 +187,7 @@ public class MusicLibraryManager : ReactiveObject
     #region Playlist Operations
 
     public async Task UploadPlaylistToAccountAsync(
-       string localPlaylistId, CancellationToken ct = default)
+    string localPlaylistId, CancellationToken ct = default)
     {
         if (!_auth.IsAuthenticated) return;
 
@@ -196,23 +196,22 @@ public class MusicLibraryManager : ReactiveObject
 
         try
         {
-            // Read track IDs from DB
             var trackIds = await _library.GetPlaylistTrackIdsAsync(localPlaylistId, ct);
 
-            // Filter YouTube track IDs and extract raw IDs
             var rawVideoIds = new List<string>(trackIds.Count);
             var localTrackIds = new List<string>(trackIds.Count);
             for (int i = 0; i < trackIds.Count; i++)
             {
-                if (trackIds[i].StartsWith("yt_"))
+                if (trackIds[i].StartsWith("yt_", StringComparison.Ordinal))
                 {
                     rawVideoIds.Add(trackIds[i][3..]);
                     localTrackIds.Add(trackIds[i]);
                 }
             }
 
-            // Create playlist with all tracks in one request
-            var ytId = await _youtube.CreatePlaylistAsync(localPl.Name, rawVideoIds.Count > 0 ? rawVideoIds : null);
+            var ytId = await _youtube.CreatePlaylistAsync(
+                localPl.Name, rawVideoIds.Count > 0 ? rawVideoIds : null);
+
             if (string.IsNullOrEmpty(ytId))
                 throw new InvalidOperationException("YouTube returned empty playlist ID.");
 
@@ -220,7 +219,6 @@ public class MusicLibraryManager : ReactiveObject
             localPl.SyncMode = PlaylistSyncMode.TwoWaySync;
             await _library.AddOrUpdatePlaylistAsync(localPl, ct);
 
-            // Fetch setVideoIds in background
             if (rawVideoIds.Count > 0)
             {
                 _ = Task.Run(async () =>
@@ -229,15 +227,13 @@ public class MusicLibraryManager : ReactiveObject
                     {
                         await Task.Delay(1000);
 
-                        var remoteItems = await _youtube.GetPlaylistItemsWithSetVideoIdAsync(ytId);
-                        if (remoteItems.Count > 0)
+                        var fullData = await _youtube.GetFullPlaylistDataAsync(ytId);
+                        if (fullData?.Tracks is { Count: > 0 } tracks)
                         {
-                            var mappings = new List<(string TrackId, string SetVideoId)>(remoteItems.Count);
-                            for (int i = 0; i < remoteItems.Count; i++)
-                            {
-                                var item = remoteItems[i];
-                                mappings.Add(("yt_" + item.VideoId, item.SetVideoId));
-                            }
+                            var mappings = new List<(string TrackId, string SetVideoId)>(tracks.Count);
+                            for (int i = 0; i < tracks.Count; i++)
+                                mappings.Add(("yt_" + tracks[i].VideoId, tracks[i].SetVideoId));
+
                             await _library.UpdateSetVideoIdsAsync(localPlaylistId, mappings);
                             Log.Info($"[Sync] Persisted {mappings.Count} setVideoIds for uploaded playlist {ytId}");
                         }
@@ -249,7 +245,8 @@ public class MusicLibraryManager : ReactiveObject
                 }, CancellationToken.None);
             }
 
-            Log.Info($"[Sync] Uploaded playlist '{localPl.Name}' with {rawVideoIds.Count} tracks to {ytId}");
+            Log.Info($"[Sync] Uploaded playlist '{localPl.Name}' " +
+                     $"with {rawVideoIds.Count} tracks to {ytId}");
         }
         catch (Exception ex)
         {
@@ -310,17 +307,17 @@ public class MusicLibraryManager : ReactiveObject
                 Log.Info($"[Sync] No cached setVideoId for {trackId}, fetching from YouTube...");
                 try
                 {
-                    var items = await _youtube.GetPlaylistItemsWithSetVideoIdAsync(
+                    var fullData = await _youtube.GetFullPlaylistDataAsync(
                         playlist!.YoutubeId!, ct);
 
-                    if (items.Count > 0)
+                    if (fullData?.Tracks is { Count: > 0 } tracks)
                     {
-                        var mappings = new List<(string TrackId, string SetVideoId)>(items.Count);
+                        var mappings = new List<(string TrackId, string SetVideoId)>(tracks.Count);
                         string? targetSetVideoId = null;
 
-                        for (int i = 0; i < items.Count; i++)
+                        for (int i = 0; i < tracks.Count; i++)
                         {
-                            var item = items[i];
+                            var item = tracks[i];
                             var localTrackId = "yt_" + item.VideoId;
                             mappings.Add((localTrackId, item.SetVideoId));
 
@@ -332,9 +329,10 @@ public class MusicLibraryManager : ReactiveObject
                         }
 
                         await _library.UpdateSetVideoIdsAsync(playlistId, mappings, ct);
-
                         setVideoId = targetSetVideoId;
-                        Log.Info($"[Sync] Fetched {items.Count} setVideoIds, target: {setVideoId ?? "not found"}");
+
+                        Log.Info($"[Sync] Fetched {tracks.Count} setVideoIds, " +
+                                 $"target: {setVideoId ?? "not found"}");
                     }
                 }
                 catch (Exception ex)
@@ -344,10 +342,8 @@ public class MusicLibraryManager : ReactiveObject
             }
         }
 
-        // Remove locally
         await _library.RemoveTrackFromPlaylistAsync(trackId, playlistId, ct);
 
-        // Sync removal to YouTube
         if (needsYoutubeSync)
         {
             if (!string.IsNullOrEmpty(setVideoId))
@@ -367,7 +363,8 @@ public class MusicLibraryManager : ReactiveObject
             }
             else
             {
-                Log.Warn($"[Sync] No setVideoId for track {trackId} in playlist {playlistId} — YouTube removal skipped");
+                Log.Warn($"[Sync] No setVideoId for track {trackId} in playlist {playlistId} " +
+                         $"— YouTube removal skipped");
             }
         }
     }

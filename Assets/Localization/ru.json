@@ -301,6 +301,7 @@
   "Track_MoreOptions": "Больше опций",
   "Track_Cached": "Кэшировано (доступно оффлайн)",
   "Track_SaveToFolder": "Сохранить в папку",
+  "Track_UnknownAuthor": "Неизвестный исполнитель",
 
   "Seek_CancelHint": "ESC или правый клик для отмены",
   "Seek_Cancelled": "Перемотка отменена",
@@ -371,6 +372,8 @@
   "Settings_AutoSaveDownloadsDesc": "Автоматически сохранять полностью кэшированные треки в папку Загрузки. Отключено = треки остаются только в кэше (экономит место на диске).",
   "Settings_ClearDownloadsConfirm": "Удалить все загруженные треки? Это действие нельзя отменить.",
   "Settings_AdvancedColors": "Расширенные цвета",
+  "Settings_SkipNToken": "Пропускать сложные треки",
+  "Settings_SkipNTokenDesc": "Автоматически пропускать треки, требующие сложной расшифровки подписи YouTube (n-token). Это ускоряет воспроизведение, но некоторые треки будут недоступны.",
 
   "CloseAction_Exit": "Закрыть приложение",
   "CloseAction_MinimizeToTray": "Свернуть в трей",
@@ -475,6 +478,9 @@
   "Notification_ViewDetails": "Посмотреть детали",
   "Notification_CopyError": "Скопировать ошибку",
   "Notification_CopyTrackUrl": "Скопировать ссылку на трек",
+  "Notification_NToken_Title": "Сложная расшифровка",
+  "Notification_NToken_Message": "Трек \"{0}\" требует сложной расшифровки подписи YouTube. Это может занять некоторое время или завершиться ошибкой.",
+  "Notification_NToken_Skipped": "Трек \"{0}\" пропущен — требует сложной расшифровки.",
 
   "Attempt_Success": "Успешно",
   "Attempt_Failed": "Не удалось",

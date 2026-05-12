@@ -54,6 +54,8 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     private TrackItemViewModel? _currentActiveVm;
 
+    private int _syncInProgressGate;
+
     #endregion
 
     #region Properties
@@ -524,19 +526,25 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
     /// <summary>
     /// Синхронизирует плейлист с YouTube.
-    /// Для обычных плейлистов использует PlaylistSyncService (с диалогом).
-    /// Для плейлиста "Понравившиеся" вызывает MusicLibraryManager.SyncLikedTracksAsync (без диалога).
+    /// Для обычных плейлистов использует PlaylistSyncService.
+    /// Для плейлиста "Понравившиеся" вызывает MusicLibraryManager.SyncLikedTracksAsync.
     /// </summary>
     private async Task RefreshPlaylistAsync()
     {
-        if (IsSyncing || !IsCloud) return;
+        if (!IsCloud)
+            return;
+
+        if (Interlocked.Exchange(ref _syncInProgressGate, 1) != 0)
+        {
+            Log.Debug("[Playlist] Sync request ignored: previous sync still in progress");
+            return;
+        }
 
         IsSyncing = true;
         _mainWindow.LockNavigation(SL["Playlist_SyncInProgress"] ?? "Syncing...");
 
         try
         {
-            // СПЕЦИАЛЬНАЯ ЛОГИКА ДЛЯ ЛАЙКОВ
             if (IsLikedPlaylist)
             {
                 await _manager.SyncLikedTracksAsync();
@@ -556,12 +564,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
 
                 NotificationService.PlaySuccessSound();
             }
-            // ОБЫЧНАЯ ЛОГИКА ДЛЯ ПЛЕЙЛИСТОВ
             else
             {
                 var result = await _syncService.SyncWithDialogAsync(_currentPlaylistId);
 
-                if (result == null) return;
+                if (result == null)
+                    return;
 
                 if (result.Success)
                 {
@@ -579,11 +587,12 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
                         await notifications.ShowToastAsync(
                             titleKey: "Playlist_SyncComplete_Toast_Title",
                             messageKey: "Playlist_SyncSuccess_Details",
-                            messageArgs: [
+                            messageArgs:
+                            [
                                 result.TracksAddedLocally,
-                                result.TracksAddedToCloud,
-                                result.TracksRemovedLocally,
-                                result.TracksRemovedFromCloud
+                            result.TracksAddedToCloud,
+                            result.TracksRemovedLocally,
+                            result.TracksRemovedFromCloud
                             ],
                             severity: NotificationSeverity.Success,
                             durationMs: 4000);
@@ -602,12 +611,15 @@ public sealed class PlaylistViewModel : ReorderableViewModel<TrackInfo, TrackIte
         catch (Exception ex)
         {
             Log.Error($"[Playlist] Sync error: {ex.Message}");
-            await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"] ?? "Error", ex.Message);
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Error_Title"] ?? "Error",
+                ex.Message);
         }
         finally
         {
             IsSyncing = false;
             _mainWindow.UnlockNavigation();
+            Interlocked.Exchange(ref _syncInProgressGate, 0);
         }
     }
 

@@ -40,7 +40,7 @@ public class MusicClient(HttpClient http)
     }
 
     public async Task<List<Playlist>> GetLibraryPlaylistsAsync(
-        CancellationToken cancellationToken = default)
+       CancellationToken cancellationToken = default)
     {
         var response = await _controller.GetBrowseAsync(
             browseId: "FEmusic_liked_playlists", cancellationToken: cancellationToken);
@@ -59,7 +59,8 @@ public class MusicClient(HttpClient http)
                         Id = string.Concat("yt_", item.Id),
                         YoutubeId = item.Id,
                         StoredName = item.Title,
-                        Author = item.Author ?? "Unknown",
+                        // Используем локализацию
+                        Author = item.Author ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"],
                         ThumbnailUrl = bestThumb,
                         SyncMode = PlaylistSyncMode.TwoWaySync
                     });
@@ -68,7 +69,6 @@ public class MusicClient(HttpClient http)
         }
         return result;
     }
-
     public async Task<List<MusicShelf>> GetPersonalizedHomeAsync(
         CancellationToken cancellationToken = default)
     {
@@ -95,7 +95,8 @@ public class MusicClient(HttpClient http)
                 {
                     Id = string.Concat("yt_", item.Id),
                     Title = item.Title,
-                    Author = item.Author ?? item.Album ?? "Unknown",
+                    // Используем локализацию вместо "Unknown"
+                    Author = item.Author ?? item.Album ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"],
                     Duration = item.Duration ?? TimeSpan.Zero,
                     ThumbnailUrl = bestThumb,
                     IsMusic = true,

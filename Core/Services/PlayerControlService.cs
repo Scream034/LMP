@@ -8,26 +8,32 @@ namespace LMP.Core.Services;
 /// <summary>
 /// Единый координатор управления воспроизведением.
 /// Предоставляет реактивные свойства и команды, синхронизированные между всеми UI компонентами.
-/// 
+///
 /// <para><b>Архитектура:</b></para>
 /// <list type="bullet">
 ///   <item>Является единственным подписчиком на события AudioEngine для state tracking</item>
 ///   <item>Предоставляет BehaviorSubject-based IObservable для PlayerBar, TrayIcon, MediaKeys</item>
 ///   <item>Работает независимо от suspend/resume состояния окна</item>
+///   <item>Является единственной точкой управления громкостью — UI не обращается к AudioEngine напрямую</item>
 /// </list>
-/// 
+///
 /// <para><b>ForceSync:</b></para>
 /// <para>Не публикует повторные значения в CurrentTrack если объект тот же (по Id).
 /// Это предотвращает ложный TrackReset при восстановлении из трея.</para>
-/// 
+///
 /// <para><b>Shuffle:</b></para>
 /// <para>Все изменения ShuffleEnabled ДОЛЖНЫ идти через этот сервис (SetShuffleEnabled / ToggleAutoShuffle),
 /// чтобы BehaviorSubject всегда был синхронизирован с AudioEngine.</para>
+///
+/// <para><b>N-Token Warning:</b></para>
+/// <para>Предупреждение о сложной расшифровке публикуется через <see cref="NTokenWarningObservable"/>
+/// и одновременно показывается через <see cref="NotificationService"/> (если доступен).</para>
 /// </summary>
 public sealed class PlayerControlService : IDisposable
 {
     private readonly AudioEngine _audio;
     private readonly LibraryService _library;
+    private readonly NotificationService? _notificationService;
 
     private readonly BehaviorSubject<bool> _isPlayingSubject;
     private readonly BehaviorSubject<bool> _isPausedSubject;
@@ -46,27 +52,47 @@ public sealed class PlayerControlService : IDisposable
     /// <summary>
     /// Сигнал принудительной синхронизации. Подписчики должны обновить
     /// все свои состояния без полного TrackReset.
-    /// Значение — Unit при вызове ForceSync.
     /// </summary>
     private readonly Subject<Unit> _forceSyncSubject = new();
 
     /// <summary>
-    /// Сигнал запроса Resume из любого компонента (например, Volume popup при suspend).
+    /// Сигнал запроса Resume из любого компонента.
     /// MainWindow подписывается и вызывает RestoreFromTray / BroadcastResume.
     /// </summary>
     private readonly Subject<Unit> _resumeRequestSubject = new();
 
+    /// <summary>
+    /// Сигнал предупреждения о сложной расшифровке n-токена.
+    /// </summary>
+    private readonly Subject<AudioEngine.NTokenWarningInfo> _nTokenWarningSubject = new();
+
+    /// <summary>
+    /// Кэш ссылки на текущий трек для корректного dedupe в <see cref="OnTrackChanged"/>.
+    /// Позволяет не переиздавать событие если Id трека не изменился.
+    /// </summary>
+    private TrackInfo? _currentTrack;
+
     private bool _disposed;
 
+    #region Constructors
+
     public PlayerControlService(AudioEngine audio, LibraryService library)
+        : this(audio, library, null)
+    {
+    }
+
+    public PlayerControlService(AudioEngine audio, LibraryService library, NotificationService? notificationService)
     {
         _audio = audio;
         _library = library;
+        _notificationService = notificationService;
+
+        _currentTrack = _audio.CurrentTrack;
 
         _isPlayingSubject = new BehaviorSubject<bool>(_audio.IsPlaying);
         _isPausedSubject = new BehaviorSubject<bool>(_audio.IsPaused);
         _isLoadingSubject = new BehaviorSubject<bool>(_audio.IsLoading);
-        _currentTrackSubject = new BehaviorSubject<TrackInfo?>(_audio.CurrentTrack);
+        _currentTrackSubject = new BehaviorSubject<TrackInfo?>(_currentTrack);
         _repeatModeSubject = new BehaviorSubject<RepeatMode>(_audio.RepeatMode);
         _shuffleEnabledSubject = new BehaviorSubject<bool>(_audio.ShuffleEnabled);
         _queueCountSubject = new BehaviorSubject<int>(_audio.Queue.Count);
@@ -76,23 +102,31 @@ public sealed class PlayerControlService : IDisposable
         _audio.OnTrackChanged += OnTrackChanged;
         _audio.OnQueueChanged += OnQueueChanged;
         _audio.OnLoadingStateChanged += OnLoadingStateChanged;
+        _audio.OnNTokenDecryptionWarning += OnNTokenDecryptionWarning;
 
         Log.Debug("[PlayerControl] Service initialized");
     }
+
+    #endregion
 
     #region Properties
 
     public bool IsPlaying => _isPlayingSubject.Value;
     public bool IsPaused => _isPausedSubject.Value;
     public bool IsLoading => _isLoadingSubject.Value;
-    public TrackInfo? CurrentTrack => _currentTrackSubject.Value;
+
+    /// <summary>
+    /// Текущий трек. Обновляется только при реальной смене Id.
+    /// </summary>
+    public TrackInfo? CurrentTrack => _currentTrack;
+
     public RepeatMode RepeatMode => _repeatModeSubject.Value;
     public bool ShuffleEnabled => _shuffleEnabledSubject.Value;
-    public bool HasTrack => _currentTrackSubject.Value != null;
+    public bool HasTrack => _currentTrack != null;
     public int QueueCount => _queueCountSubject.Value;
 
     /// <summary>
-    /// Текущая громкость (0–MaxVolume). 
+    /// Текущая громкость (0–MaxVolume).
     /// Обновляется реактивно через <see cref="VolumeObservable"/>.
     /// </summary>
     public int CurrentVolume => _volumeSubject.Value;
@@ -133,10 +167,14 @@ public sealed class PlayerControlService : IDisposable
 
     /// <summary>
     /// Сигнал запроса Resume. MainWindow подписывается и вызывает RestoreFromTray.
-    /// Используется когда пользователь взаимодействует с UI в suspend-режиме
-    /// (например, Volume popup hover/scroll).
     /// </summary>
     public IObservable<Unit> ResumeRequestObservable => _resumeRequestSubject.AsObservable();
+
+    /// <summary>
+    /// Сигнал предупреждения о сложной расшифровке n-токена для текущего трека.
+    /// Содержит контекст трека и флаг автоматического пропуска.
+    /// </summary>
+    public IObservable<AudioEngine.NTokenWarningInfo> NTokenWarningObservable => _nTokenWarningSubject.AsObservable();
 
     #endregion
 
@@ -219,7 +257,7 @@ public sealed class PlayerControlService : IDisposable
     /// Устанавливает состояние авто-перемешивания напрямую.
     /// Используется из PlaylistViewModel и других мест, которые хотят
     /// явно установить shuffle = false перед стартом очереди.
-    /// 
+    ///
     /// <para><b>ВАЖНО:</b> Все изменения ShuffleEnabled должны идти через этот метод
     /// или ToggleAutoShuffle(), чтобы BehaviorSubject оставался синхронизированным.</para>
     /// </summary>
@@ -237,14 +275,35 @@ public sealed class PlayerControlService : IDisposable
     }
 
     /// <summary>
+    /// Устанавливает громкость напрямую без сохранения на диск.
+    /// Используется для slider drag, mouse scroll и других частых UI-обновлений.
+    /// Является единственным способом изменить громкость из UI.
+    /// </summary>
+    /// <param name="volume">Новое значение громкости (0–MaxVolume).</param>
+    public void SetVolumeFast(int volume)
+    {
+        int maxVolume = _library.Settings.MaxVolumeLimit;
+        if (maxVolume <= 0) maxVolume = 100;
+
+        int clamped = Math.Clamp(volume, 0, maxVolume);
+        int current = (int)Math.Round(_audio.GetVolume());
+
+        if (clamped == current)
+            return;
+
+        _audio.SetVolumeInstant(clamped);
+        _volumeSubject.OnNext(clamped);
+    }
+
+    /// <summary>
     /// Быстрое изменение громкости без сохранения на диск.
     /// Предназначено для вызова из tight loops (mouse hook callback).
-    /// 
+    ///
     /// <para><b>Почему отдельный метод:</b> Стандартный <see cref="AdjustVolume"/>
     /// вызывает <c>SaveVolumeNow()</c> и <c>UpdateSettings()</c> на каждый тик колёсика.
     /// В mouse hook callback это создаёт задержку (файловый I/O).
     /// Этот метод только меняет значение в памяти + публикует в Subject.</para>
-    /// 
+    ///
     /// <para>Вызывайте <see cref="CommitVolume"/> после завершения серии scroll events
     /// для сохранения на диск.</para>
     /// </summary>
@@ -259,17 +318,14 @@ public sealed class PlayerControlService : IDisposable
         int newVolume = Math.Clamp(currentVolume + delta, 0, maxVolume);
 
         if (newVolume != currentVolume)
-        {
-            _audio.SetVolumeInstant(newVolume);
-            _volumeSubject.OnNext(newVolume);
-        }
+            SetVolumeFast(newVolume);
 
         return newVolume;
     }
 
     /// <summary>
     /// Сохраняет текущую громкость на диск.
-    /// Вызывается после серии быстрых изменений (scroll end).
+    /// Вызывается после серии быстрых изменений (scroll end, drag end).
     /// </summary>
     public void CommitVolume()
     {
@@ -280,7 +336,7 @@ public sealed class PlayerControlService : IDisposable
     }
 
     /// <summary>
-    /// Изменяет громкость на указанный шаг.
+    /// Изменяет громкость на указанный шаг с немедленным сохранением на диск.
     /// Используется для scroll на tray icon и горячих клавиш.
     /// Публикует новое значение в <see cref="VolumeObservable"/>.
     /// </summary>
@@ -306,7 +362,8 @@ public sealed class PlayerControlService : IDisposable
     }
 
     /// <summary>
-    /// Устанавливает громкость напрямую (для слайдера PlayerBar).
+    /// Устанавливает громкость напрямую с немедленным сохранением на диск.
+    /// Используется для слайдера PlayerBar при окончании drag.
     /// Публикует новое значение в <see cref="VolumeObservable"/>.
     /// </summary>
     /// <param name="volume">Значение громкости (0–MaxVolume).</param>
@@ -361,8 +418,19 @@ public sealed class PlayerControlService : IDisposable
         _isPausedSubject.OnNext(isPaused);
     }
 
+    /// <summary>
+    /// Обрабатывает смену трека из AudioEngine.
+    /// Не переиздаёт событие если Id трека не изменился,
+    /// чтобы предотвратить ложные TrackReset при восстановлении из трея.
+    /// </summary>
     private void OnTrackChanged(TrackInfo? track)
     {
+        var previous = _currentTrack;
+        _currentTrack = track;
+
+        if (previous?.Id == track?.Id)
+            return;
+
         _currentTrackSubject.OnNext(track);
     }
 
@@ -376,21 +444,64 @@ public sealed class PlayerControlService : IDisposable
         _isLoadingSubject.OnNext(isLoading);
     }
 
+    /// <summary>
+    /// Публикует предупреждение о сложной расшифровке n-токена
+    /// и, если доступен NotificationService, показывает toast с названием трека.
+    /// </summary>
+    private void OnNTokenDecryptionWarning(AudioEngine.NTokenWarningInfo warning)
+    {
+        _nTokenWarningSubject.OnNext(warning);
+
+        if (_notificationService == null)
+            return;
+
+        _ = ShowNTokenWarningAsync(_notificationService, warning);
+    }
+
+    /// <summary>
+    /// Показывает toast-уведомление о сложной расшифровке n-токена.
+    /// При авто-пропуске используется отдельное сообщение.
+    /// </summary>
+    private static async Task ShowNTokenWarningAsync(NotificationService notificationService, AudioEngine.NTokenWarningInfo warning)
+    {
+        try
+        {
+            var track = warning.Track;
+            string trackDisplay = track?.Title ?? track?.Id ?? "Unknown";
+            string? trackTitle = track?.Title ?? track?.Id;
+            string messageKey = warning.WasSkipped
+                ? "Notification_NToken_Skipped"
+                : "Notification_NToken_Message";
+
+            await notificationService.ShowToastAsync(
+                titleKey: "Notification_NToken_Title",
+                messageKey: messageKey,
+                severity: NotificationSeverity.Warning,
+                messageArgs: [trackDisplay],
+                trackId: track?.Id,
+                trackTitle: trackTitle);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[PlayerControl] Failed to show n-token warning: {ex.Message}");
+        }
+    }
+
     #endregion
 
     #region Sync
 
     /// <summary>
     /// Принудительная синхронизация всех состояний при восстановлении из трея.
-    /// 
-    /// <para><b>ВАЖНО:</b> НЕ переиздаёт CurrentTrack если трек тот же самый.
+    ///
+    /// <para><b>ВАЖНО:</b> НЕ переиздаёт CurrentTrack если трек тот же самый (по Id).
     /// Это предотвращает ложный BeginTrackReset → замораживание UI.</para>
-    /// 
+    ///
     /// <para>Вместо этого публикует ForceSyncObservable, на который PlayerBarViewModel
     /// подписывается для мягкого обновления (позиция, буфер, стрим-инфо).</para>
-    /// 
-    /// <para><b>Shuffle sync:</b> Всегда перечитывает _audio.ShuffleEnabled и публикует,
-    /// чтобы исправить рассинхронизацию если кто-то менял через _audio напрямую.</para>
+    ///
+    /// <para>Если реальный трек в AudioEngine отличается от кэшированного (по Id),
+    /// публикует новый трек через CurrentTrackObservable.</para>
     /// </summary>
     public void ForceSync()
     {
@@ -402,8 +513,18 @@ public sealed class PlayerControlService : IDisposable
         _queueCountSubject.OnNext(_audio.Queue.Count);
         _volumeSubject.OnNext((int)Math.Round(_audio.GetVolume()));
 
-        // НЕ переиздаём CurrentTrack — это вызвало бы HandleTrackChanged → BeginTrackReset
-        // Вместо этого сигнализируем "мягкую" синхронизацию
+        var actualTrack = _audio.CurrentTrack;
+        if (_currentTrack?.Id != actualTrack?.Id)
+        {
+            _currentTrack = actualTrack;
+            _currentTrackSubject.OnNext(actualTrack);
+        }
+        else
+        {
+            // Обновляем ссылку без переиздания события
+            _currentTrack = actualTrack;
+        }
+
         _forceSyncSubject.OnNext(Unit.Default);
 
         Log.Debug("[PlayerControl] Forced sync completed (soft, no track reset)");
@@ -422,6 +543,7 @@ public sealed class PlayerControlService : IDisposable
         _audio.OnTrackChanged -= OnTrackChanged;
         _audio.OnQueueChanged -= OnQueueChanged;
         _audio.OnLoadingStateChanged -= OnLoadingStateChanged;
+        _audio.OnNTokenDecryptionWarning -= OnNTokenDecryptionWarning;
 
         _isPlayingSubject.Dispose();
         _isPausedSubject.Dispose();
@@ -433,6 +555,7 @@ public sealed class PlayerControlService : IDisposable
         _volumeSubject.Dispose();
         _forceSyncSubject.Dispose();
         _resumeRequestSubject.Dispose();
+        _nTokenWarningSubject.Dispose();
 
         Log.Debug("[PlayerControl] Service disposed");
     }
