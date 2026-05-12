@@ -37,22 +37,64 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
     private static readonly string[] ArrayMethodMarkers =
         ["'pop'", "'push'", "'reverse'", "'splice'", "'shift'", "'unshift'"];
 
-    public event Action? OnComplexDecryptionStarted;
+    private static readonly AsyncLocal<string?> CurrentDecryptionContext = new();
 
-    /// <summary>Расшифровывает N-токен.</summary>
-    public async ValueTask<string> DecryptAsync(string nToken, CancellationToken ct = default)
+    /// <summary>
+    /// Вызывается перед запуском тяжёлой расшифровки n-токена.
+    /// Передаёт raw video id текущего resolve-контекста.
+    /// </summary>
+    public event Action<string?>? OnComplexDecryptionStarted;
+
+    /// <summary>
+    /// Устанавливает контекст текущей операции расшифровки.
+    /// </summary>
+    /// <remarks>
+    /// <para>Контекст хранится в <see cref="AsyncLocal{T}"/> и автоматически течёт
+    /// через асинхронную цепочку конкретного manifest resolve.</para>
+    /// <para>Это нужно, чтобы позднее событие от старого трека не могло инициировать
+    /// skip уже нового текущего трека.</para>
+    /// </remarks>
+    public DecryptionContextCookie PushDecryptionContext(string? contextId)
+    {
+        var previousContext = CurrentDecryptionContext.Value;
+        CurrentDecryptionContext.Value = contextId;
+        return new DecryptionContextCookie(previousContext);
+    }
+
+    /// <summary>
+    /// Cookie для восстановления предыдущего контекста расшифровки.
+    /// </summary>
+    public readonly record struct DecryptionContextCookie(string? PreviousContext) : IDisposable
+    {
+        public void Dispose()
+        {
+            CurrentDecryptionContext.Value = PreviousContext;
+        }
+    }
+
+    /// <summary>
+    /// Расшифровывает N-токен.
+    /// </summary>
+    /// <remarks>
+    /// <para><paramref name="contextId"/> — raw video id текущего manifest resolve. Передаётся в событие
+    /// <see cref="OnComplexDecryptionStarted"/> для детерминированной дедупликации и защиты от stale-событий.</para>
+    /// </remarks>
+    public async ValueTask<string> DecryptAsync(string nToken, string? contextId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(nToken)) return nToken;
         if (Cache.TryGet(nToken, out var cached)) return cached;
 
-        // Если мы дошли сюда, значит кэш пуст и сейчас начнётся тяжелая работа
-        OnComplexDecryptionStarted?.Invoke();
+        OnComplexDecryptionStarted?.Invoke(contextId);
 
         await EnsureInitializedAsync(ct).ConfigureAwait(false);
 
         var result = TryInvokeJs(nToken, "NToken");
         return result ?? nToken;
     }
+
+    /// <summary>Расшифровывает N-токен.</summary>
+    public ValueTask<string> DecryptAsync(string nToken, CancellationToken ct = default) =>
+        DecryptAsync(nToken, contextId: null, ct);
 
     protected override void InitializeCore(PlayerContext context)
     {

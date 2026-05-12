@@ -14,6 +14,9 @@ public sealed partial class CachingStreamSource
     private const int ReadAtMaxEpochRetries = 5;
     private const int ReadAtEpochRetryDelayMs = 50;
 
+    /// <summary>Максимум неудачных refresh подряд до circuit breaker.</summary>
+    private const int MaxRefreshFailuresBeforeCircuitBreak = 2;
+
     /// <summary>
     /// Координация URL refresh: только один refresh одновременно.
     /// </summary>
@@ -27,6 +30,9 @@ public sealed partial class CachingStreamSource
 
     /// <summary>Последовательный номер запроса к YouTube (&amp;rn=).</summary>
     private int _requestSequenceNumber;
+
+    /// <summary>Счётчик последовательных неудачных URL refresh.</summary>
+    private int _consecutiveRefreshFailures;
 
     #region Chunk Download Result
 
@@ -566,15 +572,42 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Координированный URL refresh. Один поток делает refresh, остальные ждут.
     /// После успешного refresh сбрасывает счётчик 403.
+    /// При повторных неудачах (n-token не расшифрован, YouTube 403) — circuit breaker.
     /// </summary>
     private async Task CoordinatedRefreshAsync(CancellationToken ct)
     {
+        // Circuit breaker: если refresh уже не помогает — не тратим время
+        int refreshFailures = Volatile.Read(ref _consecutiveRefreshFailures);
+        if (refreshFailures >= MaxRefreshFailuresBeforeCircuitBreak)
+        {
+            throw new ChunkDownloadFatalException(
+                $"URL refresh circuit breaker OPEN: {refreshFailures} consecutive refresh failures (likely encrypted n-token)",
+                chunkIndex: -1,
+                consecutiveFailures: Volatile.Read(ref _consecutive403Count),
+                reason: ChunkDownloadFailureReason.Forbidden403,
+                trackId: _trackId,
+                httpStatusCode: 403);
+        }
+
         bool acquired = await _refreshLock.WaitAsync(0, ct);
         if (!acquired)
         {
             Log.Debug("[CachingSource] Waiting for concurrent refresh...");
             await _refreshLock.WaitAsync(ct);
             _refreshLock.Release();
+
+            // После чужого refresh проверяем circuit breaker
+            if (Volatile.Read(ref _consecutiveRefreshFailures) >= MaxRefreshFailuresBeforeCircuitBreak)
+            {
+                throw new ChunkDownloadFatalException(
+                    "URL refresh circuit breaker OPEN after concurrent refresh",
+                    chunkIndex: -1,
+                    consecutiveFailures: Volatile.Read(ref _consecutive403Count),
+                    reason: ChunkDownloadFailureReason.Forbidden403,
+                    trackId: _trackId,
+                    httpStatusCode: 403);
+            }
+
             await Task.Delay(_config.PostRefreshDelayMs, ct);
             return;
         }
@@ -589,11 +622,30 @@ public sealed partial class CachingStreamSource
                 await Task.Delay(waitMs, ct);
             }
 
+            var previousUrl = _currentUrl;
+
             await RefreshUrlAsync(ct);
             _lastRefreshTime = DateTime.UtcNow;
 
             Interlocked.Exchange(ref _consecutive403Count, 0);
             Log.Info("[CachingSource] 403 counter reset after URL refresh");
+
+            // Проверяем: изменился ли n-token после refresh?
+            // Если URL всё тот же (или n-token всё ещё зашифрован) — refresh бесполезен.
+            var newNToken = Youtube.Utils.UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
+            var oldNToken = Youtube.Utils.UrlEx.TryGetQueryParameterValue(previousUrl, "n");
+
+            if (!string.IsNullOrEmpty(newNToken) &&
+                string.Equals(newNToken, oldNToken, StringComparison.Ordinal))
+            {
+                int failures = Interlocked.Increment(ref _consecutiveRefreshFailures);
+                Log.Warn($"[CachingSource] URL refresh did NOT change n-token (attempt {failures}/{MaxRefreshFailuresBeforeCircuitBreak})");
+            }
+            else
+            {
+                // N-token changed — refresh was productive
+                Interlocked.Exchange(ref _consecutiveRefreshFailures, 0);
+            }
 
             await Task.Delay(_config.PostRefreshDelayMs, ct);
         }

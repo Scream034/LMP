@@ -27,4 +27,11 @@ public interface IAudioStreamInfo : IStreamInfo
     /// May be null if the audio stream does not contain language information.
     /// </remarks>
     bool? IsAudioLanguageDefault { get; }
+
+    /// <summary>
+    /// Indicates that the n-token in the URL was NOT successfully decrypted.
+    /// URLs with encrypted n-tokens will receive HTTP 403 from YouTube.
+    /// Used by upstream code to skip broken URLs and fall back to HLS immediately.
+    /// </summary>
+    public bool HasEncryptedNToken { get; }
 }

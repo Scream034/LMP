@@ -36,7 +36,7 @@
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
 
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -224,7 +224,7 @@
     Concentus: декодер Opus в чистом C# (без нативных зависимостей).
   -->
   <ItemGroup Label="Audio">
-    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="Concentus" Version="2.2.2" />
   </ItemGroup>
 
@@ -242,7 +242,7 @@
   <!-- Скриптование / YT-байпас -->
   <!-- Jint: JS-движок на C# для дешифровки sig/n-token YouTube без нативного V8 -->
   <ItemGroup Label="Scripting">
-    <PackageReference Include="Jint" Version="4.6.0" />
+    <PackageReference Include="Jint" Version="4.9.0" />
   </ItemGroup>
 
   <!-- Linux D-Bus (системные уведомления, MPRIS) -->

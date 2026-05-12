@@ -33,9 +33,11 @@ public sealed class AudioPlayerOptions
 
 /// <summary>
 /// Аудио плеер с акторной моделью обработки команд.
-/// 
+///
 /// <para><b>Архитектура:</b> Все публичные методы неблокирующие (отправляют команды в Channel). Обработка строго последовательна в фоне.</para>
 /// <para><b>Shared Backend:</b> Backend драйвера ОС переиспользуется без полного пересоздания, что ускоряет переключение и предотвращает проблемы с EcoQoS.</para>
+/// <para><b>Error contract:</b> Ошибка конкретной команды публикуется ровно один раз внутри её обработчика.
+/// <see cref="ProcessCommandsAsync"/> не должен повторно эскалировать уже обработанную ошибку.</para>
 /// </summary>
 public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 {
@@ -87,7 +89,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>Текущий активный конвейер воспроизведения.</summary>
     private volatile AudioPipeline? _activePipeline;
 
-    // State machine
     private volatile PlayerState _state = PlayerState.Idle;
     private volatile float _volume = 1.0f;
     private volatile bool _disposed;
@@ -95,7 +96,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>Уникальный ID сессии для отмены устаревших команд. Изменяется через Interlocked.</summary>
     private int _sessionId;
 
-    // Position tracking
     private Timer? _positionTimer;
     private Timer? _bufferTimer;
 
@@ -192,8 +192,22 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session, seekPosition, ct));
     }
 
-    public Task PlayAsync(string url, string? trackId = null, int bitrateHint = 0,
-     CancellationToken ct = default, TimeSpan? seekPosition = null)
+    /// <summary>
+    /// Запускает воспроизведение и ожидает перехода в состояние <see cref="PlaybackState.Playing"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Подписки на события очищаются через <see cref="CancellationTokenRegistration"/>
+    /// во всех сценариях завершения: успех, ошибка, отмена.</para>
+    ///
+    /// <para>Если <paramref name="ct"/> уже отменён на момент вызова —
+    /// метод немедленно возвращает отменённую задачу без запуска команды.</para>
+    /// </remarks>
+    public Task PlayAsync(
+        string url,
+        string? trackId = null,
+        int bitrateHint = 0,
+        CancellationToken ct = default,
+        TimeSpan? seekPosition = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -204,34 +218,45 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         void OnStateChanged(PlaybackState state)
         {
-            if (state == PlaybackState.Playing)
-            {
-                _events.StateChanged -= OnStateChanged;
-                _events.ErrorOccurred -= OnError;
-                tcs.TrySetResult(true);
-            }
+            if (state != PlaybackState.Playing) return;
+            tcs.TrySetResult(true);
         }
 
         void OnError(AudioPlayerError error)
         {
-            _events.StateChanged -= OnStateChanged;
-            _events.ErrorOccurred -= OnError;
             tcs.TrySetException(error.Exception ?? new Exception(error.Message));
         }
 
         _events.StateChanged += OnStateChanged;
         _events.ErrorOccurred += OnError;
 
-        ct.Register(() =>
-        {
-            _events.StateChanged -= OnStateChanged;
-            _events.ErrorOccurred -= OnError;
-            tcs.TrySetCanceled(ct);
-        });
+        var registration = ct.UnsafeRegister(
+            static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+            tcs);
+
+        tcs.Task.ContinueWith(
+            (_, state) =>
+            {
+                var ctx = (PlayAsyncContext)state!;
+                ctx.Player._events.StateChanged -= ctx.OnStateChanged;
+                ctx.Player._events.ErrorOccurred -= ctx.OnError;
+                ctx.Registration.Dispose();
+            },
+            new PlayAsyncContext(this, OnStateChanged, OnError, registration),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         Play(url, trackId, bitrateHint, seekPosition, ct);
         return tcs.Task;
     }
+
+    /// <summary>Контекст для continuation в <see cref="PlayAsync"/> — избегает замыканий на heap.</summary>
+    private sealed record PlayAsyncContext(
+        AudioPlayer Player,
+        Action<PlaybackState> OnStateChanged,
+        Action<AudioPlayerError> OnError,
+        CancellationTokenRegistration Registration);
 
     public void Pause()
     {
@@ -337,10 +362,23 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
                     continue;
                 }
 
-                try { await ProcessCommandAsync(command); }
-                catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { break; }
+                try
+                {
+                    await ProcessCommandAsync(command);
+                }
+                catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+                {
+                    break;
+                }
                 catch (Exception ex)
                 {
+                    if (PlaybackErrorOrchestrator.IsCancellationLike(ex) ||
+                        command.SessionId < Interlocked.CompareExchange(ref _sessionId, 0, 0))
+                    {
+                        Log.Debug($"[AudioPlayer] Suppressing stale command error: {ex.GetType().Name}");
+                        continue;
+                    }
+
                     Log.Error($"[AudioPlayer] Command error: {ex.Message}", ex);
                     HandleError(ex);
                 }
@@ -361,6 +399,15 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
     }
 
+    /// <summary>
+    /// Обрабатывает команду воспроизведения.
+    /// </summary>
+    /// <remarks>
+    /// <para>Все ошибки публикуются внутри этого метода ровно один раз через
+    /// <see cref="AudioPlayerEvents.ErrorOccurred"/>. Метод не пробрасывает
+    /// уже обработанные ошибки наружу, чтобы <see cref="ProcessCommandsAsync"/>
+    /// не эскалировал их повторно.</para>
+    /// </remarks>
     private async Task HandlePlayAsync(PlayCommand cmd)
     {
         Log.Info($"[AudioPlayer] Play: {cmd.TrackId ?? "unknown"}, bitrate hint: {cmd.BitrateHint}");
@@ -432,11 +479,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             StartTimers();
             SetState(PlayerState.Playing);
 
-            WatchPipelineLifetimeAsync(pipeline, cmd.SessionId);
+            _ = WatchPipelineLifetimeAsync(pipeline, cmd.SessionId);
         }
         catch (OperationCanceledException)
         {
-            if (_state == PlayerState.Loading || _state == PlayerState.Buffering)
+            if (_state is PlayerState.Loading or PlayerState.Buffering)
                 SetState(PlayerState.Idle);
         }
         catch (NAudio.MmException ex)
@@ -451,21 +498,29 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             SetState(PlayerState.Error);
             _events.RaiseError(new AudioPlayerError(GetDeviceErrorMessage(), ex));
         }
+        catch (Exception ex) when (
+            cmd.ExternalCancellationToken.IsCancellationRequested ||
+            cmd.SessionId < Interlocked.CompareExchange(ref _sessionId, 0, 0) ||
+            PlaybackErrorOrchestrator.IsCancellationLike(ex))
+        {
+            if (_state is PlayerState.Loading or PlayerState.Buffering)
+                SetState(PlayerState.Idle);
+
+            Log.Debug("[AudioPlayer] Suppressing stale/cancelled play error");
+        }
         catch (Exception ex)
         {
             Log.Error($"[AudioPlayer] Play failed: {ex.Message}", ex);
             SetState(PlayerState.Error);
             _events.RaiseError(new AudioPlayerError(ex.Message, ex));
-            throw;
         }
     }
 
     /// <summary>
     /// Фоновая задача ожидания отмены lifetime token pipeline.
-    /// Если pipeline отменён из-за потери устройства (не из-за штатной остановки) —
-    /// вызывает HandleError и отправляет StopCommand.
+    /// Если pipeline отменён из-за потери устройства — инициирует остановку.
     /// </summary>
-    private async void WatchPipelineLifetimeAsync(AudioPipeline pipeline, int sessionId)
+    private async Task WatchPipelineLifetimeAsync(AudioPipeline pipeline, int sessionId)
     {
         try
         {
@@ -473,9 +528,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Проверяем: это потеря устройства или штатная остановка?
-            // Штатная остановка: _activePipeline уже null или другой pipeline.
-            // Потеря устройства: _activePipeline всё ещё наш pipeline.
             int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
             if (_disposed || sessionId < currentSession) return;
             if (_activePipeline != pipeline) return;
@@ -484,7 +536,15 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             HandleError(new Exceptions.AudioDeviceException(GetDeviceErrorMessage()));
 
             int session = Interlocked.Increment(ref _sessionId);
-            await _commandChannel.Writer.WriteAsync(new StopCommand(session));
+
+            try
+            {
+                await _commandChannel.Writer.WriteAsync(new StopCommand(session));
+            }
+            catch (ChannelClosedException)
+            {
+                Log.Debug("[AudioPlayer] Command channel closed during device loss handling");
+            }
         }
     }
 
@@ -496,8 +556,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         var pipeline = Interlocked.Exchange(ref _activePipeline, null);
         if (pipeline != null) await pipeline.DisposeAsync();
 
-        // Never-stop: не вызываем _sharedBackend.Stop() — waveOut продолжает работать.
-        // Flush очищает буфер, provider отдаёт тишину сам.
         _sharedBackend.Flush();
         _currentTrackId = null;
         SetState(PlayerState.Idle);
@@ -573,7 +631,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch (Exceptions.AudioDeviceException ex)
         {
-            // Устройство потеряно во время seek — сообщаем пользователю
             Log.Error($"[AudioPlayer] Audio device lost during seek: {ex.Message}");
             cmd.Completion?.TrySetException(ex);
             HandleError(ex);
@@ -741,7 +798,8 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         };
     }
 
-    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => _activePipeline?.Source.GetBufferedRanges() ?? [];
+    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() =>
+        _activePipeline?.Source.GetBufferedRanges() ?? [];
 
     #endregion
 
@@ -761,9 +819,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch { }
 
-        // Shared backend уничтожается ПОСЛЕДНИМ — после всех pipeline
         _sharedBackend.Dispose();
-
         _lifetimeCts.Dispose();
 
         GC.SuppressFinalize(this);
@@ -783,9 +839,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch { }
 
-        // Shared backend уничтожается ПОСЛЕДНИМ
         _sharedBackend.Dispose();
-
         _lifetimeCts.Dispose();
 
         GC.SuppressFinalize(this);

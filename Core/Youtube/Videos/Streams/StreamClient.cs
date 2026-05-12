@@ -45,7 +45,7 @@ public sealed class StreamClient
             if (_cipherManifest is null)
             {
                 Log.Debug("[StreamClient] CipherManifest not available (expected with new YouTube format)");
-                _cipherManifest = new CipherManifest("",[]);
+                _cipherManifest = new CipherManifest("", []);
             }
 
             return _cipherManifest;
@@ -53,19 +53,22 @@ public sealed class StreamClient
         catch (Exception ex)
         {
             Log.Debug($"[StreamClient] CipherManifest resolution failed: {ex.Message}");
-            _cipherManifest = new CipherManifest("",[]);
+            _cipherManifest = new CipherManifest("", []);
             return _cipherManifest;
         }
     }
 
     private async IAsyncEnumerable<IStreamInfo> GetAudioStreamInfosAsync(
-         IEnumerable<IStreamData> streamDatas,[EnumeratorCancellation] CancellationToken cancellationToken = default)
+      VideoId videoId,
+      IEnumerable<IStreamData> streamDatas,
+      [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Локальный кеш необходимости расшифровки: проверяем HEAD-запросом только один раз
         bool? isNTokenDecryptionRequired = null;
 
         foreach (var streamData in streamDatas)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var itag = streamData.Itag;
             if (itag is null) continue;
 
@@ -83,9 +86,6 @@ public sealed class StreamClient
             Log.Debug($"[StreamClient] itag={itag} raw URL (first 200): " +
                       $"{url[..Math.Min(url.Length, 200)]}");
 
-            // ════════════════════════════════════════════════════════
-            // SIGNATURE DECRYPTION
-            // ════════════════════════════════════════════════════════
             if (!string.IsNullOrWhiteSpace(streamData.Signature))
             {
                 Log.Debug($"[StreamClient] itag={itag} needs signature decryption");
@@ -94,13 +94,16 @@ public sealed class StreamClient
                 {
                     var decryptedSig = await _sigCipherDecryptor.DecipherAsync(
                         streamData.Signature,
-                        cancellationToken
-                    );
+                        cancellationToken);
 
                     var sigParam = streamData.SignatureParameter ?? "sig";
                     url = UrlEx.SetQueryParameter(url, sigParam, decryptedSig);
 
                     Log.Debug($"[StreamClient] itag={itag} sig decrypted");
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -109,17 +112,15 @@ public sealed class StreamClient
                 }
             }
 
-            // ════════════════════════════════════════════════════════
-            // N-TOKEN DECRYPTION (С ПРОВЕРКОЙ HEAD)
-            // ════════════════════════════════════════════════════════
             var nToken = UrlEx.TryGetQueryParameterValue(url, "n");
+            bool hasEncryptedNToken = false;
+
             if (!string.IsNullOrEmpty(nToken))
             {
                 if (isNTokenDecryptionRequired == null)
                 {
                     try
                     {
-                        // Проверяем, работает ли URL "как есть" (например, клиент ANDROID_VR).
                         using var headResponse = await _http.HeadAsync(url, cancellationToken);
                         if (headResponse.IsSuccessStatusCode)
                         {
@@ -132,6 +133,10 @@ public sealed class StreamClient
                             Log.Debug($"[StreamClient] itag={itag} HEAD check returned {headResponse.StatusCode}, needs decryption");
                         }
                     }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
                     catch (Exception ex)
                     {
                         isNTokenDecryptionRequired = true;
@@ -143,20 +148,31 @@ public sealed class StreamClient
                 {
                     try
                     {
-                        var decryptedN = await _nTokenDecryptor.DecryptAsync(nToken, cancellationToken);
+                        var decryptedN = await _nTokenDecryptor.DecryptAsync(
+                            nToken,
+                            contextId: videoId.Value,
+                            ct: cancellationToken);
+
+                        hasEncryptedNToken = string.Equals(decryptedN, nToken, StringComparison.Ordinal);
                         url = UrlEx.SetQueryParameter(url, "n", decryptedN);
 
                         Log.Debug($"[StreamClient] itag={itag} n-token: '{nToken}' → '{decryptedN}'");
                     }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
                     catch (Exception ex)
                     {
+                        hasEncryptedNToken = true;
                         Log.Warn($"[StreamClient] itag={itag} n-token failed: {ex.Message}");
                         Log.Warn($"[StreamClient] ⚠ URL will have ENCRYPTED n-token → expect 403!");
                     }
                 }
             }
 
-            // Cleanup
+            cancellationToken.ThrowIfCancellationRequested();
+
             url = UrlEx.RemoveQueryParameter(url, "ump");
             url = UrlEx.RemoveQueryParameter(url, "alr");
             url = UrlEx.RemoveQueryParameter(url, "srfvp");
@@ -178,8 +194,7 @@ public sealed class StreamClient
             {
                 audioLanguage = new Language(
                     streamData.AudioLanguageCode,
-                    streamData.AudioLanguageName ?? ""
-                );
+                    streamData.AudioLanguageName ?? "");
             }
 
             yield return new AudioOnlyStreamInfo(
@@ -190,8 +205,8 @@ public sealed class StreamClient
                 bitrate.Value,
                 audioCodec,
                 audioLanguage,
-                streamData.IsAudioLanguageDefault
-            );
+                streamData.IsAudioLanguageDefault,
+                hasEncryptedNToken);
         }
     }
 
@@ -222,8 +237,7 @@ public sealed class StreamClient
                 $"Video {videoId} is not playable: {playerResponse.PlayabilityError}");
 
         var streams = new List<IStreamInfo>();
-        await foreach (var stream in GetAudioStreamInfosAsync(
-            playerResponse.Streams, cancellationToken))
+        await foreach (var stream in GetAudioStreamInfosAsync(videoId, playerResponse.Streams, cancellationToken))
         {
             streams.Add(stream);
         }

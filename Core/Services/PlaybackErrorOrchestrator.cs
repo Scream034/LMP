@@ -10,6 +10,12 @@ namespace LMP.Core.Services;
 /// Единый центр принятия решений.
 /// Полностью неблокирующий — использует toast-уведомления вместо модальных диалогов.
 /// </summary>
+/// <remarks>
+/// <para><b>Recovery-first:</b></para>
+/// <para>Для фатальных ошибок playback-flow сначала переводится в корректное состояние
+/// (stop/skip), и только затем выполняется пользовательское уведомление.
+/// Это устраняет гонку между поздними async-продолжениями и UI-обработкой ошибки.</para>
+/// </remarks>
 public sealed class PlaybackErrorOrchestrator : IDisposable
 {
     private readonly YoutubeProvider _youtube;
@@ -18,7 +24,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     private readonly NotificationService _notificationService;
     private readonly LibraryService _libraryService;
 
-    private readonly SemaphoreSlim _errorLock = new(1, 1);
     private readonly HashSet<string> _recentlyShownErrors = new(StringComparer.Ordinal);
     private DateTime _lastErrorCleanup = DateTime.MinValue;
 
@@ -26,7 +31,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     private static readonly TimeSpan ErrorDeduplicationWindow = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Длительность toast для стратегии Dialog (дольше, чтобы пользователь заметил).
+    /// Длительность toast для стратегии Dialog.
     /// </summary>
     private const int DialogToastDurationMs = 8000;
 
@@ -38,11 +43,11 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     private volatile bool _disposed;
 
     public PlaybackErrorOrchestrator(
-    YoutubeProvider youtube,
-    AudioEngine audioEngine,
-    DialogService dialogService,
-    NotificationService notificationService,
-    LibraryService libraryService)
+        YoutubeProvider youtube,
+        AudioEngine audioEngine,
+        DialogService dialogService,
+        NotificationService notificationService,
+        LibraryService libraryService)
     {
         _youtube = youtube ?? throw new ArgumentNullException(nameof(youtube));
         _audioEngine = audioEngine ?? throw new ArgumentNullException(nameof(audioEngine));
@@ -50,11 +55,9 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
         _libraryService = libraryService ?? throw new ArgumentNullException(nameof(libraryService));
 
-        // Подписываемся на ошибки AudioEngine
         _audioEngine.OnErrorOccurred += HandleError;
 
-        // ═══ Подтверждение подписки ═══
-        Log.Info($"[PlaybackErrorOrchestrator] Subscribed to AudioEngine.OnErrorOccurred (handler count verification)");
+        Log.Info("[PlaybackErrorOrchestrator] Subscribed to AudioEngine.OnErrorOccurred (handler count verification)");
         Log.Info("[PlaybackErrorOrchestrator] Initialized and ready");
     }
 
@@ -64,7 +67,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     {
         if (_disposed) return;
 
-        // ═══ Подтверждение получения ошибки ═══
         Log.Info($"[Orchestrator] ◆ Received error event: {exception.GetType().Name}: {exception.Message}");
 
         _ = HandleErrorAsync(exception);
@@ -73,6 +75,18 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     public async Task HandleErrorAsync(Exception exception)
     {
         if (_disposed) return;
+
+        if (IsCancellationLike(exception))
+        {
+            Log.Debug($"[Orchestrator] Suppressing cancelled error: {exception.GetType().Name}");
+            return;
+        }
+
+        if (IsStalePlaybackError(exception))
+        {
+            Log.Debug($"[Orchestrator] Suppressing stale error: {exception.GetType().Name}");
+            return;
+        }
 
         string errorKey = GetErrorDeduplicationKey(exception);
         if (!TryRegisterError(errorKey))
@@ -86,6 +100,12 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         try
         {
             var actualException = UnwrapException(exception);
+
+            if (actualException is OperationCanceledException)
+            {
+                Log.Debug("[Orchestrator] Suppressing unwrapped cancellation");
+                return;
+            }
 
             await (actualException switch
             {
@@ -103,13 +123,51 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         }
     }
 
+    /// <summary>
+    /// Определяет, содержит ли исключение признак отмены операции.
+    /// </summary>
+    public static bool IsCancellationLike(Exception? exception)
+    {
+        for (var current = exception; current != null; current = current.InnerException)
+        {
+            if (current is OperationCanceledException or TaskCanceledException)
+                return true;
+        }
+        return false;
+    }
+
     #endregion
 
     #region Specific Error Handlers
 
     /// <summary>
-    /// Bot Detection — показываем диалог с таймером (единственный модальный случай).
-    /// Требует внимания пользователя, автоскип бессмыслен.
+    /// Подавляет ошибки от устаревших операций, которые уже не относятся к текущему треку.
+    /// </summary>
+    private bool IsStalePlaybackError(Exception exception)
+    {
+        var current = _audioEngine.CurrentTrack;
+        if (current == null)
+            return true;
+
+        var currentRaw = current.GetRawIdSpan();
+
+        return exception switch
+        {
+            StreamUnavailableException stream =>
+                !currentRaw.SequenceEqual(stream.VideoId.AsSpan()),
+
+            LoginRequiredException login =>
+                !currentRaw.SequenceEqual(login.VideoId.AsSpan()),
+
+            ChunkDownloadFatalException chunk =>
+                !string.Equals(current.Id, chunk.TrackId, StringComparison.Ordinal),
+
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Bot Detection — показываем диалог с таймером.
     /// </summary>
     private async Task HandleBotDetectionAsync(BotDetectionException exception)
     {
@@ -117,8 +175,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
         await InvokeOnUIAsync(_audioEngine.Stop);
 
-        // BotDetection — единственный случай, где модальный диалог оправдан
-        // (есть таймер обратного отсчёта)
         await _dialogService.ShowBotDetectionCooldownAsync(exception.RemainingCooldown);
     }
 
@@ -259,13 +315,13 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         var recommendation = GetRecommendation(exception);
 
         var attempts = new List<AttemptRecord>
-    {
-        new(
-            $"Chunk {exception.ChunkIndex}",
-            false,
-            $"{exception.Reason}: {exception.Message}",
-            DateTime.UtcNow)
-    };
+        {
+            new(
+                $"Chunk {exception.ChunkIndex}",
+                false,
+                $"{exception.Reason}: {exception.Message}",
+                DateTime.UtcNow)
+        };
 
         switch (behavior)
         {
@@ -298,7 +354,9 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
         var behavior = GetErrorBehavior();
         var settings = _libraryService.Settings.Audio;
-        var trackInfo = GetCurrentTrackInfo();
+        var (Id, Title) = GetCurrentTrackInfo();
+
+        await RecoverFromFatalPlaybackErrorAsync();
 
         if (behavior != PlaybackErrorBehavior.Ignore)
         {
@@ -308,8 +366,8 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             await _notificationService.ShowPlaybackErrorAsync(
                 LocalizationService.Instance["Error_Playback_Title"],
                 exception.Message,
-                trackInfo.Id,
-                trackInfo.Title,
+                Id,
+                Title,
                 null,
                 exception.ToString(),
                 NotificationSeverity.Error);
@@ -319,8 +377,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
                 exception.Message,
                 NotificationSeverity.Error);
         }
-
-        await InvokeOnUIAsync(() => _ = _audioEngine.PlayNextAsync());
     }
 
     #endregion
@@ -328,20 +384,43 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     #region Behavior Strategies
 
     /// <summary>
-    /// Стратегия Dialog (обновлённая): пауза + длинный toast (без модального окна).
-    /// Пользователь видит уведомление и решает сам.
+    /// Выполняет recovery после фатальной ошибки воспроизведения.
+    /// Для очереди длиной 1 используется terminal-stop path.
+    /// </summary>
+    private Task RecoverFromFatalPlaybackErrorAsync()
+    {
+        if (_audioEngine.Queue.Count <= 1)
+            return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
+
+        return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync());
+    }
+
+    /// <summary>
+    /// Для стратегии Dialog: при очереди длиной 1 выполняется terminal-stop,
+    /// иначе воспроизведение ставится на паузу.
+    /// </summary>
+    private Task PauseOrStopForDialogAsync()
+    {
+        if (_audioEngine.Queue.Count <= 1)
+            return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
+
+        return InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
+    }
+
+    /// <summary>
+    /// Стратегия Dialog: сначала recovery, затем длинный toast.
     /// </summary>
     private async Task HandleWithPauseAndToastAsync(
-     string titleKey,
-     string messageKey,
-     string? trackId,
-     string? trackTitle,
-     List<AttemptRecord>? attempts,
-     string? exceptionDetails,
-     bool playSound,
-     string? recommendationKey = null)
+        string titleKey,
+        string messageKey,
+        string? trackId,
+        string? trackTitle,
+        List<AttemptRecord>? attempts,
+        string? exceptionDetails,
+        bool playSound,
+        string? recommendationKey = null)
     {
-        await InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
+        await PauseOrStopForDialogAsync();
 
         if (playSound)
             _notificationService.PlayErrorSound();
@@ -352,24 +431,25 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
             durationMs: DialogToastDurationMs,
             recommendationKey: recommendationKey);
 
-        // OS notification с локализованным текстом
         var L = LocalizationService.Instance;
         await NotificationService.ShowOsNotificationAsync(L[titleKey], L[messageKey], NotificationSeverity.Error);
     }
 
     /// <summary>
-    /// Стратегия ToastAndSkip: звук, toast, OS notification, автоскип.
+    /// Стратегия ToastAndSkip: сначала recovery, затем toast и OS notification.
     /// </summary>
     private async Task HandleWithToastAndSkipAsync(
-     string titleKey,
-     string messageKey,
-     string? trackId,
-     string? trackTitle,
-     List<AttemptRecord>? attempts,
-     string? exceptionDetails,
-     bool playSound,
-     string? recommendationKey = null)
+        string titleKey,
+        string messageKey,
+        string? trackId,
+        string? trackTitle,
+        List<AttemptRecord>? attempts,
+        string? exceptionDetails,
+        bool playSound,
+        string? recommendationKey = null)
     {
+        await RecoverFromFatalPlaybackErrorAsync();
+
         if (playSound)
             _notificationService.PlayErrorSound();
 
@@ -381,17 +461,15 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
         var L = LocalizationService.Instance;
         await NotificationService.ShowOsNotificationAsync(L[titleKey], L[messageKey], NotificationSeverity.Warning);
-
-        await InvokeOnUIAsync(() => _ = _audioEngine.PlayNextAsync());
     }
 
     /// <summary>
-    /// Стратегия Ignore: только skip, без уведомлений.
+    /// Стратегия Ignore: только recovery, без уведомлений.
     /// </summary>
     private async Task HandleWithSkipOnlyAsync()
     {
-        Log.Debug("[Orchestrator] Ignoring error, skipping to next track");
-        await InvokeOnUIAsync(() => _ = _audioEngine.PlayNextAsync());
+        Log.Debug("[Orchestrator] Ignoring error, applying fatal recovery");
+        await RecoverFromFatalPlaybackErrorAsync();
     }
 
     #endregion
@@ -562,7 +640,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         bool isAuthenticated,
         LocalizationService L)
     {
-        // Для 403 ошибок приоритет — авторизация
         if (stream.Reason == StreamUnavailableReason.Forbidden403)
         {
             return isAuthenticated
@@ -619,7 +696,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _disposed = true;
 
         _audioEngine.OnErrorOccurred -= HandleError;
-        _errorLock.Dispose();
 
         lock (_recentlyShownErrors)
         {

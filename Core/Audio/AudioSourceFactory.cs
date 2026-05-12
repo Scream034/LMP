@@ -185,7 +185,7 @@ public static class AudioSourceFactory
         // 2. Логирования (показываем РЕАЛЬНЫЙ битрейт)
         // 3. CachingStreamSource (сохраняет РЕАЛЬНЫЙ битрейт в metadata)
         int finalBitrate = bitrateHint > 0 ? bitrateHint : detectedBitrate;
-        
+
         // ═══ КЛЮЧ КЭША — НОРМАЛИЗОВАННЫЙ ═══
         // BuildCacheKey внутри вызывает NormalizeBitrate(finalBitrate).
         // Например: finalBitrate=134 → cacheKey содержит "128".
@@ -263,6 +263,7 @@ public static class AudioSourceFactory
     }
 
     /// <summary>
+    /// <summary>
     /// Определяет формат: сначала по URL, потом по magic bytes.
     /// </summary>
     public static async Task<AudioFormat> DetectFormatAsync(
@@ -285,6 +286,10 @@ public static class AudioSourceFactory
 
             var header = await response.Content.ReadAsByteArrayAsync(ct);
             return DetectFormatByMagic(header);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -336,7 +341,7 @@ public static class AudioSourceFactory
     }
 
     private static async Task<(long ContentLength, AudioCodec Codec, int Bitrate)> GetStreamInfoAsync(
-        string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
+     string url, AudioFormat format, HttpClient httpClient, CancellationToken ct)
     {
         long contentLength = 0;
 
@@ -353,17 +358,20 @@ public static class AudioSourceFactory
                 if (response.IsSuccessStatusCode)
                     contentLength = response.Content.Headers.ContentLength ?? 0;
             }
-            catch { /* Fallback below */ }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+            }
         }
 
         if (contentLength <= 0)
-            contentLength = 100 * 1024 * 1024; // 100MB fallback
+            contentLength = 100 * 1024 * 1024;
 
         var codec = GetCodecForFormat(format);
-        
-        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ ИЗ URL ═══
-        // ExtractBitrateFromUrl возвращает РЕАЛЬНЫЙ битрейт из YouTube URL
-        // (например, 134000 → 134 kbps). НЕ нормализуем.
+
         int bitrate = ExtractBitrateFromUrl(url);
 
         if (bitrate == 0)

@@ -92,7 +92,7 @@ public partial class YoutubeProvider : IDisposable
     private static readonly Regex YoutubePlaylistRegex = _YoutubePlaylistRegex();
     private static readonly Regex ValidYoutubeId = _ValidYoutubeId();
 
-    public event Action? OnNTokenDecryptionStarted;
+    public event Action<string>? OnNTokenDecryptionStarted;
 
     public YoutubeProvider(
         TrackRegistry trackRegistry,
@@ -107,14 +107,21 @@ public partial class YoutubeProvider : IDisposable
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
 
-        // Пробрасываем событие наверх
-        _nTokenDecryptor.OnComplexDecryptionStarted += () => OnNTokenDecryptionStarted?.Invoke();
+        _nTokenDecryptor.OnComplexDecryptionStarted += HandleNTokenDecryptionStarted;
 
         if (AuthService != null)
         {
             ReloadClient();
             AuthService.OnAuthStateChanged += ReloadClient;
         }
+    }
+
+    private void HandleNTokenDecryptionStarted(string? rawVideoId)
+    {
+        if (string.IsNullOrWhiteSpace(rawVideoId))
+            return;
+
+        OnNTokenDecryptionStarted?.Invoke(rawVideoId);
     }
 
     #region Bot Detection — Stateless Helpers
@@ -763,51 +770,62 @@ public partial class YoutubeProvider : IDisposable
 
                 if (audioStreams.Count > 0)
                 {
-                    var selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
-                    if (selectedStream != null)
+                    // ═══ ФИЛЬТРАЦИЯ: исключаем URL с зашифрованным n-token ═══
+                    // Такие URL гарантированно вернут 403 от YouTube.
+                    // Если ВСЕ стримы имеют encrypted n-token — пропускаем к HLS fallback.
+                    var usableStreams = audioStreams
+                        .Where(s => !s.HasEncryptedNToken)
+                        .ToList();
+
+                    if (usableStreams.Count == 0 && audioStreams.Count > 0)
                     {
-                        var url = selectedStream.Url;
-                        var size = selectedStream.Size.Bytes;
-
-                        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ ИЗ YOUTUBE ═══
-                        // YouTube передаёт битрейт в Bitrate.KiloBitsPerSecond.
-                        // Это НЕ всегда круглое число: может быть 134.2 kbps.
-                        // Округляем до целого, но НЕ нормализуем.
-                        var bitrate = (int)Math.Round(selectedStream.Bitrate.KiloBitsPerSecond);
-
-                        var container = selectedStream.Container.Name;
-                        var codec = DetermineCodec(container, selectedStream);
-
-                        sw.Stop();
-
-                        // ═══ ЛОГ — ПОКАЗЫВАЕМ РЕАЛЬНЫЙ БИТРЕЙТ ═══
-                        NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps in {sw.ElapsedMilliseconds}ms");
-
-                        // ═══ КЭШ — ИСПОЛЬЗУЕТ НОРМАЛИЗОВАННЫЙ КЛЮЧ ═══
-                        // CacheStreamUrl внутри вызывает BuildCacheKey → нормализация.
-                        // НО сохраняет РЕАЛЬНЫЙ битрейт (bitrate=134) в StreamCacheEntry.
-                        CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
-
-                        // ═══ ОБНОВЛЯЕМ TRACK — РЕАЛЬНЫЙ БИТРЕЙТ ═══
-                        track.StreamUrl = url;
-                        track.TransientContainer = container;
-                        track.TransientSize = size;
-                        track.CachedCodec = codec;
-                        track.CachedBitrate = bitrate;        // ← РЕАЛЬНЫЙ битрейт
-                        track.CachedContainer = container;
-                        track.IsHlsOnly = false;
-                        track.HlsManifestUrl = null;
-
-                        // ═══ ВОЗВРАЩАЕМ РЕАЛЬНЫЙ БИТРЕЙТ ═══
-                        return (url, size, bitrate, codec, container);
+                        Log.Warn($"[YouTube] [{videoId}] All {audioStreams.Count} streams have encrypted n-token, skipping to HLS");
+                        // Не возвращаем broken URL — падаем в HLS fallback ниже
                     }
-                }
+                    else if (usableStreams.Count > 0)
+                    {
+                        var selectedStream = SelectBestStream(usableStreams, targetContainer, targetBitrate);
+                        if (selectedStream != null)
+                        {
+                            var url = selectedStream.Url;
+                            var size = selectedStream.Size.Bytes;
+                            var bitrate = (int)Math.Round(selectedStream.Bitrate.KiloBitsPerSecond);
+                            var container = selectedStream.Container.Name;
+                            var codec = DetermineCodec(container, selectedStream);
 
-                Log.Warn($"[YouTube] [{videoId}] No audio-only streams available");
+                            sw.Stop();
+
+                            NotifyStatus($"[YouTube] [{videoId}] Stream: {codec}/{bitrate}kbps in {sw.ElapsedMilliseconds}ms");
+
+                            CacheStreamUrl(cacheKey, url, size, bitrate, codec, container);
+
+                            track.StreamUrl = url;
+                            track.TransientContainer = container;
+                            track.TransientSize = size;
+                            track.CachedCodec = codec;
+                            track.CachedBitrate = bitrate;
+                            track.CachedContainer = container;
+                            track.IsHlsOnly = false;
+                            track.HlsManifestUrl = null;
+
+                            return (url, size, bitrate, codec, container);
+                        }
+                    }
+
+                    Log.Warn($"[YouTube] [{videoId}] No usable audio-only streams available");
+                }
+                else
+                {
+                    Log.Warn($"[YouTube] [{videoId}] No audio-only streams available");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (BotDetectionException)
             {
-                throw; // Пробрасываем
+                throw;
             }
             catch (VideoUnplayableException ex)
             {
@@ -819,7 +837,7 @@ public partial class YoutubeProvider : IDisposable
             catch (StreamUnavailableException ex) when (ex.HttpStatusCode == 403)
             {
                 Log.Error($"[YouTube] [{videoId}] HTTP 403 Forbidden");
-                throw; // Пробрасываем
+                throw;
             }
             catch (Exception ex)
             {
@@ -851,10 +869,14 @@ public partial class YoutubeProvider : IDisposable
                     return (hlsUrl, 0, 128, "HLS", "m3u8");
                 }
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (StreamUnavailableException ex) when (ex.WasHlsFallback)
             {
                 Log.Error($"[YouTube] [{videoId}] HLS fallback also failed with 403");
-                throw; // Пробрасываем
+                throw;
             }
             catch (BotDetectionException)
             {

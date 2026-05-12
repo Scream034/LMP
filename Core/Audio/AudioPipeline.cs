@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using LMP.Core.Audio.Backends;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Helpers;
@@ -159,7 +160,11 @@ public sealed class AudioPipeline : IAsyncDisposable
                 lifetimeCts.Token);
 
             if (!await source.InitializeAsync(lifetimeCts.Token))
+            {
+                lifetimeCts.Token.ThrowIfCancellationRequested();
+                ct.ThrowIfCancellationRequested();
                 throw new AudioSourceException("Failed to initialize audio source");
+            }
 
             decoder = CreateDecoder(source);
 
@@ -177,13 +182,17 @@ public sealed class AudioPipeline : IAsyncDisposable
 
             sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
 
-            // Подписываемся на потерю устройства во время воспроизведения
             if (sharedBackend is NAudioBackend naBackend)
                 naBackend.SetDeviceLostCallback(pipeline.NotifyDeviceLost);
 
             Log.Info($"[AudioPipeline] Created (shared backend): {streamInfo.FormatDisplay}");
 
             return pipeline;
+        }
+        catch (OperationCanceledException)
+        {
+            CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
+            throw;
         }
         catch (Youtube.Exceptions.StreamUnavailableException)
         {
@@ -192,17 +201,38 @@ public sealed class AudioPipeline : IAsyncDisposable
         }
         catch (AudioDeviceException)
         {
-            // Пробрасываем напрямую — не оборачиваем в AudioSourceException,
-            // чтобы HandlePlayAsync и HandleError могли поймать правильный тип.
             CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
             throw;
         }
         catch (Exception ex)
         {
             CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
-            if (ex is AudioSourceException) throw;
+
+            if (IsAnyCancellation(ex, ct))
+                throw new OperationCanceledException("Pipeline creation cancelled", ex, ct);
+
+            if (ex is AudioSourceException)
+                throw;
+
             throw new AudioSourceException("Failed to initialize audio source", ex);
         }
+    }
+
+    /// <summary>
+    /// Проверяет является ли исключение или любое его вложенное исключение отменой операции,
+    /// либо токен уже отменён.
+    /// </summary>
+    private static bool IsAnyCancellation(Exception ex, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested) return true;
+
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is OperationCanceledException or TaskCanceledException)
+                return true;
+        }
+
+        return false;
     }
 
     private static void CleanupOnErrorPartial(

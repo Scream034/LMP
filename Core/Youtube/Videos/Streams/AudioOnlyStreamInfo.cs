@@ -14,7 +14,8 @@ public class AudioOnlyStreamInfo(
     Bitrate bitrate,
     string audioCodec,
     Language? audioLanguage,
-    bool? isAudioLanguageDefault
+    bool? isAudioLanguageDefault,
+    bool hasEncryptedNToken
 ) : IAudioStreamInfo
 {
     /// <inheritdoc />
@@ -47,4 +48,7 @@ public class AudioOnlyStreamInfo(
         AudioLanguage is not null
             ? $"Audio-only ({Container} | {AudioLanguage})"
             : $"Audio-only ({Container})";
+
+    /// <inheritdoc />
+    public bool HasEncryptedNToken { get; } = hasEncryptedNToken;
 }
