@@ -116,7 +116,7 @@ $patterns = @(
     # ── C#: прямой доступ с кавычками ────────────────────────────────────────
 
     # SL["Key"]  /  LocalizationService.Instance["Key"]
-    '(?:SL|L|LocalizationService\.Instance)\["([A-Za-z][A-Za-z0-9_]+)"\]',,
+    '(?:SL|L|LocalizationService\.Instance)\["([A-Za-z][A-Za-z0-9_]+)"\]',
 
     # .Get("Key")  /  .RawGet("Key")  /  .GetPlural("Key", ...)
     '\.(?:Get|RawGet|GetPlural)\(\s*"([A-Za-z][A-Za-z0-9_]+)"',
@@ -140,13 +140,24 @@ $patterns = @(
     # ── Именованные параметры ─────────────────────────────────────────────────
 
     # titleKey = "Key"  /  messageKey: "Key"  /  recommendationKey = "Key"
-    '(?i)(?:title|message|recommendation)Key\s*[=:]\s*"([A-Za-z][A-Za-z0-9_]+)"'
+    '(?i)(?:title|message|recommendation)Key\s*[=:]\s*"([A-Za-z][A-Za-z0-9_]+)"',
 
-    # Строковый аргумент на отдельной строке в multiline вызове:
-    # "Auth_SessionExpired_Title",
-    # "Auth_SessionExpired_Message",
+    # ── Ternary / switch expression / standalone строки ───────────────────────
+
+    # Строковый аргумент на отдельной строке в multiline вызове или ternary:
+    #   "Auth_SessionExpired_Title",         ← multiline аргумент
+    #   ? "Notification_NToken_Skipped"      ← ternary true branch
+    #   : "Notification_NToken_Message";     ← ternary false branch
+    #   => "Error_NoAudioDevice",            ← switch expression arm
     # Только PascalCase_With_Underscores — отсеивает LOGIN_REQUIRED и True
-    '^\s*"([A-Z][a-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)+)"\s*,?\s*$',
+    '^\s*(?:[?:,]|=>)?\s*"([A-Z][a-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)+)"\s*[,;]?\s*$',
+
+    # Inline ternary / switch: ключи после ? : =>
+    #   condition ? "Key_A" : "Key_B"
+    #   ex is FooException => "Error_Foo"
+    # [A-Z][a-z] — отсекает ALL_CAPS (LOGIN_REQUIRED)
+    '[?:]\s*"([A-Z][a-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)+)"',
+    '=>\s*"([A-Z][a-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)+)"',
 
     # Первый строковый аргумент в вызове метода: SomeMethod("L10n_Key", ...)
     # [A-Z][a-z] — отсекает ALL_CAPS (LOGIN_REQUIRED, WEB_REMIX)
