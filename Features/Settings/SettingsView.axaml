@@ -472,18 +472,6 @@
                             </ComboBox>
                         </Grid>
 
-                        <!-- Smooth Volume -->
-                        <Grid ColumnDefinitions="*, Auto">
-                            <StackPanel>
-                                <TextBlock Classes="label"
-                                    Text="{Binding L[Settings_SmoothVolume]}" />
-                                <TextBlock Classes="desc"
-                                    Text="{Binding L[Settings_SmoothVolume_Tooltip]}" />
-                            </StackPanel>
-                            <ToggleSwitch Grid.Column="1"
-                                IsChecked="{Binding SmoothVolumeEnabled}" />
-                        </Grid>
-
                         <!-- Target Gain -->
                         <Grid ColumnDefinitions="*, 250, 70">
                             <StackPanel>
@@ -500,12 +488,12 @@
 
                         <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                        <!-- Audio Processing Section -->
+                                              <!-- Audio Processing Section -->
                         <TextBlock Text="{Binding L[Audio_ProcessingSection]}"
                             FontWeight="SemiBold" FontSize="14"
                             Foreground="{DynamicResource TextSecondaryBrush}" />
 
-                        <!-- Audio Normalization -->
+                        <!-- Audio Normalization Toggle -->
                         <Grid ColumnDefinitions="*, Auto">
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal">
@@ -520,6 +508,38 @@
                             </StackPanel>
                             <ToggleSwitch Grid.Column="1"
                                 IsChecked="{Binding AudioNormalizationEnabled}" />
+                        </Grid>
+
+                        <!-- Normalization Target LUFS -->
+                        <Grid ColumnDefinitions="*, 220, 70"
+                              IsEnabled="{Binding AudioNormalizationEnabled}">
+                            <StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_NormalizationTarget]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_NormalizationTarget_Desc]}" />
+                            </StackPanel>
+                            <Slider Grid.Column="1" Minimum="-24" Maximum="-6"
+                                TickFrequency="1" IsSnapToTickEnabled="True"
+                                Value="{Binding NormalizationTargetLufs}" Margin="0,0,10,0" />
+                            <TextBlock Grid.Column="2" Classes="value-label"
+                                Text="{Binding NormalizationTargetLufs, StringFormat='{}{0:F0} LUFS'}" />
+                        </Grid>
+
+                        <!-- Normalization Max Gain -->
+                        <Grid ColumnDefinitions="*, 220, 70"
+                              IsEnabled="{Binding AudioNormalizationEnabled}">
+                            <StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_NormalizationMaxGain]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_NormalizationMaxGain_Desc]}" />
+                            </StackPanel>
+                            <Slider Grid.Column="1" Minimum="1" Maximum="6"
+                                TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                Value="{Binding NormalizationMaxGain}" Margin="0,0,10,0" />
+                            <TextBlock Grid.Column="2" Classes="value-label"
+                                Text="{Binding NormalizationMaxGain, StringFormat='{}{0:F1}x'}" />
                         </Grid>
 
                         <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />

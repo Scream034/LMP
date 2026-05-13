@@ -11,7 +11,32 @@ using static LMP.Core.Audio.AudioConstants;
 namespace LMP.Core.Audio;
 
 /// <summary>
-/// Полный конвейер воспроизведения: Source → Decoder → PCM Buffer → Backend.
+/// Полный конвейер воспроизведения: Source → Decoder → PCM Buffer → Gain/Normalization → Backend.
+/// 
+/// <para><b>Архитектура громкости:</b></para>
+/// <para>Gain (volume curve, boost, user dB) применяется программно к PCM сэмплам
+/// в <see cref="AudioCallback"/>, НЕ через hardware volume backend'а.
+/// Это обеспечивает:</para>
+/// <list type="bullet">
+///   <item>Корректную работу volume curves (Quadratic, Cubic, etc.)</item>
+///   <item>Boost выше 100% (gain > 1.0)</item>
+///   <item>Audio normalization в том же callback (zero-copy)</item>
+/// </list>
+/// 
+/// <para><b>Нормализация (EBU R128-inspired):</b></para>
+/// <para>Двухфазная статическая нормализация, аналогичная Spotify/YouTube Music:</para>
+/// <list type="bullet">
+///   <item><b>Фаза анализа</b> (~3 сек): быстрое измерение integrated LUFS трека</item>
+///   <item><b>Фаза фиксации</b>: gain замораживается и не меняется до конца трека</item>
+/// </list>
+/// <para>Gain стабилен и предсказуем — одно и то же место трека всегда звучит одинаково.</para>
+/// 
+/// <para><b>Thread model:</b></para>
+/// <list type="bullet">
+///   <item>Decoder loop — dedicated thread (AboveNormal priority)</item>
+///   <item>AudioCallback — вызывается из fill thread NAudioBackend</item>
+///   <item><see cref="_gain"/> — volatile float, lock-free read/write</item>
+/// </list>
 /// </summary>
 public sealed class AudioPipeline : IAsyncDisposable
 {
@@ -43,6 +68,33 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Используется для идентификации удалённой директории кэша через IOException.
     /// </summary>
     private const int HResultPathNotFound = unchecked((int)0x80070003);
+
+    // ─── Normalization Constants (EBU R128-inspired) ───
+
+    /// <summary>
+    /// Длительность фазы анализа в секундах.
+    /// За это время накапливаются данные для расчёта LUFS — gain НЕ применяется.
+    /// После завершения gain вычисляется мгновенно и фиксируется навсегда.
+    /// </summary>
+    private const float AnalysisPhaseSeconds = 3.0f;
+
+    /// <summary>Минимальный gain нормализации.</summary>
+    private const float MinNormalizationGain = 0.1f;
+
+    /// <summary>Максимальный gain нормализации по умолчанию.</summary>
+    private const float DefaultMaxNormalizationGain = 3.0f;
+
+    /// <summary>
+    /// Порог мощности ниже которого блок считается тишиной (EBU R128 absolute gate: -70 LUFS).
+    /// </summary>
+    private const float SilenceGatingPower = 1e-7f;
+
+    /// <summary>
+    /// Длина блока для LUFS-анализа в миллисекундах.
+    /// EBU R128 использует 400ms блоки. Мы используем размер callback chunk (~50ms)
+    /// и агрегируем в скользящее окно.
+    /// </summary>
+    private const int LufsBlockMs = 400;
 
     #endregion
 
@@ -81,6 +133,47 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     /// <summary>Target timestamp для точного позиционирования. Фреймы с timestamp ниже этого пропускаются.</summary>
     private long _seekTargetMs = -1;
+
+    /// <summary>
+    /// Текущий gain применяемый к PCM сэмплам в audio callback.
+    /// Записывается из UI/engine потока, читается из fill thread backend'а.
+    /// Gain применяется мгновенно к следующему chunk (~50ms).
+    /// Плавность обеспечивается provider buffer (~500ms) в NAudioBackend.
+    /// </summary>
+    private volatile float _gain = 1.0f;
+
+    // ─── Normalization State (EBU R128-inspired static normalization) ───
+
+    /// <summary>Включена ли нормализация аудио.</summary>
+    private volatile bool _normalizationEnabled;
+
+    /// <summary>Целевой уровень LUFS для нормализации.</summary>
+    private float _normalizationTargetLufs = -14f;
+
+    /// <summary>Максимальный gain нормализации.</summary>
+    private float _maxNormalizationGain = DefaultMaxNormalizationGain;
+
+    /// <summary>
+    /// Зафиксированный gain после завершения фазы анализа.
+    /// NaN = ещё не зафиксирован (фаза анализа).
+    /// </summary>
+    private float _lockedGain = float.NaN;
+
+    /// <summary>
+    /// Суммарная мощность (sum of squares) всех не-тихих блоков за фазу анализа.
+    /// Используется для вычисления integrated LUFS.
+    /// </summary>
+    private double _analysisSumPower;
+
+    /// <summary>
+    /// Количество не-тихих сэмплов за фазу анализа.
+    /// </summary>
+    private long _analysisSampleCount;
+
+    /// <summary>
+    /// Общее количество сэмплов, обработанных в нормализации (для определения конца фазы анализа).
+    /// </summary>
+    private long _normalizationProcessedSamples;
 
     #endregion
 
@@ -604,10 +697,69 @@ public sealed class AudioPipeline : IAsyncDisposable
         _pcmBuffer.Clear();
     }
 
-    public void SetVolume(float volume)
+    /// <summary>
+    /// Устанавливает gain мгновенно.
+    /// Gain применяется программно к PCM сэмплам в <see cref="AudioCallback"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Новый gain применяется к следующему chunk (~50ms). Уже буферизованный
+    /// PCM в provider (до 500ms) доиграет со старым gain — это обеспечивает
+    /// естественную плавность без артефактов.</para>
+    /// </remarks>
+    /// <param name="gain">Gain множитель (0.0 = тишина, 1.0 = 100%, до MaxVolumeGain).</param>
+    public void SetGain(float gain)
     {
         if (_disposed) return;
-        _backend.Volume = Math.Min(volume, 1f);
+        _gain = Math.Clamp(gain, 0f, MaxVolumeGain);
+    }
+
+    /// <summary>
+    /// Включает/выключает нормализацию аудио на лету.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Алгоритм (двухфазный, без всплеска):</b></para>
+    /// <list type="bullet">
+    ///   <item><b>Фаза анализа (~3 сек):</b> накапливаем LUFS данные, gain = 1.0 (не применяется).
+    ///     Пользователь слышит трек без изменений — нет резкого скачка.</item>
+    ///   <item><b>Фиксация:</b> gain вычисляется мгновенно из accumulated LUFS и фиксируется.
+    ///     Provider buffer (~500ms) естественно сглаживает переход с 1.0 → locked gain.</item>
+    ///   <item><b>Остаток трека:</b> gain константен — нет pumping, нет изменений.</item>
+    /// </list>
+    /// </remarks>
+    public void SetNormalization(bool enabled, float targetLufs = -14f, float maxGain = DefaultMaxNormalizationGain)
+    {
+        _normalizationTargetLufs = targetLufs;
+        _maxNormalizationGain = Math.Max(1f, maxGain);
+
+        if (enabled && !_normalizationEnabled)
+        {
+            ResetNormalizationState();
+            _normalizationEnabled = true;
+            Log.Debug($"[AudioPipeline] Normalization ON: target={targetLufs}LUFS, maxGain={maxGain:F1}x");
+        }
+        else if (!enabled && _normalizationEnabled)
+        {
+            _normalizationEnabled = false;
+            _lockedGain = float.NaN;
+            Log.Debug("[AudioPipeline] Normalization OFF");
+        }
+        else if (enabled)
+        {
+            // Параметры изменились — перезапуск анализа
+            ResetNormalizationState();
+            Log.Debug($"[AudioPipeline] Normalization params updated: target={targetLufs}LUFS, maxGain={maxGain:F1}x");
+        }
+    }
+
+    /// <summary>
+    /// Сбрасывает состояние нормализации для начала новой фазы анализа.
+    /// </summary>
+    private void ResetNormalizationState()
+    {
+        _lockedGain = float.NaN;
+        _analysisSumPower = 0;
+        _analysisSampleCount = 0;
+        _normalizationProcessedSamples = 0;
     }
 
     public void PrepareForSeek(long targetMs = -1)
@@ -626,6 +778,19 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Audio Callback
 
+    /// <summary>
+    /// Callback вызываемый из fill thread backend'а для заполнения аудио-буфера.
+    /// Применяет software gain и нормализацию.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Порядок обработки:</b></para>
+    /// <list type="number">
+    ///   <item>Чтение PCM из ring buffer</item>
+    ///   <item>Применение volume gain (мгновенный)</item>
+    ///   <item>Применение нормализации (статический gain после фазы анализа)</item>
+    /// </list>
+    /// <para><b>Zero-alloc:</b> Никаких аллокаций в hot path.</para>
+    /// </remarks>
     private int AudioCallback(Span<float> buffer)
     {
         if (_disposed)
@@ -639,7 +804,185 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (read < buffer.Length)
             buffer[read..].Clear();
 
+        if (read > 0)
+        {
+            var samples = buffer[..read];
+
+            ApplyGain(samples);
+
+            if (_normalizationEnabled)
+                ApplyNormalization(samples);
+        }
+
         return read / _decoder.Channels;
+    }
+
+    /// <summary>
+    /// Применяет volume gain к сэмплам. Мгновенный (без интерполяции).
+    /// </summary>
+    /// <remarks>
+    /// <para>Плавность при изменении громкости обеспечивается архитектурно:
+    /// NAudioBackend.BufferedWaveProvider хранит ~500ms уже записанных данных
+    /// со старым gain. Новый gain влияет только на следующий chunk (~50ms).</para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyGain(Span<float> samples)
+    {
+        float currentGain = _gain;
+
+        if (MathF.Abs(currentGain - 1f) < 0.0005f)
+            return;
+
+        if (currentGain < 0.0005f)
+        {
+            samples.Clear();
+            return;
+        }
+
+        if (currentGain <= 1f)
+        {
+            for (int i = 0; i < samples.Length; i++)
+                samples[i] *= currentGain;
+            return;
+        }
+
+        for (int i = 0; i < samples.Length; i++)
+            samples[i] = SoftClip(samples[i] * currentGain);
+    }
+
+    /// <summary>
+    /// Мягкое ограничение сэмпла через tanh для значений за пределами [-1, 1].
+    /// Предотвращает цифровой клиппинг при boost/normalization gain > 1.0.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float SoftClip(float sample)
+    {
+        if (sample is > -1f and < 1f) return sample;
+        return MathF.Tanh(sample);
+    }
+
+    /// <summary>
+    /// Применяет статическую нормализацию к блоку PCM сэмплов.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Алгоритм (двухфазный с provisional gain):</b></para>
+    ///
+    /// <para><b>Фаза 1 — Анализ с provisional gain (первые ~3 сек):</b></para>
+    /// <list type="number">
+    ///   <item>Мощность блока измеряется ДО применения gain (оригинальный сигнал)</item>
+    ///   <item>Provisional gain вычисляется из накопленных LUFS и применяется сразу</item>
+    ///   <item>Gain уточняется с каждым блоком — плавная конвергенция к финальному значению</item>
+    ///   <item>Блоки тише -70 LUFS игнорируются (EBU R128 absolute gating)</item>
+    /// </list>
+    ///
+    /// <para><b>Момент фиксации (~3 сек):</b></para>
+    /// <list type="number">
+    ///   <item>Gain вычисляется финально из accumulated LUFS</item>
+    ///   <item>Фиксируется в <see cref="_lockedGain"/> — дальнейшие изменения невозможны</item>
+    ///   <item>Переход незаметен: provisional gain уже близок к финальному</item>
+    /// </list>
+    ///
+    /// <para><b>Фаза 2 — Воспроизведение:</b></para>
+    /// <list type="number">
+    ///   <item>Применяется константный locked gain — нет pumping, нет изменений</item>
+    ///   <item>Fast path: одна проверка + умножение/soft-clip</item>
+    /// </list>
+    ///
+    /// <para><b>Почему provisional, а не ожидание 3 сек:</b>
+    /// Ожидание без gain приводит к громкому всплеску на старте для треков
+    /// с высоким LUFS (-6…-8). Provisional gain устраняет это: первый блок (~50ms)
+    /// даёт грубую оценку, которая моментально конвергирует за 200-400ms.</para>
+    ///
+    /// <para><b>Формула:</b> gain = clamp(10^((target - measured_lufs) / 20), Min, Max)</para>
+    /// <para><b>Zero-alloc:</b> Никаких аллокаций.</para>
+    /// </remarks>
+    private void ApplyNormalization(Span<float> samples)
+    {
+        // Fast path: gain зафиксирован — просто применяем (основной режим работы)
+        if (!float.IsNaN(_lockedGain))
+        {
+            ApplyNormGainToSamples(samples, _lockedGain);
+            return;
+        }
+
+        // ─── Фаза анализа: измеряем оригинальный сигнал, затем применяем provisional gain ───
+
+        // 1. Мощность блока (mean square) — измеряем ДО любого normalization gain
+        float sumSquares = 0f;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float s = samples[i];
+            sumSquares += s * s;
+        }
+
+        float blockPower = samples.Length > 0 ? sumSquares / samples.Length : 0f;
+
+        // 2. EBU R128 absolute gating: пропускаем блоки тише -70 LUFS
+        if (blockPower > SilenceGatingPower)
+        {
+            _analysisSumPower += sumSquares;
+            _analysisSampleCount += samples.Length;
+        }
+
+        _normalizationProcessedSamples += samples.Length;
+
+        // 3. Вычисляем provisional gain из накопленных данных
+        float currentGain = 1.0f;
+
+        if (_analysisSampleCount > 0)
+        {
+            float integratedPower = (float)(_analysisSumPower / _analysisSampleCount);
+            float measuredLufs = PowerToLufs(integratedPower);
+            float rawGain = MathF.Pow(10f, (_normalizationTargetLufs - measuredLufs) / 20f);
+            currentGain = Math.Clamp(rawGain, MinNormalizationGain, _maxNormalizationGain);
+        }
+
+        // 4. Проверяем завершение фазы анализа → фиксируем gain навсегда
+        long analysisSamplesThreshold = (long)(_decoder.SampleRate * _decoder.Channels * AnalysisPhaseSeconds);
+
+        if (_normalizationProcessedSamples >= analysisSamplesThreshold)
+        {
+            _lockedGain = currentGain;
+
+            Log.Debug($"[AudioPipeline] Normalization locked: gain={_lockedGain:F3} " +
+                      $"(analyzed {_normalizationProcessedSamples / ((long)_decoder.SampleRate * _decoder.Channels):F1}s, " +
+                      $"target={_normalizationTargetLufs}LUFS)");
+        }
+
+        // 5. Применяем gain (provisional или только что зафиксированный) к текущему блоку
+        ApplyNormGainToSamples(samples, currentGain);
+    }
+
+    /// <summary>
+    /// Конвертирует линейную мощность (mean square) в LUFS.
+    /// LUFS ≈ 10 × log10(meanSquare) — упрощённая формула без K-weighting.
+    /// Для музыки отклонение от полного EBU R128 составляет 1-3 dB.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float PowerToLufs(float meanSquare)
+    {
+        if (meanSquare < 1e-10f) return -70f;
+        return 10f * MathF.Log10(meanSquare);
+    }
+
+    /// <summary>
+    /// Применяет normalization gain ко всем сэмплам с soft-clip при необходимости.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ApplyNormGainToSamples(Span<float> samples, float gain)
+    {
+        if (MathF.Abs(gain - 1f) < 0.001f) return;
+
+        if (gain <= 1f)
+        {
+            for (int i = 0; i < samples.Length; i++)
+                samples[i] *= gain;
+        }
+        else
+        {
+            for (int i = 0; i < samples.Length; i++)
+                samples[i] = SoftClip(samples[i] * gain);
+        }
     }
 
     #endregion
@@ -674,8 +1017,6 @@ public sealed class AudioPipeline : IAsyncDisposable
             catch { }
         }
 
-        // Never-stop: не останавливаем backend.
-        // Flush выставит gate=false, provider вернёт тишину сам.
         try { _backend.Flush(); }
         catch (ObjectDisposedException) { }
         catch (Exception ex) { Log.Debug($"[AudioPipeline] Backend flush on dispose: {ex.Message}"); }

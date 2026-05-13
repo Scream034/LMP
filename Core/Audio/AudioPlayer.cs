@@ -29,6 +29,16 @@ public sealed class AudioPlayerOptions
 
     /// <summary>Конфигурация стриминга (настройки буферизации сети).</summary>
     public StreamingConfig? StreamingConfig { get; init; }
+
+    /// <summary>
+    /// Callback конфигурации pipeline, вызываемый после заполнения буфера,
+    /// строго до открытия gate (<see cref="IPlaybackBackend.ActivateFillLoop"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>Гарантирует что gain и нормализация применены до первого <see cref="AudioPipeline.AudioCallback"/>,
+    /// исключая попадание un-normalized сэмплов в provider buffer.</para>
+    /// </remarks>
+    public Action<AudioPipeline>? OnPipelineConfiguring { get; init; }
 }
 
 /// <summary>
@@ -90,7 +100,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     private volatile AudioPipeline? _activePipeline;
 
     private volatile PlayerState _state = PlayerState.Idle;
-    private volatile float _volume = 1.0f;
     private volatile bool _disposed;
 
     /// <summary>Уникальный ID сессии для отмены устаревших команд. Изменяется через Interlocked.</summary>
@@ -106,16 +115,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     #region Properties
 
     public AudioPlayerEvents Events => _events;
-
-    public float Volume
-    {
-        get => _volume;
-        set
-        {
-            _volume = Math.Clamp(value, 0f, MaxVolumeGain);
-            _activePipeline?.SetVolume(_volume);
-        }
-    }
 
     public TimeSpan Position
     {
@@ -440,7 +439,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
             ct.ThrowIfCancellationRequested();
 
-            pipeline.SetVolume(_volume);
             _events.RaiseStreamInfo(pipeline.StreamInfo);
 
             var replaced = Interlocked.Exchange(ref _activePipeline, pipeline);
@@ -472,6 +470,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             }
 
             ct.ThrowIfCancellationRequested();
+
+            // Gain и нормализация применяются ДО открытия gate.
+            // Это гарантирует что первый AudioCallback уже видит корректные настройки
+            // и un-normalized сэмплы никогда не попадают в provider buffer.
+            _options.OnPipelineConfiguring?.Invoke(pipeline);
 
             pipeline.ActivateFillLoop();
             pipeline.Start();

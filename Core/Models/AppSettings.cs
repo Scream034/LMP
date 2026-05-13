@@ -131,24 +131,21 @@ public sealed class AudioSettings
     public VolumeCurveType VolumeCurve { get; set; } = VolumeCurveType.Quadratic;
 
     /// <summary>
-    /// Плавное изменение громкости (fade при изменении).
-    /// </summary>
-    public bool SmoothVolumeEnabled { get; set; } = false;
-
-    /// <summary>
-    /// Скорость плавного изменения громкости (мс на полный переход).
-    /// </summary>
-    public int SmoothVolumeDurationMs { get; set; } = 150;
-
-    /// <summary>
-    /// Нормализация громкости (выравнивание уровней между треками).
+    /// Нормализация громкости (статическое выравнивание уровней, аналог Spotify/YouTube Music).
     /// </summary>
     public bool NormalizationEnabled { get; set; } = false;
 
     /// <summary>
     /// Целевой уровень нормализации в LUFS.
+    /// Диапазон: -24 (тише) .. -6 (громче). По умолчанию -14 (стандарт Spotify/YouTube Music).
     /// </summary>
     public float NormalizationTargetLufs { get; set; } = -14f;
+
+    /// <summary>
+    /// Максимальный gain нормализации. Ограничивает усиление тихих треков.
+    /// Диапазон: 1.0 (без усиления) .. 6.0. По умолчанию 3.0.
+    /// </summary>
+    public float NormalizationMaxGain { get; set; } = 3.0f;
 
     /// <summary>
     /// Поведение при критических ошибках воспроизведения.
@@ -174,8 +171,6 @@ public sealed class AudioSettings
 
     /// <summary>
     /// Пропускать треки, требующие сложной расшифровки n-токена.
-    /// При включении: если YouTube требует n-token decryption, трек пропускается
-    /// и воспроизводится следующий в очереди.
     /// </summary>
     public bool SkipNTokenTracks { get; set; } = true;
 }

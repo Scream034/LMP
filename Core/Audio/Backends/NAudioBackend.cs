@@ -37,6 +37,13 @@ namespace LMP.Core.Audio.Backends;
 /// backend.Start();                     // _gateOpen=true + fade-in → данные идут в provider
 /// </code>
 ///
+/// <para><b>Gain и Provider Buffer:</b></para>
+/// <para>Gain применяется в pipeline AudioCallback при чтении из ring buffer.
+/// Provider хранит PCM с уже применённым gain. При смене gain новый gain
+/// применяется к следующему chunk (≈50ms). Уже буферизованный PCM в provider
+/// (до 500ms) доиграет со старым gain. Это компромисс:
+/// задержка применения gain ≤ 500ms вместо скачка позиции при flush.</para>
+///
 /// <para><b>Device Loss Detection:</b></para>
 /// Fill loop периодически проверяет <c>waveOut.PlaybackState</c>. Если устройство пропало
 /// во время воспроизведения — устанавливает <c>_deviceLost=true</c> и вызывает
@@ -45,7 +52,7 @@ namespace LMP.Core.Audio.Backends;
 ///
 /// <para><b>NAudio DesiredLatency:</b></para>
 /// Суммарный размер всех waveOut буферов: размер одного = DesiredLatency / NumberOfBuffers.
-/// 300ms / 3 буфера = 100ms на буфер.
+/// 300ms / 3 буфера = 100ms на буфер — стабильный минимум для WaveOutEvent.
 ///
 /// <para><b>Потокобезопасность:</b></para>
 /// <list type="bullet">
@@ -60,11 +67,18 @@ public sealed class NAudioBackend : IPlaybackBackend
 {
     #region Constants
 
-    private const int InternalBufferSeconds = 1;
+    /// <summary>
+    /// Размер provider буфера в секундах.
+    /// 500ms — компромисс между задержкой применения gain (≤500ms)
+    /// и устойчивостью к scheduler jitter. При 1s gain задержка до 1s,
+    /// при 200ms — риск underrun на слабых системах.
+    /// </summary>
+    private const double InternalBufferSeconds = 0.5;
 
     /// <summary>
     /// Суммарный размер waveOut буферов.
-    /// 300ms / 3 буфера = 100ms на буфер — оптимум для медиаплеера.
+    /// 300ms / 3 буфера = 100ms на буфер — стабильный минимум для WaveOutEvent.
+    /// Значения ≤ 100ms дают нестабильность на WASAPI shared mode.
     /// </summary>
     private const int DesiredLatencyMs = 300;
 
@@ -240,6 +254,8 @@ public sealed class NAudioBackend : IPlaybackBackend
         }
         catch (Exception ex)
         {
+            _deviceLost = true;
+            DisposeWaveOutSafe();
             Log.Error($"[NAudioBackend] Failed to open audio device: {ex.Message}");
             throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
         }
@@ -249,19 +265,18 @@ public sealed class NAudioBackend : IPlaybackBackend
 
         try
         {
-            // Never-stop: Play() вызывается один раз здесь.
-            // До первого Start() provider пуст → ReadFully=true → тишина.
             _waveOut!.Play();
         }
         catch (Exception ex)
         {
             StopFillThread();
-            try { _waveOut?.Dispose(); } catch { }
-            _waveOut = null;
+            _deviceLost = true;
+            DisposeWaveOutSafe();
             Log.Error($"[NAudioBackend] Failed to start audio device: {ex.Message}");
             throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
         }
 
+        _deviceLost = false;
         Log.Info($"[NAudioBackend] Initialized (never-stop): {sampleRate}Hz, {channels}ch");
     }
 
@@ -270,13 +285,31 @@ public sealed class NAudioBackend : IPlaybackBackend
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_waveOut == null)
+        if (_waveOut == null || _deviceLost)
         {
             Initialize(sampleRate, channels, dataCallback);
             return;
         }
 
         _callback = dataCallback ?? throw new ArgumentNullException(nameof(dataCallback));
+
+        bool waveOutDead;
+        try
+        {
+            waveOutDead = _waveOut.PlaybackState == NAudio.Wave.PlaybackState.Stopped;
+        }
+        catch (Exception)
+        {
+            waveOutDead = true;
+        }
+
+        if (waveOutDead)
+        {
+            Log.Info("[NAudioBackend] Reinit: waveOut is stopped, forcing slow path");
+            _deviceLost = true;
+            Initialize(sampleRate, channels, dataCallback);
+            return;
+        }
 
         lock (_stateLock)
         {
@@ -290,21 +323,16 @@ public sealed class NAudioBackend : IPlaybackBackend
         Volatile.Write(ref _consecutiveUnderrunCount, 0);
         Interlocked.Increment(ref _flushGeneration);
 
-        if (sampleRate == _sampleRate && channels == _channels && !_deviceLost)
+        if (sampleRate == _sampleRate && channels == _channels)
         {
-            // Fast path: формат совпадает, устройство живо.
-            // waveOut продолжает работать, provider пуст → тишина.
             _provider?.ClearBuffer();
             Log.Info($"[NAudioBackend] Reinit fast path: {sampleRate}Hz, {channels}ch");
             return;
         }
 
-        // Slow path: смена формата ИЛИ устройство было потеряно → пересоздаём waveOut.
-        if (_deviceLost)
-            Log.Info("[NAudioBackend] Reinit slow path: recovering lost device");
-        else
-            Log.Info($"[NAudioBackend] Reinit slow path: " +
-                     $"{_sampleRate}Hz/{_channels}ch → {sampleRate}Hz/{channels}ch");
+        // Slow path: смена формата → пересоздаём waveOut.
+        Log.Info($"[NAudioBackend] Reinit slow path: " +
+                 $"{_sampleRate}Hz/{_channels}ch → {sampleRate}Hz/{channels}ch");
 
         _channels = channels;
         _sampleRate = sampleRate;
@@ -321,6 +349,7 @@ public sealed class NAudioBackend : IPlaybackBackend
         catch (Exception ex)
         {
             _deviceLost = true;
+            DisposeWaveOutSafe();
             Log.Error($"[NAudioBackend] Failed to recreate audio device: {ex.Message}");
             throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
         }
@@ -336,9 +365,8 @@ public sealed class NAudioBackend : IPlaybackBackend
         catch (Exception ex)
         {
             StopFillThread();
-            try { _waveOut?.Dispose(); } catch { }
-            _waveOut = null;
             _deviceLost = true;
+            DisposeWaveOutSafe();
             Log.Error($"[NAudioBackend] Failed to start audio device: {ex.Message}");
             throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
         }
@@ -533,7 +561,7 @@ public sealed class NAudioBackend : IPlaybackBackend
 
                 if (provider.BufferedDuration.TotalSeconds > InternalBufferSeconds * BufferHighWaterMark)
                 {
-                    Thread.Sleep(IdleSleepMs * 2);
+                    Thread.Sleep(IdleSleepMs);
                     continue;
                 }
 
@@ -698,7 +726,7 @@ public sealed class NAudioBackend : IPlaybackBackend
         var format = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
 
         // ReadFully=true (дефолт): возвращает тишину когда буфер пуст.
-        // Обязательное условие never-stop — waveOut никогда не получает 0 байт.
+        // 500ms buffer: gain задержка ≤500ms, достаточно для сглаживания jitter.
         _provider = new BufferedWaveProvider(format)
         {
             BufferDuration = TimeSpan.FromSeconds(InternalBufferSeconds),
@@ -713,6 +741,19 @@ public sealed class NAudioBackend : IPlaybackBackend
 
         _waveOut.Init(_provider);
         _waveOut.Volume = Volume;
+    }
+
+    /// <summary>
+    /// Безопасно освобождает waveOut и provider, обнуляя ссылки.
+    /// Предотвращает ситуацию когда битый waveOut остаётся доступным
+    /// для fast path в <see cref="Reinitialize"/>.
+    /// </summary>
+    private void DisposeWaveOutSafe()
+    {
+        try { _waveOut?.Stop(); } catch { }
+        try { _waveOut?.Dispose(); } catch { }
+        _waveOut = null;
+        _provider = null;
     }
 
     private void AllocateBuffers(int sampleRate, int channels)

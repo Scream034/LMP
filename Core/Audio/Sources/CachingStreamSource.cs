@@ -53,8 +53,8 @@ public sealed partial class CachingStreamSource : IAudioSource
     private readonly int _bitrate;
 
     // ── Derived from config ──
-    private readonly int _chunkSize;
-    private readonly int _totalChunks;
+    private int _chunkSize;
+    private int _totalChunks;
 
     // ── Dependencies ──
     private readonly HttpClient _httpClient;
@@ -196,7 +196,6 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         try
         {
-            // Полный кэш — офлайн
             if (_cacheManager.IsFullyCached(_cacheKey))
             {
                 Log.Info($"[CachingSource] Using fully cached: {_cacheKey}");
@@ -204,12 +203,29 @@ public sealed partial class CachingStreamSource : IAudioSource
                 return await InitializeFromCacheAsync(ct);
             }
 
-            // Создаём/обновляем запись в кэше
             _cacheEntry = _cacheManager.CreateOrUpdate(
                 _cacheKey, _trackId, _url, _contentLength, _format,
                 AudioSourceFactory.GetCodecForFormat(_format),
                 _bitrate,
                 chunkSize: _chunkSize);
+
+
+            // если entry уже имеет данные, синхронизируем _chunkSize и
+            // _totalChunks с реальным разбиением из CacheEntry.
+            if (_cacheEntry.DownloadedChunks > 0 && _cacheEntry.TotalChunks > 0
+                && _cacheEntry.TotalChunks != _totalChunks)
+            {
+                int reconciledChunkSize = _contentLength > 0 && _cacheEntry.TotalChunks > 0
+                    ? (int)Math.Ceiling((double)_contentLength / _cacheEntry.TotalChunks)
+                    : _chunkSize;
+
+                Log.Info($"[CachingSource] ChunkSize reconciled: " +
+                         $"config={_chunkSize}B → cached={reconciledChunkSize}B " +
+                         $"(totalChunks: {_totalChunks}→{_cacheEntry.TotalChunks})");
+
+                _chunkSize = reconciledChunkSize;
+                _totalChunks = _cacheEntry.TotalChunks;
+            }
 
             if (_cacheEntry.DownloadedChunks > 0)
             {
@@ -220,10 +236,8 @@ public sealed partial class CachingStreamSource : IAudioSource
             _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             InitializeFirstEpoch();
 
-            // Начальные чанки для парсинга
             await LoadInitialChunksAsync(_lifetimeCts.Token);
 
-            // Парсер
             _readStream = new AsyncCachingReadStream(this);
             _parser = CreateParser(_readStream);
 
@@ -237,7 +251,6 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             _initialized = true;
 
-            // Фоновый preload
             _preloadTask = Task.Run(
                 () => PreloadLoopAsync(_lifetimeCts.Token), _lifetimeCts.Token);
 

@@ -80,7 +80,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
 
-    public List<LocalizedItem<ImageCachePreset>> ImageCachePresets { get; } = [];
+    public ObservableCollection<LocalizedItem<ImageCachePreset>> ImageCachePresets { get; } = [];
     [Reactive] public LocalizedItem<ImageCachePreset>? SelectedImageCachePreset { get; set; }
     [Reactive] public int MaxBitmapCacheItems { get; set; }
 
@@ -122,13 +122,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public bool RememberTrackFormat { get; set; }
 
     [Reactive] public bool VolumeBoostEnabled { get; set; }
-    [Reactive] public bool SmoothVolumeEnabled { get; set; }
     [Reactive] public bool AudioNormalizationEnabled { get; set; }
+    [Reactive] public float NormalizationTargetLufs { get; set; }
+    [Reactive] public float NormalizationMaxGain { get; set; }
 
-    public List<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
+    public ObservableCollection<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
     [Reactive] public LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
 
-    public List<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
+    public ObservableCollection<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
     [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
     [Reactive] public bool PlayErrorSound { get; set; }
     [Reactive] public bool SkipNTokenTracks { get; set; }
@@ -147,7 +148,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
 
-    public List<LocalizedItem<CloseAction>> CloseActionOptions { get; } = [];
+    public ObservableCollection<LocalizedItem<CloseAction>> CloseActionOptions { get; } = [];
     [Reactive] public LocalizedItem<CloseAction>? SelectedCloseAction { get; set; }
     [Reactive] public bool MinimizeToTray { get; set; }
 
@@ -578,21 +579,37 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.SmoothVolumeEnabled)
+        this.WhenAnyValue(x => x.AudioNormalizationEnabled)
+                   .Skip(1)
+                   .Where(_ => !_isLoadingSettings)
+                   .Subscribe(v =>
+                   {
+                       _library.UpdateSettings(s => s.Audio.NormalizationEnabled = v);
+                       _audio.UpdateAudioSettings();
+                   })
+                   .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.NormalizationTargetLufs)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(v =>
             {
-                _library.UpdateSettings(s => s.Audio.SmoothVolumeEnabled = v);
+                _library.UpdateSettings(s => s.Audio.NormalizationTargetLufs = v);
+                _audio.UpdateAudioSettings();
             })
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.AudioNormalizationEnabled)
+        this.WhenAnyValue(x => x.NormalizationMaxGain)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(v =>
             {
-                _library.UpdateSettings(s => s.Audio.NormalizationEnabled = v);
+                _library.UpdateSettings(s => s.Audio.NormalizationMaxGain = v);
+                _audio.UpdateAudioSettings();
             })
             .DisposeWith(Disposables);
 
@@ -702,8 +719,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
 
             VolumeBoostEnabled = s.Audio.VolumeBoostEnabled;
-            SmoothVolumeEnabled = s.Audio.SmoothVolumeEnabled;
             AudioNormalizationEnabled = s.Audio.NormalizationEnabled;
+            NormalizationTargetLufs = s.Audio.NormalizationTargetLufs;
+            NormalizationMaxGain = s.Audio.NormalizationMaxGain;
             SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
                                   ?? VolumeCurveOptions[1];
 
