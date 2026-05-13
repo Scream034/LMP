@@ -55,7 +55,7 @@ jobs:
       - name: Archive Debug Build
         shell: pwsh
         run: |
-          $debugPath = "bin/Debug/net10.0"
+          $debugPath = "bin/Debug/net11.0"
           if (-not (Test-Path $debugPath)) {
             Write-Error "Debug build folder not found at $debugPath"
             exit 1
