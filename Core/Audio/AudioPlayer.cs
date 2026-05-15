@@ -39,6 +39,13 @@ public sealed class AudioPlayerOptions
     /// исключая попадание un-normalized сэмплов в provider buffer.</para>
     /// </remarks>
     public Action<AudioPipeline>? OnPipelineConfiguring { get; init; }
+
+    /// <summary>
+    /// Callback вызываемый когда gain нормализации зафиксирован (pre-scan или real-time анализ).
+    /// Аргументы: trackId, locked gain. Используется для персистирования в БД.
+    /// Вызывается максимум один раз за трек. Должен быть thread-safe (вызов из fill thread).
+    /// </summary>
+    public Action<string, float>? OnGainLocked { get; init; }
 }
 
 /// <summary>
@@ -418,6 +425,10 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         var ct = linkedCts.Token;
 
         var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
+
+        // Захват locked gain предыдущего трека — fallback для стриминга (когда pre-scan невозможен).
+        float previousLockedGain = oldPipeline?.GetLockedNormalizationGain() ?? 1.0f;
+
         if (oldPipeline != null) await oldPipeline.DisposeAsync();
 
         StopTimers();
@@ -444,6 +455,30 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             var replaced = Interlocked.Exchange(ref _activePipeline, pipeline);
             if (replaced != null) await replaced.DisposeAsync();
 
+            // Gain и нормализация — ДО pre-scan, чтобы SetNormalization включил флаг.
+            // Pre-scan проверяет _normalizationEnabled и работает только если включена.
+            pipeline.SetInitialNormalizationGain(previousLockedGain);
+            _options.OnPipelineConfiguring?.Invoke(pipeline);
+
+            // Pre-scan: полный LUFS анализ файла до старта воспроизведения.
+            // Для local cached files ~50-150ms. Для streaming — skip (CanSeek=false).
+            // После scan: source seeked back, decoder ready, _lockedGain set.
+            // Если scan не удался — fallback на real-time анализ в GetNormalizationGain.
+            await pipeline.PreScanNormalizationAsync(ct);
+
+            // Регистрируем callback для персистирования gain в БД.
+            // Вызывается из fill thread при real-time фиксации, или уже был вызван в pre-scan.
+            // trackId захвачен в замыкании — нет обращения к изменяемому состоянию.
+            var lockedTrackId = cmd.TrackId;
+            if (lockedTrackId != null && _options.OnGainLocked != null)
+            {
+                var gainCallback = _options.OnGainLocked;
+                pipeline.SetGainLockedCallback(g => gainCallback(lockedTrackId, g));
+            }
+
+            ct.ThrowIfCancellationRequested();
+
+            // Seek к позиции ПОСЛЕ pre-scan (pre-scan seeked source back to 0).
             if (cmd.SeekPosition is { TotalMilliseconds: > 0 } seekPos)
             {
                 long seekMs = (long)seekPos.TotalMilliseconds;
@@ -470,11 +505,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             }
 
             ct.ThrowIfCancellationRequested();
-
-            // Gain и нормализация применяются ДО открытия gate.
-            // Это гарантирует что первый AudioCallback уже видит корректные настройки
-            // и un-normalized сэмплы никогда не попадают в provider buffer.
-            _options.OnPipelineConfiguring?.Invoke(pipeline);
 
             pipeline.ActivateFillLoop();
             pipeline.Start();
@@ -613,6 +643,10 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             {
                 int seekThreshold = pipeline.SampleRate * pipeline.Channels * MinSeekResumeBufferMs / 1000;
                 await pipeline.WaitForBufferAsync(seekThreshold, SeekWarmupTimeoutMs, _lifetimeCts.Token);
+
+                // Переприменяем gain (пользователь мог изменить volume во время seek).
+                // SetNormalization НЕ сбрасывает locked gain если параметры не изменились.
+                _options.OnPipelineConfiguring?.Invoke(pipeline);
 
                 pipeline.ActivateFillLoop();
                 pipeline.Start();

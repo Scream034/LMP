@@ -108,9 +108,12 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <summary>
     /// Длина fade envelope в фреймах (на канал).
-    /// 480 frames @ 48kHz = 10ms.
+    /// 2400 frames @ 48kHz = 50ms.
+    /// 50ms достаточно для маскировки gain discontinuities при смене трека,
+    /// при этом не создаёт заметной задержки старта воспроизведения.
+    /// 10ms (480 frames) маскировало только click, но не скачок нормализации.
     /// </summary>
-    private const int FadeFrames = 480;
+    private const int FadeFrames = 2400;
 
     /// <summary>
     /// Количество последовательных underrun после которых логируется предупреждение.

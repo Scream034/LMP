@@ -61,7 +61,7 @@ internal partial class DashManifest
                 .Pipe(WebUtility.UrlDecode);
 
         private bool IsAudioOnly => content.Element("AudioChannelConfiguration") is not null;
-        
+
         public string? MimeType => content.Attribute("mimeType")?.Value;
 
         public string? AudioCodec => IsAudioOnly ? (string?)content.Attribute("codecs") : null;
@@ -71,6 +71,10 @@ internal partial class DashManifest
         public string? AudioLanguageName => null;
 
         public bool? IsAudioLanguageDefault => null;
+
+        /// <inheritdoc cref="IStreamData.LoudnessDb"/>
+        /// <remarks>DASH manifest does not carry loudness metadata.</remarks>
+        public float LoudnessDb => float.NaN;
 
         public string? VideoCodec => IsAudioOnly ? null : (string?)content.Attribute("codecs");
 

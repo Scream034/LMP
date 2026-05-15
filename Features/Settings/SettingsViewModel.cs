@@ -137,6 +137,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     [Reactive] public bool PlayErrorSound { get; set; }
     [Reactive] public bool SkipNTokenTracks { get; set; }
 
+    public ObservableCollection<LocalizedItem<NormalizationMode>> NormalizationModeOptions { get; } = [];
+    [Reactive] public LocalizedItem<NormalizationMode>? SelectedNormalizationMode { get; set; }
+
+    private bool _isRevertingNormalization;
+
     #endregion
 
     #region UI & Behavior
@@ -185,6 +190,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearDownloadsCommand { get; }
+    public ReactiveCommand<Unit, Unit> ShowNormalizationInfoCommand { get; }
 
     #endregion
 
@@ -223,6 +229,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         {
             MemoryCleanupHelper.PerformCleanup(aggressive: true);
         }));
+        ShowNormalizationInfoCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShowNormalizationInfoAsync));
 
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
@@ -469,6 +476,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         CloseActionOptions.Add(new(CloseAction.Ask, SL["CloseAction_Ask"]));
         SelectedCloseAction = CloseActionOptions.FirstOrDefault(x => x.Value == currentCloseAction)
                               ?? CloseActionOptions[2];
+
+        var currentNormMode = SelectedNormalizationMode?.Value ?? _library.Settings.Audio.NormalizationMode;
+        NormalizationModeOptions.Clear();
+        NormalizationModeOptions.Add(new(NormalizationMode.Bidirectional, SL["NormMode_Bidirectional"]));
+        NormalizationModeOptions.Add(new(NormalizationMode.DownwardOnly, SL["NormMode_DownwardOnly"]));
+        SelectedNormalizationMode = NormalizationModeOptions.FirstOrDefault(x => x.Value == currentNormMode)
+                                ?? NormalizationModeOptions[0];
     }
 
     private void SetupSubscriptions()
@@ -671,14 +685,41 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.AudioNormalizationEnabled)
-                   .Skip(1)
-                   .Where(_ => !_isLoadingSettings)
-                   .Subscribe(v =>
-                   {
-                       _library.UpdateSettings(s => s.Audio.NormalizationEnabled = v);
-                       _audio.UpdateAudioSettings();
-                   })
-                   .DisposeWith(Disposables);
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings && !_isRevertingNormalization)
+            .Subscribe(async v =>
+            {
+                if (!v)
+                {
+                    var confirmed = await _dialog.ConfirmAsync(
+                        SL["Settings_NormalizationDisable_Title"],
+                        SL["Settings_NormalizationDisable_Message"],
+                        SL["Common_Disable"],
+                        SL["Common_Cancel"]);
+
+                    if (!confirmed)
+                    {
+                        _isRevertingNormalization = true;
+                        AudioNormalizationEnabled = true;
+                        _isRevertingNormalization = false;
+                        return;
+                    }
+                }
+
+                _library.UpdateSettings(s => s.Audio.NormalizationEnabled = v);
+                _audio.UpdateAudioSettings();
+            })
+            .DisposeWith(Disposables);
+
+        this.WhenAnyValue(x => x.SelectedNormalizationMode)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(m =>
+            {
+                _library.UpdateSettings(s => s.Audio.NormalizationMode = m.Value);
+                _audio.UpdateAudioSettings();
+            })
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.NormalizationTargetLufs)
             .Skip(1)
@@ -821,12 +862,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             AudioNormalizationEnabled = s.Audio.NormalizationEnabled;
             NormalizationTargetLufs = s.Audio.NormalizationTargetLufs;
             NormalizationMaxGain = s.Audio.NormalizationMaxGain;
+            SelectedNormalizationMode = NormalizationModeOptions.FirstOrDefault(
+                x => x.Value == s.Audio.NormalizationMode) ?? NormalizationModeOptions[0];
             SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
-                                  ?? VolumeCurveOptions[1];
+                            ?? VolumeCurveOptions[1];
 
             PlayErrorSound = s.Audio.PlayErrorSound;
             SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
-                                    ?? ErrorBehaviorOptions[0];
+                            ?? ErrorBehaviorOptions[0];
 
             SkipNTokenTracks = s.Audio.SkipNTokenTracks;
 
@@ -835,11 +878,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
             var savedProfile = s.InternetProfile;
             SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == savedProfile)
-                                      ?? InternetProfileOptions[1];
+                            ?? InternetProfileOptions[1];
 
             var savedClient = s.YoutubeClient;
             SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == savedClient)
-                             ?? ClientOptions[0];
+                            ?? ClientOptions[0];
 
             ProxyEnabled = s.Proxy.Enabled;
             ProxyHost = s.Proxy.Host;
@@ -1075,6 +1118,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
 
         UpdateCacheStats();
+    }
+
+    private async Task ShowNormalizationInfoAsync()
+    {
+        await _dialog.ShowInfoAsync(
+            SL["Settings_NormalizationInfo_Title"],
+            SL["Settings_NormalizationInfo_Body"],
+            SL["Common_GotIt"]);
     }
 
     protected override void Dispose(bool disposing)

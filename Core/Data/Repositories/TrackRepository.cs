@@ -208,6 +208,16 @@ public sealed partial class TrackRepository : ITrackRepository
                 .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
     }
 
+    public async Task SaveNormalizationGainAsync(string id, float gain, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+        await ctx.Tracks
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.CachedNormalizationGain, gain)
+                .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+    }
+
     #endregion
 
     #region History
@@ -305,7 +315,9 @@ public sealed partial class TrackRepository : ITrackRepository
         LocalPath = e.LocalPath,
         PreferredContainer = e.PreferredContainer,
         PreferredBitrate = e.PreferredBitrate,
-        RadioSeedId = e.RadioSeedId
+        RadioSeedId = e.RadioSeedId,
+        LoudnessDb = e.LoudnessDb ?? float.NaN,
+        CachedNormalizationGain = e.CachedNormalizationGain ?? float.NaN
     };
 
     private static TrackEntity MapToEntity(TrackInfo m) => new()
@@ -325,7 +337,11 @@ public sealed partial class TrackRepository : ITrackRepository
         LocalPath = m.LocalPath,
         PreferredContainer = m.PreferredContainer,
         PreferredBitrate = m.PreferredBitrate,
-        RadioSeedId = m.RadioSeedId
+        RadioSeedId = m.RadioSeedId,
+        LoudnessDb = float.IsNaN(m.LoudnessDb) || !float.IsFinite(m.LoudnessDb)
+            ? null : m.LoudnessDb,
+        CachedNormalizationGain = float.IsNaN(m.CachedNormalizationGain) || !float.IsFinite(m.CachedNormalizationGain)
+            ? null : m.CachedNormalizationGain
     };
 
     private static void UpdateEntityFromModel(TrackEntity entity, TrackInfo model)
@@ -345,6 +361,13 @@ public sealed partial class TrackRepository : ITrackRepository
         entity.PreferredContainer = model.PreferredContainer ?? entity.PreferredContainer;
         entity.PreferredBitrate = model.PreferredBitrate > 0 ? model.PreferredBitrate : entity.PreferredBitrate;
         entity.RadioSeedId = model.RadioSeedId ?? entity.RadioSeedId;
+
+        // Обновляем только если модель содержит валидные данные
+        if (!float.IsNaN(model.LoudnessDb) && float.IsFinite(model.LoudnessDb))
+            entity.LoudnessDb = model.LoudnessDb;
+
+        if (!float.IsNaN(model.CachedNormalizationGain) && float.IsFinite(model.CachedNormalizationGain))
+            entity.CachedNormalizationGain = model.CachedNormalizationGain;
     }
 
     #endregion

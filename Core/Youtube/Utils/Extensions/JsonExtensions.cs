@@ -88,6 +88,12 @@ internal static class JsonExtensions
                 : null;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public double? GetDoubleOrNull() =>
+            element.ValueKind == JsonValueKind.Number && element.TryGetDouble(out var result)
+                ? result
+                : null;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public JsonElement.ArrayEnumerator? EnumerateArrayOrNull() =>
             element.ValueKind == JsonValueKind.Array ? element.EnumerateArray() : null;
 

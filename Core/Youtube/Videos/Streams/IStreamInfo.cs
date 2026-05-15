@@ -8,29 +8,34 @@ namespace LMP.Core.Youtube.Videos.Streams;
 public interface IStreamInfo
 {
     /// <summary>
-    /// Stream Itag (Format ID).
+    /// Stream Itag (Format ID)
     /// </summary>
     int Itag { get; }
 
     /// <summary>
-    /// Stream URL. Fully decrypted and ready for playback.
+    /// Stream URL. Fully decrypted and ready for playback
     /// </summary>
     string Url { get; }
 
     /// <summary>
-    /// Stream container.
+    /// Stream container
     /// </summary>
     Container Container { get; }
 
     /// <summary>
-    /// Stream size.
+    /// Stream size
     /// </summary>
     FileSize Size { get; }
 
     /// <summary>
-    /// Stream bitrate.
+    /// Stream bitrate
     /// </summary>
     Bitrate Bitrate { get; }
+
+    /// <summary>
+    /// Loudness Db
+    /// </summary>
+    float LoudnessDb { get; }
 }
 
 public static class StreamInfoExtensions

@@ -19,7 +19,7 @@
                        Foreground="{DynamicResource TextPrimaryBrush}" />
 
             <!-- Сообщение -->
-            <ScrollViewer MaxHeight="200"
+            <ScrollViewer MaxHeight="500"
                           VerticalScrollBarVisibility="Auto">
                 <TextBlock Text="{Binding Message}"
                            TextWrapping="Wrap"

@@ -359,6 +359,10 @@ public sealed class LibraryService : IAsyncDisposable
         return filtered;
     }
 
+    /// <summary>Сохраняет вычисленный gain нормализации трека в БД.</summary>
+    public Task SaveTrackNormalizationGainAsync(string trackId, float gain, CancellationToken ct = default) =>
+        _tracks.SaveNormalizationGainAsync(trackId, gain, ct);
+
     #endregion
 
     #region History

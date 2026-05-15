@@ -192,6 +192,50 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
     #endregion
 
+    #region Audio Normalization
+
+    /// <summary>
+    /// Content loudness относительно YouTube reference (-14 LUFS), в dB.
+    /// Получается напрямую из InnerTube API (поле loudnessDb в формате стрима).
+    /// Семантика: положительное = трек громче таргета, YouTube его понижает.
+    /// float.NaN = значение ещё не получено (требуется pre-scan или реальный анализ).
+    /// </summary>
+    /// <remarks>
+    /// Конвертация в linear gain для нормализации:
+    /// <c>gain = MathF.Pow(10f, -LoudnessDb / 20f)</c>
+    /// Пример: LoudnessDb = +3.5 → gain = 0.668 (понижение на 3.5 dB)
+    ///         LoudnessDb = -2.0 → gain = 1.259 (повышение на 2 dB)
+    /// </remarks>
+    public float LoudnessDb { get; set; } = float.NaN;
+
+    /// <summary>
+    /// Закэшированный linear gain нормализации, вычисленный EBU R128 анализом (pre-scan или real-time).
+    /// float.NaN = ещё не вычислен. Загружается из БД, не сериализуется в JSON.
+    /// Приоритет: CachedNormalizationGain > LoudnessDb-derived gain для повторного воспроизведения.
+    /// </summary>
+    [JsonIgnore]
+    public float CachedNormalizationGain { get; set; } = float.NaN;
+
+    /// <summary>Возвращает true если loudness метаданные получены и валидны.</summary>
+    [JsonIgnore]
+    public bool HasLoudnessMetadata => !float.IsNaN(LoudnessDb) && float.IsFinite(LoudnessDb);
+
+    /// <summary>Возвращает true если gain нормализации уже вычислен и закэширован в БД.</summary>
+    [JsonIgnore]
+    public bool HasCachedNormalizationGain =>
+        !float.IsNaN(CachedNormalizationGain) && float.IsFinite(CachedNormalizationGain);
+
+    /// <summary>
+    /// Вычисляет linear gain нормализации из loudness метаданных YouTube.
+    /// </summary>
+    /// <returns>Linear gain множитель, или 1.0f если метаданные отсутствуют.</returns>
+    [JsonIgnore]
+    public float NormalizationGain => HasLoudnessMetadata
+        ? MathF.Pow(10f, -LoudnessDb / 20f)
+        : 1.0f;
+
+    #endregion
+
     #region Constructors
 
     public TrackInfo() { }

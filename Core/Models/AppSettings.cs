@@ -87,6 +87,24 @@ public enum AudioQualityPreference
     Standard
 }
 
+/// <summary>
+/// Режим нормализации громкости.
+/// </summary>
+public enum NormalizationMode
+{
+    /// <summary>
+    /// Двусторонняя нормализация: тихие треки усиливаются до таргета, громкие понижаются.
+    /// Поведение аналогично Spotify — консистентная громкость независимо от источника.
+    /// </summary>
+    Bidirectional,
+
+    /// <summary>
+    /// Односторонняя нормализация: только понижение треков громче таргета.
+    /// Тихие треки остаются без изменений. Поведение аналогично YouTube.
+    /// </summary>
+    DownwardOnly
+}
+
 public sealed class ProxySettings
 {
     public bool Enabled { get; set; } = false;
@@ -146,7 +164,7 @@ public sealed class AudioSettings
     /// <summary>
     /// Нормализация громкости (статическое выравнивание уровней, аналог Spotify/YouTube Music).
     /// </summary>
-    public bool NormalizationEnabled { get; set; } = false;
+    public bool NormalizationEnabled { get; set; } = true;
 
     /// <summary>
     /// Целевой уровень нормализации в LUFS.
@@ -159,6 +177,15 @@ public sealed class AudioSettings
     /// Диапазон: 1.0 (без усиления) .. 6.0. По умолчанию 3.0.
     /// </summary>
     public float NormalizationMaxGain { get; set; } = 3.0f;
+
+    /// <summary>
+    /// Режим нормализации громкости.
+    /// <para><b>Bidirectional</b> (по умолчанию): усиливает тихие и понижает громкие треки.
+    /// Обеспечивает одинаковую громкость при любом контенте.</para>
+    /// <para><b>DownwardOnly</b>: только понижение громких треков, как на YouTube.
+    /// Тихие треки воспроизводятся на исходном уровне.</para>
+    /// </summary>
+    public NormalizationMode NormalizationMode { get; set; } = NormalizationMode.Bidirectional;
 
     /// <summary>
     /// Поведение при критических ошибках воспроизведения.

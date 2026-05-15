@@ -215,7 +215,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             PositionUpdateInterval = TimeSpan.FromMilliseconds(200),
             MaxRetryAttempts = 3,
             UseNullBackend = false,
-            OnPipelineConfiguring = ConfigurePipelineBeforeStart  // ← новый колбэк
+            OnPipelineConfiguring = ConfigurePipelineBeforeStart,
+            OnGainLocked = HandleGainLocked
         });
 
         SubscribeToPlayerEvents();
@@ -239,6 +240,15 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// после заполнения буфера, строго до <see cref="IPlaybackBackend.ActivateFillLoop"/>.
     /// Гарантирует отсутствие громкого всплеска нормализации на старте.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Порядок нормализации (приоритет по убыванию):</b></para>
+    /// <list type="number">
+    ///   <item>DB-кеш (<see cref="TrackInfo.CachedNormalizationGain"/>) — мгновенно, без скана.</item>
+    ///   <item>YouTube loudness metadata (<see cref="TrackInfo.LoudnessDb"/>) — мгновенно.</item>
+    ///   <item>Pre-scan (EBU R128, до 120с файла) — ~50-150ms, только если CanSeek.</item>
+    ///   <item>Real-time анализ — fallback для стриминга без кеша.</item>
+    /// </list>
+    /// </remarks>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline)
     {
         var settings = _library.Settings;
@@ -257,7 +267,25 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         pipeline.SetNormalization(
             audioSettings.NormalizationEnabled,
             audioSettings.NormalizationTargetLufs,
-            audioSettings.NormalizationMaxGain);
+            audioSettings.NormalizationMaxGain,
+            audioSettings.NormalizationMode);
+
+        var track = CurrentTrack;
+        if (track == null || !audioSettings.NormalizationEnabled) return;
+
+        // Приоритет 1: DB-кеш — нет скана, нет сети, мгновенный старт.
+        if (track.HasCachedNormalizationGain)
+        {
+            pipeline.SetCachedGain(track.CachedNormalizationGain);
+            return;
+        }
+
+        // Приоритет 2: YouTube metadata — конвертируем в gain и фиксируем.
+        if (track.HasLoudnessMetadata)
+            pipeline.SetLoudnessMetadata(track.LoudnessDb);
+
+        // Нет кеша и нет metadata → pre-scan (CanSeek) или real-time (streaming).
+        // Gain locked callback установлен в HandlePlayAsync после этого вызова.
     }
 
     private void SubscribeToPlayerEvents()
@@ -447,6 +475,33 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     #endregion
 
     #region Internal Playback
+
+    /// <summary>
+    /// Вызывается при фиксации gain нормализации (из fill thread или pre-scan).
+    /// Сохраняет gain в БД для ускорения следующего воспроизведения этого трека.
+    /// Fire-and-forget — потеря gain при crash некритична (пересканируется при следующем запуске).
+    /// </summary>
+    private void HandleGainLocked(string trackId, float gain)
+    {
+        // Обновляем in-memory модель для немедленного использования в текущей сессии
+        var track = CurrentTrack;
+        if (track?.Id == trackId)
+            track.CachedNormalizationGain = gain;
+
+        // Персистируем асинхронно — не блокируем fill thread
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _library.SaveTrackNormalizationGainAsync(trackId, gain, _lifetimeCts.Token);
+                Log.Debug($"[AudioEngine] Gain persisted: trackId={trackId}, gain={gain:F3}x");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Warn($"[AudioEngine] Failed to persist gain for {trackId}: {ex.Message}");
+            }
+        });
+    }
 
     private bool TryMoveNextSkippingTrack(string? skippedTrackId)
     {
@@ -946,6 +1001,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>
     /// Пробрасывает настройки нормализации в активный pipeline.
+    /// Переприменяет YouTube loudness metadata после сброса, вызванного
+    /// изменением параметров или toggle OFF→ON, предотвращая повторный EBU R128 анализ.
     /// </summary>
     private void ApplyNormalizationToPipeline()
     {
@@ -956,7 +1013,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         pipeline.SetNormalization(
             audioSettings.NormalizationEnabled,
             audioSettings.NormalizationTargetLufs,
-            audioSettings.NormalizationMaxGain);
+            audioSettings.NormalizationMaxGain,
+            audioSettings.NormalizationMode);
+
+        var track = CurrentTrack;
+        if (track?.HasLoudnessMetadata == true)
+            pipeline.SetLoudnessMetadata(track.LoudnessDb);
+        else if (track?.HasCachedNormalizationGain == true)
+            pipeline.SetCachedGain(track.CachedNormalizationGain);
     }
 
     /// <summary>

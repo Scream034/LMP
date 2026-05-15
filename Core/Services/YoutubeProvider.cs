@@ -808,6 +808,12 @@ public partial class YoutubeProvider : IDisposable
                             track.IsHlsOnly = false;
                             track.HlsManifestUrl = null;
 
+                            // Обновляем loudness только если InnerTube вернул валидное значение.
+                            // Не перезаписываем уже известные метаданные (например, из БД или pre-scan).
+                            var loudness = selectedStream.LoudnessDb;
+                            if (!float.IsNaN(loudness) && float.IsFinite(loudness) && !track.HasLoudnessMetadata)
+                                track.LoudnessDb = loudness;
+
                             return (url, size, bitrate, codec, container);
                         }
                     }

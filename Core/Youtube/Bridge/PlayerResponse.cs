@@ -347,6 +347,13 @@ internal partial class PlayerResponse
                 ?.GetPropertyOrNull("audioIsDefault")
                 ?.GetBooleanOrNull();
 
+        /// <inheritdoc cref="IStreamData.LoudnessDb"/>
+        public float LoudnessDb =>
+            _content
+                .GetPropertyOrNull("loudnessDb")
+                ?.GetDoubleOrNull()
+                ?.Pipe(static d => (float)d) ?? float.NaN;
+
         public string? VideoCodec
         {
             get

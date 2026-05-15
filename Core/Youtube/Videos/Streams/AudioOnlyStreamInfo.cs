@@ -15,7 +15,8 @@ public class AudioOnlyStreamInfo(
     string audioCodec,
     Language? audioLanguage,
     bool? isAudioLanguageDefault,
-    bool hasEncryptedNToken
+    bool hasEncryptedNToken,
+    float loudnessDb = float.NaN
 ) : IAudioStreamInfo
 {
     /// <inheritdoc />
@@ -43,12 +44,15 @@ public class AudioOnlyStreamInfo(
     public bool? IsAudioLanguageDefault { get; } = isAudioLanguageDefault;
 
     /// <inheritdoc />
+    public bool HasEncryptedNToken { get; } = hasEncryptedNToken;
+
+    /// <inheritdoc />
+    public float LoudnessDb { get; } = loudnessDb;
+
+    /// <inheritdoc />
     [ExcludeFromCodeCoverage]
     public override string ToString() =>
         AudioLanguage is not null
             ? $"Audio-only ({Container} | {AudioLanguage})"
             : $"Audio-only ({Container})";
-
-    /// <inheritdoc />
-    public bool HasEncryptedNToken { get; } = hasEncryptedNToken;
 }

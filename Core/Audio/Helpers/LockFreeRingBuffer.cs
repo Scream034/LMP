@@ -238,11 +238,12 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
     /// <remarks>
     /// НЕ потокобезопасно для concurrent read/write.
     /// Безопасно вызывать между StopDecoding и StartDecoding.
+    /// Volatile.Write гарантирует visibility новых значений Head/Tail для обоих потоков.
     /// </remarks>
     public void Clear()
     {
-        _producer.Head = 0;
-        _consumer.Tail = 0;
+        Volatile.Write(ref _producer.Head, 0);
+        Volatile.Write(ref _consumer.Tail, 0);
         _consumer.CachedHead = 0;
         _producer.CachedTail = 0;
     }

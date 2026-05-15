@@ -206,7 +206,8 @@ public sealed class StreamClient
                 audioCodec,
                 audioLanguage,
                 streamData.IsAudioLanguageDefault,
-                hasEncryptedNToken);
+                hasEncryptedNToken,
+                streamData.LoudnessDb);
         }
     }
 

@@ -27,6 +27,12 @@ public static class DatabaseExtensions
         await AddColumnIfNotExistsAsync(context,
             "PlaylistTracks", "SetVideoId", "TEXT", ct);
 
+        await AddColumnIfNotExistsAsync(context,
+            "Tracks", "LoudnessDb", "REAL", ct);
+
+        await AddColumnIfNotExistsAsync(context,
+            "Tracks", "CachedNormalizationGain", "REAL", ct);
+
         Log.Info("[DB] Schema migration complete");
     }
 

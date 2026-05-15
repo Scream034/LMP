@@ -607,21 +607,47 @@
                             FontWeight="SemiBold" FontSize="14"
                             Foreground="{DynamicResource TextSecondaryBrush}" />
 
-                        <!-- Audio Normalization Toggle -->
-                        <Grid ColumnDefinitions="*, Auto">
+                        <!-- Audio Normalization Toggle + How it works -->
+                        <Grid ColumnDefinitions="*, Auto, Auto">
                             <StackPanel>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Classes="label"
-                                        Text="{Binding L[Settings_AudioNormalization]}" />
-                                    <Border Classes="feature-badge experimental">
-                                        <TextBlock Text="BETA" />
-                                    </Border>
-                                </StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_AudioNormalization]}" />
                                 <TextBlock Classes="desc"
                                     Text="{Binding L[Settings_AudioNormalization_Tooltip]}" />
                             </StackPanel>
-                            <ToggleSwitch Grid.Column="1"
+                            <Button Grid.Column="1"
+                                Classes="transparent-btn"
+                                Command="{Binding ShowNormalizationInfoCommand}"
+                                Margin="0,0,12,0"
+                                VerticalAlignment="Center"
+                                ToolTip.Tip="{Binding L[Settings_NormalizationHowItWorks]}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <PathIcon Data="{StaticResource Icon.AlertCircle}"
+                                        Width="16" Height="16"
+                                        Foreground="{DynamicResource AccentBrush}" />
+                                    <TextBlock Text="{Binding L[Settings_NormalizationHowItWorks]}"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        FontSize="12" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <ToggleSwitch Grid.Column="2"
                                 IsChecked="{Binding AudioNormalizationEnabled}" />
+                        </Grid>
+
+                        <!-- Normalization Mode -->
+                        <Grid ColumnDefinitions="*, Auto"
+                            IsEnabled="{Binding AudioNormalizationEnabled}">
+                            <StackPanel>
+                                <TextBlock Classes="label"
+                                    Text="{Binding L[Settings_NormalizationMode]}" />
+                                <TextBlock Classes="desc"
+                                    Text="{Binding L[Settings_NormalizationMode_Desc]}" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1"
+                                ItemsSource="{Binding NormalizationModeOptions}"
+                                SelectedItem="{Binding SelectedNormalizationMode}"
+                                DisplayMemberBinding="{Binding Name}"
+                                MinWidth="260" />
                         </Grid>
 
                         <!-- Normalization Target LUFS -->
@@ -639,6 +665,22 @@
                             <TextBlock Grid.Column="2" Classes="value-label"
                                 Text="{Binding NormalizationTargetLufs, StringFormat='{}{0:F0} LUFS'}" />
                         </Grid>
+
+                        <!-- LUFS YouTube metadata note -->
+                        <Border Background="{DynamicResource BgElevatedBrush}"
+                            CornerRadius="6" Padding="12,10" Margin="0,0,0,4"
+                            IsVisible="{Binding AudioNormalizationEnabled}">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <PathIcon Data="{StaticResource Icon.Info}"
+                                    Width="16" Height="16"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    VerticalAlignment="Top" Margin="0,2,0,0" />
+                                <TextBlock Text="{Binding L[Settings_NormalizationTarget_Note]}"
+                                    Foreground="{DynamicResource TextSecondaryBrush}"
+                                    FontSize="12" TextWrapping="Wrap"
+                                    MaxWidth="600" />
+                            </StackPanel>
+                        </Border>
 
                         <!-- Normalization Max Gain -->
                         <Grid ColumnDefinitions="*, 220, 70"

@@ -76,6 +76,7 @@ Core/Audio/
  Helpers/
   ConcurrentBitArray.cs
   FrameBuffer.cs
+  KWeightingFilter.cs
   LockFreeRingBuffer.cs
   WebMParser.cs
  Http/SharedHttpClient.cs
