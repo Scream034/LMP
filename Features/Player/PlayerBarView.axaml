@@ -3,7 +3,6 @@
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:asyncImage="using:AsyncImageLoader"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:vm="using:LMP.Features.Player"
     xmlns:controls="using:LMP.UI.Controls"
     x:CompileBindings="True"
@@ -185,14 +184,10 @@
                     BoxShadow="0 2 8 0 #60000000"
                     CornerRadius="4">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <mi:MaterialIcon
-                            Width="14" Height="14"
+                        <PathIcon Width="14" Height="14"
                             Foreground="{DynamicResource AccentBrush}"
-                            Kind="InformationOutline" />
-                        <TextBlock
-                            Name="SeekHintText"
-                            FontSize="11"
-                            FontWeight="SemiBold"
+                            Data="{StaticResource Icon.InformationOutline}" />
+                        <TextBlock Name="SeekHintText" FontSize="11" FontWeight="SemiBold"
                             Foreground="{DynamicResource TextPrimaryBrush}" />
                     </StackPanel>
                 </Border>
@@ -211,240 +206,322 @@
                     Orientation="Horizontal"
                     Spacing="2">
 
-                    <!-- Shuffle: ЛКМ = shuffle now, ПКМ = toggle auto-shuffle -->
-                    <Panel>
-                        <Button
-                            x:Name="ShuffleButton"
-                            Width="40" Height="40"
-                            Classes="playback-btn"
-                            Classes.active="{Binding IsShuffleAnimating}"
-                            Classes.auto-enabled="{Binding AutoShuffleEnabled}"
-                            Command="{Binding ShuffleQueueCommand}"
-                            CornerRadius="20"
-                            PointerPressed="OnShuffleButtonPressed">
-                            <!-- Стилизованный ToolTip для hover (современный дизайн) -->
-                            <ToolTip.Tip>
-                                <StackPanel Spacing="4" MaxWidth="200">
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Border
-                                            Width="20" Height="20"
-                                            CornerRadius="10"
-                                            Background="{DynamicResource AccentBrush}"
-                                            Classes.shuffle-active="{Binding AutoShuffleEnabled}">
-                                            <Border.Styles>
-                                                <Style Selector="Border">
-                                                    <Setter Property="Opacity" Value="0.3" />
-                                                </Style>
-                                                <Style Selector="Border.shuffle-active">
-                                                    <Setter Property="Opacity" Value="1" />
-                                                </Style>
-                                            </Border.Styles>
-                                            <mi:MaterialIcon
-                                                Width="12" Height="12"
-                                                Foreground="{DynamicResource AccentButtonTextBrush}"
-                                                Kind="Shuffle"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center" />
-                                        </Border>
-                                        <TextBlock
-                                            FontSize="13"
-                                            FontWeight="SemiBold"
-                                            Foreground="{DynamicResource TextPrimaryBrush}"
-                                            Text="{Binding ShuffleTooltip}"
-                                            VerticalAlignment="Center" />
-                                    </StackPanel>
-                                    <TextBlock
-                                        FontSize="11"
-                                        Foreground="{DynamicResource TextMutedBrush}"
-                                        Text="{Binding L[Player_Shuffle_Hint]}"
-                                        TextWrapping="Wrap" />
-                                </StackPanel>
-                            </ToolTip.Tip>
-                            <ToolTip.Placement>Top</ToolTip.Placement>
-                            <ToolTip.VerticalOffset>-6</ToolTip.VerticalOffset>
-                            <Panel>
-                                <mi:MaterialIcon Width="18" Height="18" Kind="Shuffle" />
-                                <!-- Индикатор auto-shuffle (точка) -->
-                                <Ellipse
-                                    Width="6" Height="6"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Bottom"
-                                    Margin="0,0,4,4"
-                                    Fill="{DynamicResource AccentBrush}"
-                                    IsVisible="{Binding AutoShuffleEnabled}" />
-                            </Panel>
-                        </Button>
+                    <!-- Shuffle Button -->
+                    <Button x:Name="ShuffleButton" Width="40" Height="40"
+                        Classes="playback-btn"
+                        Classes.active="{Binding IsShuffleAnimating}"
+                        Classes.auto-enabled="{Binding AutoShuffleEnabled}"
+                        Command="{Binding ShuffleQueueCommand}"
+                        CornerRadius="20"
+                        PointerEntered="OnShuffleButtonEntered"
+                        PointerExited="OnShuffleButtonExited"
+                        PointerPressed="OnShuffleButtonPressed">
+                        <Button.Styles>
+                            <!-- LMB: scale-bounce на контейнере -->
+                            <Style Selector="Button.active Panel.shuffle-content">
+                                <Style.Animations>
+                                    <Animation Duration="0:0:0.32" FillMode="None"
+                                        Easing="BackEaseOut">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="ScaleTransform.ScaleX" Value="1" />
+                                            <Setter Property="ScaleTransform.ScaleY" Value="1" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="28%">
+                                            <Setter Property="ScaleTransform.ScaleX" Value="0.68" />
+                                            <Setter Property="ScaleTransform.ScaleY" Value="0.68" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="ScaleTransform.ScaleX" Value="1" />
+                                            <Setter Property="ScaleTransform.ScaleY" Value="1" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
 
-                        <!-- Hint Popup (показывается при ПКМ toggle) -->
-                        <Popup
-                            HorizontalOffset="-40"
-                            IsLightDismissEnabled="False"
-                            IsOpen="{Binding IsShuffleHintVisible}"
-                            Placement="Top"
-                            PlacementTarget="{Binding #ShuffleButton}"
-                            VerticalOffset="-8">
-                            <Border
-                                Padding="10,8"
-                                Background="{DynamicResource BgElevatedBrush}"
-                                BorderBrush="{DynamicResource BgHighlightBrush}"
-                                BorderThickness="1"
-                                BoxShadow="0 4 16 0 #50000000"
-                                CornerRadius="8">
-                                <StackPanel Spacing="4">
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Border
-                                            Width="24" Height="24"
-                                            CornerRadius="12"
-                                            Background="{DynamicResource AccentBrush}"
-                                            Classes.shuffle-active="{Binding AutoShuffleEnabled}">
-                                            <Border.Styles>
-                                                <Style Selector="Border">
-                                                    <Setter Property="Opacity" Value="0.3" />
-                                                </Style>
-                                                <Style Selector="Border.shuffle-active">
-                                                    <Setter Property="Opacity" Value="1" />
-                                                </Style>
-                                            </Border.Styles>
-                                            <mi:MaterialIcon
-                                                Width="14" Height="14"
-                                                Foreground="{DynamicResource AccentButtonTextBrush}"
-                                                Kind="Shuffle"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center" />
-                                        </Border>
-                                        <TextBlock
-                                            FontSize="13"
-                                            FontWeight="SemiBold"
-                                            Foreground="{DynamicResource TextPrimaryBrush}"
-                                            Text="{Binding ShuffleHintText}"
-                                            VerticalAlignment="Center" />
-                                    </StackPanel>
-                                    <TextBlock
-                                        FontSize="11"
-                                        Foreground="{DynamicResource TextMutedBrush}"
-                                        Text="{Binding L[Player_Shuffle_Hint]}"
-                                        TextWrapping="Wrap"
-                                        MaxWidth="180" />
+                            <!-- LMB: акцентный flash -->
+                            <Style Selector="Button.active PathIcon.shuffle-flash">
+                                <Style.Animations>
+                                    <Animation Duration="0:0:0.32" FillMode="None"
+                                        Easing="CubicEaseOut">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="Opacity" Value="0" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="20%">
+                                            <Setter Property="Opacity" Value="1" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="65%">
+                                            <Setter Property="Opacity" Value="1" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="Opacity" Value="0" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
+
+                            <!-- RMB: normal уходит — только Opacity -->
+                            <Style Selector="Button.auto-enabled Panel.shuffle-normal">
+                                <Style.Animations>
+                                    <Animation Duration="0:0:0.15" FillMode="Forward"
+                                        Easing="QuadraticEaseIn">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="Opacity" Value="1" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="Opacity" Value="0" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
+
+                            <!-- RMB: normal появляется — только Opacity -->
+                            <Style Selector="Button:not(.auto-enabled) Panel.shuffle-normal">
+                                <Style.Animations>
+                                    <Animation Duration="0:0:0.20" FillMode="Forward"
+                                        Easing="QuadraticEaseOut">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="Opacity" Value="0" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="Opacity" Value="1" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
+
+                            <!-- RMB: auto уходит — только Opacity -->
+                            <Style Selector="Button:not(.auto-enabled) Panel.shuffle-auto">
+                                <Style.Animations>
+                                    <Animation Duration="0:0:0.15" FillMode="Forward"
+                                        Easing="QuadraticEaseIn">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="Opacity" Value="1" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="Opacity" Value="0" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
+
+                            <!-- RMB: auto появляется — только Opacity -->
+                            <Style Selector="Button.auto-enabled Panel.shuffle-auto">
+                                <Style.Animations>
+                                    <Animation Duration="0:0:0.20" FillMode="Forward"
+                                        Easing="QuadraticEaseOut">
+                                        <KeyFrame Cue="0%">
+                                            <Setter Property="Opacity" Value="0" />
+                                        </KeyFrame>
+                                        <KeyFrame Cue="100%">
+                                            <Setter Property="Opacity" Value="1" />
+                                        </KeyFrame>
+                                    </Animation>
+                                </Style.Animations>
+                            </Style>
+                        </Button.Styles>
+
+                        <Panel Classes="shuffle-content"
+                            Width="18" Height="18"
+                            RenderTransformOrigin="0.5,0.5">
+                            <Panel.RenderTransform>
+                                <ScaleTransform ScaleX="1" ScaleY="1" />
+                            </Panel.RenderTransform>
+
+                            <!-- Обычный Shuffle -->
+                            <Panel Classes="shuffle-normal"
+                                Width="18" Height="18"
+                                IsVisible="{Binding !AutoShuffleEnabled}">
+                                <PathIcon Width="18" Height="18"
+                                    Data="{StaticResource Icon.Shuffle}" />
+                            </Panel>
+
+                            <!-- ShuffleAuto -->
+                            <Panel Classes="shuffle-auto"
+                                Width="18" Height="18"
+                                IsVisible="{Binding AutoShuffleEnabled}">
+                                <PathIcon Width="18" Height="18"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    Data="{StaticResource Icon.ShuffleAuto}" />
+                            </Panel>
+
+                            <PathIcon Classes="shuffle-flash"
+                                Width="18" Height="18"
+                                Opacity="0"
+                                Foreground="{DynamicResource AccentBrush}"
+                                Data="{StaticResource Icon.Shuffle}"
+                                IsVisible="{Binding !AutoShuffleEnabled}" />
+                            <PathIcon Classes="shuffle-flash"
+                                Width="18" Height="18"
+                                Opacity="0"
+                                Foreground="{DynamicResource AccentBrush}"
+                                Data="{StaticResource Icon.ShuffleAuto}"
+                                IsVisible="{Binding AutoShuffleEnabled}" />
+                        </Panel>
+                    </Button>
+
+                    <Popup x:Name="ShufflePopup"
+                        HorizontalOffset="-40"
+                        IsLightDismissEnabled="False"
+                        Placement="Top"
+                        PlacementTarget="{Binding #ShuffleButton}"
+                        Topmost="True"
+                        VerticalOffset="-8">
+                        <Border Padding="10,7"
+                            Background="{DynamicResource BgElevatedBrush}"
+                            BorderBrush="{DynamicResource BgHighlightBrush}"
+                            BorderThickness="1"
+                            BoxShadow="0 4 16 0 #50000000"
+                            CornerRadius="8">
+                            <StackPanel Spacing="3" MinWidth="160">
+                                <StackPanel Orientation="Horizontal" Spacing="6"
+                                    VerticalAlignment="Center">
+                                    <PathIcon Width="13" Height="13" VerticalAlignment="Center"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Data="{StaticResource Icon.ShuffleAuto}"
+                                        IsVisible="{Binding AutoShuffleEnabled}" />
+                                    <PathIcon Width="13" Height="13" VerticalAlignment="Center"
+                                        Foreground="{DynamicResource TextSecondaryBrush}"
+                                        Data="{StaticResource Icon.Shuffle}"
+                                        IsVisible="{Binding !AutoShuffleEnabled}" />
+                                    <TextBlock FontSize="13" FontWeight="SemiBold"
+                                        VerticalAlignment="Center"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Text="{Binding ShuffleTooltip}" />
                                 </StackPanel>
-                            </Border>
-                        </Popup>
-                    </Panel>
+                                <TextBlock FontSize="11"
+                                    Foreground="{DynamicResource TextMutedBrush}"
+                                    Text="{Binding L[Player_Shuffle_Hint]}" />
+                            </StackPanel>
+                        </Border>
+                    </Popup>
 
                     <!-- Previous -->
-                    <Button
-                        Width="40" Height="40"
-                        Classes="playback-btn"
-                        Command="{Binding PreviousCommand}"
-                        CornerRadius="20"
+                    <Button Width="40" Height="40" Classes="playback-btn"
+                        Command="{Binding PreviousCommand}" CornerRadius="20"
                         ToolTip.Tip="{Binding PreviousTooltip}"
-                        ToolTip.Placement="Top"
-                        ToolTip.VerticalOffset="-6">
-                        <mi:MaterialIcon Width="24" Height="24" Kind="SkipPrevious" />
+                        ToolTip.Placement="Top" ToolTip.VerticalOffset="-6">
+                        <PathIcon Width="20" Height="20" Data="{StaticResource Icon.SkipPrevious}" />
                     </Button>
 
                     <!-- Play/Pause -->
-                    <Button
-                        Width="52" Height="52"
-                        Classes="playback-btn-main"
-                        Command="{Binding PlayPauseCommand}"
-                        CornerRadius="26"
+                    <Button Width="52" Height="52" Classes="playback-btn-main"
+                        Command="{Binding PlayPauseCommand}" CornerRadius="26"
                         ToolTip.Tip="{Binding PlayPauseTooltip}"
-                        ToolTip.Placement="Top"
-                        ToolTip.VerticalOffset="-6">
+                        ToolTip.Placement="Top" ToolTip.VerticalOffset="-6">
                         <Panel>
-                            <mi:MaterialIcon Width="30" Height="30"
-                                IsVisible="{Binding IsPlaying}" Kind="Pause" />
-                            <mi:MaterialIcon Width="30" Height="30"
-                                IsVisible="{Binding IsPaused}" Kind="Play" />
+                            <PathIcon Width="26" Height="26"
+                                Data="{StaticResource Icon.Pause}"
+                                IsVisible="{Binding IsPlaying}" />
+                            <PathIcon Width="26" Height="26"
+                                Data="{StaticResource Icon.Play}"
+                                IsVisible="{Binding IsPaused}" />
                         </Panel>
                     </Button>
 
                     <!-- Next -->
-                    <Button
-                        Width="40" Height="40"
-                        Classes="playback-btn"
-                        Command="{Binding NextCommand}"
-                        CornerRadius="20"
+                    <Button Width="40" Height="40" Classes="playback-btn"
+                        Command="{Binding NextCommand}" CornerRadius="20"
                         ToolTip.Tip="{Binding NextTooltip}"
-                        ToolTip.Placement="Top"
-                        ToolTip.VerticalOffset="-6">
-                        <mi:MaterialIcon Width="24" Height="24" Kind="SkipNext" />
+                        ToolTip.Placement="Top" ToolTip.VerticalOffset="-6">
+                        <PathIcon Width="20" Height="20" Data="{StaticResource Icon.SkipNext}" />
                     </Button>
 
-                    <!-- Repeat -->
-                    <Panel>
-                        <Button
-                            x:Name="RepeatButton"
-                            Width="40" Height="40"
-                            Classes="playback-btn"
-                            Classes.active="{Binding RepeatMode, Converter={StaticResource RepeatModeActive}}"
-                            Command="{Binding ToggleRepeatCommand}"
-                            CornerRadius="20"
-                            ToolTip.Tip="{Binding RepeatTooltip}"
-                            ToolTip.Placement="Top"
-                            ToolTip.VerticalOffset="-6">
-                            <Grid>
-                                <mi:MaterialIcon Width="18" Height="18"
-                                    Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" />
-                                <Border
-                                    HorizontalAlignment="Center"
+                    <Button x:Name="RepeatButton" Width="40" Height="40"
+                        Classes="playback-btn"
+                        Command="{Binding ToggleRepeatCommand}" CornerRadius="20"
+                        ToolTip.Tip="{Binding RepeatTooltip}"
+                        ToolTip.Placement="Top"
+                        ToolTip.VerticalOffset="-6">
+                        <Grid>
+                            <!-- None: обычный цвет, без затемнения -->
+                            <PathIcon Width="18" Height="18"
+                                Data="{StaticResource Icon.Repeat}"
+                                IsVisible="{Binding RepeatMode,
+                                    Converter={StaticResource RepeatModeEquals},
+                                    ConverterParameter=None}" />
+                            <!-- Off: обычный цвет -->
+                            <PathIcon Width="18" Height="18"
+                                Data="{StaticResource Icon.Repeat}"
+                                IsVisible="{Binding RepeatMode,
+                                    Converter={StaticResource RepeatModeEquals},
+                                    ConverterParameter=Off}" />
+                            <!-- RepeatOne: акцентный -->
+                            <PathIcon Width="18" Height="18"
+                                Data="{StaticResource Icon.RepeatOnce}"
+                                Foreground="{DynamicResource AccentBrush}"
+                                IsVisible="{Binding RepeatMode,
+                                    Converter={StaticResource RepeatModeEquals},
+                                    ConverterParameter=RepeatOne}" />
+                            <!-- RepeatAll: акцентный -->
+                            <PathIcon Width="18" Height="18"
+                                Data="{StaticResource Icon.Repeat}"
+                                Foreground="{DynamicResource AccentBrush}"
+                                IsVisible="{Binding RepeatMode,
+                                    Converter={StaticResource RepeatModeEquals},
+                                    ConverterParameter=RepeatAll}" />
+                        </Grid>
+                    </Button>
+
+                    <Popup HorizontalOffset="0"
+                        IsLightDismissEnabled="False"
+                        IsOpen="{Binding IsRepeatHintVisible}"
+                        Placement="Top"
+                        PlacementTarget="{Binding #RepeatButton}"
+                        Topmost="True"
+                        VerticalOffset="-8">
+                        <Border Classes="mode-hint" Classes.visible="{Binding IsRepeatHintVisible}"
+                            Padding="10,7"
+                            Background="{DynamicResource BgElevatedBrush}"
+                            BorderBrush="{DynamicResource BgHighlightBrush}"
+                            BorderThickness="1"
+                            BoxShadow="0 4 16 0 #50000000"
+                            CornerRadius="8">
+                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center">
+                                <PathIcon Width="13" Height="13" VerticalAlignment="Center"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    Data="{StaticResource Icon.Repeat}" />
+                                <TextBlock FontSize="12" FontWeight="SemiBold"
                                     VerticalAlignment="Center"
-                                    Classes="repeat-indicator"
-                                    Classes.visible="{Binding RepeatMode, Converter={StaticResource RepeatModeEquals}, ConverterParameter=RepeatAll}" />
-                            </Grid>
-                        </Button>
-                        <Popup
-                            HorizontalOffset="-30"
-                            IsLightDismissEnabled="False"
-                            IsOpen="{Binding IsRepeatHintVisible}"
-                            Placement="Top"
-                            PlacementTarget="{Binding #RepeatButton}"
-                            VerticalOffset="-8">
-                            <Border Classes="mode-hint"
-                                Classes.visible="{Binding IsRepeatHintVisible}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon Width="14" Height="14"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        Kind="{Binding RepeatMode, Converter={StaticResource RepeatModeIcon}}" />
-                                    <TextBlock FontSize="12" FontWeight="SemiBold"
-                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                        Text="{Binding RepeatHintText}" />
-                                </StackPanel>
-                            </Border>
-                        </Popup>
-                    </Panel>
+                                    Foreground="{DynamicResource TextPrimaryBrush}"
+                                    Text="{Binding RepeatHintText}" />
+                            </StackPanel>
+                        </Border>
+                    </Popup>
 
                     <Border Width="1" Height="28" Margin="6,0"
                         Background="{DynamicResource BgHighlightBrush}" />
 
                     <!-- Volume -->
                     <Panel Name="VolumePanel">
-                        <Button
-                            x:Name="VolumeButton"
-                            Width="38" Height="38"
+                        <!-- Volume Button -->
+                        <Button x:Name="VolumeButton" Width="38" Height="38"
                             Classes="icon-btn"
                             Classes.popup-open="{Binding #VolumePopup.IsOpen}"
-                            Command="{Binding ToggleMuteCommand}"
-                            CornerRadius="19"
-                            ToolTip.Placement="Top"
-                            ToolTip.VerticalOffset="-6"
+                            Command="{Binding ToggleMuteCommand}" CornerRadius="19"
+                            ToolTip.Placement="Top" ToolTip.VerticalOffset="-6"
                             PointerWheelChanged="OnVolumeScroll">
                             <Grid>
-                                <mi:MaterialIcon Width="20" Height="20"
+                                <PathIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextMutedBrush}"
-                                    IsVisible="{Binding IsMuted}" Kind="VolumeMute" />
-                                <mi:MaterialIcon Width="20" Height="20"
+                                    Data="{StaticResource Icon.VolumeMute}"
+                                    IsVisible="{Binding IsMuted}" />
+                                <PathIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextSecondaryBrush}"
-                                    IsVisible="{Binding IsVolumeLow}" Kind="VolumeLow" />
-                                <mi:MaterialIcon Width="20" Height="20"
+                                    Data="{StaticResource Icon.VolumeLow}"
+                                    IsVisible="{Binding IsVolumeLow}" />
+                                <PathIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextSecondaryBrush}"
-                                    IsVisible="{Binding IsVolumeMedium}" Kind="VolumeMedium" />
-                                <mi:MaterialIcon Width="20" Height="20"
+                                    Data="{StaticResource Icon.VolumeMedium}"
+                                    IsVisible="{Binding IsVolumeMedium}" />
+                                <PathIcon Width="20" Height="20"
                                     Foreground="{DynamicResource TextSecondaryBrush}"
-                                    IsVisible="{Binding IsVolumeHigh}" Kind="VolumeHigh" />
-                                <mi:MaterialIcon Width="20" Height="20"
-                                    Foreground="{DynamicResource SystemWarnOrangeBrush}"
-                                    IsVisible="{Binding IsVolumeBoosted}" Kind="VolumeVibrate" />
+                                    Data="{StaticResource Icon.VolumeHigh}"
+                                    IsVisible="{Binding IsVolumeHigh}" />
+                                <PathIcon Width="20" Height="20"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    Data="{StaticResource Icon.VolumeVibrate}"
+                                    IsVisible="{Binding IsVolumeBoosted}" />
                             </Grid>
                         </Button>
 
@@ -524,32 +601,30 @@
 
                     <!-- Like -->
                     <Panel>
-                        <Button
-                            x:Name="LikeButton"
-                            Width="36" Height="36"
+                        <!-- Like Button -->
+                        <Button x:Name="LikeButton" Width="36" Height="36"
                             Classes="icon-btn"
-                            Command="{Binding ToggleLikeCommand}"
-                            CornerRadius="18"
+                            Command="{Binding ToggleLikeCommand}" CornerRadius="18"
                             ToolTip.Tip="{Binding LikeTooltip}"
-                            ToolTip.Placement="Top"
-                            ToolTip.VerticalOffset="-6">
-                            <mi:MaterialIcon Width="18" Height="18"
+                            ToolTip.Placement="Top" ToolTip.VerticalOffset="-6">
+                            <PathIcon Width="18" Height="18"
                                 Classes="heart-icon"
                                 Classes.active="{Binding IsLiked}"
-                                Kind="{Binding IsLiked, Converter={StaticResource BoolToSelector}, ConverterParameter=Heart|HeartOutline}" />
+                                Data="{Binding IsLiked,
+                                    Converter={StaticResource BoolToGeometryConverter},
+                                    ConverterParameter='Heart|HeartOutline'}" />
                         </Button>
-                        <Popup
-                            HorizontalOffset="-20"
-                            IsLightDismissEnabled="False"
-                            IsOpen="{Binding IsLikeHintVisible}"
-                            Placement="Top"
-                            PlacementTarget="{Binding #LikeButton}"
-                            VerticalOffset="-8">
+
+                        <!-- Like Hint Popup -->
+                        <Popup HorizontalOffset="-20" IsLightDismissEnabled="False"
+                            IsOpen="{Binding IsLikeHintVisible}" Placement="Top"
+                            PlacementTarget="{Binding #LikeButton}" VerticalOffset="-8">
                             <Border Classes="mode-hint"
                                 Classes.visible="{Binding IsLikeHintVisible}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <mi:MaterialIcon Width="14" Height="14"
-                                        Foreground="{DynamicResource AccentBrush}" Kind="Heart" />
+                                    <PathIcon Width="14" Height="14"
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Data="{StaticResource Icon.Heart}" />
                                     <TextBlock FontSize="12" FontWeight="SemiBold"
                                         Foreground="{DynamicResource TextPrimaryBrush}"
                                         Text="{Binding LikeHintText}" />
@@ -587,12 +662,12 @@
                         ClipToBounds="True"
                         CornerRadius="6">
                         <Panel>
-                            <mi:MaterialIcon
-                                Width="22"
-                                Height="22"
+                            <PathIcon Width="22" Height="22"
                                 Foreground="{DynamicResource TextMutedBrush}"
-                                IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}, ConverterParameter=invert}"
-                                Kind="MusicNote" />
+                                Data="{StaticResource Icon.MusicNote}"
+                                IsVisible="{Binding SafeThumbnail,
+                                    Converter={StaticResource NullToVisible},
+                                    ConverterParameter=invert}" />
                             <Image
                                 asyncImage:ImageLoader.Source="{Binding SafeThumbnail}"
                                 IsVisible="{Binding SafeThumbnail, Converter={StaticResource NullToVisible}}"
@@ -697,12 +772,11 @@
                                                         CommandParameter="{Binding}">
                                                         <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                                                             <Panel Grid.Column="0" Width="22">
-                                                                <mi:MaterialIcon
-                                                                    Width="16"
+                                                                <PathIcon Grid.Column="0" Width="16"
                                                                     Height="16"
                                                                     Foreground="{DynamicResource AccentBrush}"
-                                                                    IsVisible="{Binding IsDownloaded}"
-                                                                    Kind="CheckCircle" />
+                                                                    Data="{StaticResource Icon.CheckCircle}"
+                                                                    IsVisible="{Binding IsDownloaded}" />
                                                             </Panel>
                                                             <TextBlock
                                                                 Grid.Column="1"
@@ -712,12 +786,12 @@
                                                                 Grid.Column="2"
                                                                 Width="20"
                                                                 Margin="4,0">
-                                                                <mi:MaterialIcon
-                                                                    Width="14"
+                                                                <PathIcon Grid.Column="2" Width="14"
                                                                     Height="14"
                                                                     Foreground="{DynamicResource AccentBrush}"
-                                                                    IsVisible="{Binding IsActive}"
-                                                                    Kind="VolumeHigh" />
+                                                                    Data="{StaticResource Icon.VolumeHighSmall}"
+                                                                    IsVisible="{Binding IsActive}" />
+
                                                             </Panel>
                                                             <TextBlock
                                                                 Grid.Column="3"
@@ -738,11 +812,9 @@
                                     FontSize="10"
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     Text="{Binding StreamInfo}" />
-                                <mi:MaterialIcon
-                                    Width="10"
-                                    Height="10"
+                                <PathIcon Width="10" Height="10"
                                     Foreground="{DynamicResource TextMutedBrush}"
-                                    Kind="ChevronUp" />
+                                    Data="{StaticResource Icon.ChevronUp}" />
                                 <TextBlock
                                     FontSize="10"
                                     Foreground="{DynamicResource AccentBrush}"

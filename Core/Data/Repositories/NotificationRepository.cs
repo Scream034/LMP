@@ -43,12 +43,6 @@ public sealed class NotificationRepository : INotificationRepository
         await db.Notifications.ExecuteDeleteAsync(ct);
     }
 
-    public async Task<int> GetUnreadCountAsync(CancellationToken ct = default)
-    {
-        await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        return await db.Notifications.CountAsync(n => !n.IsRead, ct);
-    }
-
     public async Task PruneAsync(int keepCount = 100, CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
@@ -66,5 +60,14 @@ public sealed class NotificationRepository : INotificationRepository
                 .Where(n => n.CreatedAt < cutoffDate)
                 .ExecuteDeleteAsync(ct);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteOlderThanAsync(DateTime threshold, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        await db.Notifications
+            .Where(n => n.CreatedAt < threshold)
+            .ExecuteDeleteAsync(ct);
     }
 }

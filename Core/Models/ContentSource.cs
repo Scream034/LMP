@@ -59,7 +59,7 @@ public static class ContentSourceExtensions
     {
         ContentSource.YouTubeMusic => "Music",
         ContentSource.YouTube => "Youtube",
-        ContentSource.Local => "FolderMusic",
+        ContentSource.Local => "DatabaseSearch",
         _ => "Help"
     };
 

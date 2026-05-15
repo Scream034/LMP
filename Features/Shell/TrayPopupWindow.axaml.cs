@@ -3,10 +3,9 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 using LMP.Core.Models;
 using LMP.Core.Services;
-using Material.Icons;
-using Material.Icons.Avalonia;
 
 namespace LMP.Features.Shell;
 
@@ -46,19 +45,19 @@ public partial class TrayPopupWindow : Window
     private TextBlock? _trackAuthorText;
     private Button? _showButton;
     private TextBlock? _showText;
-    private MaterialIcon? _showIcon;
+    private PathIcon? _showIcon;
     private Button? _playPauseButton;
-    private MaterialIcon? _playPauseIcon;
+    private PathIcon? _playPauseIcon;
     private TextBlock? _playPauseText;
     private Button? _nextButton;
     private TextBlock? _nextText;
     private Button? _prevButton;
     private TextBlock? _prevText;
     private Button? _repeatButton;
-    private MaterialIcon? _repeatIcon;
+    private PathIcon? _repeatIcon;
     private TextBlock? _repeatText;
     private Border? _volumeSection;
-    private MaterialIcon? _volumeIcon;
+    private PathIcon? _volumeIcon;
     private TextBlock? _volumeText;
     private Button? _queueButton;
     private TextBlock? _queueText;
@@ -135,19 +134,19 @@ public partial class TrayPopupWindow : Window
         _trackAuthorText = this.FindControl<TextBlock>("TrackAuthorText");
         _showButton = this.FindControl<Button>("ShowButton");
         _showText = this.FindControl<TextBlock>("ShowText");
-        _showIcon = this.FindControl<MaterialIcon>("ShowIcon");
+        _showIcon = this.FindControl<PathIcon>("ShowIcon");
         _playPauseButton = this.FindControl<Button>("PlayPauseButton");
-        _playPauseIcon = this.FindControl<MaterialIcon>("PlayPauseIcon");
+        _playPauseIcon = this.FindControl<PathIcon>("PlayPauseIcon");
         _playPauseText = this.FindControl<TextBlock>("PlayPauseText");
         _nextButton = this.FindControl<Button>("NextButton");
         _nextText = this.FindControl<TextBlock>("NextText");
         _prevButton = this.FindControl<Button>("PrevButton");
         _prevText = this.FindControl<TextBlock>("PrevText");
         _repeatButton = this.FindControl<Button>("RepeatButton");
-        _repeatIcon = this.FindControl<MaterialIcon>("RepeatIcon");
+        _repeatIcon = this.FindControl<PathIcon>("RepeatIcon");
         _repeatText = this.FindControl<TextBlock>("RepeatText");
         _volumeSection = this.FindControl<Border>("VolumeSection");
-        _volumeIcon = this.FindControl<MaterialIcon>("VolumeIcon");
+        _volumeIcon = this.FindControl<PathIcon>("VolumeIcon");
         _volumeText = this.FindControl<TextBlock>("VolumeText");
         _queueButton = this.FindControl<Button>("QueueButton");
         _queueText = this.FindControl<TextBlock>("QueueText");
@@ -260,12 +259,12 @@ public partial class TrayPopupWindow : Window
         if (isWindowVisible)
         {
             SetText(_showText, L["Tray_Hide"] ?? "Hide");
-            SetIcon(_showIcon, MaterialIconKind.WindowMinimize);
+            SetIcon(_showIcon, "Icon.ChevronDown");
         }
         else
         {
             SetText(_showText, L["Tray_Show"] ?? "Show");
-            SetIcon(_showIcon, MaterialIconKind.WindowRestore);
+            SetIcon(_showIcon, "Icon.Home");
         }
     }
 
@@ -277,12 +276,12 @@ public partial class TrayPopupWindow : Window
         if (isPlaying)
         {
             SetText(_playPauseText, L["Tray_Pause"] ?? "Pause");
-            SetIcon(_playPauseIcon, MaterialIconKind.Pause);
+            SetIcon(_playPauseIcon, "Icon.Pause");
         }
         else
         {
             SetText(_playPauseText, L["Tray_Play"] ?? "Play");
-            SetIcon(_playPauseIcon, MaterialIconKind.Play);
+            SetIcon(_playPauseIcon, "Icon.Play");
         }
     }
 
@@ -293,17 +292,19 @@ public partial class TrayPopupWindow : Window
     {
         if (_repeatText == null || _repeatIcon == null) return;
 
-        (_repeatText.Text, _repeatIcon.Kind) = repeatMode switch
+        var (text, iconKey) = repeatMode switch
         {
-            RepeatMode.All => (L["Tray_RepeatAll"] ?? "Repeat All", MaterialIconKind.Repeat),
-            RepeatMode.One => (L["Tray_RepeatOne"] ?? "Repeat One", MaterialIconKind.RepeatOne),
-            _ => (L["Tray_Repeat"] ?? "Repeat", MaterialIconKind.RepeatOff)
+            RepeatMode.All => (L["Tray_RepeatAll"] ?? "Repeat All", "Icon.Repeat"),
+            RepeatMode.One => (L["Tray_RepeatOne"] ?? "Repeat One", "Icon.RepeatOnce"),
+            _ => (L["Tray_Repeat"] ?? "Repeat", "Icon.Repeat")
         };
+
+        _repeatText.Text = text;
+        SetIcon(_repeatIcon, iconKey);
     }
 
     /// <summary>
     /// Обновляет отображение громкости (иконка + текст).
-    /// Читает напрямую из AudioEngine через <see cref="PlayerControlService.GetCurrentVolume"/>.
     /// </summary>
     private void UpdateVolumeDisplay()
     {
@@ -311,13 +312,16 @@ public partial class TrayPopupWindow : Window
 
         var volume = _playerControl.GetCurrentVolume();
         _volumeText.Text = $"{volume}%";
-        _volumeIcon.Kind = volume switch
+
+        var iconKey = volume switch
         {
-            0 => MaterialIconKind.VolumeMute,
-            <= 33 => MaterialIconKind.VolumeLow,
-            <= 66 => MaterialIconKind.VolumeMedium,
-            _ => MaterialIconKind.VolumeHigh
+            0 => "Icon.VolumeMute",
+            <= 33 => "Icon.VolumeLow",
+            <= 66 => "Icon.VolumeMedium",
+            _ => "Icon.VolumeHigh"
         };
+
+        SetIcon(_volumeIcon, iconKey);
     }
 
     #endregion
@@ -469,19 +473,36 @@ public partial class TrayPopupWindow : Window
 
     #region Helpers — Null-safe Property Setters
 
-    /// <summary>Null-safe установка текста TextBlock.</summary>
+    /// <summary>
+    /// Null-safe установка Data для PathIcon через именованный ресурс StreamGeometry.
+    /// </summary>
+    /// <param name="control">Контрол PathIcon</param>
+    /// <param name="resourceKey">Ключ из Icons.axaml</param>
+    private static void SetIcon(PathIcon? control, string resourceKey)
+    {
+        if (control == null) return;
+
+        if (Application.Current?.Resources.TryGetResource(
+                resourceKey,
+                Application.Current.ActualThemeVariant,
+                out var res) == true
+            && res is StreamGeometry geometry)
+        {
+            control.Data = geometry;
+        }
+    }
+
+    /// <summary>
+    /// Null-safe установка текста TextBlock.
+    /// </summary>
     private static void SetText(TextBlock? control, string? text)
     {
         control?.Text = text;
     }
 
-    /// <summary>Null-safe установка Kind для MaterialIcon.</summary>
-    private static void SetIcon(MaterialIcon? control, MaterialIconKind kind)
-    {
-        control?.Kind = kind;
-    }
-
-    /// <summary>Null-safe установка IsEnabled для Control.</summary>
+    /// <summary>
+    /// Null-safe установка IsEnabled для Control.
+    /// </summary>
     private static void SetEnabled(Control? control, bool enabled)
     {
         control?.IsEnabled = enabled;

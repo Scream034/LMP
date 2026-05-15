@@ -1,6 +1,5 @@
 using LMP.Core.Models;
 using LMP.Core.Youtube.Music;
-using LMP.Core.Youtube.Playlists;
 
 namespace LMP.Core.Services;
 

@@ -1,8 +1,7 @@
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Library"
-    xmlns:controls="using:LMP.UI.Controls"
-    xmlns:mi="using:Material.Icons.Avalonia">
+    xmlns:controls="using:LMP.UI.Controls">
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- PLAYLIST CARD HOVER STYLES                                          -->
@@ -71,14 +70,15 @@
                                         Margin="0,0,0,10">
                                         <Panel Background="{DynamicResource BgHighlightBrush}">
 
-                                            <mi:MaterialIcon Kind="PlaylistMusic" Width="64"
-                                                Height="64"
+                                            <!-- Заглушка плейлиста (нет обложки) -->
+                                            <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                                                Width="64" Height="64"
                                                 Foreground="{DynamicResource TextMutedBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
                                                 IsVisible="{Binding ThumbnailUrl,
-                                                Converter={StaticResource NullToVisible},
-                                                ConverterParameter='invert'}" />
+                                                    Converter={StaticResource NullToVisible},
+                                                    ConverterParameter='invert'}" />
 
                                             <Image
                                                 Stretch="UniformToFill"
@@ -102,13 +102,15 @@
                                                 </Image.IsVisible>
                                             </Image>
 
-                                            <mi:MaterialIcon Kind="Heart" Width="64" Height="64"
+                                            <!-- Liked playlist иконка сердца -->
+                                            <PathIcon Data="{StaticResource Icon.Heart}"
+                                                Width="64" Height="64"
                                                 Foreground="{DynamicResource AccentBrush}"
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
                                                 IsVisible="{Binding Id,
-                                                Converter={StaticResource StringStartsWithConverter},
-                                                ConverterParameter='liked'}" />
+                                                    Converter={StaticResource StringStartsWithConverter},
+                                                    ConverterParameter='liked'}" />
                                         </Panel>
                                     </Border>
 
@@ -129,12 +131,14 @@
 
                                 <UniformGrid Rows="1" HorizontalAlignment="Stretch">
 
+                                    <!-- Add to queue -->
                                     <Button Command="{Binding AddToQueueCommand}"
                                         Classes="ghost-btn"
                                         HorizontalAlignment="Stretch"
                                         HorizontalContentAlignment="Center"
                                         ToolTip.Tip="{Binding L[Queue_Add]}">
-                                        <mi:MaterialIcon Kind="PlaylistPlus" Width="18" Height="18" />
+                                        <PathIcon Data="{StaticResource Icon.PlaylistPlus}"
+                                            Width="18" Height="18" />
                                     </Button>
 
                                     <controls:CopyLinkButton
@@ -145,13 +149,15 @@
                                         ButtonSize="32"
                                         IconSize="16" />
 
+                                    <!-- Delete -->
                                     <Button Command="{Binding DeleteCommand}"
                                         Classes="ghost-btn"
                                         HorizontalAlignment="Stretch"
                                         HorizontalContentAlignment="Center"
                                         IsVisible="{Binding CanDelete}"
                                         ToolTip.Tip="{Binding L[Button_Delete]}">
-                                        <mi:MaterialIcon Kind="DeleteOutline" Width="18" Height="18" />
+                                        <PathIcon Data="{StaticResource Icon.DeleteOutline}"
+                                            Width="18" Height="18" />
                                     </Button>
                                 </UniformGrid>
                             </Panel>

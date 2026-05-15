@@ -1,31 +1,35 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Media;
-using Avalonia.VisualTree;
 using LMP.Core.Helpers;
 using LMP.Core.Services;
-using Material.Icons;
-using Material.Icons.Avalonia;
 
 namespace LMP.UI.Controls;
 
 /// <summary>
 /// Универсальная кнопка копирования ссылки.
-/// Использует единый глобальный toast через <see cref="CopyHintService"/>.
-/// Визуально показывает краткое состояние Success/Error через fade-смену иконки.
+/// Показывает hint-popup над кнопкой (аналогично RepeatHint/LikeHint в PlayerBar).
+/// Визуально отражает состояние Success/Error через fade-смену иконки + popup.
+///
+/// <para><b>Idle-состояние задаётся статически в AXAML</b> (Data + Foreground через DynamicResource),
+/// code-behind управляет только анимацией Success/Error и возвратом к idle.</para>
 /// </summary>
 public partial class CopyLinkButton : UserControl
 {
     private CancellationTokenSource? _stateCts;
-    private MaterialIcon? _icon;
+    private PathIcon? _icon;
+    private Popup? _hintPopup;
+    private PathIcon? _hintIcon;
+    private TextBlock? _hintText;
 
-    private const int FadeDurationMs = 150;
+    private const int FadeDurationMs  = 150;
     private const int StateDurationMs = 1200;
 
-    private static readonly MaterialIconKind IdleKind = MaterialIconKind.LinkVariant;
-    private static readonly MaterialIconKind SuccessKind = MaterialIconKind.Check;
-    private static readonly MaterialIconKind ErrorKind = MaterialIconKind.Close;
+    private const string IdleIconKey    = "Icon.LinkVariant";
+    private const string SuccessIconKey = "Icon.Check";
+    private const string ErrorIconKey   = "Icon.Close";
 
     #region Styled Properties
 
@@ -39,50 +43,50 @@ public partial class CopyLinkButton : UserControl
         set => SetValue(ShowHoverRingProperty, value);
     }
 
+    /// <summary>URL для копирования.</summary>
     public static readonly StyledProperty<string?> CopyUrlProperty =
         AvaloniaProperty.Register<CopyLinkButton, string?>(nameof(CopyUrl));
 
-    /// <summary>URL для копирования.</summary>
     public string? CopyUrl
     {
         get => GetValue(CopyUrlProperty);
         set => SetValue(CopyUrlProperty, value);
     }
 
+    /// <summary>Текст hint-popup при успешном копировании.</summary>
     public static readonly StyledProperty<string?> SuccessTextProperty =
         AvaloniaProperty.Register<CopyLinkButton, string?>(nameof(SuccessText));
 
-    /// <summary>Текст toast при успешном копировании.</summary>
     public string? SuccessText
     {
         get => GetValue(SuccessTextProperty);
         set => SetValue(SuccessTextProperty, value);
     }
 
+    /// <summary>Текст ToolTip.</summary>
     public static readonly StyledProperty<string?> ToolTipTextProperty =
         AvaloniaProperty.Register<CopyLinkButton, string?>(nameof(ToolTipText));
 
-    /// <summary>Текст tooltip.</summary>
     public string? ToolTipText
     {
         get => GetValue(ToolTipTextProperty);
         set => SetValue(ToolTipTextProperty, value);
     }
 
+    /// <summary>Размер иконки.</summary>
     public static readonly StyledProperty<double> IconSizeProperty =
         AvaloniaProperty.Register<CopyLinkButton, double>(nameof(IconSize), 16.0);
 
-    /// <summary>Размер иконки.</summary>
     public double IconSize
     {
         get => GetValue(IconSizeProperty);
         set => SetValue(IconSizeProperty, value);
     }
 
+    /// <summary>Размер круглой кнопки.</summary>
     public static readonly StyledProperty<double> ButtonSizeProperty =
         AvaloniaProperty.Register<CopyLinkButton, double>(nameof(ButtonSize), 36.0);
 
-    /// <summary>Размер круглой кнопки.</summary>
     public double ButtonSize
     {
         get => GetValue(ButtonSizeProperty);
@@ -91,74 +95,44 @@ public partial class CopyLinkButton : UserControl
 
     #endregion
 
-    #region Direct Properties
-
-    public static readonly DirectProperty<CopyLinkButton, MaterialIconKind> IconKindProperty =
-        AvaloniaProperty.RegisterDirect<CopyLinkButton, MaterialIconKind>(
-            nameof(IconKind), static o => o.IconKind);
-
-    /// <summary>Текущий вид иконки.</summary>
-    public MaterialIconKind IconKind
-    {
-        get;
-        private set => SetAndRaise(IconKindProperty, ref field, value);
-    } = IdleKind;
-
-    public static readonly DirectProperty<CopyLinkButton, IBrush?> IconForegroundProperty =
-        AvaloniaProperty.RegisterDirect<CopyLinkButton, IBrush?>(
-            nameof(IconForeground), static o => o.IconForeground);
-
-    /// <summary>Текущий цвет иконки.</summary>
-    public IBrush? IconForeground
-    {
-        get;
-        private set => SetAndRaise(IconForegroundProperty, ref field, value);
-    }
-
-    #endregion
-
     public CopyLinkButton()
     {
         InitializeComponent();
-        IconForeground = GetBrush("TextSecondaryBrush") ?? GetBrush("TextMutedBrush");
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
-        _icon = this.FindControl<MaterialIcon>("LinkIcon");
+
+        _icon      = this.FindControl<PathIcon>("LinkIcon");
+        _hintPopup = this.FindControl<Popup>("HintPopup");
+        _hintIcon  = this.FindControl<PathIcon>("HintIcon");
+        _hintText  = this.FindControl<TextBlock>("HintText");
+
+        // Idle-состояние (Data + Foreground) задано статически в AXAML через
+        // StaticResource / DynamicResource — code-behind не трогает его при attach.
+        // ApplyIdleState вызывается только после завершения анимации (возврат к idle).
     }
 
     private async void OnClick(object? sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(CopyUrl))
-            return;
+        if (string.IsNullOrEmpty(CopyUrl)) return;
 
         try
         {
             await Clipboard.SetTextAsync(CopyUrl);
-
-            CopyHintService.Instance.Show(
-                SuccessText ?? "Copied!",
-                CopyHintKind.Success,
-                MousePositionHelper.Position);
-
             await AnimateStateAsync(success: true);
         }
         catch
         {
-            CopyHintService.Instance.Show(
-                "Copy failed",
-                CopyHintKind.Error,
-                MousePositionHelper.Position);
-
             await AnimateStateAsync(success: false);
         }
     }
 
     /// <summary>
-    /// Плавно меняет состояние иконки:
-    /// fade-out → смена вида → fade-in → пауза → возврат к исходной скрепке.
+    /// Показывает hint-popup над кнопкой, меняет иконку кнопки через fade,
+    /// затем возвращает оба в исходное состояние.
+    /// CTS отменяет предыдущую анимацию при быстрых повторных кликах.
     /// </summary>
     private async Task AnimateStateAsync(bool success)
     {
@@ -169,58 +143,126 @@ public partial class CopyLinkButton : UserControl
 
         try
         {
-            if (_icon != null)
-                _icon.Opacity = 0;
+            ShowHint(success);
 
+            if (_icon != null) _icon.Opacity = 0;
             await Task.Delay(FadeDurationMs, cts.Token);
 
-            IconKind = success ? SuccessKind : ErrorKind;
-            IconForeground = GetBrush(success ? "AccentBrush" : "SystemErrorRedBrush");
+            SetIconState(
+                success ? SuccessIconKey : ErrorIconKey,
+                success ? "AccentBrush"  : "SystemErrorRedBrush");
 
-            if (_icon != null)
-                _icon.Opacity = 1;
+            if (_icon != null) _icon.Opacity = 1;
 
             await Task.Delay(StateDurationMs, cts.Token);
 
-            if (_icon != null)
-                _icon.Opacity = 0;
+            HideHint();
 
+            if (_icon != null) _icon.Opacity = 0;
             await Task.Delay(FadeDurationMs, cts.Token);
 
-            IconKind = IdleKind;
-            IconForeground = GetBrush("TextSecondaryBrush") ?? GetBrush("TextMutedBrush");
-
-            if (_icon != null)
-                _icon.Opacity = 1;
+            ApplyIdleState();
+            if (_icon != null) _icon.Opacity = 1;
         }
         catch (OperationCanceledException)
         {
-            IconKind = IdleKind;
-            IconForeground = GetBrush("TextSecondaryBrush") ?? GetBrush("TextMutedBrush");
-
-            if (_icon != null)
-                _icon.Opacity = 1;
+            HideHint();
+            ApplyIdleState();
+            if (_icon != null) _icon.Opacity = 1;
         }
     }
 
-    private static IBrush? GetBrush(string key)
+    private void ShowHint(bool success)
     {
-        var app = Application.Current;
-        if (app == null)
-            return null;
+        if (_hintPopup is null || _hintIcon is null || _hintText is null) return;
 
-        return app.Resources.TryGetResource(key, app.ActualThemeVariant, out var resource)
-            && resource is IBrush brush
-            ? brush
-            : null;
+        var app   = Application.Current;
+        var theme = app?.ActualThemeVariant;
+
+        if (app != null && theme != null)
+        {
+            string iconKey  = success ? SuccessIconKey : ErrorIconKey;
+            string brushKey = success ? "AccentBrush"  : "SystemErrorRedBrush";
+
+            if (app.Resources.TryGetResource(iconKey, theme, out var geo) && geo is StreamGeometry sg)
+                _hintIcon.Data = sg;
+
+            if (app.Resources.TryGetResource(brushKey, theme, out var br) && br is IBrush brush)
+                _hintIcon.Foreground = brush;
+        }
+
+        _hintText.Text = success
+            ? (SuccessText ?? "Copied!")
+            : "Copy failed";
+
+        _hintPopup.IsOpen = true;
+    }
+
+    private void HideHint()
+    {
+        if (_hintPopup != null)
+            _hintPopup.IsOpen = false;
+    }
+
+    /// <summary>
+    /// Восстанавливает idle-иконку после завершения анимации.
+    /// В отличие от AXAML-инициализации, здесь ресурсы гарантированно доступны
+    /// (вызывается только внутри <see cref="AnimateStateAsync"/> после Task.Delay).
+    /// Если TryGetResource недоступен — откатываемся к DynamicResource через ClearValue.
+    /// </summary>
+    private void ApplyIdleState()
+    {
+        if (_icon is null) return;
+
+        var app   = Application.Current;
+        var theme = app?.ActualThemeVariant;
+
+        if (app is null || theme is null)
+        {
+            // Ресурсы недоступны — сбрасываем на AXAML-значение через ClearValue.
+            // DynamicResource из разметки вернётся автоматически.
+            _icon.ClearValue(PathIcon.DataProperty);
+            _icon.ClearValue(PathIcon.ForegroundProperty);
+            return;
+        }
+
+        if (app.Resources.TryGetResource(IdleIconKey, theme, out var geo) && geo is StreamGeometry sg)
+            _icon.Data = sg;
+
+        if (app.Resources.TryGetResource("TextSecondaryBrush", theme, out var br) && br is IBrush brush)
+            _icon.Foreground = brush;
+        else
+            // Fallback: не ставим null — сбрасываем на inherited/DynamicResource.
+            _icon.ClearValue(PathIcon.ForegroundProperty);
+    }
+
+    private void SetIconState(string geometryKey, string brushKey)
+    {
+        if (_icon is null) return;
+
+        var app   = Application.Current;
+        var theme = app?.ActualThemeVariant;
+        if (app is null || theme is null) return;
+
+        if (app.Resources.TryGetResource(geometryKey, theme, out var geo) && geo is StreamGeometry geometry)
+            _icon.Data = geometry;
+
+        if (app.Resources.TryGetResource(brushKey, theme, out var res) && res is IBrush brush)
+            _icon.Foreground = brush;
+        else if (app.Resources.TryGetResource("TextMutedBrush", theme, out var fb) && fb is IBrush fallback)
+            _icon.Foreground = fallback;
+        // Намеренно НЕ ставим null — видимость важнее точного цвета.
     }
 
     protected override void OnUnloaded(RoutedEventArgs e)
     {
         _stateCts?.Cancel();
         _stateCts?.Dispose();
-        _stateCts = null;
-        _icon = null;
+        _stateCts  = null;
+        _icon      = null;
+        _hintPopup = null;
+        _hintIcon  = null;
+        _hintText  = null;
         base.OnUnloaded(e);
     }
 }

@@ -197,7 +197,7 @@ class Program
             .WithInterFont()
             .With(new SkiaOptions
             {
-                MaxGpuResourceSizeBytes = 128 * 1024 * 1024
+                MaxGpuResourceSizeBytes = 256 * 1024 * 1024  // 256 MB вместо дефолтных 28 MB
             })
 #if DEBUG
             .LogToTrace()
@@ -252,7 +252,6 @@ class Program
         services.AddSingleton(sp =>
         {
             var auth = sp.GetRequiredService<CookieAuthService>();
-            var notifications = sp.GetRequiredService<NotificationService>();
 
             // Lazy accessor — избегаем циклической зависимости
             // MainWindowViewModel создаётся позже, чем DialogService
@@ -262,7 +261,7 @@ class Program
                 return mainWindow.DialogHost;
             }
 
-            return new DialogService(auth, notifications, GetDialogHost);
+            return new DialogService(auth, GetDialogHost);
         });
 
         services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));

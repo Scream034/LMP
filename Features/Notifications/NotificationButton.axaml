@@ -1,33 +1,29 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:notifications="using:LMP.Features.Notifications"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             x:Class="LMP.Features.Notifications.NotificationButton"
-             x:DataType="notifications:NotificationButtonViewModel">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:notifications="using:LMP.Features.Notifications"
+    x:Class="LMP.Features.Notifications.NotificationButton"
+    x:DataType="notifications:NotificationButtonViewModel">
 
-    <Button Classes="window-btn" 
-            Command="{Binding TogglePanelCommand}"
-            ToolTip.Tip="{Binding L[Nav_Notifications]}"
-            Width="36" Height="30">
+    <Button Classes="ctrl-btn"
+        Command="{Binding TogglePanelCommand}"
+        ToolTip.Tip="{Binding L[Nav_Notifications]}">
         <Panel>
-            <!-- Bell Icon -->
-            <mi:MaterialIcon Kind="Bell" Width="16" Height="16"
-                             Foreground="{DynamicResource TextMutedBrush}" />
-            
-            <!-- Badge (непрочитанные) -->
+            <PathIcon Data="{StaticResource Icon.Bell}"
+                Width="15" Height="15"
+                Foreground="{DynamicResource TextMutedBrush}" />
             <Border IsVisible="{Binding HasUnread}"
-                    Background="{DynamicResource AccentBrush}"
-                    CornerRadius="6"
-                    MinWidth="14" Height="14"
-                    Padding="3,0"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    Margin="0,-2,-4,0">
+                Background="{DynamicResource AccentBrush}"
+                CornerRadius="6"
+                MinWidth="13" Height="13"
+                Padding="3,0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,-4,-4,0">
                 <TextBlock Text="{Binding UnreadCountText}"
-                           FontSize="9" FontWeight="Bold"
-                           Foreground="{DynamicResource TextDarkBrush}"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center" />
+                    FontSize="8" FontWeight="Bold"
+                    Foreground="{DynamicResource AccentButtonTextBrush}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center" />
             </Border>
         </Panel>
     </Button>

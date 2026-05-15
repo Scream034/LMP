@@ -1,6 +1,5 @@
 <Styles xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:mi="using:Material.Icons.Avalonia">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Style Selector="ListBox.track-list">
         <Setter Property="Background" Value="Transparent" />
@@ -53,18 +52,29 @@
         <Setter Property="Padding" Value="8,6" />
         <Setter Property="Margin" Value="0,1" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-            </Transitions>
-        </Setter>
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="Border.track-row:pointerover">
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
+
     <Style Selector="Border.track-row.is-active">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Style.Animations>
+            <Animation Duration="0:0:1.8" IterationCount="Infinite"
+                PlaybackDirection="Alternate"
+                Easing="SineEaseInOut"
+                FillMode="Both">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.733" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
     </Style>
+
     <Style Selector="Border.track-row.menu-open">
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
     </Style>
@@ -97,6 +107,7 @@
         <Setter Property="ClipToBounds" Value="True" />
         <Setter Property="Cursor" Value="Hand" />
     </Style>
+
     <Style Selector="Button.cover-btn Panel.cover-overlay">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="IsHitTestVisible" Value="False" />
@@ -110,11 +121,8 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Border.track-row.is-active Button.cover-btn Panel.cover-overlay">
-        <Setter Property="Opacity" Value="1" />
-        <Setter Property="IsHitTestVisible" Value="True" />
-    </Style>
-    <Style Selector="Button.cover-btn mi|MaterialIcon.play-icon">
+
+    <Style Selector="Button.cover-btn Panel.cover-overlay PathIcon">
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="RenderTransform" Value="scale(0.85)" />
         <Setter Property="Transitions">
@@ -124,24 +132,23 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.cover-btn:pointerover mi|MaterialIcon.play-icon">
+    <Style Selector="Button.cover-btn:pointerover Panel.cover-overlay PathIcon">
         <Setter Property="RenderTransform" Value="scale(1)" />
     </Style>
-    <Style Selector="Button.cover-btn:pressed mi|MaterialIcon.play-icon">
+    <Style Selector="Button.cover-btn:pressed Panel.cover-overlay PathIcon">
         <Setter Property="RenderTransform" Value="scale(0.9)" />
     </Style>
 
-    <Style Selector="mi|MaterialIcon.playing-indicator">
-        <Style.Animations>
-            <Animation Duration="0:0:0.8" IterationCount="Infinite" PlaybackDirection="Alternate">
-                <KeyFrame Cue="0%">
-                    <Setter Property="Opacity" Value="0.6" />
-                </KeyFrame>
-                <KeyFrame Cue="100%">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
+    <Style Selector="Button.like-btn PathIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.like-btn.is-liked PathIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <Style Selector="Button.like-btn">
@@ -166,28 +173,13 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.like-btn mi|MaterialIcon">
-        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
-            </Transitions>
-        </Setter>
-    </Style>
-    <Style Selector="Button.like-btn.is-liked mi|MaterialIcon">
-        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-    </Style>
 
     <Style Selector="Button.more-btn, Button.remove-btn">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="IsHitTestVisible" Value="False" />
-        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
-        <Setter Property="RenderTransform" Value="scale(0.8)" />
         <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15"
-                    Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
     </Style>
@@ -195,24 +187,15 @@
         Selector="Border.track-row:pointerover Button.more-btn, Border.track-row:pointerover Button.remove-btn">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
-        <Setter Property="RenderTransform" Value="scale(1)" />
     </Style>
     <Style Selector="Border.track-row.menu-open Button.more-btn">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="IsHitTestVisible" Value="True" />
-        <Setter Property="RenderTransform" Value="scale(1)" />
-    </Style>
-    <Style Selector="Button.more-btn:pressed, Button.remove-btn:pressed">
-        <Setter Property="RenderTransform" Value="scale(0.9)" />
     </Style>
 
     <Style Selector="Border.track-row TextBlock.duration-text">
         <Setter Property="Opacity" Value="1" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
-            </Transitions>
-        </Setter>
+        <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
     <Style Selector="Border.track-row:pointerover TextBlock.duration-text">
         <Setter Property="Opacity" Value="0" />

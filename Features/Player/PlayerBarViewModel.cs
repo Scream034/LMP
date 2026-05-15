@@ -6,7 +6,6 @@ using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Media;
 using LMP.Core.Audio;
-using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -277,8 +276,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     [Reactive] public bool IsRepeatHintVisible { get; private set; }
     [Reactive] public string RepeatHintText { get; private set; } = "";
-    [Reactive] public bool IsShuffleHintVisible { get; private set; }
-    [Reactive] public string ShuffleHintText { get; private set; } = "";
     [Reactive] public bool IsLikeHintVisible { get; private set; }
     [Reactive] public string LikeHintText { get; private set; } = "";
 
@@ -475,11 +472,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         ToggleAutoShuffleCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             _playerControl.ToggleAutoShuffle();
-            ShowHint(
-                v => IsShuffleHintVisible = v,
-                () => ShuffleHintText = AutoShuffleEnabled
-                    ? SL["Player_Shuffle_AutoOn"]
-                    : SL["Player_Shuffle_AutoOff"]);
+            this.RaisePropertyChanged(nameof(ShuffleTooltip));
         }));
 
         ToggleRepeatCommand = CreateCommand(ReactiveCommand.Create(() =>

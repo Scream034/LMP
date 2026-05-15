@@ -7,7 +7,7 @@ namespace LMP.Core.Youtube.Search;
 /// <summary>
 /// Metadata associated with a YouTube playlist returned by a search query.
 /// </summary>
-public class PlaylistSearchResult(
+public sealed class PlaylistSearchResult(
     PlaylistId id,
     string title,
     Author? author,

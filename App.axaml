@@ -1,7 +1,6 @@
 <Application xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:LMP"
-    xmlns:materialIcons="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
     x:Class="LMP.App"
     RequestedThemeVariant="Dark">
 
@@ -9,21 +8,19 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="/Core/Converters/AppConverters.axaml" />
+                <ResourceInclude Source="avares://LMP/UI/Theme/Icons.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
 
     <Application.Styles>
         <FluentTheme />
-        <materialIcons:MaterialIconStyles />
 
         <StyleInclude Source="avares://AsyncImageLoader.Avalonia/AdvancedImage.axaml" />
 
-        <!-- Наши переопределения (порядок важен!) -->
-        <!-- 1. ToolTip первым — единственный источник ToolTip template -->
+        <!-- 1. ToolTip первым -->
         <StyleInclude Source="/UI/Theme/ToolTipTheme.axaml" />
-        <!-- 2. Theme.axaml подключает: Typography, Buttons, Controls, AppComponents,
-        PlayerBarStyles -->
+        <!-- 2. Theme.axaml: Typography, Buttons, Controls, AppComponents, PlayerBarStyles -->
         <StyleInclude Source="/UI/Theme/Theme.axaml" />
         <!-- 3. Дополнительные компоненты -->
         <StyleInclude Source="/UI/Theme/LoadingSkeletons.axaml" />

@@ -3,7 +3,6 @@ using LMP.Core.Audio;
 using LMP.Core.Exceptions;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
-using LMP.Core.Youtube.Exceptions;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 

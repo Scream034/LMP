@@ -133,16 +133,6 @@
           "Acornima": "1.6.1"
         }
       },
-      "Material.Icons.Avalonia": {
-        "type": "Direct",
-        "requested": "[3.0.0, )",
-        "resolved": "3.0.0",
-        "contentHash": "095OuixMxUKVy4r1AUWCfwTJquIjR3J/lS/zyevT16E2owyOHExhlBZSccTdtPCUcWRj4vpu+E9fUC+KFge1Mw==",
-        "dependencies": {
-          "Avalonia": "11.3.0",
-          "Material.Icons": "3.0.0"
-        }
-      },
       "Microsoft.EntityFrameworkCore": {
         "type": "Direct",
         "requested": "[10.0.2, )",
@@ -450,11 +440,6 @@
         "type": "Transitive",
         "resolved": "2.14.1",
         "contentHash": "lQKvtaTDOXnoVJ20ibTuSIOf2i0uO0MPbDhd1jm238I+U/2ZnRENj0cktKZhtchBMtCUSRQ5v4xBCUbKNmyVMw=="
-      },
-      "Material.Icons": {
-        "type": "Transitive",
-        "resolved": "3.0.0",
-        "contentHash": "wj3cqCKW+vzKR9tt+WtfKHhrFxMZxYO4pKEedYKW8xEs2+NQ1b99rU+omRO9sOVAlNrn06R/egBWtG5oPzKWcw=="
       },
       "MicroCom.Runtime": {
         "type": "Transitive",

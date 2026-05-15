@@ -30,7 +30,7 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build: release",
-      "program": "${workspaceFolder}/bin/Release/net10.0/LMP.dll",
+      "program": "${workspaceFolder}/bin/Release/net11.0/LMP.dll",
       "args": [],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

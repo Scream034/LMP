@@ -9,6 +9,7 @@ namespace LMP.Features.Notifications;
 public sealed class NotificationButtonViewModel : ViewModelBase
 {
     private readonly NotificationService _notificationService;
+    private readonly NotificationPanelViewModel _panelViewModel;
 
     [Reactive] public bool IsPanelOpen { get; set; }
 
@@ -18,14 +19,17 @@ public sealed class NotificationButtonViewModel : ViewModelBase
 
     public ReactiveCommand<Unit, Unit> TogglePanelCommand { get; }
 
-    public NotificationButtonViewModel(NotificationService notificationService)
+    public NotificationButtonViewModel(
+        NotificationService notificationService,
+        NotificationPanelViewModel panelViewModel)
     {
         _notificationService = notificationService;
+        _panelViewModel = panelViewModel;
 
-        // Подписываемся на изменения в сервисе
         _notificationService.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is nameof(NotificationService.UnreadCount) or nameof(NotificationService.HasUnread))
+            if (e.PropertyName is nameof(NotificationService.UnreadCount)
+                                or nameof(NotificationService.HasUnread))
             {
                 this.RaisePropertyChanged(nameof(HasUnread));
                 this.RaisePropertyChanged(nameof(UnreadCount));
@@ -37,9 +41,10 @@ public sealed class NotificationButtonViewModel : ViewModelBase
         {
             IsPanelOpen = !IsPanelOpen;
 
-            // При открытии панели отмечаем все как прочитанные
             if (IsPanelOpen)
             {
+                Log.Debug("[NotificationButton] Panel opened");
+                _ = _panelViewModel.OnPanelOpenedAsync();
                 _notificationService.MarkAllAsRead();
             }
         }));

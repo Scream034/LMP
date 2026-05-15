@@ -1,6 +1,5 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:mi="using:Material.Icons.Avalonia"
     x:Class="LMP.UI.Controls.CopyLinkButton"
     x:Name="Root">
 
@@ -15,7 +14,6 @@
                 </Transitions>
             </Setter>
         </Style>
-
         <Style Selector="Button.copy-btn Border.hover-ring">
             <Setter Property="Opacity" Value="0" />
             <Setter Property="Transitions">
@@ -24,52 +22,87 @@
                 </Transitions>
             </Setter>
         </Style>
-
         <Style Selector="Button.copy-btn:pointerover Border.hover-ring">
             <Setter Property="Opacity" Value="1" />
         </Style>
-
         <Style Selector="Button.copy-btn:pressed Border.hover-ring">
             <Setter Property="Opacity" Value="1" />
         </Style>
-
         <Style Selector="Button.copy-btn:pressed">
             <Setter Property="Opacity" Value="0.82" />
         </Style>
     </UserControl.Styles>
 
-    <Button Classes="copy-btn"
-        Click="OnClick"
-        Width="{Binding ButtonSize, ElementName=Root}"
-        Height="{Binding ButtonSize, ElementName=Root}"
-        CornerRadius="999"
-        VerticalAlignment="Center"
-        HorizontalAlignment="Center"
-        ToolTip.Tip="{Binding ToolTipText, ElementName=Root}">
+    <Panel>
+        <Button x:Name="CopyButton"
+            Classes="copy-btn"
+            Click="OnClick"
+            Width="{Binding ButtonSize, ElementName=Root}"
+            Height="{Binding ButtonSize, ElementName=Root}"
+            CornerRadius="999"
+            VerticalAlignment="Center"
+            HorizontalAlignment="Center"
+            ToolTip.Tip="{Binding ToolTipText, ElementName=Root}"
+            ToolTip.Placement="Top"
+            ToolTip.VerticalOffset="-6">
 
-        <Grid Width="{Binding ButtonSize, ElementName=Root}"
-            Height="{Binding ButtonSize, ElementName=Root}">
+            <Grid Width="{Binding ButtonSize, ElementName=Root}"
+                Height="{Binding ButtonSize, ElementName=Root}">
 
-            <Border Classes="hover-ring"
-                Margin="2"
-                CornerRadius="999"
+                <Border Classes="hover-ring"
+                    Margin="2"
+                    CornerRadius="999"
+                    BorderThickness="1"
+                    IsVisible="{Binding ShowHoverRing, ElementName=Root}"
+                    BorderBrush="{DynamicResource AccentBrush}" />
+
+                <PathIcon x:Name="LinkIcon"
+                    Width="{Binding IconSize, ElementName=Root}"
+                    Height="{Binding IconSize, ElementName=Root}"
+                    Data="{StaticResource Icon.LinkVariant}"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                    <PathIcon.Transitions>
+                        <Transitions>
+                            <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+                        </Transitions>
+                    </PathIcon.Transitions>
+                </PathIcon>
+            </Grid>
+        </Button>
+
+        <!--
+            Hint popup над кнопкой — идентичен по структуре остальным hint-popup в PlayerBar.
+            Topmost="True" гарантирует отображение поверх hover-слоёв.
+            HorizontalOffset центрирует popup относительно кнопки из code-behind.
+        -->
+        <Popup x:Name="HintPopup"
+            Placement="Top"
+            PlacementTarget="{Binding #CopyButton}"
+            IsLightDismissEnabled="False"
+            IsHitTestVisible="False"
+            Topmost="True"
+            VerticalOffset="-8">
+            <Border x:Name="HintBorder"
+                Padding="10,7"
+                Background="{DynamicResource BgElevatedBrush}"
+                BorderBrush="{DynamicResource BgHighlightBrush}"
                 BorderThickness="1"
-                IsVisible="{Binding ShowHoverRing, ElementName=Root}"
-                BorderBrush="{DynamicResource AccentBrush}" />
-
-            <mi:MaterialIcon x:Name="LinkIcon"
-                Width="{Binding IconSize, ElementName=Root}"
-                Height="{Binding IconSize, ElementName=Root}"
-                Kind="{Binding IconKind, ElementName=Root}"
-                Foreground="{Binding IconForeground, ElementName=Root}"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center">
-                <mi:MaterialIcon.Transitions>
-                    <Transitions>
-                        <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
-                    </Transitions>
-                </mi:MaterialIcon.Transitions>
-            </mi:MaterialIcon>
-        </Grid>
-    </Button>
+                BoxShadow="0 4 16 0 #50000000"
+                CornerRadius="8">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <PathIcon x:Name="HintIcon"
+                        Width="13" Height="13"
+                        VerticalAlignment="Center"
+                        Data="{StaticResource Icon.Check}"
+                        Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock x:Name="HintText"
+                        FontSize="12" FontWeight="SemiBold"
+                        VerticalAlignment="Center"
+                        Foreground="{DynamicResource TextPrimaryBrush}" />
+                </StackPanel>
+            </Border>
+        </Popup>
+    </Panel>
 </UserControl>

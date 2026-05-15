@@ -2,7 +2,6 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Playlist"
     xmlns:asyncImage="using:AsyncImageLoader"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:controls="using:LMP.UI.Controls"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
     xmlns:b="using:LMP.Core.Behaviors"
@@ -12,18 +11,21 @@
 
     <UserControl.Styles>
         <Style Selector="GridSplitter.header-splitter">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="MinHeight" Value="6" />
+            <Setter Property="Background" Value="{DynamicResource BgElevated}" />
+            <Setter Property="CornerRadius" Value="20" />
+            <Setter Property="Opacity" Value="0.1" />
+            <Setter Property="MinHeight" Value="3" />
             <Setter Property="Cursor" Value="SizeNorthSouth" />
             <Setter Property="Transitions">
                 <Transitions>
                     <BrushTransition Property="Background" Duration="0:0:0.15" />
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
                 </Transitions>
             </Setter>
         </Style>
         <Style Selector="GridSplitter.header-splitter:pointerover">
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Opacity" Value="0.3" />
+            <Setter Property="Opacity" Value="0.9" />
         </Style>
 
         <!-- Fade-in for playlist content -->
@@ -38,67 +40,60 @@
         <Style Selector="Grid.playlist-content.loaded">
             <Setter Property="Opacity" Value="1" />
         </Style>
-
-        <Style Selector="Button.copy-btn:pointerover Border.hover-ring">
-            <Setter Property="Opacity" Value="0" />
-        </Style>
-
-        <Style Selector="Button.copy-btn:pressed Border.hover-ring">
-            <Setter Property="Opacity" Value="0" />
-        </Style>
     </UserControl.Styles>
 
     <Grid Classes="playlist-content"
         Classes.loaded="{Binding !IsLoading}">
         <Grid.RowDefinitions>
-            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}" MinHeight="180"
-                MaxHeight="340" />
+            <RowDefinition Height="{Binding HeaderHeight, Mode=TwoWay}"
+                MinHeight="280"
+                MaxHeight="400" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <!-- ═══ HEADER ═══ -->
-        <Panel Grid.Row="0">
+        <Panel Grid.Row="0" HorizontalAlignment="Stretch">
+
             <!-- 1. Базовый фон -->
             <Border Background="{DynamicResource BgPrimaryBrush}" />
 
-            <!-- 2. Градиентный фон (для обычных плейлистов) -->
+            <!-- 2. Обычный плейлист -->
             <Border Background="{Binding HeaderBackground}"
                 IsVisible="{Binding !IsLikedPlaylist}"
                 Padding="32,24,32,24">
-                <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
-                    HorizontalAlignment="Left" VerticalAlignment="Bottom">
-                    <Grid ColumnDefinitions="Auto, *" Width="840">
-                        <!-- COVER -->
-                        <Border Grid.Column="0"
-                            Width="180" Height="180"
-                            CornerRadius="8" ClipToBounds="True"
-                            Background="{DynamicResource BgSkeletonBrush}"
-                            BoxShadow="{StaticResource CardShadow}">
-                            <Panel>
-                                <mi:MaterialIcon Kind="MusicNote"
-                                    Width="64" Height="64"
-                                    Foreground="{DynamicResource TextMutedBrush}"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Center"
-                                    IsVisible="{Binding ThumbnailUrl, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                <Grid ColumnDefinitions="Auto, *">
+                    <!-- COVER -->
+                    <Border Grid.Column="0"
+                        Width="180" Height="180"
+                        CornerRadius="8" ClipToBounds="True"
+                        Background="{DynamicResource BgSkeletonBrush}"
+                        BoxShadow="{StaticResource CardShadow}"
+                        VerticalAlignment="Bottom">
+                        <Panel>
+                            <PathIcon Data="{StaticResource Icon.MusicNote}"
+                                Width="64" Height="64"
+                                Foreground="{DynamicResource TextMutedBrush}"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                IsVisible="{Binding ThumbnailUrl,
+                                    Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                            <Image
+                                controls:QualityImage.Source="{Binding ThumbnailUrl}"
+                                controls:QualityImage.Quality="High"
+                                Stretch="UniformToFill"
+                                IsVisible="{Binding ThumbnailUrl,
+                                    Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </Panel>
+                    </Border>
 
-                                <Image
-                                    controls:QualityImage.Source="{Binding ThumbnailUrl}"
-                                    controls:QualityImage.Quality="High"
-                                    Stretch="UniformToFill"
-                                    IsVisible="{Binding ThumbnailUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            </Panel>
-                        </Border>
-
-                        <!-- INFO & ACTIONS (shared template) -->
-                        <ContentControl Grid.Column="1" Content="{Binding}"
-                            ContentTemplate="{StaticResource PlaylistHeaderInfoTemplate}" />
-                    </Grid>
-                </Viewbox>
+                    <!-- INFO & ACTIONS -->
+                    <ContentControl Grid.Column="1" Content="{Binding}"
+                        ContentTemplate="{StaticResource PlaylistHeaderInfoTemplate}" />
+                </Grid>
             </Border>
 
-            <!-- 3. Liked Playlist: градиент СВЕРХУ ВНИЗ + Heart обложка -->
+            <!-- 3. Liked Playlist -->
             <Border IsVisible="{Binding IsLikedPlaylist}" Padding="32,24,32,24">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="50%,0%" EndPoint="50%,100%">
@@ -106,28 +101,27 @@
                         <GradientStop Color="{DynamicResource BgElevated}" Offset="1.0" />
                     </LinearGradientBrush>
                 </Border.Background>
-                <Viewbox Stretch="Uniform" StretchDirection="DownOnly"
-                    HorizontalAlignment="Left" VerticalAlignment="Bottom">
-                    <Grid ColumnDefinitions="Auto, *" Width="840">
-                        <!-- COVER: Liked gradient с сердцем -->
-                        <Border Grid.Column="0"
-                            Width="180" Height="180"
-                            CornerRadius="8" ClipToBounds="True"
-                            BoxShadow="{StaticResource CardShadow}">
-                            <Border Classes="liked-gradient">
-                                <mi:MaterialIcon Kind="Heart" Width="72" Height="72"
-                                    Foreground="{DynamicResource AccentButtonTextBrush}"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Center"
-                                    Opacity="0.9" />
-                            </Border>
+                <Grid ColumnDefinitions="Auto, *">
+                    <!-- COVER: Liked -->
+                    <Border Grid.Column="0"
+                        Width="180" Height="180"
+                        CornerRadius="8" ClipToBounds="True"
+                        BoxShadow="{StaticResource CardShadow}"
+                        VerticalAlignment="Bottom">
+                        <Border Classes="liked-gradient">
+                            <PathIcon Data="{StaticResource Icon.Heart}"
+                                Width="72" Height="72"
+                                Foreground="{DynamicResource AccentButtonTextBrush}"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Opacity="0.9" />
                         </Border>
+                    </Border>
 
-                        <!-- INFO & ACTIONS (same shared template — no duplication!) -->
-                        <ContentControl Grid.Column="1" Content="{Binding}"
-                            ContentTemplate="{StaticResource PlaylistHeaderInfoTemplate}" />
-                    </Grid>
-                </Viewbox>
+                    <!-- INFO & ACTIONS -->
+                    <ContentControl Grid.Column="1" Content="{Binding}"
+                        ContentTemplate="{StaticResource PlaylistHeaderInfoTemplate}" />
+                </Grid>
             </Border>
         </Panel>
 
@@ -139,7 +133,9 @@
             HorizontalAlignment="Stretch" />
 
         <!-- ═══ TRACK LIST ═══ -->
-        <ScrollViewer Grid.Row="2">
+        <ScrollViewer Grid.Row="2"
+            HorizontalScrollBarVisibility="Disabled"
+            UseLayoutRounding="True">
             <controls:TrackListControl
                 Margin="24,12,24,0"
                 Items="{Binding Items}"
@@ -155,40 +151,33 @@
     <UserControl.Resources>
         <DataTemplate x:Key="PlaylistHeaderInfoTemplate" x:DataType="vm:PlaylistViewModel">
             <Grid Margin="32,0,0,0" RowDefinitions="*, Auto">
-                <StackPanel Grid.Row="0" VerticalAlignment="Bottom"
-                    Margin="0,0,0,24">
 
-                    <!-- Название и Описание на одной линии -->
-                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,0,0,4">
+                <!-- Title, Description, Stats -->
+                <StackPanel Grid.Row="0" VerticalAlignment="Bottom" Margin="0,0,0,24">
 
-                        <!-- Название плейлиста -->
-                        <TextBlock Text="{Binding PlaylistName}"
-                            FontSize="42" FontWeight="Black"
-                            Foreground="{DynamicResource TextPrimaryBrush}"
-                            TextWrapping="NoWrap"
-                            TextTrimming="CharacterEllipsis"
-                            MaxLines="1"
-                            MaxWidth="550"
-                            VerticalAlignment="Bottom"
-                            ClipToBounds="False"
-                            Padding="0,0,0,6"
-                            Margin="0,0,0,-6" />
+                    <!-- Название -->
+                    <TextBlock Text="{Binding PlaylistName}"
+                        FontSize="42" FontWeight="Black"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        TextWrapping="Wrap"
+                        MaxLines="2"
+                        TextTrimming="CharacterEllipsis"
+                        Padding="0,0,0,6"
+                        Margin="0,0,0,2" />
 
-                        <!-- Описание (приглушённый, на той же визуальной линии) -->
-                        <TextBlock Text="{Binding Description}"
-                            FontSize="14"
-                            Foreground="{DynamicResource TextMutedBrush}"
-                            TextWrapping="NoWrap"
-                            TextTrimming="CharacterEllipsis"
-                            MaxLines="1"
-                            MaxWidth="250"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,0,6"
-                            IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    </StackPanel>
+                    <!-- Описание -->
+                    <TextBlock Text="{Binding Description}"
+                        FontSize="14"
+                        Foreground="{DynamicResource TextMutedBrush}"
+                        TextWrapping="Wrap"
+                        MaxLines="2"
+                        TextTrimming="CharacterEllipsis"
+                        Margin="0,4,0,0"
+                        IsVisible="{Binding Description,
+                        Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
                     <!-- Статистика -->
-                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
                         <TextBlock Text="{Binding FormattedTrackCount}"
                             FontWeight="SemiBold"
                             Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -196,7 +185,6 @@
                         <TextBlock Text="{Binding FormattedDuration}"
                             Foreground="{DynamicResource TextSecondaryBrush}" />
 
-                        <!-- Скрепка в статистике -->
                         <Panel IsVisible="{Binding HasYoutubeLink}">
                             <controls:CopyLinkButton
                                 CopyUrl="{Binding PlaylistYoutubeUrl}"
@@ -209,7 +197,8 @@
                                 Margin="2,0,0,0" />
                         </Panel>
 
-                        <mi:MaterialIcon Kind="CloudCheck" Width="14" Height="14"
+                        <PathIcon Data="{StaticResource Icon.CloudCheck}"
+                            Width="14" Height="14"
                             Foreground="{DynamicResource TextMutedBrush}"
                             IsVisible="{Binding IsCloud}"
                             VerticalAlignment="Center"
@@ -227,9 +216,11 @@
                         Width="48" Height="48" CornerRadius="24"
                         ToolTip.Tip="{Binding L[Player_Play]}">
                         <Panel>
-                            <mi:MaterialIcon Kind="Play" Width="26" Height="26"
+                            <PathIcon Data="{StaticResource Icon.Play}"
+                                Width="26" Height="26"
                                 IsVisible="{Binding !IsPlayingThisPlaylist}" />
-                            <mi:MaterialIcon Kind="Pause" Width="26" Height="26"
+                            <PathIcon Data="{StaticResource Icon.Pause}"
+                                Width="26" Height="26"
                                 IsVisible="{Binding IsPlayingThisPlaylist}" />
                         </Panel>
                     </Button>
@@ -238,7 +229,8 @@
                         Command="{Binding ShufflePlayCommand}"
                         Width="40" Height="40" CornerRadius="20"
                         ToolTip.Tip="{Binding L[Playlist_ShufflePlay]}">
-                        <mi:MaterialIcon Kind="ShuffleVariant" Width="20" Height="20"
+                        <PathIcon Data="{StaticResource Icon.Shuffle}"
+                            Width="20" Height="20"
                             Foreground="{Binding IsShuffleActive,
                                 Converter={StaticResource BoolToSelector},
                                 ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
@@ -248,14 +240,15 @@
                         Command="{Binding AddToQueueCommand}"
                         Width="40" Height="40" CornerRadius="20"
                         ToolTip.Tip="{Binding L[Queue_Add]}">
-                        <mi:MaterialIcon Kind="PlaylistPlus" Width="20" Height="20" />
+                        <PathIcon Data="{StaticResource Icon.PlaylistPlus}" Width="20" Height="20" />
                     </Button>
 
                     <Button Classes="playback-btn"
                         Command="{Binding DownloadAllCommand}"
                         Width="40" Height="40" CornerRadius="20"
                         ToolTip.Tip="{Binding L[Playlist_DownloadAll]}">
-                        <mi:MaterialIcon Kind="Download" Width="20" Height="20"
+                        <PathIcon Data="{StaticResource Icon.Download}"
+                            Width="20" Height="20"
                             Foreground="{Binding IsDownloadingActive,
                                 Converter={StaticResource BoolToSelector},
                                 ConverterParameter='AccentBrush|TextSecondaryBrush'}" />
@@ -267,9 +260,11 @@
                         Width="40" Height="40" CornerRadius="20"
                         ToolTip.Tip="{Binding L[Playlist_SyncWithCloud]}">
                         <Panel>
-                            <mi:MaterialIcon Kind="Sync" Width="20" Height="20"
+                            <PathIcon Data="{StaticResource Icon.Sync}"
+                                Width="20" Height="20"
                                 IsVisible="{Binding !IsSyncing}" />
-                            <mi:MaterialIcon Kind="Sync" Width="20" Height="20"
+                            <PathIcon Data="{StaticResource Icon.Sync}"
+                                Width="20" Height="20"
                                 IsVisible="{Binding IsSyncing}"
                                 Classes="spinning" />
                         </Panel>
@@ -280,7 +275,7 @@
                         IsVisible="{Binding CanEdit}"
                         Width="40" Height="40" CornerRadius="20"
                         ToolTip.Tip="{Binding L[EditPlaylist_Title]}">
-                        <mi:MaterialIcon Kind="Pencil" Width="20" Height="20" />
+                        <PathIcon Data="{StaticResource Icon.Pencil}" Width="20" Height="20" />
                     </Button>
 
                     <Border Width="1" Height="24"

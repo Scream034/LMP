@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Services;
 using ReactiveUI;
@@ -25,6 +26,29 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     private List<string> _masterIds = [];
     private readonly Dictionary<string, TSource> _sources = [];
     private readonly Dictionary<string, TViewModel> _vmCache = [];
+
+    /// <summary>
+    /// Обратный индекс VM → ID для O(1) поиска идентификатора по экземпляру ViewModel.
+    /// Без него <see cref="GetVmId"/> требовал O(n) обход всего _vmCache.
+    /// Поддерживается атомарно вместе с _vmCache.
+    /// </summary>
+    private readonly Dictionary<TViewModel, string> _vmToId =
+        new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Переиспользуемый буфер для <see cref="RebuildVisibleItems"/>.
+    /// Избегает аллокации List на каждый вызов фильтра (горячий путь при наборе текста).
+    /// </summary>
+    private List<TViewModel> _rebuildBuffer = [];
+
+    /// <summary>
+    /// Переиспользуемый Dictionary для SyncVisibleItems.
+    /// Избегает аллокации на каждый rebuild (горячий путь при скролле + фильтре).
+    /// Очищается через Clear() — capacity сохраняется для следующего вызова.
+    /// </summary>
+    private readonly Dictionary<TViewModel, int> _syncPositions =
+        new(ReferenceEqualityComparer.Instance);
+
     private CancellationTokenSource? _loadCts;
     private bool _isDisposed;
 
@@ -98,9 +122,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         _masterIds = [.. allIds];
         _sources.Clear();
 
-        foreach (var vm in _vmCache.Values)
-            vm.Dispose();
-        _vmCache.Clear();
+        DisposeAndClearVmCache();
         Items.Clear();
 
         if (_masterIds.Count == 0) return;
@@ -138,9 +160,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         foreach (var item in list)
             _sources[GetItemId(item)] = item;
 
-        foreach (var vm in _vmCache.Values)
-            vm.Dispose();
-        _vmCache.Clear();
+        DisposeAndClearVmCache();
         Items.Clear();
 
         RebuildVisibleItems();
@@ -153,7 +173,10 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected void RebuildVisibleItems()
     {
         var query = FilterQuery;
-        var newVisible = new List<TViewModel>(_masterIds.Count);
+
+        _rebuildBuffer.Clear();
+        if (_rebuildBuffer.Capacity < _masterIds.Count)
+            _rebuildBuffer.Capacity = _masterIds.Count;
 
         foreach (var id in _masterIds)
         {
@@ -164,34 +187,67 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             {
                 vm = CreateViewModel(source);
                 _vmCache[id] = vm;
+                _vmToId[vm] = id;
             }
 
-            newVisible.Add(vm);
+            _rebuildBuffer.Add(vm);
         }
 
-        SyncVisibleItems(newVisible);
+        SyncVisibleItems(_rebuildBuffer);
     }
 
     /// <summary>
-    /// In-place синхронизация Items с новым списком.
-    /// Минимизирует количество CollectionChanged событий:
-    /// заменяет по индексу вместо Clear + AddRange.
+    /// In-place синхронизация Items с новым списком без Replace-операций.
+    ///
+    /// <para><b>Критично для ItemsRepeater:</b> замена элемента по индексу
+    /// (<c>Items[i] = x</c>) эмитирует <c>Replace</c> в <c>ObservableCollection</c>,
+    /// что вызывает переработку anchor-элемента в <c>ScrollContentPresenter</c>
+    /// и приводит к фризам/прыжкам скролла (Avalonia issue #7593, PR #16347).</para>
+    ///
+    /// <para><b>Стратегия:</b> только Add/Remove/Move — никаких Replace.
+    /// Move не меняет anchor candidates, Remove/Add — изолированные операции.</para>
+    ///
+    /// <para><b>O(n) вместо O(n²):</b> используем Dictionary с ReferenceEquality
+    /// для поиска существующих элементов за O(1) вместо линейного сканирования.</para>
     /// </summary>
     private void SyncVisibleItems(List<TViewModel> newItems)
     {
         while (Items.Count > newItems.Count)
             Items.RemoveAt(Items.Count - 1);
 
+        // Переиспользуем _syncPositions вместо new Dictionary на каждый вызов.
+        _syncPositions.Clear();
+        for (int i = 0; i < Items.Count; i++)
+            _syncPositions[Items[i]] = i;
+
         for (int i = 0; i < newItems.Count; i++)
         {
             if (i < Items.Count)
             {
-                if (!ReferenceEquals(Items[i], newItems[i]))
-                    Items[i] = newItems[i];
+                if (ReferenceEquals(Items[i], newItems[i])) continue;
+
+                if (_syncPositions.TryGetValue(newItems[i], out int existingAt)
+                    && existingAt > i
+                    && existingAt < Items.Count
+                    && ReferenceEquals(Items[existingAt], newItems[i]))
+                {
+                    Items.Move(existingAt, i);
+                    _syncPositions[newItems[i]] = i;
+                    for (int k = i + 1; k <= existingAt && k < Items.Count; k++)
+                        _syncPositions[Items[k]] = k;
+                }
+                else
+                {
+                    Items.Insert(i, newItems[i]);
+                    _syncPositions[newItems[i]] = i;
+                    for (int k = i + 1; k < Items.Count; k++)
+                        _syncPositions[Items[k]] = k;
+                }
             }
             else
             {
                 Items.Add(newItems[i]);
+                _syncPositions[newItems[i]] = i;
             }
         }
     }
@@ -282,20 +338,59 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     protected List<string> GetAllIds() => [.. _masterIds];
 
-    private string GetVmId(TViewModel vm)
-    {
-        foreach (var kvp in _vmCache)
-        {
-            if (ReferenceEquals(kvp.Value, vm)) return kvp.Key;
-        }
-        return string.Empty;
-    }
+    /// <summary>
+    /// O(1) поиск ID по экземпляру ViewModel через обратный индекс.
+    /// Ранее — O(n) полный обход _vmCache.Values с ReferenceEquals.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private string GetVmId(TViewModel vm) =>
+        _vmToId.TryGetValue(vm, out var id) ? id : string.Empty;
 
     protected void CancelLoading()
     {
         _loadCts?.Cancel();
         _loadCts?.Dispose();
         _loadCts = null;
+    }
+
+    /// <summary>
+    /// Диспозит все VM в кэше и очищает оба словаря (_vmCache + _vmToId) атомарно.
+    /// </summary>
+    private void DisposeAndClearVmCache()
+    {
+        foreach (var vm in _vmCache.Values)
+            vm.Dispose();
+        _vmCache.Clear();
+        _vmToId.Clear();
+    }
+
+    #endregion
+
+    #region Local Mutations
+
+    /// <summary>
+    /// Удаляет элемент из всех внутренних структур без полного rebuild.
+    /// O(n) по _masterIds (List.Remove), O(1) по словарям и ObservableCollection.Remove.
+    /// 
+    /// <para><b>VM не диспозится:</b> экземпляр может быть shared через
+    /// <see cref="TrackViewModelFactory"/> (WeakReference cache).
+    /// Dispose произойдёт при GC или при полном Dispose ReorderableViewModel.</para>
+    /// </summary>
+    /// <returns>true если элемент был найден и удалён.</returns>
+    protected bool RemoveItemLocally(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return false;
+
+        bool removed = _masterIds.Remove(id);
+        _sources.Remove(id);
+
+        if (_vmCache.Remove(id, out var vm))
+        {
+            _vmToId.Remove(vm);
+            Items.Remove(vm);
+        }
+
+        return removed;
     }
 
     #endregion
@@ -311,14 +406,13 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             Log.Debug($"[ReorderableVM] Disposing {_vmCache.Count} cached VMs");
 
             CancelLoading();
+            DisposeAndClearVmCache();
 
-            foreach (var vm in _vmCache.Values)
-                vm.Dispose();
-
-            _vmCache.Clear();
             Items.Clear();
             _sources.Clear();
             _masterIds.Clear();
+            _rebuildBuffer = null!;
+            _syncPositions.Clear();
         }
 
         base.Dispose(disposing);

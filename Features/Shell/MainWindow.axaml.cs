@@ -11,8 +11,6 @@ using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
-using Material.Icons;
-using Material.Icons.Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 
@@ -98,7 +96,7 @@ public partial class MainWindow : Window
     private readonly Canvas? _copyHintCanvas;
     private readonly Border? _copyHintOverlay;
     private readonly TextBlock? _copyHintText;
-    private readonly MaterialIcon? _copyHintIcon;
+    private readonly PathIcon? _copyHintIcon;
     private CancellationTokenSource? _copyHintCts;
 
     private const int CopyHintDurationMs = 1800;
@@ -115,7 +113,7 @@ public partial class MainWindow : Window
         _copyHintCanvas = this.FindControl<Canvas>("CopyHintCanvas");
         _copyHintOverlay = this.FindControl<Border>("CopyHintOverlay");
         _copyHintText = this.FindControl<TextBlock>("CopyHintText");
-        _copyHintIcon = this.FindControl<MaterialIcon>("CopyHintIcon");
+        _copyHintIcon = this.FindControl<PathIcon>("CopyHintIcon");
 
         // Трекинг позиции курсора для позиционирования toast
         var rootGrid = this.FindControl<Grid>("RootGrid") ?? Content as Grid;
@@ -239,8 +237,8 @@ public partial class MainWindow : Window
 
         var maximizeIcon = this.FindControl<Border>("MaximizeIcon");
         var restoreIcon = this.FindControl<Grid>("RestoreIcon");
-        if (maximizeIcon != null) maximizeIcon.IsVisible = state != WindowState.Maximized;
-        if (restoreIcon != null) restoreIcon.IsVisible = state == WindowState.Maximized;
+        maximizeIcon?.IsVisible = state != WindowState.Maximized;
+        restoreIcon?.IsVisible = state == WindowState.Maximized;
 
         if (state == WindowState.Minimized)
         {
@@ -1187,23 +1185,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Применяет иконку и цвет по типу hint-а без биндинга — нет боксинга.
+    /// Применяет иконку и цвет акцента по типу hint-а.
+    /// Использует StaticResource из Icons.axaml — zero alloc после первого парсинга.
     /// </summary>
     private void ApplyCopyHintKind(CopyHintKind kind)
     {
         if (_copyHintIcon is null || _copyHintOverlay is null) return;
 
-        var (iconKind, resourceKey) = kind switch
+        var (iconKey, resourceKey) = kind switch
         {
-            CopyHintKind.Warning => (MaterialIconKind.AlertCircleOutline, "SystemWarnOrangeBrush"),
-            CopyHintKind.Error => (MaterialIconKind.CloseCircleOutline, "SystemErrorRedBrush"),
-            _ => (MaterialIconKind.CheckCircleOutline, "AccentBrush")
+            CopyHintKind.Warning => ("Icon.InformationOutline", "SystemWarnOrangeBrush"),
+            CopyHintKind.Error => ("Icon.Close", "SystemErrorRedBrush"),
+            _ => ("Icon.CheckCircle", "AccentBrush")
         };
 
-        _copyHintIcon.Kind = iconKind;
+        var themeVariant = Application.Current?.ActualThemeVariant;
 
-        if (Application.Current?.Resources.TryGetResource(
-                resourceKey, Application.Current.ActualThemeVariant, out var res) == true
+        if (Application.Current?.Resources.TryGetResource(iconKey, themeVariant, out var geo) == true
+            && geo is StreamGeometry geometry)
+        {
+            _copyHintIcon.Data = geometry;
+        }
+
+        if (Application.Current?.Resources.TryGetResource(resourceKey, themeVariant, out var res) == true
             && res is IBrush brush)
         {
             _copyHintIcon.Foreground = brush;

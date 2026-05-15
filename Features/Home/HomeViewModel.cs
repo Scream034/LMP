@@ -1,5 +1,4 @@
-﻿using LMP.Core.Helpers;
-using LMP.Core.Models;
+﻿using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using LMP.Features.Shared;
@@ -12,37 +11,39 @@ using System.Reactive.Linq;
 
 namespace LMP.Features.Home;
 
-public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewModel>, IDisposable
+/// <summary>
+/// ViewModel главного экрана. Категории + поиск через YouTube с кэшированием.
+/// Smart Parent (трек-активность, прогресс загрузки) унаследован от TrackListPaginatedViewModel.
+/// </summary>
+public sealed class HomeViewModel : TrackListPaginatedViewModel
 {
     #region Constants
+
     private const int DefaultBatchSize = 30;
     private const int DefaultPrefetch = 20;
+
     #endregion
 
     #region Fields
+
     private readonly YoutubeProvider _youtube;
     private readonly SearchCacheService _searchCache;
     private readonly ImageCacheService _imageCache;
-    private readonly AudioEngine _audio;
-    private readonly TrackViewModelFactory _vmFactory;
     private readonly EventHandler<string> _languageChangedHandler;
 
     private string _currentQuery = "";
-    private int _fetchOffset = 0;
+    private int _fetchOffset;
     private CancellationTokenSource? _categoryCts;
     private bool _isDisposed;
+
     #endregion
 
     #region Properties
+
     protected override int BatchSize => DefaultBatchSize;
     protected override int PrefetchThreshold => DefaultPrefetch;
 
-    /// <summary>
-    /// true после завершения первой загрузки данных.
-    /// View показывает скелетон пока false, основной контент когда true.
-    /// </summary>
     [Reactive] public bool IsContentReady { get; private set; }
-
     [Reactive] public string Greeting { get; private set; } = string.Empty;
     [Reactive] public bool ShowDebugInfo { get; set; }
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
@@ -51,11 +52,14 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     public DebugStats Stats { get; } = new();
 
     public ReadOnlyObservableCollection<TrackItemViewModel> ActiveTracks => Items;
+
     #endregion
 
     #region Commands
+
     public ReactiveCommand<Unit, bool> ToggleDebugCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
+
     #endregion
 
     #region Constructor
@@ -65,13 +69,13 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         SearchCacheService searchCache,
         ImageCacheService imageCache,
         AudioEngine audio,
+        DownloadService downloads,
         TrackViewModelFactory vmFactory)
+        : base(audio, downloads, vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
         _imageCache = imageCache;
-        _audio = audio;
-        _vmFactory = vmFactory;
 
         UpdateGreeting();
 
@@ -84,27 +88,28 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
         InitializeCategories();
 
-        ToggleDebugCommand = CreateCommand(ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo));
-        RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true)));
+        ToggleDebugCommand = CreateCommand(
+            ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo));
 
-        // Подписка на смену категории — будет работать только после OnNavigatedToAsync
+        RefreshCommand = CreateCommand(
+            ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true)));
+
         this.WhenAnyValue(x => x.SelectedCategory)
             .WhereNotNull()
-            .Skip(1) // Пропускаем начальную установку
-            .Where(_ => IsContentReady) // Только после первой инициализации
+            .Skip(1)
+            .Where(_ => IsContentReady)
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(async _ => await LoadTracksAsync())
             .DisposeWith(Disposables);
-
-        // НЕ загружаем данные в конструкторе!
-        // Загрузка будет запущена из OnNavigatedToAsync() после CrossFade-анимации.
     }
 
     #endregion
 
+    #region Navigation
+
     /// <summary>
-    /// Вызывается из MainWindowViewModel после задержки (180ms).
-    /// Запускаем тяжёлую загрузку треков и категорий.
+    /// Вызывается из MainWindowViewModel после CrossFade-анимации.
+    /// Первая тяжёлая загрузка запускается здесь, не в конструкторе.
     /// </summary>
     public override async Task OnNavigatedToAsync()
     {
@@ -114,24 +119,21 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         IsContentReady = true;
     }
 
-    #region Overrides & Filter Implementation
+    #endregion
 
-    protected override bool FilterItem(TrackInfo item, string query)
-        => TrackFilters.MatchesTitleOrAuthor(item, query);
+    #region TrackListPaginatedViewModel Implementation
 
-    protected override TrackItemViewModel CreateItemViewModel(TrackInfo track)
+    protected override void OnPlay(TrackInfo track)
     {
-        return _vmFactory.GetOrCreate(track, PlayWithContext);
+        Task.Run(async () => await Audio.PlayTrackAsync(track));
+        _ = LibService.AddToRecentlyPlayedAsync(track);
     }
-
-    protected override string GetItemId(TrackInfo item) => item.Id;
 
     protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
     {
         if (SelectedCategory?.IsSpecial == true) return [];
 
         _fetchOffset += 50;
-
         var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
         if (ct.IsCancellationRequested) return [];
 
@@ -154,6 +156,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         UpdateStats();
         return result;
     }
+
     #endregion
 
     #region Private Methods
@@ -161,7 +164,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     private async Task LoadTracksAsync(bool force = false)
     {
         var category = SelectedCategory;
-        if (category == null) return;
+        if (category is null) return;
 
         _categoryCts?.Cancel();
         _categoryCts?.Dispose();
@@ -175,49 +178,51 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         {
             await Task.Delay(50, ct);
 
-            List<TrackInfo> tracks;
             if (category.IsSpecial)
             {
-                tracks = await LibService.GetRecentlyPlayedAsync(100);
+                var recent = await LibService.GetRecentlyPlayedAsync(100);
                 if (ct.IsCancellationRequested) return;
-                await InitializeItemsAsync(tracks, canFetchMore: false);
+                await InitializeItemsAsync(recent, canFetchMore: false);
             }
             else
             {
                 _currentQuery = category.Query;
 
-                var cached = await _searchCache.GetAsync(_currentQuery, SearchSource.YouTube, 30);
+                var cached = !force
+                    ? await _searchCache.GetAsync(_currentQuery, SearchSource.YouTube, 30)
+                    : null;
 
-                if (cached != null && cached.Count > 0 && !force)
+                List<TrackInfo> tracks;
+
+                if (cached is { Count: > 0 })
                 {
                     tracks = cached;
-                    if (ct.IsCancellationRequested) return;
                     _ = RefreshCacheInBackgroundAsync(ct);
                 }
                 else
                 {
                     tracks = await _youtube.SearchAsync(_currentQuery, 100);
-
                     if (ct.IsCancellationRequested) return;
 
                     if (tracks.Count > 0)
-                    {
                         _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, tracks);
-                    }
                 }
 
-                var imageUrls = tracks.Take(20).Select(static t => t.ThumbnailUrl).Where(static u => !string.IsNullOrEmpty(u));
+                var imageUrls = tracks.Take(20)
+                    .Select(static t => t.ThumbnailUrl)
+                    .Where(static u => !string.IsNullOrEmpty(u));
                 _ = _imageCache.PrefetchAsync(imageUrls!, ct);
 
                 if (ct.IsCancellationRequested) return;
-
                 await InitializeItemsAsync(tracks, canFetchMore: true);
             }
+
             UpdateStats();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Log.Info($"Load error: {ex.Message}");
+            Log.Error($"[HomeVM] Load error: {ex.Message}");
         }
     }
 
@@ -227,26 +232,19 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
         {
             await Task.Delay(3000, ct);
             var fresh = await _youtube.SearchAsync(_currentQuery, 100);
-            if (ct.IsCancellationRequested) return;
-
-            if (fresh.Count > 0)
-            {
-                await _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, fresh);
-            }
+            if (ct.IsCancellationRequested || fresh.Count == 0) return;
+            await _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, fresh);
         }
-        catch { }
-    }
-
-    private void PlayWithContext(TrackInfo track)
-    {
-        Task.Run(async () => await _audio.PlayTrackAsync(track));
-        _ = LibService.AddToRecentlyPlayedAsync(track);
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Warn($"[HomeVM] Background cache refresh failed: {ex.Message}");
+        }
     }
 
     private void UpdateGreeting()
     {
-        var hour = DateTime.Now.Hour;
-        var key = hour switch
+        var key = DateTime.Now.Hour switch
         {
             < 12 => "Home_Greeting_Morning",
             < 18 => "Home_Greeting_Afternoon",
@@ -256,22 +254,22 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
     }
 
     /// <summary>
-    /// Обновляет имена категорий in-place вместо Clear() + Add().
-    /// Clear() → 14 CollectionChanged → сброс SelectedCategory → лишний LoadTracksAsync.
-    /// In-place: ноль лишних событий.
+    /// In-place обновление имён категорий.
+    /// Clear() + Add() даёт 14 CollectionChanged → сброс SelectedCategory → лишний Load.
+    /// In-place: только PropertyChanged на отдельных полях, порядок и ссылки сохранены.
     /// </summary>
     private void InitializeCategories()
     {
         ReadOnlySpan<(string key, string fallback, string query, bool special)> defs =
         [
-            ("Category_RecentlyPlayed", "Recently Played", "",                        true),
-        ("Category_Trending",       "Trending",        "trending music 2024",     false),
-        ("Category_Pop",            "Pop",             "pop hits 2024",           false),
-        ("Category_HipHop",         "Hip-Hop",         "hip hop 2024",            false),
-        ("Category_Electronic",     "Electronic",      "electronic music",        false),
-        ("Category_LoFi",           "Lo-Fi",           "lofi hip hop chill beats", false),
-        ("Category_Rock",           "Rock",            "rock music",              false),
-    ];
+            ("Category_RecentlyPlayed", "Recently Played", "",                         true),
+            ("Category_Trending",       "Trending",        "trending music 2024",      false),
+            ("Category_Pop",            "Pop",             "pop hits 2024",            false),
+            ("Category_HipHop",         "Hip-Hop",         "hip hop 2024",             false),
+            ("Category_Electronic",     "Electronic",      "electronic music",         false),
+            ("Category_LoFi",           "Lo-Fi",           "lofi hip hop chill beats", false),
+            ("Category_Rock",           "Rock",            "rock music",               false),
+        ];
 
         for (int i = Categories.Count; i < defs.Length; i++)
             Categories.Add(new CategoryItem());
@@ -306,7 +304,7 @@ public sealed class HomeViewModel : PaginatedViewModel<TrackInfo, TrackItemViewM
 
     #endregion
 
-    #region IDisposable Implementation
+    #region IDisposable
 
     protected override void Dispose(bool disposing)
     {

@@ -8,7 +8,6 @@ using ReactiveUI.Fody.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Audio;
 using LMP.Core.Helpers;
-using LMP.UI.Controls;
 
 namespace LMP.Features.Shared;
 
@@ -44,6 +43,13 @@ public sealed class TrackItemViewModel : ViewModelBase
 
     public bool ShowAddToQueue => !IsQueueContext;
 
+    /// <summary>
+    /// Замена MultiBinding BoolConverters.And в AXAML.
+    /// Вычисляется в VM — zero runtime reflection при рециклировании контейнера.
+    /// Обновляется через OnTrackPropertyChanged при смене IsCached/IsDownloaded.
+    /// </summary>
+    public bool ShowCachedIcon => Track.IsCached && !Track.IsDownloaded;
+
     public string DownloadStatusText
     {
         get
@@ -58,7 +64,6 @@ public sealed class TrackItemViewModel : ViewModelBase
     public Action<TrackInfo>? RemoveFromPlaylistAction { get; set; }
     public string? SourceContextId { get; set; }
 
-    // ICommand вместо ReactiveCommand: ~6x меньше объектов на каждую команду.
     public ICommand PlayCommand { get; }
     public ICommand ToggleLikeCommand { get; }
     public ICommand AddToQueueCommand { get; }
@@ -109,8 +114,24 @@ public sealed class TrackItemViewModel : ViewModelBase
 
     private void OnTrackPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(Track.IsDownloaded) or nameof(Track.IsCached))
-            this.RaisePropertyChanged(nameof(DownloadStatusText));
+        switch (e.PropertyName)
+        {
+            case nameof(Track.IsDownloaded):
+                // Трек скачан → прогресс-бар больше не нужен
+                if (Track.IsDownloaded && IsDownloading)
+                {
+                    IsDownloading = false;
+                    DownloadProgress = 0f;
+                }
+                this.RaisePropertyChanged(nameof(DownloadStatusText));
+                this.RaisePropertyChanged(nameof(ShowCachedIcon));
+                break;
+
+            case nameof(Track.IsCached):
+                this.RaisePropertyChanged(nameof(DownloadStatusText));
+                this.RaisePropertyChanged(nameof(ShowCachedIcon));
+                break;
+        }
     }
 
     private async Task PlayAsync()
@@ -143,23 +164,28 @@ public sealed class TrackItemViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Вызывается Smart Parent-ом при смене трека или состояния воспроизведения. O(1).
-    /// </summary>
     public void SetActive(bool isActive, bool isPlaying)
     {
         IsActive = isActive;
         IsPlaying = isActive && isPlaying;
     }
 
-    /// <summary>
-    /// Вызывается Smart Parent-ом при обновлении прогресса загрузки. O(1).
-    /// </summary>
     public void SetDownloadState(bool isDownloading, float progress)
     {
+        // Если трек уже скачан — принудительно сбрасываем состояние загрузки,
+        // независимо от того что передал вызывающий.
+        // Защита от race condition: OnCompleted → IsDownloaded=true → SetDownloadState(true, 1.0)
+        if (Track.IsDownloaded)
+            isDownloading = false;
+
         IsDownloading = isDownloading;
-        DownloadProgress = progress;
-        if (!isDownloading) this.RaisePropertyChanged(nameof(DownloadStatusText));
+        DownloadProgress = isDownloading ? progress : 0f;
+
+        if (!isDownloading)
+        {
+            this.RaisePropertyChanged(nameof(DownloadStatusText));
+            this.RaisePropertyChanged(nameof(ShowCachedIcon));
+        }
     }
 
     public void UpdatePlayAction(Action<TrackInfo>? onPlay) => _onPlay = onPlay;
@@ -173,10 +199,6 @@ public sealed class TrackItemViewModel : ViewModelBase
             await _manager.AddTrackToPlaylistAsync(playlistId, Track);
     }
 
-    /// <summary>
-    /// Копирует ссылку на трек и показывает hint через CopyHintService.
-    /// Anchor не передаём — TrackListControl передаёт его через перегрузку.
-    /// </summary>
     private async Task CopyLinkAsync()
     {
         if (IsDisposed) return;
@@ -199,7 +221,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         CopyHintService.Instance.Show(
             L["Track_Copied"] ?? "Copied!",
             CopyHintKind.Success,
-            null); // ИСПОЛЬЗУЕМ ДЕФОЛТНОЕ ПОЛОЖЕНИЕ
+            null);
     }
 
     protected override void Dispose(bool disposing)

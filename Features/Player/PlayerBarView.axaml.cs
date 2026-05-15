@@ -113,6 +113,21 @@ public partial class PlayerBarView : UserControl
 
     #region Lifecycle
 
+    private void OnShuffleButtonEntered(object? sender, PointerEventArgs e)
+        => ShufflePopup.IsOpen = true;
+
+    private void OnShuffleButtonExited(object? sender, PointerEventArgs e)
+        => ShufflePopup.IsOpen = false;
+
+    private void OnShuffleButtonPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.GetCurrentPoint(sender as Control).Properties.IsRightButtonPressed)
+        {
+            e.Handled = true;
+            _currentViewModel?.ToggleAutoShuffleCommand.Execute().Subscribe();
+        }
+    }
+
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
@@ -385,25 +400,6 @@ public partial class PlayerBarView : UserControl
         }
 
         _volumeHoverSubscribed = enabled;
-    }
-
-    #endregion
-
-    #region Shuffle Button - Right Click Handler
-
-    /// <summary>
-    /// ЛКМ: ShuffleQueueCommand (через Command binding).
-    /// ПКМ: toggle auto-shuffle.
-    /// </summary>
-    private void OnShuffleButtonPressed(object? sender, PointerPressedEventArgs e)
-    {
-        var point = e.GetCurrentPoint(sender as Control);
-
-        if (point.Properties.IsRightButtonPressed)
-        {
-            e.Handled = true;
-            _currentViewModel?.ToggleAutoShuffleCommand.Execute().Subscribe();
-        }
     }
 
     #endregion

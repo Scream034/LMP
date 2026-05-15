@@ -2,7 +2,6 @@
 using Avalonia.Media;
 using LMP.Core.Models;
 using System.Globalization;
-using Material.Icons;
 using Avalonia.Input;
 using LMP.Core.Services;
 using Avalonia.Platform;
@@ -12,6 +11,41 @@ using Avalonia.Data;
 using Avalonia;
 
 namespace LMP.Core.Converters;
+
+/// <summary>
+/// Конвертер bool → StreamGeometry для PathIcon в виртуализованных списках.
+/// Устраняет повторный парсинг SVG path при рециклировании контейнеров ItemsRepeater.
+/// 
+/// <para>ConverterParameter формат: "TrueKey|FalseKey" 
+/// (ключи из Icons.axaml без префикса "Icon.").</para>
+/// 
+/// <para>Пример: ConverterParameter='Pause|Play' → Icon.Pause / Icon.Play</para>
+/// </summary>
+public sealed class BoolToGeometryConverter : IValueConverter
+{
+    public static readonly BoolToGeometryConverter Instance = new();
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is not bool boolVal || parameter is not string param)
+            return null;
+
+        var span = param.AsSpan();
+        int pipe = span.IndexOf('|');
+        if (pipe < 0) return null;
+
+        var key = boolVal
+            ? $"Icon.{span[..pipe]}"
+            : $"Icon.{span[(pipe + 1)..]}";
+
+        return Application.Current?.Resources.TryGetResource(key, null, out var resource) == true
+            ? resource
+            : null;
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
 
 public sealed class TimeSpanToStringConverter : IValueConverter
 {
@@ -47,36 +81,38 @@ public sealed class InverseBoolConverter : IValueConverter
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => value is bool b ? !b : value;
 }
 
+/// <summary>
+/// Конвертер volume → ключ ресурса геометрии иконки для PathIcon.
+/// Возвращает строку вида "Icon.*" для поиска в Application.Resources.
+/// </summary>
 public sealed class VolumeToIconConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        if (value is float vol)
+        var key = value switch
         {
-            return vol switch
-            {
-                0 => MaterialIconKind.VolumeOff,
-                < 0.33f => MaterialIconKind.VolumeLow,
-                < 0.66f => MaterialIconKind.VolumeMedium,
-                _ => MaterialIconKind.VolumeHigh
-            };
-        }
-        return MaterialIconKind.VolumeHigh;
+            float vol when vol == 0f => "Icon.VolumeMute",
+            float vol when vol < 0.33f => "Icon.VolumeLow",
+            float vol when vol < 0.66f => "Icon.VolumeMedium",
+            _ => "Icon.VolumeHigh"
+        };
+
+        return Application.Current?.Resources.TryGetResource(key, null, out var res) == true
+            ? res
+            : null;
     }
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotImplementedException();
 }
 
 /// <summary>
 /// Конвертирует bool в одно из двух значений по параметру "TrueValue|FalseValue".
-/// Кэширует результат парсинга параметра: Split + TryParse/Find вызываются
-/// один раз на уникальный параметр вместо каждого вызова конвертера.
+/// Поддерживает: IBrush (по ключу ресурса), string.
+/// MaterialIconKind-ветка удалена — используйте BoolToGeometryConverter для PathIcon.
 /// </summary>
 public sealed class BoolToSelectorConverter : IValueConverter
 {
-    /// <summary>
-    /// Кэш разобранных пар параметров. Ключ — строка параметра, значение — пара строк.
-    /// Параметров конечное число (~10-15 в приложении).
-    /// </summary>
     private static readonly Dictionary<string, (string TrueVal, string FalseVal)> _pairCache = [];
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -86,61 +122,22 @@ public sealed class BoolToSelectorConverter : IValueConverter
         if (!_pairCache.TryGetValue(key, out var pair))
         {
             var sep = key.IndexOf('|');
-            pair = sep >= 0
-                ? (key[..sep], key[(sep + 1)..])
-                : (key, key);
+            pair = sep >= 0 ? (key[..sep], key[(sep + 1)..]) : (key, key);
             _pairCache[key] = pair;
         }
 
         var chosen = b ? pair.TrueVal : pair.FalseVal;
 
-        // MaterialIconKind
-        if (targetType == typeof(MaterialIconKind) || targetType == typeof(object))
+        // IBrush по ключу ресурса
+        if (Application.Current?.TryFindResource(chosen, out var res) == true)
         {
-            if (Enum.TryParse<MaterialIconKind>(chosen, true, out var iconKind))
-                return iconKind;
+            if (res is IBrush brush) return brush;
+            if (res is Color color) return new SolidColorBrush(color);
         }
 
-        // IBrush
-        if (typeof(IBrush).IsAssignableFrom(targetType))
-        {
-            if (Application.Current?.TryFindResource(chosen, out var res) == true)
-            {
-                if (res is IBrush brush) return brush;
-                if (res is Color color) return new SolidColorBrush(color);
-            }
-
-            try { return SolidColorBrush.Parse(chosen); }
-            catch { return Brushes.Transparent; }
-        }
-
-        return chosen;
-    }
-
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotImplementedException();
-}
-
-public sealed class BoolToCursorConverter : IValueConverter
-{
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is bool boolValue && parameter is string param)
-        {
-            var parts = param.Split('|');
-            if (parts.Length == 2)
-            {
-                var cursorName = boolValue ? parts[0] : parts[1];
-                return cursorName switch
-                {
-                    "Hand" => new Cursor(StandardCursorType.Hand),
-                    "Arrow" => new Cursor(StandardCursorType.Arrow),
-                    "Wait" => new Cursor(StandardCursorType.Wait),
-                    _ => Cursor.Default
-                };
-            }
-        }
-        return Cursor.Default;
+        // Попытка парсинга как цвет
+        try { return SolidColorBrush.Parse(chosen); }
+        catch { return chosen; }
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -324,36 +321,6 @@ public sealed class GreaterThanConverter : IValueConverter
 }
 
 /// <summary>
-/// Конвертер для иконки режима повтора.
-/// </summary>
-public sealed class RepeatModeIconConverter : IValueConverter
-{
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        return value is RepeatMode mode && mode == RepeatMode.One
-            ? MaterialIconKind.RepeatOne
-            : MaterialIconKind.Repeat;
-    }
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotSupportedException();
-}
-
-/// <summary>
-/// Конвертер для цвета иконки режима повтора.
-/// </summary>
-public sealed class RepeatModeActiveConverter : IValueConverter
-{
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        return value is RepeatMode mode && mode != RepeatMode.None;
-    }
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotSupportedException();
-}
-
-/// <summary>
 /// Конвертер для проверки конкретного режима повтора.
 /// </summary>
 public sealed class RepeatModeEqualsConverter : IValueConverter
@@ -418,82 +385,6 @@ public sealed class BoolToFontWeightConverter : IValueConverter
 }
 
 /// <summary>
-/// Конвертирует bool в MaterialIconKind.
-/// Параметр: "TrueIcon|FalseIcon", например "Heart|HeartOutline".
-/// 
-/// Кэширует результат парсинга параметра: string.Split('|') + Enum.TryParse
-/// вызываются один раз на уникальный параметр вместо ~160 раз за цикл рециклинга
-/// (8 конвертеров × 20 видимых элементов).
-/// </summary>
-public sealed class BoolToIconConverter : IValueConverter
-{
-    /// <summary>
-    /// Кэш: "Heart|HeartOutline" → (MaterialIconKind.Heart, MaterialIconKind.HeartOutline).
-    /// Параметров конечное число (~5-8 в приложении), словарь не растёт бесконтрольно.
-    /// </summary>
-    private static readonly Dictionary<string, (MaterialIconKind TrueIcon, MaterialIconKind FalseIcon)?> _cache = [];
-
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is not bool b || parameter is not string key)
-            return MaterialIconKind.Help;
-
-        if (!_cache.TryGetValue(key, out var pair))
-        {
-            pair = ParseIconPair(key);
-            _cache[key] = pair;
-        }
-
-        return pair.HasValue
-            ? (b ? pair.Value.TrueIcon : pair.Value.FalseIcon)
-            : MaterialIconKind.Help;
-    }
-
-    private static (MaterialIconKind, MaterialIconKind)? ParseIconPair(string options)
-    {
-        var separatorIndex = options.IndexOf('|');
-        if (separatorIndex < 0) return null;
-
-        var truePart = options.AsSpan(0, separatorIndex);
-        var falsePart = options.AsSpan(separatorIndex + 1);
-
-        if (Enum.TryParse<MaterialIconKind>(truePart, true, out var trueIcon) &&
-            Enum.TryParse<MaterialIconKind>(falsePart, true, out var falseIcon))
-        {
-            return (trueIcon, falseIcon);
-        }
-
-        return null;
-    }
-
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotImplementedException();
-}
-
-/// <summary>
-/// Конвертирует bool в видимость window buttons
-/// </summary>
-public sealed class WindowButtonVisibilityConverter : IValueConverter
-{
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is bool isMaximized && parameter is string mode)
-        {
-            return mode switch
-            {
-                "Maximize" => !isMaximized,
-                "Restore" => isMaximized,
-                _ => true
-            };
-        }
-        return true;
-    }
-
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotImplementedException();
-}
-
-/// <summary>
 /// Конвертирует NotificationSeverity в Color из текущей темы.
 /// Error → SystemError, Warning → SystemWarnOrange, Info → SystemInfoBlue, Success → Accent.
 /// </summary>
@@ -536,31 +427,4 @@ public sealed class SeverityToColorConverter : IValueConverter
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotSupportedException();
-}
-
-/// <summary>
-/// Возвращает URL изображения только когда скролл остановлен.
-/// При быстром скролле возвращает null → ImageLoader не загружает картинку,
-/// отображается фоновый placeholder (BgSkeletonBrush).
-/// 
-/// values[0] = string ThumbnailUrl
-/// values[1] = bool IsScrollingFast
-/// </summary>
-public sealed class DeferredUrlConverter : IMultiValueConverter
-{
-    public static readonly DeferredUrlConverter Instance = new();
-
-    public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (values is not { Count: >= 2 })
-            return null;
-
-        if (values[0] is not string url || string.IsNullOrEmpty(url))
-            return null;
-
-        // values[1] может быть UnsetValue при recycling в VirtualizingStackPanel
-        var isScrollingFast = values[1] is true;
-
-        return isScrollingFast ? null : url;
-    }
 }

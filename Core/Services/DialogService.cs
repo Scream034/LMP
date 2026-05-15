@@ -38,7 +38,6 @@ public sealed class DialogService
     private static LocalizationService L => LocalizationService.Instance;
 
     private readonly CookieAuthService _authService;
-    private readonly NotificationService _notifications;
     private readonly Func<DialogHostViewModel> _getDialogHost;
 
     /// <summary>
@@ -56,11 +55,9 @@ public sealed class DialogService
     /// </param>
     public DialogService(
         CookieAuthService authService,
-        NotificationService notifications,
         Func<DialogHostViewModel> getDialogHost)
     {
         _authService = authService;
-        _notifications = notifications;
         _getDialogHost = getDialogHost;
     }
 
@@ -430,7 +427,6 @@ public sealed class DialogService
         var tcs = new TaskCompletionSource<List<SyncDecision>>();
 
         var vm = new SyncSelectionViewModel(
-            _notifications,
             items, existingLocalNames, trackCounts)
         {
             OnResult = result =>

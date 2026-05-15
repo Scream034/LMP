@@ -1,116 +1,115 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:d="using:LMP.UI.Dialogs"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             xmlns:asyncImage="using:AsyncImageLoader"
-             x:Class="LMP.UI.Controls.PlaylistCoverPicker"
-             x:DataType="d:PlaylistCoverPickerViewModel"
-             x:CompileBindings="True">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="using:LMP.UI.Dialogs"
+    xmlns:asyncImage="using:AsyncImageLoader"
+    x:Class="LMP.UI.Controls.PlaylistCoverPicker"
+    x:DataType="d:PlaylistCoverPickerViewModel"
+    x:CompileBindings="True">
 
     <Grid RowDefinitions="Auto, *">
 
         <!-- Row 0: Превью + статус + Apply (горизонтально) -->
         <Grid Grid.Row="0" ColumnDefinitions="Auto, *, Auto"
-              Margin="0,0,0,8">
+            Margin="0,0,0,8">
 
             <!-- Превью мозаики -->
             <Border Grid.Column="0"
-                    Width="72" Height="72"
-                    CornerRadius="6" ClipToBounds="True"
-                    Background="{DynamicResource BgSkeletonBrush}">
+                Width="72" Height="72"
+                CornerRadius="6" ClipToBounds="True"
+                Background="{DynamicResource BgSkeletonBrush}">
                 <Panel>
-                    <!-- Placeholder -->
+                    <!-- Placeholder превью мозаики -->
                     <StackPanel HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                IsVisible="{Binding !HasPreview}">
-                        <mi:MaterialIcon Kind="ImageMultipleOutline"
-                                         Width="24" Height="24"
-                                         Foreground="{DynamicResource TextMutedBrush}"
-                                         HorizontalAlignment="Center" />
+                        VerticalAlignment="Center"
+                        IsVisible="{Binding !HasPreview}">
+                        <PathIcon Data="{StaticResource Icon.ImageMultipleOutline}"
+                            Width="24" Height="24"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding SelectionHint}"
-                                   FontSize="9"
-                                   Foreground="{DynamicResource TextMutedBrush}"
-                                   HorizontalAlignment="Center"
-                                   Margin="0,2,0,0" />
+                            FontSize="9"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            HorizontalAlignment="Center"
+                            Margin="0,2,0,0" />
                     </StackPanel>
 
                     <!-- Реальное превью -->
                     <Image Source="{Binding MosaicPreview}"
-                           Stretch="UniformToFill"
-                           IsVisible="{Binding HasPreview}" />
+                        Stretch="UniformToFill"
+                        IsVisible="{Binding HasPreview}" />
                 </Panel>
             </Border>
 
             <!-- Статус и подсказка -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center"
-                        Margin="10,0,0,0" Spacing="2">
+                Margin="10,0,0,0" Spacing="2">
                 <TextBlock Text="{Binding SelectionStatus}"
-                           FontSize="12"
-                           Foreground="{DynamicResource TextSecondaryBrush}"
-                           FontWeight="Medium" />
+                    FontSize="12"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    FontWeight="Medium" />
                 <TextBlock Text="{Binding L[CoverPicker_SelectTracks]}"
-                           FontSize="10"
-                           Foreground="{DynamicResource TextMutedBrush}"
-                           TextWrapping="Wrap" />
+                    FontSize="10"
+                    Foreground="{DynamicResource TextMutedBrush}"
+                    TextWrapping="Wrap" />
             </StackPanel>
 
             <!-- Кнопка Apply -->
             <Button Grid.Column="2"
-                    Content="{Binding L[CoverPicker_Apply]}"
-                    Command="{Binding ApplyCommand}"
-                    Classes="accent accent-base"
-                    FontSize="11"
-                    Padding="10,5"
-                    VerticalAlignment="Center"
-                    IsVisible="{Binding HasPreview}" />
+                Content="{Binding L[CoverPicker_Apply]}"
+                Command="{Binding ApplyCommand}"
+                Classes="accent accent-base"
+                FontSize="11"
+                Padding="10,5"
+                VerticalAlignment="Center"
+                IsVisible="{Binding HasPreview}" />
         </Grid>
 
         <!-- Row 1: Виртуализированная сетка обложек -->
         <ScrollViewer Grid.Row="1"
-                      VerticalScrollBarVisibility="Auto"
-                      MaxHeight="140">
+            VerticalScrollBarVisibility="Auto"
+            MaxHeight="140">
             <ItemsRepeater ItemsSource="{Binding TrackCovers}">
                 <ItemsRepeater.Layout>
                     <UniformGridLayout MinItemWidth="56"
-                                       MinItemHeight="56"
-                                       MinColumnSpacing="4"
-                                       MinRowSpacing="4"
-                                       ItemsStretch="Uniform" />
+                        MinItemHeight="56"
+                        MinColumnSpacing="4"
+                        MinRowSpacing="4"
+                        ItemsStretch="Uniform" />
                 </ItemsRepeater.Layout>
                 <ItemsRepeater.ItemTemplate>
                     <DataTemplate x:DataType="d:TrackCoverItemViewModel">
                         <Button Command="{Binding ToggleCommand}"
-                                Padding="0"
-                                CornerRadius="4"
-                                Background="Transparent"
-                                BorderThickness="2"
-                                BorderBrush="{Binding IsSelected, 
+                            Padding="0"
+                            CornerRadius="4"
+                            Background="Transparent"
+                            BorderThickness="2"
+                            BorderBrush="{Binding IsSelected, 
                                     Converter={StaticResource BoolToSelector},
                                     ConverterParameter='AccentBrush|Transparent'}"
-                                Width="56" Height="56"
-                                ToolTip.Tip="{Binding TrackTitle}">
+                            Width="56" Height="56"
+                            ToolTip.Tip="{Binding TrackTitle}">
                             <Border CornerRadius="3" ClipToBounds="True">
                                 <Panel>
                                     <!-- Обложка -->
                                     <Image asyncImage:ImageLoader.Source="{Binding ThumbnailUrl}"
-                                           Stretch="UniformToFill"
-                                           Width="52" Height="52" />
+                                        Stretch="UniformToFill"
+                                        Width="52" Height="52" />
 
                                     <!-- Затемнение при выборе -->
                                     <Border Background="#60000000"
-                                            IsVisible="{Binding IsSelected}" />
+                                        IsVisible="{Binding IsSelected}" />
 
                                     <!-- Галочка + номер -->
                                     <Border Background="{DynamicResource AccentBrush}"
-                                            CornerRadius="0,0,6,0"
-                                            Padding="3,1"
-                                            HorizontalAlignment="Left"
-                                            VerticalAlignment="Top"
-                                            IsVisible="{Binding IsSelected}">
+                                        CornerRadius="0,0,6,0"
+                                        Padding="3,1"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Top"
+                                        IsVisible="{Binding IsSelected}">
                                         <TextBlock Text="{Binding SelectionOrder}"
-                                                   FontSize="9"
-                                                   FontWeight="Bold"
-                                                   Foreground="{DynamicResource AccentButtonTextBrush}" />
+                                            FontSize="9"
+                                            FontWeight="Bold"
+                                            Foreground="{DynamicResource AccentButtonTextBrush}" />
                                     </Border>
                                 </Panel>
                             </Border>

@@ -1,44 +1,44 @@
 <UserControl xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:dialogs="using:LMP.UI.Dialogs"
-             xmlns:mi="using:Material.Icons.Avalonia"
-             x:Class="LMP.UI.Dialogs.Content.AddToPlaylistDialogContent"
-             x:DataType="dialogs:AddToPlaylistDialogViewModel">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dialogs="using:LMP.UI.Dialogs"
+    x:Class="LMP.UI.Dialogs.Content.AddToPlaylistDialogContent"
+    x:DataType="dialogs:AddToPlaylistDialogViewModel">
 
     <Border Background="{DynamicResource BgPrimaryBrush}"
-            BorderBrush="{DynamicResource BgHighlightBrush}"
-            BorderThickness="1"
-            CornerRadius="8"
-            Padding="24"
-            Width="500"
-            MinHeight="500"
-            MaxHeight="800">
+        BorderBrush="{DynamicResource BgHighlightBrush}"
+        BorderThickness="1"
+        CornerRadius="8"
+        Padding="24"
+        Width="500"
+        MinHeight="500"
+        MaxHeight="800">
 
         <Grid RowDefinitions="Auto, Auto, Auto, *, Auto, Auto">
 
             <!-- Title -->
             <TextBlock Grid.Row="0"
-                       Text="{Binding L[AddToPlaylist_Title]}"
-                       FontSize="20" FontWeight="Bold"
-                       Margin="0,0,0,4" />
+                Text="{Binding L[AddToPlaylist_Title]}"
+                FontSize="20" FontWeight="Bold"
+                Margin="0,0,0,4" />
 
             <!-- Track name -->
             <TextBlock Grid.Row="1"
-                       Text="{Binding TrackDisplayName}"
-                       FontSize="13"
-                       Foreground="{DynamicResource TextMutedBrush}"
-                       TextTrimming="CharacterEllipsis"
-                       Margin="0,0,0,12" />
+                Text="{Binding TrackDisplayName}"
+                FontSize="13"
+                Foreground="{DynamicResource TextMutedBrush}"
+                TextTrimming="CharacterEllipsis"
+                Margin="0,0,0,12" />
 
             <!-- Search -->
             <TextBox Grid.Row="2"
-                     Text="{Binding FilterQuery, Mode=TwoWay}"
-                     Watermark="{Binding L[AddToPlaylist_SearchHint]}"
-                     Margin="0,0,0,12">
+                Text="{Binding FilterQuery, Mode=TwoWay}"
+                Watermark="{Binding L[AddToPlaylist_SearchHint]}"
+                Margin="0,0,0,12">
                 <TextBox.InnerLeftContent>
-                    <mi:MaterialIcon Kind="Magnify" Width="16" Height="16"
-                                     Foreground="{DynamicResource TextMutedBrush}"
-                                     Margin="8,0,4,0" />
+                    <PathIcon Data="{StaticResource Icon.Search}"
+                        Width="16" Height="16"
+                        Foreground="{DynamicResource TextMutedBrush}"
+                        Margin="8,0,4,0" />
                 </TextBox.InnerLeftContent>
             </TextBox>
 
@@ -48,21 +48,21 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="dialogs:PlaylistCheckItem">
                             <Border Margin="0,0,0,4" Padding="8,10" CornerRadius="6"
-                                    Background="{DynamicResource BgElevatedBrush}">
+                                Background="{DynamicResource BgElevatedBrush}">
                                 <Grid ColumnDefinitions="Auto, *, Auto">
                                     <CheckBox Grid.Column="0"
-                                              IsChecked="{Binding IsChecked}"
-                                              VerticalAlignment="Center"
-                                              Margin="0,0,10,0" />
+                                        IsChecked="{Binding IsChecked}"
+                                        VerticalAlignment="Center"
+                                        Margin="0,0,10,0" />
                                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Name}"
-                                                   FontWeight="SemiBold" FontSize="14" />
+                                            FontWeight="SemiBold" FontSize="14" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="2"
-                                               Text="{Binding TrackCount}"
-                                               FontSize="12"
-                                               Foreground="{DynamicResource TextMutedBrush}"
-                                               VerticalAlignment="Center" />
+                                        Text="{Binding TrackCount}"
+                                        FontSize="12"
+                                        Foreground="{DynamicResource TextMutedBrush}"
+                                        VerticalAlignment="Center" />
                                 </Grid>
                             </Border>
                         </DataTemplate>
@@ -72,21 +72,21 @@
 
             <!-- Summary -->
             <TextBlock Grid.Row="4"
-                       Text="{Binding SummaryText}"
-                       FontSize="12"
-                       Foreground="{DynamicResource TextMutedBrush}"
-                       Margin="0,12,0,0" />
+                Text="{Binding SummaryText}"
+                FontSize="12"
+                Foreground="{DynamicResource TextMutedBrush}"
+                Margin="0,12,0,0" />
 
             <!-- Buttons -->
             <StackPanel Grid.Row="5" Orientation="Horizontal"
-                        HorizontalAlignment="Right" Spacing="12"
-                        Margin="0,12,0,0">
+                HorizontalAlignment="Right" Spacing="12"
+                Margin="0,12,0,0">
                 <Button Content="{Binding L[Common_Cancel]}"
-                        Command="{Binding CancelCommand}"
-                        Background="Transparent" />
+                    Command="{Binding CancelCommand}"
+                    Background="Transparent" />
                 <Button Content="{Binding L[Common_OK]}"
-                        Command="{Binding ConfirmCommand}"
-                        Classes="accent accent-base" />
+                    Command="{Binding ConfirmCommand}"
+                    Classes="accent accent-base" />
             </StackPanel>
         </Grid>
     </Border>

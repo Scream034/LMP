@@ -1,6 +1,5 @@
 <Styles xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:mi="using:Material.Icons.Avalonia">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- PLAYER BAR STYLES — ДОПОЛНЕНИЯ к глобальным стилям                 -->
@@ -30,7 +29,7 @@
     </Style>
 
     <!-- ═══ HEART ICON ANIMATION ═══ -->
-    <Style Selector="Button.icon-btn mi|MaterialIcon.heart-icon">
+    <Style Selector="Button.icon-btn PathIcon.heart-icon">
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
             <Transitions>
@@ -39,7 +38,7 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.icon-btn:pressed mi|MaterialIcon.heart-icon">
+    <Style Selector="Button.icon-btn:pressed PathIcon.heart-icon">
         <Setter Property="RenderTransform" Value="scale(1.25)" />
     </Style>
 
@@ -174,7 +173,7 @@
         <Setter Property="Fill" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
     <Style Selector="Ellipse.vol-thumb.boosted">
-        <Setter Property="Fill" Value="{DynamicResource SystemWarnOrangeBrush}" />
+        <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <Style Selector="Border.vol-track">
@@ -197,19 +196,19 @@
         <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
     <Style Selector="Border.vol-fill.boosted">
-        <Setter Property="Background" Value="{DynamicResource SystemWarnOrangeBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
 
        <!-- ═══ AUTO-SHUFFLE INDICATOR ═══ -->
     <Style Selector="Button.playback-btn.auto-enabled">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
-    <Style Selector="Button.playback-btn.auto-enabled mi|MaterialIcon">
+    <Style Selector="Button.playback-btn.auto-enabled PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <!-- ═══ SHUFFLE ANIMATION (active = IsShuffleAnimating) ═══ -->
-    <Style Selector="Button.playback-btn.active mi|MaterialIcon">
+    <Style Selector="Button.playback-btn.active PathIcon">
         <Setter Property="RenderTransformOrigin" Value="50%, 50%" />
         <!-- Обязательно задаём тип трансформации ДО анимации -->
         <Setter Property="RenderTransform">

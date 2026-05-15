@@ -1,7 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Library"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:local="using:LMP.Core.Converters"
     xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Library.LibraryView"
@@ -11,96 +10,102 @@
 
     <Grid RowDefinitions="Auto, Auto, *">
 
-        <!-- Row 0: Stats (слева) + Actions (справа) -->
+        <!-- Row 0: Stats + Actions -->
         <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,20,24,4">
 
-            <!-- Левая часть: Статистика -->
-            <Border
-                IsVisible="{Binding !IsSyncing}"
-                Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
+            <!-- Stats -->
+            <Border IsVisible="{Binding !IsSyncing}"
+                    Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
                 <Border.Transitions>
                     <Transitions>
-                        <DoubleTransition Property="Opacity" Duration="0:0:0.4"
-                            Easing="CubicEaseOut" />
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.4" Easing="CubicEaseOut" />
                     </Transitions>
                 </Border.Transitions>
                 <StackPanel Spacing="6" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="20">
                         <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount], FallbackValue=''}">
-                            <mi:MaterialIcon Kind="PlaylistMusic" Width="16" Height="16"
-                                Foreground="{DynamicResource AccentBrush}" />
+                                    ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount], FallbackValue=''}">
+                            <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                                      Width="16" Height="16"
+                                      Foreground="{DynamicResource AccentBrush}" />
                             <TextBlock Text="{Binding PlaylistCountText}"
-                                FontSize="13" FontWeight="SemiBold"
-                                Foreground="{DynamicResource TextPrimaryBrush}" />
+                                       FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_TrackCount], FallbackValue=''}">
-                            <mi:MaterialIcon Kind="MusicNote" Width="16" Height="16"
-                                Foreground="{DynamicResource TextMutedBrush}" />
+                                    ToolTip.Tip="{Binding L[Library_Tip_TrackCount], FallbackValue=''}">
+                            <PathIcon Data="{StaticResource Icon.MusicNote}"
+                                      Width="16" Height="16"
+                                      Foreground="{DynamicResource TextMutedBrush}" />
                             <TextBlock Text="{Binding TotalTracksText}"
-                                FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                       FontSize="13"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="6"
-                            ToolTip.Tip="{Binding L[Library_Tip_TotalDuration], FallbackValue=''}">
-                            <mi:MaterialIcon Kind="ClockOutline" Width="16" Height="16"
-                                Foreground="{DynamicResource TextMutedBrush}" />
+                                    ToolTip.Tip="{Binding L[Library_Tip_TotalDuration], FallbackValue=''}">
+                            <PathIcon Data="{StaticResource Icon.ClockOutline}"
+                                      Width="16" Height="16"
+                                      Foreground="{DynamicResource TextMutedBrush}" />
                             <TextBlock Text="{Binding TotalDurationText}"
-                                FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                       FontSize="13"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
                         </StackPanel>
                     </StackPanel>
-
                     <StackPanel Orientation="Horizontal" Spacing="20">
                         <TextBlock Text="{Binding AvgTrackDurationText}"
-                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
-                            ToolTip.Tip="{Binding L[Library_Tip_AvgTrack], FallbackValue=''}" />
+                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
+                                   ToolTip.Tip="{Binding L[Library_Tip_AvgTrack], FallbackValue=''}" />
                         <TextBlock Text="{Binding AvgPlaylistDurationText}"
-                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
-                            ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist], FallbackValue=''}" />
+                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
+                                   ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist], FallbackValue=''}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- Левая часть при синке -->
+            <!-- Sync status text -->
             <TextBlock Text="{Binding SyncStatus}"
-                FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
-                IsVisible="{Binding IsSyncing}" VerticalAlignment="Center" />
+                       FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                       IsVisible="{Binding IsSyncing}" VerticalAlignment="Center" />
 
-            <!-- Правая часть: Кнопки -->
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
-                VerticalAlignment="Center">
+            <!-- Actions -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <Button Command="{Binding SyncAccountPlaylistsCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Library_SyncYoutube], FallbackValue=''}"
-                    Width="36" Height="36">
+                        Classes="icon-btn"
+                        ToolTip.Tip="{Binding L[Library_SyncYoutube], FallbackValue=''}"
+                        Width="36" Height="36">
                     <Panel Width="22" Height="22">
-                        <mi:MaterialIcon Kind="CloudSync" Width="22" Height="22"
-                            IsVisible="{Binding !IsSyncing}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <!-- Idle: CloudSync -->
+                        <PathIcon Data="{StaticResource Icon.CloudSync}"
+                                  Width="22" Height="22"
+                                  IsVisible="{Binding !IsSyncing}"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <!-- Syncing: пульсирующий Cloud -->
                         <Panel IsVisible="{Binding IsSyncing}" Width="22" Height="22">
                             <Panel>
                                 <Border Width="22" Height="22" CornerRadius="11"
-                                    Background="{DynamicResource AccentBrush}" />
-                                <mi:MaterialIcon Kind="Cloud" Width="14" Height="14"
-                                    Foreground="{DynamicResource TextDarkBrush}"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        Background="{DynamicResource AccentBrush}" />
+                                <PathIcon Data="{StaticResource Icon.Cloud}"
+                                          Width="14" Height="14"
+                                          Foreground="{DynamicResource TextDarkBrush}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
                             <Panel Classes="cloud-crossfade-overlay">
                                 <Border Width="22" Height="22" CornerRadius="11"
-                                    Background="{DynamicResource BgSecondaryBrush}" />
-                                <mi:MaterialIcon Kind="Cloud" Width="14" Height="14"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        Background="{DynamicResource BgSecondaryBrush}" />
+                                <PathIcon Data="{StaticResource Icon.Cloud}"
+                                          Width="14" Height="14"
+                                          Foreground="{DynamicResource AccentBrush}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Panel>
                         </Panel>
                     </Panel>
                 </Button>
 
                 <Button Command="{Binding OpenCreateCommand}"
-                    Classes="icon-btn"
-                    ToolTip.Tip="{Binding L[Library_CreatePlaylist], FallbackValue=''}"
-                    IsEnabled="{Binding !IsSyncing}">
-                    <mi:MaterialIcon Kind="Plus" Width="20" Height="20" />
+                        Classes="icon-btn"
+                        ToolTip.Tip="{Binding L[Library_CreatePlaylist], FallbackValue=''}"
+                        IsEnabled="{Binding !IsSyncing}">
+                    <PathIcon Data="{StaticResource Icon.Plus}" Width="20" Height="20" />
                 </Button>
             </StackPanel>
         </Grid>
@@ -109,7 +114,7 @@
         <Grid Grid.Row="1" Height="3" Margin="24,0" IsVisible="{Binding IsSyncing}">
             <Border Background="{DynamicResource BgHighlightBrush}" CornerRadius="1.5" />
             <Border Background="{DynamicResource AccentBrush}" CornerRadius="1.5"
-                HorizontalAlignment="Left">
+                    HorizontalAlignment="Left">
                 <Border.Width>
                     <MultiBinding>
                         <MultiBinding.Converter>
@@ -121,8 +126,7 @@
                 </Border.Width>
                 <Border.Transitions>
                     <Transitions>
-                        <DoubleTransition Property="Width" Duration="0:0:0.2"
-                            Easing="CubicEaseOut" />
+                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="CubicEaseOut" />
                     </Transitions>
                 </Border.Transitions>
             </Border>
@@ -140,7 +144,7 @@
                     </MultiBinding>
                 </ScrollViewer.IsVisible>
                 <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                    Margin="24,16,24,100">
+                           Margin="24,16,24,100">
                     <Border Classes="playlist-skeleton skeleton" Margin="10" />
                     <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.7" />
                     <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.5" />
@@ -159,68 +163,59 @@
                 </ScrollViewer.IsVisible>
                 <StackPanel Margin="24,0,24,100">
 
-                    <!-- Playlist Grid -->
                     <ItemsControl ItemsSource="{Binding Playlists}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal"
-                                    HorizontalAlignment="Center" />
+                                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:PlaylistCardViewModel">
-                                <Border
-                                    Classes="playlist-card-inner"
-                                    Classes.visible="{Binding IsVisible}"
-                                    Margin="10"
-                                    Tag="{Binding DataContext, ElementName=LibraryRoot}">
+                                <Border Classes="playlist-card-inner"
+                                        Classes.visible="{Binding IsVisible}"
+                                        Width="220" Margin="10"
+                                        Tag="{Binding DataContext, ElementName=LibraryRoot}">
 
                                     <Border.ContextMenu>
                                         <ContextMenu>
-                                            <MenuItem
-                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Player_Play], FallbackValue='Play', TargetNullValue='Play'}"
-                                                Command="{Binding PlayCommand}">
+                                            <MenuItem Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Player_Play], FallbackValue='Play'}"
+                                                      Command="{Binding PlayCommand}">
                                                 <MenuItem.Icon>
-                                                    <mi:MaterialIcon Kind="Play" />
+                                                    <PathIcon Data="{StaticResource Icon.Play}" Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Playlist_Open], FallbackValue='Open', TargetNullValue='Open'}"
-                                                Command="{Binding OpenCommand}">
+                                            <MenuItem Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Playlist_Open], FallbackValue='Open'}"
+                                                      Command="{Binding OpenCommand}">
                                                 <MenuItem.Icon>
-                                                    <mi:MaterialIcon Kind="FolderOpen" />
+                                                    <PathIcon Data="{StaticResource Icon.FolderOpen}" Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[EditPlaylist_Title], FallbackValue='Edit', TargetNullValue='Edit'}"
-                                                Command="{Binding EditCommand}"
-                                                IsVisible="{Binding CanEdit}">
+                                            <MenuItem Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[EditPlaylist_Title], FallbackValue='Edit'}"
+                                                      Command="{Binding EditCommand}"
+                                                      IsVisible="{Binding CanEdit}">
                                                 <MenuItem.Icon>
-                                                    <mi:MaterialIcon Kind="Pencil" />
+                                                    <PathIcon Data="{StaticResource Icon.Pencil}" Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Queue_AddAll], FallbackValue='Add to queue', TargetNullValue='Add to queue'}"
-                                                Command="{Binding AddToQueueCommand}">
+                                            <MenuItem Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Queue_AddAll], FallbackValue='Add to queue'}"
+                                                      Command="{Binding AddToQueueCommand}">
                                                 <MenuItem.Icon>
-                                                    <mi:MaterialIcon Kind="PlaylistPlay" />
+                                                    <PathIcon Data="{StaticResource Icon.PlaylistPlus}" Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
-                                            <MenuItem
-                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Track_CopyLink], FallbackValue='Copy link', TargetNullValue='Copy link'}"
-                                                Command="{Binding CopyLinkCommand}">
+                                            <MenuItem Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Track_CopyLink], FallbackValue='Copy link'}"
+                                                      Command="{Binding CopyLinkCommand}">
                                                 <MenuItem.Icon>
-                                                    <mi:MaterialIcon Kind="LinkVariant" />
+                                                    <PathIcon Data="{StaticResource Icon.LinkVariant}" Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                             <Separator Classes="menu-separator" />
-                                            <MenuItem
-                                                Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Button_Delete], FallbackValue='Delete', TargetNullValue='Delete'}"
-                                                Command="{Binding DeleteCommand}"
-                                                IsVisible="{Binding CanDelete}"
-                                                Classes="danger">
+                                            <MenuItem Header="{Binding $parent[Border].((vm:LibraryViewModel)Tag).L[Button_Delete], FallbackValue='Delete'}"
+                                                      Command="{Binding DeleteCommand}"
+                                                      IsVisible="{Binding CanDelete}"
+                                                      Classes="danger">
                                                 <MenuItem.Icon>
-                                                    <mi:MaterialIcon Kind="Delete" />
+                                                    <PathIcon Data="{StaticResource Icon.Delete}" Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                         </ContextMenu>
@@ -229,72 +224,68 @@
                                     <Grid RowDefinitions="220, Auto">
                                         <!-- Cover -->
                                         <Button Grid.Row="0"
-                                            Command="{Binding OpenCommand}"
-                                            Background="Transparent" BorderThickness="0"
-                                            Padding="0" Cursor="Hand"
-                                            CornerRadius="8,8,0,0" ClipToBounds="True">
+                                                Command="{Binding OpenCommand}"
+                                                Background="Transparent" BorderThickness="0"
+                                                Padding="0" Cursor="Hand"
+                                                CornerRadius="8,8,0,0" ClipToBounds="True">
                                             <Panel Width="220" Height="220">
+                                                <!-- Liked gradient cover -->
                                                 <Border IsVisible="{Binding IsLikedPlaylist}"
-                                                    Width="220" Height="220">
+                                                        Width="220" Height="220">
                                                     <Border.Background>
-                                                        <LinearGradientBrush StartPoint="50%,0%"
-                                                            EndPoint="50%,100%">
-                                                            <GradientStop
-                                                                Color="{DynamicResource Accent}"
-                                                                Offset="0.0" />
-                                                            <GradientStop
-                                                                Color="{DynamicResource BgElevated}"
-                                                                Offset="1.0" />
+                                                        <LinearGradientBrush StartPoint="50%,0%" EndPoint="50%,100%">
+                                                            <GradientStop Color="{DynamicResource Accent}" Offset="0.0" />
+                                                            <GradientStop Color="{DynamicResource BgElevated}" Offset="1.0" />
                                                         </LinearGradientBrush>
                                                     </Border.Background>
-                                                    <mi:MaterialIcon Kind="Heart" Width="72"
-                                                        Height="72"
-                                                        Foreground="{DynamicResource AccentButtonTextBrush}"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Center"
-                                                        Opacity="0.9" />
+                                                    <PathIcon Data="{StaticResource Icon.Heart}"
+                                                              Width="72" Height="72"
+                                                              Foreground="{DynamicResource AccentButtonTextBrush}"
+                                                              HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center"
+                                                              Opacity="0.9" />
                                                 </Border>
-                                                <Border
-                                                    Background="{DynamicResource BgSkeletonBrush}"
-                                                    IsVisible="{Binding ShowPlaceholder}"
-                                                    Width="220" Height="220">
-                                                    <mi:MaterialIcon Kind="PlaylistMusic" Width="72"
-                                                        Height="72"
-                                                        Foreground="{DynamicResource TextMutedBrush}"
-                                                        HorizontalAlignment="Center"
-                                                        VerticalAlignment="Center" />
+                                                <!-- Placeholder -->
+                                                <Border Background="{DynamicResource BgSkeletonBrush}"
+                                                        IsVisible="{Binding ShowPlaceholder}"
+                                                        Width="220" Height="220">
+                                                    <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                                                              Width="72" Height="72"
+                                                              Foreground="{DynamicResource TextMutedBrush}"
+                                                              HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center" />
                                                 </Border>
-                                                <Image
-                                                    controls:QualityImage.Source="{Binding ThumbnailUrl}"
-                                                    controls:QualityImage.Quality="High"
-                                                    Stretch="UniformToFill"
-                                                    Width="220" Height="220"
-                                                    IsVisible="{Binding HasThumbnail}" />
+                                                <!-- Thumbnail -->
+                                                <Image controls:QualityImage.Source="{Binding ThumbnailUrl}"
+                                                       controls:QualityImage.Quality="High"
+                                                       Stretch="UniformToFill"
+                                                       Width="220" Height="220"
+                                                       IsVisible="{Binding HasThumbnail}" />
                                             </Panel>
                                         </Button>
 
                                         <!-- Info -->
                                         <Button Grid.Row="1"
-                                            Command="{Binding OpenCommand}"
-                                            Background="Transparent" BorderThickness="0"
-                                            Padding="14,12"
-                                            HorizontalContentAlignment="Left"
-                                            Cursor="Hand">
-                                            <StackPanel>
+                                                Command="{Binding OpenCommand}"
+                                                Background="Transparent" BorderThickness="0"
+                                                Padding="14,12"
+                                                HorizontalContentAlignment="Left"
+                                                Cursor="Hand">
+                                            <StackPanel MaxWidth="192">
                                                 <TextBlock Text="{Binding Name}"
-                                                    FontWeight="SemiBold" FontSize="14"
-                                                    TextTrimming="CharacterEllipsis" />
-                                                <StackPanel Orientation="Horizontal" Spacing="6"
-                                                    Margin="0,4,0,0">
+                                                           FontWeight="SemiBold" FontSize="14"
+                                                           TextWrapping="Wrap" MaxLines="2"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
                                                     <TextBlock Text="{Binding FormattedTrackCount}"
-                                                        FontSize="12"
-                                                        Foreground="{DynamicResource TextMutedBrush}" />
-                                                    <mi:MaterialIcon Kind="CloudCheck"
-                                                        Width="13" Height="13"
-                                                        Foreground="{DynamicResource TextMutedBrush}"
-                                                        IsVisible="{Binding IsSynced}"
-                                                        Tag="{Binding DataContext, ElementName=LibraryRoot}"
-                                                        ToolTip.Tip="{Binding $parent[Border]?.((vm:LibraryViewModel)Tag).L[Library_CloudSyncTooltip]}" />
+                                                               FontSize="12"
+                                                               Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <PathIcon Data="{StaticResource Icon.CloudCheck}"
+                                                              Width="13" Height="13"
+                                                              Foreground="{DynamicResource TextMutedBrush}"
+                                                              IsVisible="{Binding IsSynced}"
+                                                              Tag="{Binding DataContext, ElementName=LibraryRoot}"
+                                                              ToolTip.Tip="{Binding $parent[Border]?.((vm:LibraryViewModel)Tag).L[Library_CloudSyncTooltip]}" />
                                                 </StackPanel>
                                             </StackPanel>
                                         </Button>
@@ -306,14 +297,15 @@
 
                     <!-- Empty state -->
                     <StackPanel IsVisible="{Binding !Playlists.Count}"
-                        HorizontalAlignment="Center" Margin="0,60">
-                        <mi:MaterialIcon Kind="PlaylistMusic" Width="64" Height="64"
-                            Foreground="{DynamicResource TextMutedBrush}"
-                            HorizontalAlignment="Center" />
+                                HorizontalAlignment="Center" Margin="0,60">
+                        <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                                  Width="64" Height="64"
+                                  Foreground="{DynamicResource TextMutedBrush}"
+                                  HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding L[Library_Empty], FallbackValue=''}"
-                            FontSize="16"
-                            Foreground="{DynamicResource TextSecondaryBrush}"
-                            HorizontalAlignment="Center" Margin="0,16,0,0" />
+                                   FontSize="16"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center" Margin="0,16,0,0" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

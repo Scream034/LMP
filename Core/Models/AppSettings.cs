@@ -4,18 +4,18 @@ public enum YoutubeClientProfile
 {
     WebRemix,    // n + sig (Работают все ролики)
     AndroidVR,   // большинство роликов работают
-    Web, // n + sig
-    TV, // не работает
-    Ios, // HLS в основном
+    Web,         // n + sig
+    TV,          // не работает
+    Ios,         // HLS в основном
     AndroidMusic // требует доп. действий
 }
 
 public enum InternetProfile
 {
-    Low,      // Экономия трафика / Медленный интернет
-    Medium,   // Баланс (по умолчанию)
-    High,     // Высокое качество / Быстрый интернет
-    Ultra     // Максимальное кэширование / Локальная сеть
+    Low,    // Экономия трафика / Медленный интернет
+    Medium, // Баланс (по умолчанию)
+    High,   // Высокое качество / Быстрый интернет
+    Ultra   // Максимальное кэширование / Локальная сеть
 }
 
 /// <summary>
@@ -81,7 +81,7 @@ public sealed class ProxySettings
     public int Port { get; set; } = 8080;
     public bool UseAuth { get; set; } = false;
     public string Username { get; set; } = "";
-    public string Password { get; set; } = ""; // В реальном приложении стоит шифровать
+    public string Password { get; set; } = "";
 }
 
 /// <summary>
@@ -175,6 +175,44 @@ public sealed class AudioSettings
     public bool SkipNTokenTracks { get; set; } = true;
 }
 
+/// <summary>
+/// Настройки панели уведомлений: поведение, отображение и авто-очистка.
+/// <para>
+/// Единая точка конфигурации всего, что связано с уведомлениями.
+/// <see cref="Services.NotificationService"/> читает эти значения напрямую,
+/// что устраняет жёсткие константы в коде сервиса.
+/// </para>
+/// </summary>
+public sealed class NotificationSettings
+{
+    /// <summary>
+    /// Ширина панели уведомлений в пикселях.
+    /// </summary>
+    public int PanelWidth { get; set; } = 360;
+
+    /// <summary>
+    /// Максимум уведомлений в памяти и в панели.
+    /// При превышении вытесняются самые старые.
+    /// </summary>
+    public int MaxInPanelCount { get; set; } = 50;
+
+    /// <summary>
+    /// Включить авто-очистку уведомлений по возрасту.
+    /// </summary>
+    public bool AutoCleanupEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Возраст уведомления в часах, после которого оно удаляется автоматически.
+    /// По умолчанию 48 ч (2 дня).
+    /// </summary>
+    public int AutoCleanupAfterHours { get; set; } = 48;
+
+    /// <summary>
+    /// Интервал фоновой проверки авто-очистки в минутах.
+    /// </summary>
+    public int CleanupCheckIntervalMinutes { get; set; } = 30;
+}
+
 public enum RepeatMode
 {
     None,
@@ -210,13 +248,12 @@ public sealed class AppSettings
 
     // === Network ===
     public InternetProfile InternetProfile { get; set; } = InternetProfile.Medium;
-    // Добавляем выбор клиента (по умолчанию VR, так как он сейчас работает)
     public YoutubeClientProfile YoutubeClient { get; set; } = YoutubeClientProfile.AndroidVR;
     public ProxySettings Proxy { get; set; } = new();
     public StorageSettings Storage { get; set; } = new();
 
     // === UI ===
-    public double PlaylistHeaderHeight { get; set; } = 320;
+    public double PlaylistHeaderHeight { get; set; } = 300;
     public string LanguageCode { get; set; } = "en";
     public string DownloadPath { get; set; } = string.Empty;
     public bool DiscordRpcEnabled { get; set; } = true;
@@ -253,9 +290,9 @@ public sealed class AppSettings
     public bool MinimizeToTray { get; set; } = false;
 
     /// <summary>
-    /// Ширина панели уведомлений.
+    /// Настройки панели уведомлений и авто-очистки.
     /// </summary>
-    public int NotificationPanelWidth { get; set; } = 360;
+    public NotificationSettings Notifications { get; set; } = new();
 
     // === Search ===
     public string LastSearchQuery { get; set; } = "";

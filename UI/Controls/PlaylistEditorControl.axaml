@@ -2,7 +2,6 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="using:LMP.UI.Dialogs"
     xmlns:controls="using:LMP.UI.Controls"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:asyncImage="using:AsyncImageLoader"
     x:Class="LMP.UI.Controls.PlaylistEditorControl"
     x:DataType="d:PlaylistEditorViewModel"
@@ -52,17 +51,19 @@
                     <!-- Переключатель вкладок -->
                     <StackPanel Orientation="Horizontal" Spacing="4"
                         IsVisible="{Binding ShowCoverModeSwitch}">
+                        <!-- Вкладка URL -->
                         <Button Padding="10,5" FontSize="11" CornerRadius="12"
                             Command="{Binding SetCoverModeUrl}"
                             Classes.ghost-btn="{Binding !IsCoverModeUrl}"
                             Classes.accent="{Binding IsCoverModeUrl}"
                             Classes.accent-base="{Binding IsCoverModeUrl}">
                             <StackPanel Orientation="Horizontal" Spacing="5">
-                                <mi:MaterialIcon Kind="Link" Width="13" Height="13" />
+                                <PathIcon Data="{StaticResource Icon.Link}" Width="13" Height="13" />
                                 <TextBlock Text="URL" FontSize="11" />
                             </StackPanel>
                         </Button>
 
+                        <!-- Вкладка из треков -->
                         <Button Padding="10,5" FontSize="11" CornerRadius="12"
                             Command="{Binding SetCoverModeFromTracks}"
                             IsVisible="{Binding HasTracksCoverOption}"
@@ -70,18 +71,21 @@
                             Classes.accent="{Binding IsCoverModeFromTracks}"
                             Classes.accent-base="{Binding IsCoverModeFromTracks}">
                             <StackPanel Orientation="Horizontal" Spacing="5">
-                                <mi:MaterialIcon Kind="ImageMultipleOutline" Width="13" Height="13" />
+                                <PathIcon Data="{StaticResource Icon.ImageMultipleOutline}"
+                                    Width="13" Height="13" />
                                 <TextBlock Text="{Binding L[CoverPicker_Tab]}" FontSize="11" />
                             </StackPanel>
                         </Button>
 
+                        <!-- Вкладка файл -->
                         <Button Padding="10,5" FontSize="11" CornerRadius="12"
                             Command="{Binding SetCoverModeFile}"
                             Classes.ghost-btn="{Binding !IsCoverModeFile}"
                             Classes.accent="{Binding IsCoverModeFile}"
                             Classes.accent-base="{Binding IsCoverModeFile}">
                             <StackPanel Orientation="Horizontal" Spacing="5">
-                                <mi:MaterialIcon Kind="FileImageOutline" Width="13" Height="13" />
+                                <PathIcon Data="{StaticResource Icon.FileImageOutline}" Width="13"
+                                    Height="13" />
                                 <TextBlock Text="{Binding L[CoverPicker_FileTab]}" FontSize="11" />
                             </StackPanel>
                         </Button>
@@ -100,7 +104,8 @@
                             Margin="8,0,0,0"
                             Background="{DynamicResource BgSkeletonBrush}">
                             <Panel>
-                                <mi:MaterialIcon Kind="ImageOutline"
+                                <!-- Превью URL: заглушка без изображения -->
+                                <PathIcon Data="{StaticResource Icon.ImageOutline}"
                                     Width="18" Height="18"
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     HorizontalAlignment="Center"
@@ -132,13 +137,14 @@
                                 IsReadOnly="True"
                                 Watermark="{Binding L[CoverPicker_FileHint]}"
                                 FontSize="12" />
+                            <!-- Кнопка выбора файла -->
                             <Button Grid.Column="1"
                                 Command="{Binding SelectFileCommand}"
                                 Padding="8,6"
                                 Margin="8,0,0,0"
                                 ToolTip.Tip="{Binding L[CoverPicker_BrowseFile]}">
-                                <mi:MaterialIcon Kind="FolderOpen"
-                                    Width="18" Height="18" />
+                                <PathIcon Data="{StaticResource Icon.FolderOpen}" Width="18"
+                                    Height="18" />
                             </Button>
                         </Grid>
                         <Border Width="80" Height="80"
@@ -152,8 +158,7 @@
                         </Border>
                     </StackPanel>
 
-                    <!-- ═══ Кнопка загрузки обложки в YouTube ═══ -->
-                    <!-- Показывается для TwoWaySync плейлистов когда есть обложка -->
+                    <!-- Кнопка загрузки обложки в YouTube -->
                     <Button Command="{Binding UploadThumbnailCommand}"
                         IsVisible="{Binding ShowUploadThumbnailButton}"
                         Padding="8,6"
@@ -161,9 +166,11 @@
                         Margin="0,4,0,0">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Panel>
-                                <mi:MaterialIcon Kind="CloudUpload" Width="14" Height="14"
+                                <PathIcon Data="{StaticResource Icon.CloudUpload}"
+                                    Width="14" Height="14"
                                     IsVisible="{Binding !IsRecalculatingColor}" />
-                                <mi:MaterialIcon Kind="Sync" Width="14" Height="14"
+                                <PathIcon Data="{StaticResource Icon.Sync}"
+                                    Width="14" Height="14"
                                     IsVisible="{Binding IsRecalculatingColor}"
                                     Classes="spinning" />
                             </Panel>
@@ -218,15 +225,18 @@
                     BorderBrush="{DynamicResource BgHighlightBrush}"
                     BorderThickness="1"
                     Background="{Binding ComputedColorPreviewBrush}" />
+                <!-- Кнопка пересчёта цвета -->
                 <Button Grid.Column="2"
                     Command="{Binding RecalculateColorCommand}"
                     Padding="6"
                     Margin="4,0,0,0"
                     ToolTip.Tip="{Binding L[EditPlaylist_RecalculateColor]}">
                     <Panel>
-                        <mi:MaterialIcon Kind="Refresh" Width="18" Height="18"
+                        <PathIcon Data="{StaticResource Icon.Refresh}"
+                            Width="18" Height="18"
                             IsVisible="{Binding !IsRecalculatingColor}" />
-                        <mi:MaterialIcon Kind="Sync" Width="18" Height="18"
+                        <PathIcon Data="{StaticResource Icon.Sync}"
+                            Width="18" Height="18"
                             IsVisible="{Binding IsRecalculatingColor}"
                             Classes="spinning" />
                     </Panel>
@@ -243,7 +253,9 @@
             IsVisible="{Binding ShowSyncSection}">
             <StackPanel Spacing="10">
                 <Grid ColumnDefinitions="Auto, *, Auto">
-                    <mi:MaterialIcon Grid.Column="0" Kind="CloudSync"
+                    <!-- YouTube Sync: иконка CloudSync -->
+                    <PathIcon Grid.Column="0"
+                        Data="{StaticResource Icon.CloudSync}"
                         Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}"
                         VerticalAlignment="Center" Margin="0,0,10,0" />
@@ -266,9 +278,12 @@
                     <Border.Background>
                         <SolidColorBrush Color="{DynamicResource AccentColor}" Opacity="0.1" />
                     </Border.Background>
+                    <!-- Sync active badge -->
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <mi:MaterialIcon Kind="CheckCircleOutline" Width="14" Height="14"
-                            Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                        <PathIcon Data="{StaticResource Icon.CheckCircleOutline}"
+                            Width="14" Height="14"
+                            Foreground="{DynamicResource AccentBrush}"
+                            VerticalAlignment="Center" />
                         <TextBlock Text="{Binding L[EditPlaylist_SyncActive]}" FontSize="11"
                             Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
                     </StackPanel>
@@ -279,8 +294,10 @@
                     <Border.Background>
                         <SolidColorBrush Color="Orange" Opacity="0.1" />
                     </Border.Background>
+                    <!-- Login required warning -->
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <mi:MaterialIcon Kind="AlertOutline" Width="14" Height="14"
+                        <PathIcon Data="{StaticResource Icon.AlertOutline}"
+                            Width="14" Height="14"
                             Foreground="Orange" VerticalAlignment="Center" />
                         <TextBlock Text="{Binding L[EditPlaylist_LoginRequired]}" FontSize="11"
                             Foreground="Orange" VerticalAlignment="Center" TextWrapping="Wrap" />
@@ -289,8 +306,7 @@
             </StackPanel>
         </Border>
 
-        <!-- ═══ Create Copy ═══ -->
-        <!-- Видна только при редактировании. Создаёт локальную копию без привязки к YouTube. -->
+        <!-- Create Copy кнопка -->
         <Button Command="{Binding CreateCopyCommand}"
             IsVisible="{Binding IsForEdit}"
             HorizontalAlignment="Left"
@@ -298,7 +314,7 @@
             Margin="0,4,0,0"
             Classes="ghost-btn">
             <StackPanel Orientation="Horizontal" Spacing="6">
-                <mi:MaterialIcon Kind="ContentCopy" Width="14" Height="14" />
+                <PathIcon Data="{StaticResource Icon.ContentCopy}" Width="14" Height="14" />
                 <TextBlock Text="{Binding L[EditPlaylist_CreateCopy]}" FontSize="12" />
             </StackPanel>
         </Button>

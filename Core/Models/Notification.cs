@@ -65,6 +65,8 @@ public sealed class Notification
         ? L[TitleKey]
         : TitleRaw ?? "";
 
+    public string TrackUrl => !string.IsNullOrEmpty(TrackId) ? $"https://www.youtube.com/watch?v={TrackId}" : "";
+
     /// <summary>
     /// Локализованное сообщение.
     /// </summary>
@@ -126,11 +128,11 @@ public sealed class Notification
 
     public string Icon => Severity switch
     {
-        NotificationSeverity.Info => "ℹ️",
-        NotificationSeverity.Success => "✅",
-        NotificationSeverity.Warning => "⚠️",
-        NotificationSeverity.Error => "❌",
-        _ => "📌"
+        NotificationSeverity.Info => "🛈",    // Unicode: \uF005 или \u24D8 (Символ информации)
+        NotificationSeverity.Success => "✓", // Unicode: \u2713 (Галочка Checkmark)
+        NotificationSeverity.Warning => "⚠", // Unicode: \u26A0 (Предупреждающий треугольник)
+        NotificationSeverity.Error => "🗙",   // Unicode: \u1F5D9 или "✕" \u2715 (Крестик)
+        _ => "🖈"                             // Unicode: \u1F5C8 (Канцелярская кнопка)
     };
 
     #endregion

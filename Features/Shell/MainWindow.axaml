@@ -15,7 +15,6 @@
     xmlns:playlistV="using:LMP.Features.Playlist"
     xmlns:playerV="using:LMP.Features.Player"
     xmlns:playerBarV="using:LMP.Features.Player"
-    xmlns:mi="using:Material.Icons.Avalonia"
     x:Class="LMP.Features.Shell.MainWindow"
     x:DataType="shell:MainWindowViewModel"
     Title="Lite Music Player"
@@ -119,7 +118,7 @@
                 </Button>
             </StackPanel>
 
-            <!-- Col 1: Navigation Tabs -->
+            <!-- Col 1: Navigation Tabs — PathIcon вместо MaterialIcon -->
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="0"
                 VerticalAlignment="Stretch" Margin="8,0,0,0">
 
@@ -128,64 +127,77 @@
                     Margin="0,0,4,0" VerticalAlignment="Center" />
 
                 <Button Classes="nav-tab"
-                    Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Home'}"
+                    Classes.active="{Binding CurrentPageName,
+                Converter={StaticResource StringStartsWithConverter},
+                ConverterParameter='Home'}"
                     Command="{Binding NavigateCommand}" CommandParameter="Home"
                     IsEnabled="{Binding !IsNavigationLocked}"
                     ToolTip.Tip="{Binding L[Nav_Home_Tip]}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="Home" />
+                        <PathIcon Data="{StaticResource Icon.Home}" Width="16" Height="16" />
                         <TextBlock Text="{Binding L[Nav_Home]}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
                 <Button Classes="nav-tab"
-                    Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Search'}"
+                    Classes.active="{Binding CurrentPageName,
+                Converter={StaticResource StringStartsWithConverter},
+                ConverterParameter='Search'}"
                     Command="{Binding NavigateCommand}" CommandParameter="Search"
                     IsEnabled="{Binding !IsNavigationLocked}"
                     ToolTip.Tip="{Binding L[Nav_Search_Tip]}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="Magnify" />
+                        <PathIcon Data="{StaticResource Icon.Search}" Width="16" Height="16" />
                         <TextBlock Text="{Binding L[Nav_Search]}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
                 <Button Classes="nav-tab"
-                    Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Library'}"
+                    Classes.active="{Binding CurrentPageName,
+                Converter={StaticResource StringStartsWithConverter},
+                ConverterParameter='Library'}"
                     Command="{Binding NavigateCommand}" CommandParameter="Library"
                     IsEnabled="{Binding !IsNavigationLocked}"
                     ToolTip.Tip="{Binding L[Nav_Library_Tip]}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="BookMusic" />
+                        <PathIcon Data="{StaticResource Icon.Library}" Width="16" Height="16" />
                         <TextBlock Text="{Binding L[Nav_Library]}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
                 <Button Classes="nav-tab"
-                    Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Queue'}"
+                    Classes.active="{Binding CurrentPageName,
+                Converter={StaticResource StringStartsWithConverter},
+                ConverterParameter='Queue'}"
                     Command="{Binding NavigateCommand}" CommandParameter="Queue"
                     IsEnabled="{Binding !IsNavigationLocked}"
                     ToolTip.Tip="{Binding L[Nav_Queue_Tip]}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="PlaylistPlay" />
+                        <PathIcon Data="{StaticResource Icon.Queue}" Width="16" Height="16" />
                         <TextBlock Text="{Binding L[Nav_Queue]}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
                 <Button Classes="nav-tab"
-                    Classes.active="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Settings'}"
+                    Classes.active="{Binding CurrentPageName,
+                Converter={StaticResource StringStartsWithConverter},
+                ConverterParameter='Settings'}"
                     Command="{Binding NavigateCommand}" CommandParameter="Settings"
                     IsEnabled="{Binding !IsNavigationLocked}"
                     ToolTip.Tip="{Binding L[Nav_Settings_Tip]}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="Cog" />
+                        <PathIcon Data="{StaticResource Icon.Settings}" Width="16" Height="16" />
                         <TextBlock Text="{Binding L[Nav_Settings]}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
+                <!-- Breadcrumb — виден только на странице плейлиста -->
                 <Button Classes="nav-tab active"
-                    IsVisible="{Binding CurrentPageName, Converter={StaticResource StringStartsWithConverter}, ConverterParameter='Playlist'}">
+                    IsVisible="{Binding CurrentPageName,
+                Converter={StaticResource StringStartsWithConverter},
+                ConverterParameter='Playlist'}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="PlaylistMusic" />
+                        <PathIcon Data="{StaticResource Icon.PlaylistMusic}" Width="16" Height="16" />
                         <TextBlock Text="{Binding L[Nav_Playlist]}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
@@ -202,28 +214,36 @@
             </StackPanel>
 
             <!-- Col 4: Window Controls -->
-            <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="0" Margin="0,0,4,0">
+            <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="2" Margin="0,0,6,0">
                 <Border Width="1" Height="16"
                     Background="{DynamicResource BgHighlightBrush}"
-                    Margin="4,0" VerticalAlignment="Center" />
+                    Margin="4,0,6,0" VerticalAlignment="Center" />
 
-                <Button Classes="window-btn" Name="MinimizeButton"
+                <Button Name="MinimizeButton"
+                    Classes="ctrl-btn"
                     ToolTip.Tip="{Binding L[Window_Minimize]}">
-                    <Border Width="10" Height="1" Background="{DynamicResource TextMutedBrush}"
-                        VerticalAlignment="Center" CornerRadius="0.5" />
+                    <Border Width="10" Height="1"
+                        Background="{DynamicResource TextMutedBrush}"
+                        VerticalAlignment="Center"
+                        CornerRadius="0.5" />
                 </Button>
 
-                <Button Classes="window-btn" Name="MaximizeButton"
+                <Button Name="MaximizeButton"
+                    Classes="ctrl-btn"
                     ToolTip.Tip="{Binding L[Window_Maximize]}">
                     <Panel>
-                        <Border Width="10" Height="10" BorderThickness="1.2" CornerRadius="1"
-                            BorderBrush="{DynamicResource TextMutedBrush}"
-                            Name="MaximizeIcon" />
+                        <Border Name="MaximizeIcon"
+                            Width="10" Height="10"
+                            BorderThickness="1.2"
+                            CornerRadius="1"
+                            BorderBrush="{DynamicResource TextMutedBrush}" />
                         <Grid Name="RestoreIcon" IsVisible="False" Width="12" Height="12">
-                            <Border Width="8" Height="8" BorderThickness="1.2" CornerRadius="1"
+                            <Border Width="8" Height="8"
+                                BorderThickness="1.2" CornerRadius="1"
                                 BorderBrush="{DynamicResource TextMutedBrush}"
                                 HorizontalAlignment="Left" VerticalAlignment="Bottom" />
-                            <Border Width="8" Height="8" BorderThickness="1.2" CornerRadius="1"
+                            <Border Width="8" Height="8"
+                                BorderThickness="1.2" CornerRadius="1"
                                 BorderBrush="{DynamicResource TextMutedBrush}"
                                 Background="{DynamicResource BgSecondaryBrush}"
                                 HorizontalAlignment="Right" VerticalAlignment="Top" />
@@ -231,7 +251,8 @@
                     </Panel>
                 </Button>
 
-                <Button Classes="window-btn window-btn-close" Name="CloseButton"
+                <Button Name="CloseButton"
+                    Classes="ctrl-btn-close"
                     ToolTip.Tip="{Binding L[Window_Close]}">
                     <Grid Width="10" Height="10">
                         <Line StartPoint="0,0" EndPoint="10,10"
@@ -282,14 +303,15 @@
                     </TransitioningContentControl.ContentTemplate>
                 </TransitioningContentControl>
 
-                <!-- Navigation Lock Overlay (сетевые операции) -->
+                <!-- Nav Lock Overlay — CloudSync PathIcon -->
                 <Border IsVisible="{Binding IsNavigationLocked}" Background="#60000000"
                     IsHitTestVisible="True">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="24">
                         <Panel Width="80" Height="80" HorizontalAlignment="Center">
                             <Border Width="80" Height="80" CornerRadius="40"
                                 Background="{DynamicResource AccentBrush}" />
-                            <mi:MaterialIcon Kind="CloudSync" Width="40" Height="40"
+                            <PathIcon Data="{StaticResource Icon.CloudSync}"
+                                Width="40" Height="40"
                                 Foreground="{DynamicResource TextDarkBrush}"
                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Panel>
@@ -345,25 +367,24 @@
                 MaxWidth="260"
                 IsVisible="False"
                 Opacity="0">
-
                 <Border.Transitions>
                     <Transitions>
                         <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
                     </Transitions>
                 </Border.Transitions>
-
                 <StackPanel Orientation="Horizontal" Spacing="7">
-                    <mi:MaterialIcon x:Name="CopyHintIcon"
+                    <!--
+            CopyHintIcon: программно задаётся из MainWindow.axaml.cs через PathIcon.Data.
+            Используем PathIcon вместо MaterialIcon для согласованности.
+        -->
+                    <PathIcon x:Name="CopyHintIcon"
                         Width="14" Height="14"
                         VerticalAlignment="Center" />
                     <TextBlock x:Name="CopyHintText"
-                        FontSize="12"
-                        FontWeight="SemiBold"
+                        FontSize="12" FontWeight="SemiBold"
                         VerticalAlignment="Center"
                         Foreground="{DynamicResource TextPrimaryBrush}"
-                        TextWrapping="Wrap"
-                        MaxWidth="200"
-                        MaxLines="2" />
+                        TextWrapping="Wrap" MaxWidth="200" MaxLines="2" />
                 </StackPanel>
             </Border>
         </Canvas>

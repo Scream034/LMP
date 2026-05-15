@@ -28,12 +28,13 @@ public interface INotificationRepository
     Task ClearAllAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Количество непрочитанных.
-    /// </summary>
-    Task<int> GetUnreadCountAsync(CancellationToken ct = default);
-
-    /// <summary>
     /// Удалить старые уведомления, оставив не более <paramref name="keepCount"/>.
     /// </summary>
     Task PruneAsync(int keepCount = 100, CancellationToken ct = default);
+
+    /// <summary>
+    /// Удаляет уведомления, созданные до указанной даты.
+    /// Используется авто-очисткой <see cref="NotificationService"/>.
+    /// </summary>
+    Task DeleteOlderThanAsync(DateTime threshold, CancellationToken ct = default);
 }

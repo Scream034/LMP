@@ -1,7 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Player"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Player.QueueView"
     x:DataType="vm:QueueViewModel"
@@ -11,8 +10,11 @@
         <!-- Empty State -->
         <StackPanel IsVisible="{Binding IsEmpty}" HorizontalAlignment="Center"
             VerticalAlignment="Center" Spacing="16">
-            <mi:MaterialIcon Kind="PlaylistMusicOutline" Width="64" Height="64"
-                Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
+            <!-- Empty State: иконка пустой очереди -->
+            <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                Width="64" Height="64"
+                Foreground="{DynamicResource TextMutedBrush}"
+                HorizontalAlignment="Center" />
             <StackPanel HorizontalAlignment="Center">
                 <TextBlock Text="{Binding L[Queue_Empty]}" FontSize="20" FontWeight="Bold"
                     Foreground="{DynamicResource TextPrimaryBrush}" TextAlignment="Center" />
@@ -35,21 +37,24 @@
                             Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                        <!-- Header actions -->
                         <Button Command="{Binding ShuffleQueueCommand}" Classes="icon-btn"
                             ToolTip.Tip="{Binding L[Queue_Shuffle]}">
-                            <mi:MaterialIcon Kind="Shuffle" Width="20" Height="20" />
+                            <PathIcon Data="{StaticResource Icon.Shuffle}" Width="20" Height="20" />
                         </Button>
                         <Button Command="{Binding DownloadAllCommand}" Classes="icon-btn"
                             ToolTip.Tip="{Binding L[Queue_DownloadAll]}">
-                            <mi:MaterialIcon Kind="DownloadOutline" Width="20" Height="20" />
+                            <PathIcon Data="{StaticResource Icon.Download}" Width="20"
+                                Height="20" />
                         </Button>
                         <Button Command="{Binding SaveQueueToPlaylistCommand}" Classes="icon-btn"
                             ToolTip.Tip="{Binding L[Queue_SaveToPlaylist]}">
-                            <mi:MaterialIcon Kind="ContentSave" Width="20" Height="20" />
+                            <PathIcon Data="{StaticResource Icon.ContentSave}" Width="20"
+                                Height="20" />
                         </Button>
                         <Button Command="{Binding ClearQueueCommand}" Classes="icon-btn"
                             ToolTip.Tip="{Binding L[Queue_Clear]}">
-                            <mi:MaterialIcon Kind="Broom" Width="20" Height="20" />
+                            <PathIcon Data="{StaticResource Icon.Broom}" Width="20" Height="20" />
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -64,8 +69,10 @@
             <StackPanel Grid.Row="1"
                 IsVisible="{Binding IsFilterEmpty}"
                 HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
-                <mi:MaterialIcon Kind="MagnifyClose" Width="48" Height="48"
-                    Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
+                <PathIcon Data="{StaticResource Icon.MagnifyClose}"
+                    Width="48" Height="48"
+                    Foreground="{DynamicResource TextMutedBrush}"
+                    HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding L[Search_NoResults]}" FontSize="16"
                     Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center" />
             </StackPanel>

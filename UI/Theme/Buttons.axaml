@@ -1,6 +1,5 @@
 <Styles xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:mi="using:Material.Icons.Avalonia">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <!-- BASE BUTTON TEMPLATE                                                -->
@@ -86,7 +85,7 @@
     <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button:disabled mi|MaterialIcon">
+    <Style Selector="Button:disabled PathIcon">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
@@ -202,7 +201,7 @@
     <Style Selector="Button.accent-base:pointerover TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-    <Style Selector="Button.accent-base mi|MaterialIcon">
+    <Style Selector="Button.accent-base PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
 
@@ -340,10 +339,10 @@
         <Setter Property="Opacity" Value="0.5" />
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
-    <Style Selector="Button.icon-btn:disabled mi|MaterialIcon">
+    <Style Selector="Button.icon-btn:disabled PathIcon">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.icon-btn mi|MaterialIcon">
+    <Style Selector="Button.icon-btn PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
         <Setter Property="Transitions">
             <Transitions>
@@ -351,10 +350,10 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.icon-btn:pointerover mi|MaterialIcon">
+    <Style Selector="Button.icon-btn:pointerover PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
-    <Style Selector="Button.icon-btn.active mi|MaterialIcon">
+    <Style Selector="Button.icon-btn.active PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
@@ -398,8 +397,8 @@
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
     <Style
-        Selector="Button.playback-btn.disabled mi|MaterialIcon,
-                     Button.playback-btn:disabled mi|MaterialIcon">
+        Selector="Button.playback-btn.disabled PathIcon,
+                     Button.playback-btn:disabled PathIcon">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
@@ -428,7 +427,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
     <!-- Иконка: AccentButtonTextBrush + белый эффект для тёмных акцентов -->
-    <Style Selector="Button.playback-btn-main mi|MaterialIcon">
+    <Style Selector="Button.playback-btn-main PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
     <!-- Template override: убираем дефолтный hover фон Avalonia -->
@@ -544,14 +543,14 @@
     <Style Selector="Button.ghost-btn:pressed">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
-    <Style Selector="Button.ghost-btn mi|MaterialIcon">
+    <Style Selector="Button.ghost-btn PathIcon">
         <Setter Property="Transitions">
             <Transitions>
                 <BrushTransition Property="Foreground" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.ghost-btn:pointerover mi|MaterialIcon">
+    <Style Selector="Button.ghost-btn:pointerover PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
     <Style Selector="Button.ghost-btn TextBlock">
@@ -567,7 +566,7 @@
     <Style Selector="Button.ghost-btn:disabled /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.ghost-btn:disabled mi|MaterialIcon">
+    <Style Selector="Button.ghost-btn:disabled PathIcon">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
@@ -650,7 +649,7 @@
         Selector="Button.search-chip-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.search-chip-close mi|MaterialIcon">
+    <Style Selector="Button.search-chip-close PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
         <Setter Property="Transitions">
             <Transitions>
@@ -658,7 +657,7 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.search-chip-close:pointerover mi|MaterialIcon">
+    <Style Selector="Button.search-chip-close:pointerover PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBrush}" />
     </Style>
 
@@ -717,7 +716,7 @@
     </Style>
 
     <!-- Иконка: 20px -->
-    <Style Selector="Button.nav-tab mi|MaterialIcon">
+    <Style Selector="Button.nav-tab PathIcon">
         <Setter Property="Width" Value="20" />
         <Setter Property="Height" Value="20" />
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
@@ -727,10 +726,10 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Button.nav-tab:pointerover mi|MaterialIcon">
+    <Style Selector="Button.nav-tab:pointerover PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
-    <Style Selector="Button.nav-tab.active mi|MaterialIcon">
+    <Style Selector="Button.nav-tab.active PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
@@ -813,7 +812,7 @@
     </Style>
 
     <!-- Checked: иконка и текст наследуют AccentButtonTextBrush -->
-    <Style Selector="ToggleButton.sync-toggle:checked mi|MaterialIcon">
+    <Style Selector="ToggleButton.sync-toggle:checked PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
     <Style Selector="ToggleButton.sync-toggle:checked TextBlock">
@@ -840,6 +839,77 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
     <Style Selector="ToggleButton.sync-toggle TextBlock">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- CTRL BUTTON — кнопки управления окном и панели уведомлений         -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Inline BorderBrush на Button — local value, блокирует :pointerover -->
+    <!-- из глобальных стилей. Класс решает проблему: style setter имеет    -->
+    <!-- правильный приоритет и анимация работает корректно.                -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Button.ctrl-btn">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ctrl-btn:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.ctrl-btn:pressed">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.ctrl-btn /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.ctrl-btn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.ctrl-btn:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- Вариант для кнопки закрытия: SystemError вместо Accent -->
+    <Style Selector="Button.ctrl-btn-close">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ctrl-btn-close:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorBrush}" />
+    </Style>
+    <Style Selector="Button.ctrl-btn-close:pressed">
+        <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorBrush}" />
+    </Style>
+    <Style Selector="Button.ctrl-btn-close /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="Button.ctrl-btn-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 </Styles>

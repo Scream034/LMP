@@ -1,16 +1,13 @@
 ﻿using System.Collections;
-using System.Collections.Specialized;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using LMP.Core.Services;
 using LMP.Features.Shared;
-using Material.Icons;
 
 namespace LMP.UI.Controls;
 
@@ -60,11 +57,26 @@ public partial class TrackListControl : UserControl
     private ItemsRepeater? _repeater;
     private DispatcherTimer? _autoScrollTimer;
     private double _autoScrollOffset;
-    private IDisposable? _scrollTrackingSub;
+
+    private SnapScrollHelper? _snapScroll;
 
     #endregion
 
     #region Styled Properties
+
+    public static readonly StyledProperty<bool> EnableSnapScrollProperty =
+        AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableSnapScroll), true);
+
+    /// <summary>
+    /// Включает выравнивание позиции скролла по сетке высоты трека (60px).
+    /// Устраняет sub-pixel рендеринг текста и иконок, снижает нагрузку на GPU.
+    /// Touchpad не затрагивается — пропорциональный scroll сохраняется.
+    /// </summary>
+    public bool EnableSnapScroll
+    {
+        get => GetValue(EnableSnapScrollProperty);
+        set => SetValue(EnableSnapScrollProperty, value);
+    }
 
     public static readonly StyledProperty<IEnumerable?> ItemsProperty =
         AvaloniaProperty.Register<TrackListControl, IEnumerable?>(nameof(Items));
@@ -252,8 +264,12 @@ public partial class TrackListControl : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             _scrollViewer = this.FindAncestorOfType<ScrollViewer>();
-            if (_scrollViewer != null)
-                SetupScrollTracking();
+
+            if (_scrollViewer != null && EnableSnapScroll)
+            {
+                _snapScroll?.Dispose();
+                _snapScroll = new SnapScrollHelper(_scrollViewer, ItemHeight);
+            }
         }, DispatcherPriority.Loaded);
 
         _autoScrollTimer = new DispatcherTimer(
@@ -267,40 +283,11 @@ public partial class TrackListControl : UserControl
 
         _autoScrollTimer?.Stop();
         _autoScrollTimer = null;
-        _scrollTrackingSub?.Dispose();
-        _scrollTrackingSub = null;
+        _snapScroll?.Dispose();
+        _snapScroll = null;
         _repeater = null;
         _scrollViewer = null;
         _lastHighlightedItem = null;
-    }
-
-    #endregion
-
-    #region Scroll Tracking
-
-    private void SetupScrollTracking()
-    {
-        if (_scrollViewer == null) return;
-        _scrollTrackingSub?.Dispose();
-        _scrollTrackingSub = _scrollViewer
-            .GetObservable(ScrollViewer.OffsetProperty)
-            .Subscribe(OnScrollOffsetChanged);
-    }
-
-    private void OnScrollOffsetChanged(Vector offset)
-    {
-        // UpdateFooterVisibility(offset);
-    }
-
-    private void UpdateFooterVisibility(Vector offset)
-    {
-        if (_scrollViewer == null) { IsFooterVisible = false; return; }
-
-        double distanceToBottom =
-            _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height - offset.Y;
-        bool isNearBottom = distanceToBottom <= NearBottomThreshold
-                            || _scrollViewer.Extent.Height <= _scrollViewer.Viewport.Height;
-        IsFooterVisible = ReachedEnd && isNearBottom;
     }
 
     #endregion
@@ -328,6 +315,25 @@ public partial class TrackListControl : UserControl
             else
                 IsFooterVisible = ReachedEnd;
         }
+        else if (change.Property == EnableSnapScrollProperty)
+        {
+            if (_scrollViewer == null) return;
+            _snapScroll?.Dispose();
+            _snapScroll = change.GetNewValue<bool>()
+                ? new SnapScrollHelper(_scrollViewer, ItemHeight)
+                : null;
+        }
+    }
+
+    private void UpdateFooterVisibility(Vector offset)
+    {
+        if (_scrollViewer == null) { IsFooterVisible = false; return; }
+
+        double distanceToBottom =
+            _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height - offset.Y;
+        bool isNearBottom = distanceToBottom <= NearBottomThreshold
+                            || _scrollViewer.Extent.Height <= _scrollViewer.Viewport.Height;
+        IsFooterVisible = ReachedEnd && isNearBottom;
     }
 
     private void CheckInitialLoad()
@@ -413,7 +419,10 @@ public partial class TrackListControl : UserControl
     private void OnDragOver(object? sender, DragEventArgs e)
     {
         if (!EnableReordering || !HasTrackIndexData(e))
-        { e.DragEffects = DragDropEffects.None; return; }
+        {
+            e.DragEffects = DragDropEffects.None;
+            return;
+        }
 
         e.DragEffects = DragDropEffects.Move;
         if (_repeater == null) return;
@@ -431,11 +440,23 @@ public partial class TrackListControl : UserControl
         if (overItem == null) return;
         _lastHighlightedItem = overItem;
 
-        double relY = pos.Y - (idx * ItemHeight);
+        // ✅ ФИКС: relY относительно bounds элемента, а не теоретической позиции
+        var itemBounds = overItem.Bounds;
+        var relY = pos.Y - _repeater.Bounds.Position.Y - (idx * ItemHeight);
+
+        // Альтернатива: relY в пределах элемента
+        // var relY = e.GetPosition(overItem).Y;
+
         if (relY < ItemHeight / 2)
-        { overItem.Classes.Add("insert-top"); overItem.Classes.Remove("insert-bottom"); }
+        {
+            overItem.Classes.Add("insert-top");
+            overItem.Classes.Remove("insert-bottom");
+        }
         else
-        { overItem.Classes.Remove("insert-top"); overItem.Classes.Add("insert-bottom"); }
+        {
+            overItem.Classes.Remove("insert-top");
+            overItem.Classes.Add("insert-bottom");
+        }
 
         HandleAutoScroll(e);
     }
@@ -494,7 +515,10 @@ public partial class TrackListControl : UserControl
         if (idx < 0)
             return _repeater.ItemsSource is ICollection c ? c.Count - 1 : -1;
 
-        double relY = pos.Y - (idx * ItemHeight);
+        // ✅ ФИКС: relY в пределах элемента
+        var targetElement = _repeater.TryGetElement(idx);
+        var relY = targetElement != null ? e.GetPosition(targetElement).Y : pos.Y - (idx * ItemHeight);
+
         int target = relY > ItemHeight / 2 ? idx + 1 : idx;
         if (oldIndex < target) target--;
 
@@ -608,4 +632,160 @@ public partial class TrackListControl : UserControl
     }
 
     #endregion
+
+    #region Snap Scroll
+
+    /// <summary>
+    /// Выравнивает позицию ScrollViewer по целочисленной сетке высоты трека
+    /// с лёгкой интерполяцией (lerp) для колеса мыши.
+    ///
+    /// <para><b>Стратегия по источнику события:</b></para>
+    /// <list type="bullet">
+    ///   <item><b>Mouse wheel</b> — вычисляет target на N × <see cref="_itemHeight"/>,
+    ///   затем плавно интерполирует за ~6-8 кадров (100ms).</item>
+    ///   <item><b>Scrollbar drag</b> — без вмешательства. ScrollViewer обрабатывает нативно,
+    ///   никакого snap и lerp — пользователь контролирует позицию напрямую.</item>
+    ///   <item><b>Touchpad</b> — дельта &lt; порога → не перехватываем.</item>
+    /// </list>
+    ///
+    /// <para><b>Почему scrollbar НЕ snap'ится:</b> при drag thumb пользователь
+    /// непрерывно задаёт позицию. Snap после отпускания → «прыжок назад»,
+    /// нарушающий ожидание (UX anti-pattern: loss of control).
+    /// Wheel дискретен по природе → snap + lerp = плавность без потери контроля.</para>
+    /// </summary>
+    private sealed class SnapScrollHelper : IDisposable
+    {
+        #region Constants
+
+        /// <summary>
+        /// Порог дельты колеса для различения мыши и тачпада.
+        /// Mouse wheel: |delta| ≈ 1.0–3.0. Touchpad: |delta| ≈ 0.05–0.3.
+        /// </summary>
+        private const double TouchpadDeltaThreshold = 0.5;
+
+        /// <summary>Треков на один тик колеса мыши.</summary>
+        private const double WheelTracksPerTick = 3.0;
+
+        /// <summary>
+        /// Коэффициент экспоненциальной интерполяции за кадр.
+        /// 0.25 = 25% оставшегося расстояния за кадр → ~6 кадров до визуальной остановки.
+        /// </summary>
+        private const double LerpFactor = 0.25;
+
+        /// <summary>
+        /// Порог расстояния до target при котором lerp завершается snap'ом.
+        /// Меньше 0.5px — sub-pixel, нет смысла продолжать анимацию.
+        /// </summary>
+        private const double LerpSnapThreshold = 0.5;
+
+        #endregion
+
+        private readonly ScrollViewer _sv;
+        private readonly double _itemHeight;
+        private readonly DispatcherTimer _lerpTimer;
+
+        /// <summary>Целевая позиция скролла (всегда snap-aligned).</summary>
+        private double _targetOffset;
+
+        /// <summary>Флаг: lerp-анимация активна.</summary>
+        private bool _isAnimating;
+
+        private bool _disposed;
+
+        public SnapScrollHelper(ScrollViewer sv, double itemHeight)
+        {
+            _sv = sv;
+            _itemHeight = itemHeight;
+            _targetOffset = sv.Offset.Y;
+
+            // Tunnel: перехватываем до дефолтного обработчика ScrollViewer
+            sv.AddHandler(
+                InputElement.PointerWheelChangedEvent,
+                OnWheel,
+                RoutingStrategies.Tunnel,
+                handledEventsToo: false);
+
+            // Lerp-таймер: ~60fps, запускается только во время wheel-анимации.
+            // CPU = 0 при drag scrollbar и в покое.
+            _lerpTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(16)
+            };
+            _lerpTimer.Tick += OnLerpTick;
+        }
+
+        private void OnWheel(object? sender, PointerWheelEventArgs e)
+        {
+            // Тачпад: пропускаем, ScrollViewer обрабатывает нативно
+            if (Math.Abs(e.Delta.Y) < TouchpadDeltaThreshold) return;
+
+            e.Handled = true;
+
+            double maxOffset = Math.Max(0, _sv.Extent.Height - _sv.Viewport.Height);
+            double step = Math.Sign(-e.Delta.Y) * _itemHeight * WheelTracksPerTick;
+
+            // Если уже анимируемся — продолжаем от текущего target, а не от текущего offset.
+            // Это даёт «накопление» инерции при быстром прокручивании колеса.
+            double baseOffset = _isAnimating ? _targetOffset : _sv.Offset.Y;
+            _targetOffset = SnapToGrid(Math.Clamp(baseOffset + step, 0, maxOffset));
+
+            StartLerp();
+        }
+
+        /// <summary>
+        /// Кадр lerp-анимации: экспоненциальное приближение к target.
+        /// Один вызов Offset = один layout pass. Завершается когда расстояние &lt; 0.5px.
+        /// </summary>
+        private void OnLerpTick(object? sender, EventArgs e)
+        {
+            double current = _sv.Offset.Y;
+            double distance = _targetOffset - current;
+
+            if (Math.Abs(distance) < LerpSnapThreshold)
+            {
+                SetOffset(_targetOffset);
+                StopLerp();
+                return;
+            }
+
+            SetOffset(current + distance * LerpFactor);
+        }
+
+        private void StartLerp()
+        {
+            if (_isAnimating) return;
+            _isAnimating = true;
+            _lerpTimer.Start();
+        }
+
+        private void StopLerp()
+        {
+            _isAnimating = false;
+            _lerpTimer.Stop();
+        }
+
+        /// <summary>
+        /// Округляет offset до ближайшей границы трека.
+        /// Результат всегда целочисленный если itemHeight целое (60).
+        /// </summary>
+        private double SnapToGrid(double offset) =>
+            Math.Round(offset / _itemHeight) * _itemHeight;
+
+        private void SetOffset(double y)
+        {
+            _sv.Offset = new Vector(_sv.Offset.X, y);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            _lerpTimer.Stop();
+            _sv.RemoveHandler(InputElement.PointerWheelChangedEvent, OnWheel);
+        }
+    }
+
+    #endregion
+
 }

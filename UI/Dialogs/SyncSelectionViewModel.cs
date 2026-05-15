@@ -6,6 +6,7 @@ using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -21,7 +22,7 @@ public sealed record SyncActionOption(MergeAction Action, string DisplayName)
     public override string ToString() => DisplayName;
 }
 
-public class SyncSelectionViewModel : ViewModelBase
+public sealed class SyncSelectionViewModel : ViewModelBase
 {
     private readonly List<SyncItemViewModel> _allItems = [];
     private readonly List<SyncItemViewModel> _conflictingItems = [];
@@ -57,7 +58,6 @@ public class SyncSelectionViewModel : ViewModelBase
     public Action<List<SyncDecision>>? OnResult { get; set; }
 
     public SyncSelectionViewModel(
-        NotificationService notifications,
         IEnumerable<PlaylistSearchResult> playlists,
         ISet<string> existingLocalNames,
         IReadOnlyDictionary<string, int>? trackCounts = null)
@@ -89,7 +89,7 @@ public class SyncSelectionViewModel : ViewModelBase
             int trackCount = 0;
             trackCounts?.TryGetValue(p.Id.Value, out trackCount);
 
-            var item = new SyncItemViewModel(p, hasConflict, notifications, trackCount);
+            var item = new SyncItemViewModel(p, hasConflict, trackCount);
 
             // Сразу применяем дефолтный шаблон к элементу
             item.SelectedOption = hasConflict
@@ -263,11 +263,10 @@ public class SyncSelectionViewModel : ViewModelBase
     }
 }
 
-public class SyncItemViewModel : ReactiveObject
+public sealed class SyncItemViewModel : ReactiveObject
 {
-    private readonly NotificationService? _notifications;
-
     public PlaylistSearchResult Original { get; }
+    public string PlaylistUrl => Original.Url;
     public bool HasConflict { get; }
     public string Name => Original.Title;
     public string Author => Original.Author?.ChannelTitle ?? "";
@@ -285,21 +284,14 @@ public class SyncItemViewModel : ReactiveObject
     public MergeAction SelectedAction => SelectedOption?.Action ?? MergeAction.Skip;
     public static LocalizationService L => LocalizationService.Instance;
 
-    /// <summary>
-    /// Команда копирования YouTube-ссылки в буфер обмена.
-    /// </summary>
-    public ReactiveCommand<Unit, Unit> CopyLinkCommand { get; }
-
     public SyncItemViewModel(
         PlaylistSearchResult original,
         bool hasConflict,
-        NotificationService notifications,
         int trackCount = 0)
     {
         Original = original;
         HasConflict = hasConflict;
         TrackCount = trackCount;
-        _notifications = notifications;
 
         var l = LocalizationService.Instance;
         AvailableActions = hasConflict
@@ -312,27 +304,5 @@ public class SyncItemViewModel : ReactiveObject
                 new SyncActionOption(MergeAction.Duplicate, l["Sync_Action_Import"]),
                 new SyncActionOption(MergeAction.Skip, l["Sync_Action_Skip"])
             ];
-
-        // ═══ Команда копирования ссылки ═══
-        CopyLinkCommand = ReactiveCommand.CreateFromTask(async () =>
-        {
-            try
-            {
-                var url = $"https://music.youtube.com/playlist?list={Original.Id.Value}";
-
-                await Clipboard.SetTextAsync(url);
-
-                // Показываем toast-уведомление о копировании
-                await _notifications.ShowToastAsync(
-                    titleKey: "Sync_LinkCopied",
-                    messageKey: "Sync_LinkCopied",
-                    severity: NotificationSeverity.Success,
-                    durationMs: 2000);
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[SyncItem] Copy link failed: {ex.Message}");
-            }
-        });
     }
 }

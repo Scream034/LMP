@@ -1,6 +1,5 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:svm="using:LMP.Features.Shared"
     xmlns:h="using:LMP.Core.Helpers"
     x:Class="LMP.UI.Controls.TrackListControl"
@@ -15,40 +14,41 @@
 
             <MenuItem Header="{Binding L[Player_Play]}" Command="{Binding PlayCommand}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="Play" />
+                    <PathIcon Data="{StaticResource Icon.Play}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="{Binding L[Queue_Add]}" Command="{Binding AddToQueueCommand}"
                 IsVisible="{Binding ShowAddToQueue}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="PlaylistPlus" />
+                    <PathIcon Data="{StaticResource Icon.PlaylistPlus}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="{Binding L[AddToPlaylist_Title]}"
                 Command="{Binding AddToPlaylistCommand}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="PlaylistPlus" />
+                    <PathIcon Data="{StaticResource Icon.PlaylistPlus}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <Separator Classes="menu-separator" />
             <MenuItem Header="{Binding L[Track_StartRadio]}" Command="{Binding StartRadioCommand}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="RadioTower" />
+                    <PathIcon Data="{StaticResource Icon.RadioTower}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="{Binding L[Track_CopyLink]}" Command="{Binding CopyLinkCommand}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="LinkVariant" />
+                    <PathIcon Data="{StaticResource Icon.LinkVariant}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <MenuItem Header="{Binding DownloadStatusText}"
                 Command="{Binding SaveToDownloadsCommand}"
                 IsEnabled="{Binding !Track.IsDownloaded}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon
-                        Kind="{Binding Track.IsDownloaded,
-                        Converter={StaticResource BoolToIconConverter},
-                        ConverterParameter='Check|Download'}" />
+                    <PathIcon
+                        Data="{Binding Track.IsDownloaded,
+                        Converter={StaticResource BoolToGeometryConverter},
+                        ConverterParameter='CheckCircle|Download'}"
+                        Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <Separator Classes="menu-separator" IsVisible="{Binding IsPlaylistContext}" />
@@ -56,7 +56,7 @@
                 Command="{Binding RemoveFromPlaylistCommand}"
                 IsVisible="{Binding IsPlaylistContext}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="PlaylistRemove" />
+                    <PathIcon Data="{StaticResource Icon.PlaylistRemove}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
             <Separator Classes="menu-separator" IsVisible="{Binding IsQueueContext}" />
@@ -64,17 +64,12 @@
                 Command="{Binding RemoveFromQueueCommand}"
                 IsVisible="{Binding IsQueueContext}">
                 <MenuItem.Icon>
-                    <mi:MaterialIcon Kind="Close" />
+                    <PathIcon Data="{StaticResource Icon.Close}" Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
         </MenuFlyout>
     </UserControl.Resources>
 
-    <!--
-        ScrollViewer НЕ здесь — он ВСЕГДА в родительском View.
-        ItemsRepeater находит ScrollViewer-предка через visual tree →
-        получает реальный viewport → виртуализация работает (~15 элементов).
-    -->
     <Panel>
         <StackPanel IsVisible="{Binding !IsLoading, ElementName=Root}">
 
@@ -101,110 +96,129 @@
                             PointerMoved="OnItemPointerMoved"
                             PointerReleased="OnItemPointerReleased">
 
-                            <Grid ColumnDefinitions="Auto, *, Auto, Auto, 60"
-                                Background="Transparent">
+                            <Panel Background="Transparent">
 
-                                <!-- КОЛОНКА 0: Обложка -->
-                                <Button Grid.Column="0" Classes="cover-btn"
+                                <!-- COVER -->
+                                <Button Classes="cover-btn"
+                                    Width="44" Height="44"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Margin="8,0,0,0"
                                     Command="{Binding PlayCommand}"
-                                    Width="44" Height="44" Margin="0,0,12,0"
                                     ToolTip.Tip="{Binding L[Player_Play]}">
                                     <Panel>
                                         <Border CornerRadius="6" ClipToBounds="True"
                                             Background="{DynamicResource BgSkeletonBrush}">
-                                            <Image Stretch="UniformToFill" Width="44" Height="44"
+                                            <Image Stretch="UniformToFill"
                                                 RenderOptions.BitmapInterpolationMode="LowQuality"
                                                 h:DebouncedImage.Source="{Binding ThumbnailUrl}" />
                                         </Border>
                                         <Panel Classes="cover-overlay" IsHitTestVisible="False">
                                             <Border CornerRadius="6"
                                                 Background="{DynamicResource BgOverlayBrush}" />
-                                            <mi:MaterialIcon
-                                                Kind="{Binding IsPlaying,
-                                                Converter={StaticResource BoolToIconConverter},
-                                                ConverterParameter='Pause|Play'}"
-                                                Classes="play-icon" Width="24" Height="24"
+                                            <PathIcon Width="24" Height="24"
                                                 Foreground="{DynamicResource TextPrimaryBrush}"
                                                 HorizontalAlignment="Center"
-                                                VerticalAlignment="Center" />
+                                                VerticalAlignment="Center"
+                                                Data="{Binding IsPlaying,
+                                    Converter={StaticResource BoolToGeometryConverter},
+                                    ConverterParameter='Pause|Play'}" />
                                         </Panel>
-                                        <Border IsVisible="{Binding IsPlaying}"
-                                            Width="12" Height="12" CornerRadius="6"
-                                            Background="{DynamicResource AccentBrush}"
-                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                            Margin="0,0,2,2" IsHitTestVisible="False">
-                                            <mi:MaterialIcon Kind="VolumeHigh" Width="8" Height="8"
-                                                Foreground="{DynamicResource TextDarkBrush}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center" />
-                                        </Border>
                                     </Panel>
                                 </Button>
 
-                                <!-- КОЛОНКА 1: Информация -->
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center"
-                                    Spacing="2" IsHitTestVisible="False">
-                                    <TextBlock Text="{Binding Title}" Classes="track-title"
-                                        TextTrimming="CharacterEllipsis" MaxLines="1"
+                                <Grid RowDefinitions="Auto,Auto"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Center"
+                                    Margin="64,0,108,0"
+                                    IsHitTestVisible="False">
+                                    <TextBlock Grid.Row="0"
+                                        Text="{Binding Title}"
+                                        Classes="track-title"
+                                        TextTrimming="CharacterEllipsis"
+                                        MaxLines="1"
                                         FontSize="14" />
-                                    <TextBlock Text="{Binding Author}"
+                                    <TextBlock Grid.Row="1"
+                                        Text="{Binding Author}"
                                         Foreground="{DynamicResource TextMutedBrush}"
-                                        TextTrimming="CharacterEllipsis" MaxLines="1"
+                                        TextTrimming="CharacterEllipsis"
+                                        MaxLines="1"
                                         FontSize="12" />
-                                </StackPanel>
+                                </Grid>
 
-                                <!-- КОЛОНКА 2: Статус -->
-                                <Panel Grid.Column="2" VerticalAlignment="Center"
-                                    Margin="8,0" IsHitTestVisible="False">
-                                    <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        IsVisible="{Binding Track.IsDownloaded}"
-                                        ToolTip.Tip="{Binding L[Track_Downloaded]}" />
-                                    <mi:MaterialIcon Kind="CloudCheck" Width="16" Height="16"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        ToolTip.Tip="{Binding L[Track_Cached]}">
-                                        <mi:MaterialIcon.IsVisible>
-                                            <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                                <Binding Path="Track.IsCached" />
-                                                <Binding Path="!Track.IsDownloaded" />
-                                            </MultiBinding>
-                                        </mi:MaterialIcon.IsVisible>
-                                    </mi:MaterialIcon>
-                                    <ProgressBar Value="{Binding DownloadProgress}" Maximum="1"
-                                        Width="32" Height="3" IsVisible="{Binding IsDownloading}"
-                                        Foreground="{DynamicResource AccentBrush}" />
-                                </Panel>
+                                <PathIcon
+                                    Width="16" Height="16"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,84,0"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    Data="{StaticResource Icon.CheckCircle}"
+                                    IsVisible="{Binding Track.IsDownloaded}"
+                                    ToolTip.Tip="{Binding L[Track_Downloaded]}"
+                                    IsHitTestVisible="False" />
 
-                                <!-- КОЛОНКА 3: Лайк -->
-                                <Button Grid.Column="3" Classes="icon-btn like-btn"
+                                <PathIcon
+                                    Width="16" Height="16"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,84,0"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    Data="{StaticResource Icon.CloudCheck}"
+                                    IsVisible="{Binding ShowCachedIcon}"
+                                    ToolTip.Tip="{Binding L[Track_Cached]}"
+                                    IsHitTestVisible="False" />
+
+                                <ProgressBar
+                                    Width="32" Height="3"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,84,0"
+                                    Value="{Binding DownloadProgress}" Maximum="1"
+                                    IsVisible="{Binding IsDownloading}"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    IsHitTestVisible="False" />
+
+                                <Button
+                                    Classes="icon-btn like-btn"
                                     Classes.is-liked="{Binding Track.IsLiked}"
+                                    Width="28" Height="28"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,48,0"
                                     Command="{Binding ToggleLikeCommand}"
                                     ToolTip.Tip="{Binding L[Track_ToggleLike]}">
-                                    <mi:MaterialIcon
-                                        Kind="{Binding Track.IsLiked,
-                                        Converter={StaticResource BoolToIconConverter},
-                                        ConverterParameter='Heart|HeartOutline'}"
-                                        Width="16" Height="16" />
+                                    <PathIcon Width="16" Height="16"
+                                        Data="{Binding Track.IsLiked,
+                            Converter={StaticResource BoolToGeometryConverter},
+                            ConverterParameter='Heart|HeartOutline'}" />
                                 </Button>
 
-                                <!-- КОЛОНКА 4: Длительность + Меню -->
-                                <Panel Grid.Column="4">
-                                    <TextBlock Text="{Binding FormattedDuration}"
-                                        Classes="duration-text" VerticalAlignment="Center"
-                                        HorizontalAlignment="Right"
-                                        Foreground="{DynamicResource TextMutedBrush}"
-                                        FontSize="12" Margin="0,0,8,0"
-                                        IsHitTestVisible="False" />
-                                    <Button Classes="icon-btn more-btn"
-                                        HorizontalAlignment="Right" Width="32" Height="32"
-                                        Click="OnMoreButtonClicked"
-                                        ToolTip.Tip="{Binding L[Track_MoreOptions]}">
-                                        <mi:MaterialIcon Kind="DotsHorizontal" Width="20"
-                                            Height="20"
-                                            Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    </Button>
-                                </Panel>
-                            </Grid>
+                                <TextBlock
+                                    Classes="duration-text"
+                                    Width="36"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,10,0"
+                                    TextAlignment="Right"
+                                    Foreground="{DynamicResource TextMutedBrush}"
+                                    FontSize="12"
+                                    Text="{Binding FormattedDuration}"
+                                    IsHitTestVisible="False" />
+
+                                <Button
+                                    Classes="icon-btn more-btn"
+                                    Width="32" Height="32"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,8,0"
+                                    Click="OnMoreButtonClicked"
+                                    ToolTip.Tip="{Binding L[Track_MoreOptions]}">
+                                    <PathIcon Width="20" Height="20"
+                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                        Data="{StaticResource Icon.DotsHorizontal}" />
+                                </Button>
+
+                            </Panel>
                         </Border>
                     </DataTemplate>
                 </ItemsRepeater.ItemTemplate>
@@ -237,7 +251,7 @@
                 <Border IsVisible="{Binding IsFooterVisible}"
                     Margin="0,16,0,32" HorizontalAlignment="Center" Opacity="0.5">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <mi:MaterialIcon Kind="CheckCircle" Width="16" Height="16"
+                        <PathIcon Data="{StaticResource Icon.CheckCircle}" Width="16" Height="16"
                             Foreground="{DynamicResource TextMutedBrush}" />
                         <TextBlock Text="{Binding EndOfListText}"
                             Foreground="{DynamicResource TextMutedBrush}" FontSize="13" />

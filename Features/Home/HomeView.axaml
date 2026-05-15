@@ -1,7 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Home"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:i="using:Avalonia.Xaml.Interactivity"
     xmlns:b="using:LMP.Core.Behaviors"
     xmlns:controls="using:LMP.UI.Controls"
@@ -17,13 +16,15 @@
                 <TextBlock Text="{Binding Greeting}"
                     FontSize="28" FontWeight="Bold"
                     Foreground="{DynamicResource TextPrimaryBrush}" />
+                <!-- Debug toggle button -->
                 <Button Grid.Column="1"
                     Command="{Binding ToggleDebugCommand}"
                     Background="Transparent" Padding="8" Cursor="Hand">
-                    <mi:MaterialIcon Kind="Bug" Width="18" Height="18"
+                    <PathIcon Data="{StaticResource Icon.Bug}"
+                        Width="18" Height="18"
                         Foreground="{Binding ShowDebugInfo,
-                        Converter={StaticResource BoolToSelector},
-                        ConverterParameter='AccentBrush|TextMutedBrush'}" />
+                            Converter={StaticResource BoolToSelector},
+                            ConverterParameter='AccentBrush|TextMutedBrush'}" />
                 </Button>
             </Grid>
 

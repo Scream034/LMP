@@ -3,7 +3,6 @@
     xmlns:vm="using:LMP.Features.Settings"
     xmlns:controls="using:LMP.Features.Settings.Controls"
     xmlns:asyncImageLoader="clr-namespace:AsyncImageLoader;assembly=AsyncImageLoader.Avalonia"
-    xmlns:mi="using:Material.Icons.Avalonia"
     x:Class="LMP.Features.Settings.SettingsView"
     x:DataType="vm:SettingsViewModel"
     x:CompileBindings="True">
@@ -35,10 +34,10 @@
 
                 <!-- ACCOUNT & LANGUAGE -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="Account" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.Account}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Classes="h2" Text="{Binding L[Settings_Account_Language]}"
-                        Margin="0" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_Account_Language]}" Margin="0" />
                 </StackPanel>
                 <Border Classes="card">
                     <StackPanel Spacing="20">
@@ -48,8 +47,11 @@
                                 Margin="0,0,20,0"
                                 Background="{DynamicResource BgHighlightBrush}">
                                 <Panel>
-                                    <mi:MaterialIcon Kind="Account" Width="36" Height="36"
-                                        IsVisible="{Binding AccountAvatarUrl, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                                    <!-- Profile Card: аватар-заглушка -->
+                                    <PathIcon Data="{StaticResource Icon.Account}"
+                                        Width="36" Height="36"
+                                        IsVisible="{Binding AccountAvatarUrl,
+                                            Converter={x:Static StringConverters.IsNullOrEmpty}}" />
                                     <Image
                                         asyncImageLoader:ImageLoader.Source="{Binding AccountAvatarUrl}"
                                         Stretch="UniformToFill"
@@ -90,7 +92,8 @@
 
                 <!-- NETWORK -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="Web" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.Web}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
                     <TextBlock Classes="h2" Text="{Binding L[Settings_Network]}" Margin="0" />
                 </StackPanel>
@@ -151,12 +154,12 @@
                     </StackPanel>
                 </Border>
 
-                <!-- STORAGE & CACHE -->
+                <!-- Storage & Cache секция -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="Database" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.Database}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Classes="h2" Text="{Binding L[Settings_Storage_Data]}"
-                        Margin="0" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_Storage_Data]}" Margin="0" />
                 </StackPanel>
                 <Border Classes="card">
                     <StackPanel Spacing="20">
@@ -298,12 +301,12 @@
                     </StackPanel>
                 </Border>
 
-                <!-- APPEARANCE -->
+                <!-- Appearance секция -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="Palette" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.Palette}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Classes="h2" Text="{Binding L[Settings_Appearance]}"
-                        Margin="0" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_Appearance]}" Margin="0" />
                 </StackPanel>
                 <Border Classes="card">
                     <StackPanel Spacing="20">
@@ -404,9 +407,10 @@
                     </StackPanel>
                 </Border>
 
-                <!-- AUDIO -->
+                <!-- Audio секция -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="VolumeHigh" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.VolumeHigh}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
                     <TextBlock Classes="h2" Text="{Binding L[Settings_Audio]}" Margin="0" />
                 </StackPanel>
@@ -488,7 +492,7 @@
 
                         <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 
-                                              <!-- Audio Processing Section -->
+                        <!-- Audio Processing Section -->
                         <TextBlock Text="{Binding L[Audio_ProcessingSection]}"
                             FontWeight="SemiBold" FontSize="14"
                             Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -512,7 +516,7 @@
 
                         <!-- Normalization Target LUFS -->
                         <Grid ColumnDefinitions="*, 220, 70"
-                              IsEnabled="{Binding AudioNormalizationEnabled}">
+                            IsEnabled="{Binding AudioNormalizationEnabled}">
                             <StackPanel>
                                 <TextBlock Classes="label"
                                     Text="{Binding L[Settings_NormalizationTarget]}" />
@@ -528,7 +532,7 @@
 
                         <!-- Normalization Max Gain -->
                         <Grid ColumnDefinitions="*, 220, 70"
-                              IsEnabled="{Binding AudioNormalizationEnabled}">
+                            IsEnabled="{Binding AudioNormalizationEnabled}">
                             <StackPanel>
                                 <TextBlock Classes="label"
                                     Text="{Binding L[Settings_NormalizationMaxGain]}" />
@@ -624,12 +628,12 @@
                     </StackPanel>
                 </Border>
 
-                <!-- PLAYBACK -->
+                <!-- Playback секция -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="Play" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.Play}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Classes="h2" Text="{Binding L[Settings_Playback]}"
-                        Margin="0" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_Playback]}" Margin="0" />
                 </StackPanel>
                 <Border Classes="card">
                     <StackPanel Spacing="16">
@@ -657,12 +661,12 @@
                     </StackPanel>
                 </Border>
 
-                <!-- WINDOW BEHAVIOR -->
+                <!-- Window Behavior секция -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="WindowRestore" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.WindowRestore}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Classes="h2" Text="{Binding L[Settings_WindowBehavior]}"
-                        Margin="0" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_WindowBehavior]}" Margin="0" />
                 </StackPanel>
                 <Border Classes="card">
                     <StackPanel Spacing="16">
@@ -697,12 +701,12 @@
                     </StackPanel>
                 </Border>
 
-                <!-- GENERAL -->
+                <!-- General секция: используем Icon.Settings (MDI Cog) -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
-                    <mi:MaterialIcon Kind="Cog" Width="20" Height="20"
+                    <PathIcon Data="{StaticResource Icon.Settings}"
+                        Width="20" Height="20"
                         Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Classes="h2" Text="{Binding L[Settings_General]}"
-                        Margin="0" />
+                    <TextBlock Classes="h2" Text="{Binding L[Settings_General]}" Margin="0" />
                 </StackPanel>
                 <Border Classes="card">
                     <StackPanel Spacing="16">

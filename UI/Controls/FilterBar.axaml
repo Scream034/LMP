@@ -1,6 +1,5 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:mi="using:Material.Icons.Avalonia"
     xmlns:local="using:LMP.UI.Controls"
     x:Class="LMP.UI.Controls.FilterBar"
     x:Name="Root"
@@ -15,12 +14,17 @@
         VerticalContentAlignment="Center"
         Padding="6,0,12,0">
         <TextBox.InnerLeftContent>
-            <mi:MaterialIcon Kind="{Binding IconKind, ElementName=Root}"
+            <!--
+                IconData привязан к вычисляемому DirectProperty FilterBar.IconData,
+                которое возвращает StreamGeometry из Application.Resources по ключу IconKey.
+                Это позволяет менять иконку снаружи через строковый ключ без зависимости
+                от Material.Icons.
+            -->
+            <PathIcon Data="{Binding IconData, ElementName=Root}"
                 Width="{Binding IconSize, ElementName=Root}"
                 Height="{Binding IconSize, ElementName=Root}"
                 Foreground="{DynamicResource TextSecondaryBrush}"
                 Margin="12,0,8,0" />
         </TextBox.InnerLeftContent>
     </TextBox>
-
 </UserControl>
