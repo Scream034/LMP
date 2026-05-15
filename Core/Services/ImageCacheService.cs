@@ -7,10 +7,10 @@ namespace LMP.Core.Services;
 
 public enum ImageQuality
 {
-    Low    = 120,
+    Low = 120,
     Medium = 200,
-    High   = 400,
-    Ultra  = 800
+    High = 400,
+    Ultra = 800
 }
 
 /// <summary>
@@ -59,9 +59,12 @@ public sealed class ImageCacheService : IDisposable
 
     private int MaxMemoryItems => _library.Settings.Storage.MaxBitmapCacheItems > 0
         ? _library.Settings.Storage.MaxBitmapCacheItems
-        : 50;
+        : 25;
 
-    private long MaxMemoryBytes => MaxMemoryItems * 200L * 200 * 4;
+    // Реальный лимит в байтах:
+    // Low (120px):  120×120×4 = 57.6KB × 25 items ≈ 1.4MB — правильно
+    // High (400px): 400×400×4 = 640KB × 25 items ≈ 16MB — нужно учитывать
+    private long MaxMemoryBytes => MaxMemoryItems * 400L * 400 * 4; // запас для High качества
 
     public ImageCacheService(LibraryService library)
     {
@@ -87,18 +90,17 @@ public sealed class ImageCacheService : IDisposable
 
         var memKey = ComputeMemoryKeyHash(url, decodeWidth);
 
-        // 1. Hot path: Memory cache — O(1) lookup, zero alloc
+        // 1. Hot path: Memory cache
         lock (_lruLock)
         {
-            if (_memoryCache.TryGetValue(memKey, out var cached) && cached.AddRef())
+            if (_memoryCache.TryGetValue(memKey, out var cached))
             {
                 TouchLruUnsafe(memKey);
-                return cached.Bitmap;
+                return cached.Bitmap; // ← просто возвращаем, без AddRef
             }
         }
 
-        // 2. Cold path: дедупликация через Lazy<Task> — фабрика вызовется ровно один раз
-        //    даже при конкурентном GetOrAdd от нескольких потоков.
+        // 2. Cold path: дедупликация через Lazy<Task>
         var lazyTask = _pendingLoads.GetOrAdd(
             memKey,
             static (k, state) => new Lazy<Task<Bitmap?>>(() =>
@@ -108,19 +110,7 @@ public sealed class ImageCacheService : IDisposable
         try
         {
             var bitmap = await lazyTask.Value;
-
-            if (bitmap != null)
-            {
-                // AddRef для этого вызывающего.
-                // LoadImageInternalAsync добавил bitmap в cache с refCount=1 (cache ref).
-                // Каждый waiter, получающий ненулевой результат, должен явно AddRef.
-                lock (_lruLock)
-                {
-                    if (_memoryCache.TryGetValue(memKey, out var rc))
-                        rc.AddRef();
-                }
-            }
-
+            // ← убрать блок AddRef для вызывающего — кэш держит единственный ref
             return bitmap;
         }
         catch { return null; }
@@ -254,7 +244,10 @@ public sealed class ImageCacheService : IDisposable
 
     /// <summary>
     /// Добавляет bitmap в memory cache с LRU eviction.
-    /// Dictionary + LinkedList под единым lock-ом — O(1) вставка, O(1) eviction.
+    /// 
+    /// <para><b>Memory pressure:</b> GC.AddMemoryPressure вызывается ПОСЛЕ
+    /// успешной вставки. При дубликате — bitmap диспозится без pressure,
+    /// т.к. оригинал уже учтён.</para>
     /// </summary>
     private void AddToMemoryCache(ulong key, Bitmap bitmap)
     {
@@ -263,7 +256,6 @@ public sealed class ImageCacheService : IDisposable
 
         lock (_lruLock)
         {
-            // Eviction: удаляем LRU-хвост пока не влезет новый элемент
             while ((_memoryCache.Count >= MaxMemoryItems ||
                     _currentMemoryCacheBytes + estimatedBytes > MaxMemoryBytes)
                    && _lruOrder.Last != null)
@@ -277,23 +269,12 @@ public sealed class ImageCacheService : IDisposable
                 var node = _lruOrder.AddFirst(key);
                 _lruIndex[key] = node;
                 Interlocked.Add(ref _currentMemoryCacheBytes, estimatedBytes);
+                GC.AddMemoryPressure(estimatedBytes);
             }
             else
             {
-                // Гонка: другой поток уже вставил этот ключ
                 entry.Dispose();
             }
-        }
-    }
-
-    public void ReleaseBitmap(string url, int decodeWidth)
-    {
-        var key = ComputeMemoryKeyHash(url, decodeWidth);
-
-        lock (_lruLock)
-        {
-            if (_memoryCache.TryGetValue(key, out var rc))
-                rc.Release();
         }
     }
 
@@ -312,7 +293,17 @@ public sealed class ImageCacheService : IDisposable
 
     /// <summary>
     /// Вызывается с уже захваченным _lruLock.
-    /// Удаляет хвостовой (наиболее старый) элемент из LRU. O(1).
+    /// Удаляет хвостовой элемент LRU. O(1).
+    ///
+    /// <para><b>ВАЖНО:</b> Bitmap НЕ диспозится намеренно.
+    /// ImageCacheService возвращает Bitmap напрямую в Image.Source.
+    /// Image не имеет механизма release при смене Source → кэш не знает
+    /// когда bitmap перестал использоваться UI-слоем.
+    /// Bitmap будет собран GC когда Image.Source сменится и
+    /// последняя ссылка исчезнет.</para>
+    ///
+    /// <para>GC.RemoveMemoryPressure вызывается: кэш больше не отвечает
+    /// за эту память, даже если Image.Source всё ещё держит bitmap.</para>
     /// </summary>
     private void EvictLastUnsafe()
     {
@@ -323,8 +314,10 @@ public sealed class ImageCacheService : IDisposable
 
         if (_memoryCache.Remove(key, out var removed))
         {
-            Interlocked.Add(ref _currentMemoryCacheBytes, -removed.EstimatedBytes);
-            removed.Release();
+            var bytes = removed.EstimatedBytes;
+            Interlocked.Add(ref _currentMemoryCacheBytes, -bytes);
+            GC.RemoveMemoryPressure(bytes);
+            // ← removed.Dispose() УБРАН: bitmap может быть в Image.Source
         }
     }
 
@@ -387,16 +380,29 @@ public sealed class ImageCacheService : IDisposable
         });
     }
 
+    /// <summary>
+    /// Полностью очищает memory cache.
+    ///
+    /// <para><b>ВАЖНО:</b> Bitmap-ы не диспозятся — они могут использоваться
+    /// в Image.Source контролов в данный момент. Вызов Dispose() при живых
+    /// Image-контролах вызывает ObjectDisposedException в layout pass.</para>
+    /// </summary>
     public void ClearMemoryCache()
     {
+        long totalBytes;
+
         lock (_lruLock)
         {
-            foreach (var r in _memoryCache.Values) r.Release();
+            totalBytes = _currentMemoryCacheBytes;
+
             _memoryCache.Clear();
             _lruOrder.Clear();
             _lruIndex.Clear();
             Interlocked.Exchange(ref _currentMemoryCacheBytes, 0);
         }
+
+        if (totalBytes > 0)
+            GC.RemoveMemoryPressure(totalBytes);
     }
 
     public async Task ClearDiskCacheAsync()
@@ -426,7 +432,7 @@ public sealed class ImageCacheService : IDisposable
     #region Cache Key Hashing (FNV-1a 64-bit → ulong)
 
     private const ulong FnvOffsetBasis = 14695981039346656037UL;
-    private const ulong FnvPrime       = 1099511628211UL;
+    private const ulong FnvPrime = 1099511628211UL;
 
     /// <summary>
     /// FNV-1a 64-bit хеш URL. Используется как ключ disk cache.
@@ -459,7 +465,7 @@ public sealed class ImageCacheService : IDisposable
             <= 120 => 120,
             <= 200 => 200,
             <= 400 => 400,
-            _      => 800
+            _ => 800
         };
 
         ulong hash = FnvOffsetBasis;

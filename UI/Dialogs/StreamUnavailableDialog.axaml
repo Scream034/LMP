@@ -11,7 +11,7 @@
         WindowStartupLocation="CenterOwner"
         CanResize="False"
         ShowInTaskbar="False"
-        SystemDecorations="BorderOnly"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource BgPrimaryBrush}">
 
     <Border BorderBrush="#E74C3C"

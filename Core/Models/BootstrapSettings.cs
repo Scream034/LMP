@@ -8,9 +8,17 @@ public sealed class BootstrapSettings
     public string LanguageCode { get; set; } = "en";
     public bool IsFirstRun { get; set; } = true;
     public string? ThemeJson { get; set; }
-    
+
     [JsonIgnore]
     private static readonly string FilePath = G.FilePath.Bootstrap;
+
+    /// <summary>
+    /// Лимит GPU texture cache Skia в байтах.
+    /// Применяется при старте через SkiaOptions.MaxGpuResourceSizeBytes.
+    /// Изменение вступает в силу после перезапуска.
+    /// Дефолт: 64MB — покрывает ~762 обложки 120px без лишнего потребления RAM.
+    /// </summary>
+    public long GpuTextureCacheMb { get; set; } = 64;
 
     public static BootstrapSettings Load()
     {
@@ -50,10 +58,10 @@ public sealed class BootstrapSettings
             IsFirstRun = false,
             LanguageCode = G.SystemInfo.DetectSystemLanguage()
         };
-        
+
         Log.Info($"[Bootstrap] First run (no file), detected language: {defaults.LanguageCode}");
         defaults.Save();
-        
+
         return defaults;
     }
 
@@ -69,9 +77,9 @@ public sealed class BootstrapSettings
             Log.Error($"[Bootstrap] Failed to save: {ex.Message}");
         }
     }
-    
+
     public static BootstrapSettings Current { get; private set; } = new();
-    
+
     public static void Initialize()
     {
         Current = Load();

@@ -48,7 +48,7 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
 
         this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => ApplyFilter())
             .DisposeWith(Disposables);
 

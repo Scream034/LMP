@@ -14,6 +14,7 @@ using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Backends;
+using LMP.Core.Helpers;
 
 namespace LMP.Features.Debug;
 
@@ -524,9 +525,17 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
 
     private void ExecuteDumpMemory()
     {
-        var report = MemoryDiagnostics.Instance.GetFullReport();
-        AppendLog(report);
-        MemoryDiagnostics.LogReport();
+        AppendLog("\n╔══════════════════════════════════════════╗");
+        AppendLog("║         MEMORY REPORT                    ║");
+        AppendLog("╠══════════════════════════════════════════╣");
+
+        var gcInfo = GC.GetGCMemoryInfo();
+        AppendLog($"║ GC Total:       {GC.GetTotalMemory(false) / 1024 / 1024,6} MB              ║");
+        AppendLog($"║ GC Heap:        {gcInfo.HeapSizeBytes / 1024 / 1024,6} MB              ║");
+        AppendLog($"║ Memory Load:    {gcInfo.MemoryLoadBytes / 1024 / 1024,6} MB              ║");
+        AppendLog($"║ High Threshold: {gcInfo.HighMemoryLoadThresholdBytes / 1024 / 1024,6} MB              ║");
+        AppendLog($"║ Gen0/1/2: {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2),-6}                   ║");
+        AppendLog("╚══════════════════════════════════════════╝\n");
     }
 
     private void ExecuteForceGc()
@@ -535,8 +544,11 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         var before = GC.GetTotalMemory(false) / 1024 / 1024;
         AppendLog($"Before: {before} MB");
 
-        MemoryDiagnostics.ForceCleanup();
+        // Используем централизованный хелпер
+        MemoryCleanupHelper.PerformCleanup(aggressive: true);
 
+        // Ждём завершения (синхронно для Debug)
+        System.Threading.Thread.Sleep(500);
         var after = GC.GetTotalMemory(true) / 1024 / 1024;
         AppendLog($"After:  {after} MB");
         AppendLog($"Freed:  {before - after} MB");
@@ -565,11 +577,12 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             var cleaned = vmFactory.CleanupCache();
             AppendLog($"✓ TrackVM cache: cleaned {cleaned} dead refs");
 
-            MemoryDiagnostics.ForceCleanup();
-            AppendLog("✓ GC completed");
+            MemoryCleanupHelper.PerformCleanup(aggressive: true);
+            AppendLog("✓ GC + Skia caches completed");
 
-            var stats = MemoryDiagnostics.Instance.CurrentStats;
-            AppendLog($"\nCurrent memory: {stats.WorkingSetMb} MB (GC: {stats.GcTotalMemoryMb} MB)");
+            await Task.Delay(300); // дать время фоновому Task завершиться
+            var memMb = GC.GetTotalMemory(false) / 1024 / 1024;
+            AppendLog($"\nCurrent GC memory: {memMb} MB");
         }
         catch (Exception ex)
         {

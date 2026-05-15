@@ -67,14 +67,14 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
         var filterPredicate = this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxApp.TaskpoolScheduler)
+            .ObserveOn(RxSchedulers.TaskpoolScheduler)
             .Select(BuildFilterPredicate)
             .StartWith(BuildFilterPredicate(FilterQuery));
 
         _sourceList.Connect()
             .Filter(filterPredicate)
             .Transform(CreateItemViewModel)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Bind(out _items)
             .Subscribe()
             .DisposeWith(_dynamicDataSubscriptions);
@@ -93,7 +93,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             .Filter(filterPredicate)
             .Count()
             .Throttle(TimeSpan.FromMilliseconds(100))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(visibleCount =>
             {
                 if (visibleCount < PrefetchThreshold && HasMoreItems && !IsLoading && !IsLoadingMore && !IsFetchingFromNetwork)
@@ -273,16 +273,28 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;
-        
+
         if (disposing)
         {
             Log.Debug($"[PaginatedVM] Disposing");
-            
+
             CancelLoading();
             _dynamicDataSubscriptions.Dispose();
+
+            // ═══ FIX: Разрыв GC-root цепочки ═══
+            // TrackItemVM.Dispose() отписывается от Track.PropertyChanged,
+            // без этого: TrackRegistry._pinned → TrackInfo.PropertyChanged
+            //   → TrackItemVM._onPlay → PageVM (удерживает весь граф).
+            // _items — ReadOnlyObservableCollection, итерируем до Dispose SourceList.
+            foreach (var item in _items)
+            {
+                if (item is IDisposable d)
+                    d.Dispose();
+            }
+
             _sourceList.Dispose();
         }
-        
+
         base.Dispose(disposing);
         _isDisposed = true;
     }

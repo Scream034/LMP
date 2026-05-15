@@ -32,7 +32,7 @@
             <!-- Search -->
             <TextBox Grid.Row="2"
                 Text="{Binding FilterQuery, Mode=TwoWay}"
-                Watermark="{Binding L[AddToPlaylist_SearchHint]}"
+                PlaceholderText="{Binding L[AddToPlaylist_SearchHint]}"
                 Margin="0,0,0,12">
                 <TextBox.InnerLeftContent>
                     <PathIcon Data="{StaticResource Icon.Search}"

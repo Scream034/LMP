@@ -54,7 +54,7 @@ public abstract class TrackListReorderableViewModel
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => Audio.OnTrackChanged += h,
                 h => Audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(track => UpdatePlaybackState(track, Audio.IsPlaying))
             .DisposeWith(Disposables);
 
@@ -62,7 +62,7 @@ public abstract class TrackListReorderableViewModel
                 h => (a, b) => h((a, b)),
                 h => Audio.OnPlaybackStateChanged += h,
                 h => Audio.OnPlaybackStateChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => UpdatePlaybackState(Audio.CurrentTrack, x.isPlaying))
             .DisposeWith(Disposables);
     }
@@ -96,7 +96,7 @@ public abstract class TrackListReorderableViewModel
                 h => (id, p) => h((id, p)),
                 h => Downloads.OnProgress += h,
                 h => Downloads.OnProgress -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => GetCachedVm(x.id)?.SetDownloadState(true, x.progress))
             .DisposeWith(Disposables);
 
@@ -104,7 +104,7 @@ public abstract class TrackListReorderableViewModel
                 h => (id, ok, path) => h((id, ok, path)),
                 h => Downloads.OnCompleted += h,
                 h => Downloads.OnCompleted -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => GetCachedVm(x.id)?.SetDownloadState(false, 0f))
             .DisposeWith(Disposables);
     }

@@ -162,7 +162,7 @@ public sealed class SyncSelectionViewModel : ViewModelBase
         this.WhenAnyValue(x => x.SearchQuery)
             .Throttle(TimeSpan.FromMilliseconds(300))
             .DistinctUntilChanged()
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => ApplyFilter())
             .DisposeWith(Disposables);
 

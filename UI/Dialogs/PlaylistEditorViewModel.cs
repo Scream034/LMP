@@ -227,7 +227,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
             CoverPicker.WhenAnyValue(x => x.ResultPath)
                 .Where(path => !string.IsNullOrEmpty(path))
-                .ObserveOn(RxApp.MainThreadScheduler)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(path =>
                 {
                     ThumbnailUrl = path;
@@ -278,7 +278,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
         this.WhenAnyValue(x => x.ThumbnailUrl)
             .Throttle(TimeSpan.FromMilliseconds(400))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(UpdateThumbnailPreview)
             .DisposeWith(Disposables);
 
@@ -288,7 +288,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
 
         this.WhenAnyValue(x => x.CustomColor)
             .Throttle(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(colorStr => ColorPreviewBrush = TryParseColor(colorStr))
             .DisposeWith(Disposables);
     }

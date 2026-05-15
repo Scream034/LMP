@@ -11,6 +11,7 @@ using ReactiveUI.Fody.Helpers;
 using System.Reactive.Disposables;
 using LMP.Core.Audio;
 
+
 namespace LMP.Features.Search;
 
 /// <summary>
@@ -167,7 +168,7 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         this.WhenAnyValue(x => x.Source)
             .Skip(1)
             .Throttle(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async source =>
             {
                 if (_isDisposed) return;

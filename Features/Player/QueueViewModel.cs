@@ -7,6 +7,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
 using System.Reactive.Disposables;
+
 using System.Reactive.Linq;
 
 namespace LMP.Features.Player;
@@ -128,7 +129,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
                 h => _audio.OnQueueChanged += h,
                 h => _audio.OnQueueChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(80))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 if (!_isMovingInternally)
@@ -140,7 +141,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => _audio.OnTrackChanged += h,
                 h => _audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(t =>
             {
                 if (!_isSuspended) UpdatePlaybackState(t, _audio.IsPlaying);
@@ -151,7 +152,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
                 h => (a, b) => h((a, b)),
                 h => _audio.OnPlaybackStateChanged += h,
                 h => _audio.OnPlaybackStateChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x =>
             {
                 if (!_isSuspended) UpdatePlaybackState(_audio.CurrentTrack, x.isPlaying);
@@ -165,7 +166,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
                 h => (id, p) => h((id, p)),
                 h => _downloads.OnProgress += h,
                 h => _downloads.OnProgress -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x =>
             {
                 if (!_isSuspended) _vmCache.GetValueOrDefault(x.id)?.SetDownloadState(true, x.progress);
@@ -176,7 +177,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
                 h => (id, ok, path) => h((id, ok, path)),
                 h => _downloads.OnCompleted += h,
                 h => _downloads.OnCompleted -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x =>
             {
                 if (!_isSuspended) _vmCache.GetValueOrDefault(x.id)?.SetDownloadState(false, 0f);
@@ -188,7 +189,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
     {
         this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);

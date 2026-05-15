@@ -2,6 +2,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:svm="using:LMP.Features.Shared"
     xmlns:h="using:LMP.Core.Helpers"
+    xmlns:ir="using:Avalonia.Controls"
     x:Class="LMP.UI.Controls.TrackListControl"
     x:Name="Root"
     x:CompileBindings="True">
@@ -74,18 +75,18 @@
         <StackPanel IsVisible="{Binding !IsLoading, ElementName=Root}">
 
             <!-- ═══ ITEMS REPEATER ═══ -->
-            <ItemsRepeater x:Name="MainRepeater"
+            <ir:ItemsRepeater x:Name="MainRepeater"
                 ItemsSource="{Binding Items, ElementName=Root}"
                 DragDrop.AllowDrop="{Binding EnableReordering, ElementName=Root}"
                 DragDrop.DragOver="OnDragOver"
                 DragDrop.Drop="OnDrop"
                 DragDrop.DragLeave="OnDragLeave">
 
-                <ItemsRepeater.Layout>
+                <ir:ItemsRepeater.Layout>
                     <StackLayout Spacing="0" />
-                </ItemsRepeater.Layout>
+                </ir:ItemsRepeater.Layout>
 
-                <ItemsRepeater.ItemTemplate>
+                <ir:ItemsRepeater.ItemTemplate>
                     <DataTemplate x:DataType="svm:TrackItemViewModel">
                         <Border Classes="track-row"
                             Classes.is-active="{Binding IsActive}"
@@ -221,8 +222,8 @@
                             </Panel>
                         </Border>
                     </DataTemplate>
-                </ItemsRepeater.ItemTemplate>
-            </ItemsRepeater>
+                </ir:ItemsRepeater.ItemTemplate>
+            </ir:ItemsRepeater>
 
             <!-- ═══ FOOTER ═══ -->
             <StackPanel Margin="0,8,0,16"

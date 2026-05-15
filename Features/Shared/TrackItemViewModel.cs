@@ -108,8 +108,6 @@ public sealed class TrackItemViewModel : ViewModelBase
         });
 
         Track.PropertyChanged += OnTrackPropertyChanged;
-
-        MemoryDiagnostics.TrackInstance("TrackVM.Created");
     }
 
     private void OnTrackPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -233,7 +231,6 @@ public sealed class TrackItemViewModel : ViewModelBase
             _onPlay = null;
             StartRadioAction = null;
             RemoveFromPlaylistAction = null;
-            MemoryDiagnostics.UntrackInstance("TrackVM.Created");
         }
         base.Dispose(disposing);
         IsDisposed = true;

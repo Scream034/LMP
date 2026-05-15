@@ -241,6 +241,16 @@ public class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Навигация к плейлисту.
+    ///
+    /// <para><b>FIX диспозал независим от загрузки:</b> старая страница
+    /// диспозится через фиксированный <see cref="DisposePageDelayedAsync"/> delay,
+    /// не дожидаясь завершения LoadPlaylistAsync новой.
+    /// Это устраняет накопление zombie PlaylistVM при быстрых кликах:
+    /// каждая пред. страница диспозится через ~200ms после навигации,
+    /// независимо от того, сколько грузится новая.</para>
+    /// </summary>
     public void NavigateToPlaylist(string playlistId)
     {
         if (IsNavigationLocked || DialogHost.HasActiveDialog) return;
@@ -250,20 +260,26 @@ public class MainWindowViewModel : ViewModelBase
         var oldPage = CurrentPage;
         var oldPageName = CurrentPageName;
 
+        var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
+        CurrentPage = playlistVM;
+        CurrentPageName = "Playlist";
+
+        // ═══ FIX: Dispose старой страницы независимо от загрузки новой ═══
+        if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
+        {
+            _ = DisposePageDelayedAsync(disposable, oldPageName);
+        }
+
+        // Загрузка данных плейлиста — отдельно, не блокирует dispose
         _ = Task.Run(async () =>
         {
-            var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
-            await playlistVM.LoadPlaylistAsync(playlistId);
-
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            try
             {
-                CurrentPage = playlistVM;
-                CurrentPageName = "Playlist";
-            });
-
-            if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
+                await playlistVM.LoadPlaylistAsync(playlistId);
+            }
+            catch (Exception ex)
             {
-                await DisposePageDelayedAsync(disposable, oldPageName);
+                Log.Error($"[Navigation] Playlist load failed: {ex.Message}");
             }
         });
     }

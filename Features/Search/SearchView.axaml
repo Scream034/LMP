@@ -16,7 +16,7 @@
 
             <Grid ColumnDefinitions="*, Auto">
                 <TextBox Classes="search-box"
-                    Watermark="{Binding L[Search_Placeholder]}"
+                    PlaceholderText="{Binding L[Search_Placeholder]}"
                     Text="{Binding SearchQuery}"
                     CornerRadius="20" Padding="15,10">
                     <TextBox.KeyBindings>

@@ -8,7 +8,6 @@ using LMP.Features.Playlist;
 using LMP.Features.Search;
 using LMP.Features.Settings;
 using LMP.Features.Shell;
-using Avalonia.ReactiveUI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Avalonia;
@@ -21,6 +20,7 @@ using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Features.Notifications;
 using LMP.Core.Models;
+using ReactiveUI.Avalonia;
 
 namespace LMP;
 
@@ -192,17 +192,22 @@ class Program
     }
 
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
+    {
+        BootstrapSettings.Initialize();
+        var gpuCacheBytes = BootstrapSettings.Current.GpuTextureCacheMb * 1024L * 1024L;
+
+        return AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
             .With(new SkiaOptions
             {
-                MaxGpuResourceSizeBytes = 256 * 1024 * 1024  // 256 MB вместо дефолтных 28 MB
+                MaxGpuResourceSizeBytes = gpuCacheBytes
             })
 #if DEBUG
             .LogToTrace()
 #endif
-            .UseReactiveUI();
+            .UseReactiveUI(_ => { });
+    }
 
     private static void ConfigureServices(IServiceCollection services)
     {

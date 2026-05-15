@@ -1,4 +1,5 @@
 ﻿using Avalonia;
+using Avalonia.Diagnostics;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
@@ -10,6 +11,8 @@ using AsyncImageLoader;
 using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 using System.Diagnostics;
+using LMP.Core.Helpers;
+
 
 #if DEBUG
 using LMP.Tests;
@@ -97,9 +100,8 @@ public partial class App : Application
             _splash?.SetProgress(20);
 
             // ─── Memory Monitor ───
-            MemoryDiagnostics.Instance.OnMemoryWarning += Log.Warn;
-            MemoryDiagnostics.Instance.WarningThresholdMb = 400;
-            MemoryDiagnostics.Instance.CriticalThresholdMb = 450;
+            MemoryCleanupHelper.StartAutoCleanup();
+            Log.Info("[Startup] Memory auto-cleanup scheduled");
             _splash?.SetProgress(25);
 
             // ─── Library Service ───
@@ -142,7 +144,14 @@ public partial class App : Application
             _splash?.UpdateStatus(L["Splash_PreparingImages"]);
             var imageCache = await Task.Run(() =>
                 Program.Services.GetRequiredService<ImageCacheService>());
+
+            // Создаём loader только один раз, не дублируем.
+            // Старый loader из splash (если был установлен) диспозим.
+            var oldLoader = ImageLoader.AsyncImageLoader;
             ImageLoader.AsyncImageLoader = new CachedImageLoader(imageCache);
+            if (oldLoader is IDisposable disposableLoader)
+                disposableLoader.Dispose();
+
             _splash?.SetProgress(70);
 
             // ─── YouTube Provider ───
@@ -159,7 +168,7 @@ public partial class App : Application
                 var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
                 mainWindow = new MainWindow { DataContext = mainWindowVM };
             });
-            _splash?.SetProgress(95);
+            _splash?.SetProgress(93);
 
             // ─── Ready! ───
             _splash?.UpdateStatus(L["Splash_Ready"]);
@@ -192,8 +201,7 @@ public partial class App : Application
             {
                 try
                 {
-                    MemoryDiagnostics.LogReport();
-                    MemoryDiagnostics.Instance.Dispose();
+                    MemoryCleanupHelper.Dispose();
                     await audioCacheManager.DisposeAsync();
                     await library.DisposeAsync();
                 }
@@ -204,7 +212,9 @@ public partial class App : Application
             };
 
 #if DEBUG
-            desktop.MainWindow!.AttachDevTools();
+            // Avalonia 12: AttachDeveloperTools — extension на Application, не Window.
+            // Открывается F12 по умолчанию (настраивается через DeveloperToolsOptions).
+            this.AttachDeveloperTools();
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {

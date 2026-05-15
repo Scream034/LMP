@@ -49,4 +49,10 @@ public interface IPlaylistRepository
     /// Used during full playlist sync from YouTube.
     /// </summary>
     Task UpdateSetVideoIdsAsync(string playlistId, IReadOnlyList<(string TrackId, string SetVideoId)> mappings, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns track IDs with SQL-level LIMIT/OFFSET.
+    /// Use for paged loading (e.g. cover picker in edit dialog).
+    /// </summary>
+    Task<List<string>> GetTrackIdsAsync(string playlistId, int limit, int offset = 0, CancellationToken ct = default);
 }

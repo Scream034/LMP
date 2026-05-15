@@ -227,18 +227,14 @@ public partial class StreamUnavailableDialog : Window
     {
         try
         {
-            var clipboard = GetTopLevel(this)?.Clipboard;
-            if (clipboard != null)
-            {
-                await clipboard.SetTextAsync(_fullErrorDetails);
+            await Core.Helpers.Clipboard.SetTextAsync(_fullErrorDetails);
 
-                // Временно меняем текст кнопки
-                var originalText = CopyErrorText;
-                CopyErrorText = L["Track_Copied"];
+            // Временно меняем текст кнопки
+            var originalText = CopyErrorText;
+            CopyErrorText = L["Track_Copied"];
 
-                await Task.Delay(1500);
-                CopyErrorText = originalText;
-            }
+            await Task.Delay(1500);
+            CopyErrorText = originalText;
         }
         catch (Exception ex)
         {

@@ -74,6 +74,19 @@ public enum PlaybackErrorBehavior
     Ignore
 }
 
+public enum RepeatMode
+{
+    None,
+    One,
+    All
+}
+
+public enum AudioQualityPreference
+{
+    BestAvailable,
+    Standard
+}
+
 public sealed class ProxySettings
 {
     public bool Enabled { get; set; } = false;
@@ -213,17 +226,26 @@ public sealed class NotificationSettings
     public int CleanupCheckIntervalMinutes { get; set; } = 30;
 }
 
-public enum RepeatMode
+/// <summary>
+/// Настройки автоматической очистки памяти.
+/// </summary>
+public sealed class MemorySettings
 {
-    None,
-    One,
-    All
-}
+    /// <summary>
+    /// Включить автоматическую очистку памяти по таймеру.
+    /// </summary>
+    public bool AutoCleanupEnabled { get; set; } = true;
 
-public enum AudioQualityPreference
-{
-    BestAvailable,
-    Standard
+    /// <summary>
+    /// Интервал автоочистки в минутах.
+    /// </summary>
+    public int AutoCleanupIntervalMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Порог памяти (MB) при превышении которого запускается агрессивная очистка.
+    /// 0 = отключено.
+    /// </summary>
+    public int PressureThresholdMb { get; set; } = 400;
 }
 
 /// <summary>
@@ -302,4 +324,9 @@ public sealed class AppSettings
     /// Режим синхронизации лайков с YouTube.
     /// </summary>
     public LikeSyncMode LikeSyncMode { get; set; } = LikeSyncMode.MusicOnly;
+
+    /// <summary>
+    /// Настройки управления памятью.
+    /// </summary>
+    public MemorySettings Memory { get; set; } = new();
 }

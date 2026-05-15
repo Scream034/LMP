@@ -74,8 +74,6 @@ public class TrackViewModelFactory
 
         _cache[canonical.Id] = new WeakReference<TrackItemViewModel>(vm);
 
-        MemoryDiagnostics.TrackInstance("TrackVM.Created(Shared)");
-
         return vm;
     }
 
@@ -93,8 +91,6 @@ public class TrackViewModelFactory
         var vm = CreateVmInstance(canonical, playAction);
 
         vm.IsQueueContext = true;
-
-        MemoryDiagnostics.TrackInstance("TrackVM.Created(Queue)");
 
         // НЕ добавляем в _cache!
         return vm;
@@ -150,7 +146,6 @@ public class TrackViewModelFactory
 
             if (deadCount > 0)
             {
-                MemoryDiagnostics.SetBytes("TrackVM.CacheSize", _cache.Count);
                 Log.Debug($"[TrackFactory] Cleaned {deadCount} dead references.");
             }
 
@@ -200,6 +195,5 @@ public class TrackViewModelFactory
     public void Clear()
     {
         _cache.Clear();
-        MemoryDiagnostics.SetBytes("TrackVM.CacheSize", 0);
     }
 }

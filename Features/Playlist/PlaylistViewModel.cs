@@ -15,6 +15,7 @@ using System.Reactive.Linq;
 using LMP.UI.Dialogs;
 using Microsoft.Extensions.DependencyInjection;
 
+
 namespace LMP.Features.Playlist;
 
 /// <summary>
@@ -267,7 +268,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
                 h => LibService.OnDataChanged += h,
                 h => LibService.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(600))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async _ =>
             {
                 if (_isSuspended) return;
@@ -358,9 +359,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     protected override async Task<List<TrackInfo>> LoadTracksAsync(
         IEnumerable<string> ids, CancellationToken ct)
     {
-        var idsList = ids.ToList();
-        return await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId, limit: idsList.Count, offset: 0, ct);
+        return await LibService.GetPlaylistTracksAsync(_currentPlaylistId, ct);
     }
 
     /// <summary>
@@ -458,9 +457,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         if (_allTracksCacheValid && _allTracksCache is not null)
             return _allTracksCache;
 
-        var allIds = GetAllIds();
-        _allTracksCache = await LibService.GetPlaylistTracksAsync(
-            _currentPlaylistId, limit: allIds.Count, offset: 0);
+        _allTracksCache = await LibService.GetPlaylistTracksAsync(_currentPlaylistId);
         _allTracksCacheValid = true;
         return _allTracksCache;
     }
@@ -529,7 +526,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
         IsShuffleActive = true;
         Observable.Timer(TimeSpan.FromMilliseconds(800))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => IsShuffleActive = false)
             .DisposeWith(Disposables);
     }
@@ -543,7 +540,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             Downloads.StartDownload(track);
 
         Observable.Timer(TimeSpan.FromSeconds(2))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => IsDownloadingActive = false)
             .DisposeWith(Disposables);
     }

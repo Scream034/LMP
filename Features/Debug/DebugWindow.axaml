@@ -73,7 +73,7 @@
                         <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,2" />
 
                         <TextBox Text="{Binding SearchFilter}" Width="180"
-                            Watermark="🔍 Filter tests..." VerticalAlignment="Center"
+                            PlaceholderText="🔍 Filter tests..." VerticalAlignment="Center"
                             FontSize="12" />
 
                         <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,2" />
@@ -389,7 +389,7 @@
                                 FontWeight="Bold"
                                 Foreground="{DynamicResource AccentBrush}" />
                             <TextBox Text="{Binding AudioTestInput}" Width="280"
-                                Watermark="YouTube URL or Video ID"
+                                PlaceholderText="YouTube URL or Video ID"
                                 VerticalAlignment="Center" />
                             <TextBlock Text="Duration (sec):" VerticalAlignment="Center" />
                             <NumericUpDown Value="{Binding AudioTestDuration}"

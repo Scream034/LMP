@@ -9,7 +9,7 @@
         WindowStartupLocation="CenterOwner"
         CanResize="False"
         ShowInTaskbar="False"
-        SystemDecorations="BorderOnly"
+        WindowDecorations="BorderOnly"
         Background="{DynamicResource BgPrimaryBrush}">
 
     <Border BorderBrush="{DynamicResource AccentBrush}"

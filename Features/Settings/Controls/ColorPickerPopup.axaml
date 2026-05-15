@@ -57,7 +57,7 @@
                              Text="{Binding HexInput, ElementName=Root, Mode=TwoWay}"
                              FontFamily="Consolas, monospace"
                              FontSize="14"
-                             Watermark="#RRGGBB"
+                             PlaceholderText="#RRGGBB"
                              MaxLength="9"
                              Margin="0,4,0,0"/>
                 </StackPanel>

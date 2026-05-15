@@ -4,6 +4,7 @@ using System.Reactive;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
+using LMP.Core.Helpers;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI;
@@ -58,10 +59,10 @@ public sealed class NotificationPanelViewModel : ViewModelBase
             DisplayedNotifications.Clear();
         }));
 
-        CopyErrorCommand = CreateCommand(ReactiveCommand.Create<string?>(details =>
+        CopyErrorCommand = CreateCommand(ReactiveCommand.Create<string?>(async details =>
         {
             if (!string.IsNullOrEmpty(details))
-                CopyToClipboard(details, "Error details");
+                await CopyToClipboardAsync(details, "Error details");
         }));
     }
 
@@ -155,16 +156,12 @@ public sealed class NotificationPanelViewModel : ViewModelBase
         base.Dispose(disposing);
     }
 
-    private static void CopyToClipboard(string text, string description)
+    private static async Task CopyToClipboardAsync(string text, string description)
     {
         try
         {
-            if (Application.Current?.ApplicationLifetime
-                    is IClassicDesktopStyleApplicationLifetime { MainWindow: { } win })
-            {
-                win.Clipboard?.SetTextAsync(text);
-                Log.Info($"[Notification] {description} copied to clipboard");
-            }
+            await Clipboard.SetTextAsync(text);
+            Log.Info($"[Notification] {description} copied to clipboard");
         }
         catch (Exception ex)
         {

@@ -1,10 +1,13 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
+
 using System.Reactive.Linq;
 using Avalonia.Media;
+using Avalonia.Threading;
 using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
+using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -154,6 +157,22 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     #endregion
 
+    #region Memory
+
+    public sealed record GpuCachePresetItem(long Mb, string Name);
+
+    public ObservableCollection<GpuCachePresetItem> GpuCachePresets { get; } = [];
+    [Reactive] public GpuCachePresetItem? SelectedGpuCachePreset { get; set; }
+    [Reactive] public bool GpuCacheRestartRequired { get; private set; }
+
+    [Reactive] public bool AutoMemoryCleanupEnabled { get; set; }
+    [Reactive] public int MemoryCleanupIntervalMinutes { get; set; }
+    [Reactive] public int MemoryPressureThresholdMb { get; set; }
+
+    public ReactiveCommand<Unit, Unit> CleanupMemoryNowCommand { get; }
+
+    #endregion
+
     #region Commands
 
     public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
@@ -200,6 +219,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         ApplyThemeCommand = CreateCommand(ReactiveCommand.Create(ApplyTheme));
         ResetThemeCommand = CreateCommand(ReactiveCommand.Create(ResetTheme));
         ClearDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
+        CleanupMemoryNowCommand = CreateCommand(ReactiveCommand.Create(() =>
+        {
+            MemoryCleanupHelper.PerformCleanup(aggressive: true);
+        }));
 
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
@@ -238,7 +261,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         if (_isDisposed) return;
 
         await Task.Delay(50);
-
         if (_isDisposed) return;
 
         InitializeLists();
@@ -246,13 +268,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         UpdateCacheStats();
         SetupSubscriptions();
 
-        // ═══ ИСПРАВЛЕНИЕ GUEST: Если авторизованы, но профиля нет — получаем автоматически ═══
         if (IsAuthenticated && _auth.State.UserName == "Guest")
-        {
             _ = FetchUserProfileQuietlyAsync();
-        }
 
         IsContentReady = true;
+
+        // После рендера Settings — вернуть память занятую предыдущей страницей
+        // (плейлист/библиотека загрузили обложки которые теперь не видны)
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+        MemoryCleanupHelper.PerformCleanup(aggressive: false);
     }
 
     private async Task FetchUserProfileQuietlyAsync()
@@ -282,6 +306,26 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     {
         RefreshThemePresets();
         RefreshLocalizedLists();
+        InitGpuCachePresets();
+    }
+
+    private void InitGpuCachePresets()
+    {
+        GpuCachePresets.Clear();
+
+        // Покрытие обложек 120px: 1 текстура ≈ 56KB
+        // 32MB  → ~570  обложек  (минимум, слабые GPU/iGPU)
+        // 64MB  → ~1140 обложек  (рекомендуется, дефолт)
+        // 128MB → ~2280 обложек  (мощные GPU)
+        // 256MB → ~4560 обложек  (максимум, было ваше прежнее значение)
+        GpuCachePresets.Add(new GpuCachePresetItem(32, $"32 MB  ({SL["Cache_Low"]})"));
+        GpuCachePresets.Add(new GpuCachePresetItem(64, $"64 MB  ({SL["Cache_Medium"]}) ✓"));
+        GpuCachePresets.Add(new GpuCachePresetItem(128, $"128 MB ({SL["Cache_High"]})"));
+        GpuCachePresets.Add(new GpuCachePresetItem(256, $"256 MB ({SL["Cache_Ultra"]})"));
+
+        var currentMb = BootstrapSettings.Current.GpuTextureCacheMb;
+        SelectedGpuCachePreset = GpuCachePresets.FirstOrDefault(x => x.Mb == currentMb)
+                                 ?? GpuCachePresets[1]; // дефолт 64MB
     }
 
     private void RefreshThemePresets()
@@ -481,6 +525,53 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Subscribe(_ => SaveStorageSettings())
             .DisposeWith(Disposables);
 
+        // GPU texture cache
+        this.WhenAnyValue(x => x.SelectedGpuCachePreset)
+            .Skip(1).WhereNotNull()
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(preset =>
+            {
+                if (BootstrapSettings.Current.GpuTextureCacheMb == preset.Mb) return;
+                BootstrapSettings.Current.GpuTextureCacheMb = preset.Mb;
+                BootstrapSettings.Current.Save();
+                GpuCacheRestartRequired = true;
+                Log.Info($"[Settings] GPU cache → {preset.Mb}MB (restart required)");
+            })
+            .DisposeWith(Disposables);
+
+        // Auto cleanup toggle
+        this.WhenAnyValue(x => x.AutoMemoryCleanupEnabled)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Memory.AutoCleanupEnabled = v);
+                MemoryCleanupHelper.RestartAutoCleanup();
+            })
+            .DisposeWith(Disposables);
+
+        // Cleanup interval
+        this.WhenAnyValue(x => x.MemoryCleanupIntervalMinutes)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Throttle(TimeSpan.FromMilliseconds(500))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(v =>
+            {
+                _library.UpdateSettings(s => s.Memory.AutoCleanupIntervalMinutes = v);
+                MemoryCleanupHelper.RestartAutoCleanup();
+            })
+            .DisposeWith(Disposables);
+
+        // Pressure threshold
+        this.WhenAnyValue(x => x.MemoryPressureThresholdMb)
+            .Skip(1)
+            .Where(_ => !_isLoadingSettings)
+            .Throttle(TimeSpan.FromMilliseconds(500))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(v => _library.UpdateSettings(s => s.Memory.PressureThresholdMb = v))
+            .DisposeWith(Disposables);
+
         this.WhenAnyValue(x => x.SelectedImageCachePreset)
             .Skip(1)
             .Where(p => !_isUpdatingPreset && !_isLoadingSettings && p != null)
@@ -593,7 +684,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
             .Throttle(TimeSpan.FromMilliseconds(300))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.Audio.NormalizationTargetLufs = v);
@@ -605,7 +696,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
             .Throttle(TimeSpan.FromMilliseconds(300))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(v =>
             {
                 _library.UpdateSettings(s => s.Audio.NormalizationMaxGain = v);
@@ -717,6 +808,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             EnableSearchCache = s.EnableSearchCache;
             SearchCacheTtlMinutes = s.SearchCacheTtlMinutes;
             SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
+
+            var mem = s.Memory;
+            AutoMemoryCleanupEnabled = mem.AutoCleanupEnabled;
+            MemoryCleanupIntervalMinutes = mem.AutoCleanupIntervalMinutes > 0
+                ? mem.AutoCleanupIntervalMinutes : 30;
+            MemoryPressureThresholdMb = mem.PressureThresholdMb > 0
+                ? mem.PressureThresholdMb : 400;
+
 
             VolumeBoostEnabled = s.Audio.VolumeBoostEnabled;
             AudioNormalizationEnabled = s.Audio.NormalizationEnabled;

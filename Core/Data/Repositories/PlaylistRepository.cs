@@ -77,6 +77,24 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .ToListAsync(ct);
     }
 
+    /// <summary>
+    /// SQL-level LIMIT/OFFSET — generates: SELECT TrackId ... ORDER BY Position LIMIT @limit OFFSET @offset.
+    /// Avoids loading all IDs into memory when only a page is needed.
+    /// </summary>
+    public async Task<List<string>> GetTrackIdsAsync(
+        string playlistId, int limit, int offset = 0, CancellationToken ct = default)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        return await ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId == playlistId)
+            .OrderBy(pt => pt.Position)
+            .Skip(offset)
+            .Take(limit)
+            .Select(pt => pt.TrackId)
+            .ToListAsync(ct);
+    }
+
     public async Task<int> GetTrackCountAsync(string playlistId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);

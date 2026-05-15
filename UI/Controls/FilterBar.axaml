@@ -7,7 +7,7 @@
     x:CompileBindings="True">
 
     <TextBox Text="{Binding FilterText, ElementName=Root, Mode=TwoWay}"
-        Watermark="{Binding Watermark, ElementName=Root}"
+        PlaceholderText="{Binding Watermark, ElementName=Root}"
         Height="{Binding BarHeight, ElementName=Root}"
         CornerRadius="{Binding BarCornerRadius, ElementName=Root}"
         FontSize="{Binding TextFontSize, ElementName=Root}"

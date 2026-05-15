@@ -7,6 +7,7 @@ using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
+
 using System.Reactive.Linq;
 
 namespace LMP.Features.Home;
@@ -98,7 +99,7 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
             .WhereNotNull()
             .Skip(1)
             .Where(_ => IsContentReady)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async _ => await LoadTracksAsync())
             .DisposeWith(Disposables);
     }

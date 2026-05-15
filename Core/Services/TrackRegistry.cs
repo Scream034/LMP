@@ -156,20 +156,14 @@ public sealed class TrackRegistry
 
         if (shouldPin)
         {
-            if (_pinned.TryAdd(track.Id, track))
-            {
-                MemoryDiagnostics.TrackBytes("TrackRegistry.Pinned", 1024);
-                return true;
-            }
+            _pinned.TryAdd(track.Id, track);
         }
         else
         {
-            if (_pinned.TryRemove(track.Id, out _))
-            {
-                MemoryDiagnostics.UntrackBytes("TrackRegistry.Pinned", 1024);
-            }
+            _pinned.TryRemove(track.Id, out _);
         }
-        return false;
+
+        return shouldPin;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -224,7 +218,6 @@ public sealed class TrackRegistry
 
         sw.Stop();
         Log.Info($"[TrackRegistry] Hydrated {_pinned.Count} pinned tracks in {sw.ElapsedMilliseconds}ms");
-        MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", _pinned.Count * 1024);
     }
 
     public async Task FlushAsync(CancellationToken ct = default)
@@ -282,7 +275,6 @@ public sealed class TrackRegistry
 
     public void Clear()
     {
-        MemoryDiagnostics.SetBytes("TrackRegistry.Pinned", 0);
         _cache.Clear();
         _pinned.Clear();
     }

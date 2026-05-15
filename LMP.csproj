@@ -3,18 +3,18 @@
   <!--      ВЕРСИИ ПАКЕТОВ        -->
   <PropertyGroup Label="Package Versions">
     <!--
-      Avalonia 11.3.x — последняя стабильная ветка с полной экосистемой.
-      Avalonia 12.x пока не имеет пакетов ReactiveUI/Diagnostics на NuGet.
-      При миграции на 12.x потребуется также обновить Tmds.DBus.Protocol до 0.92.0+.
+      Avalonia 12.0.3 — стабильная.
+      Производительность: до 1867% FPS в сложных сценах, новый рендерер.
+      Breaking: DoDragDropAsync → PointerPressedEventArgs, IDataObject → IDataTransfer.
     -->
-    <AvaloniaVersion>11.3.13</AvaloniaVersion>
+    <AvaloniaVersion>12.0.3</AvaloniaVersion>
 
     <!--
-      Avalonia.ReactiveUI версионируется ОТДЕЛЬНО от ядра Avalonia.
-      Последняя стабильная на NuGet: 11.3.9
-      (пакет публикуется реже, чем ядро — нормальное поведение)
+      ReactiveUI.Avalonia 12.0.1 — замена deprecated Avalonia.ReactiveUI.
+      Пакет Avalonia.ReactiveUI помечен как legacy и больше не поддерживается.
+      ReactiveUI.Avalonia — официальная замена с поддержкой Avalonia 12.
     -->
-    <AvaloniaReactiveUIVersion>11.3.9</AvaloniaReactiveUIVersion>
+    <ReactiveUIAvaloniaVersion>12.0.1</ReactiveUIAvaloniaVersion>
 
     <!-- Dev-инструменты -->
     <HotAvaloniaVersion>3.1.0</HotAvaloniaVersion>
@@ -28,6 +28,9 @@
 
     <!-- Microsoft Extensions (совпадает с TFM) -->
     <MsExtVersion>10.0.2</MsExtVersion>
+
+    <!-- AsyncImageLoader: 3.8.0 — Avalonia 12 support -->
+    <AsyncImageLoaderVersion>3.8.0</AsyncImageLoaderVersion>
   </PropertyGroup>
 
   <!--   ОСНОВНЫЕ НАСТРОЙКИ       -->
@@ -156,37 +159,29 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
 
     <!--
-      Avalonia.ReactiveUI версионируется отдельно от ядра Avalonia.
-      Используем $(AvaloniaReactiveUIVersion), а не $(AvaloniaVersion).
+      ReactiveUI.Avalonia — официальная замена Avalonia.ReactiveUI.
+      Старый пакет Avalonia.ReactiveUI помечен deprecated (legacy).
     -->
-    <PackageReference Include="Avalonia.ReactiveUI" Version="$(AvaloniaReactiveUIVersion)" />
+    <PackageReference Include="ReactiveUI.Avalonia" Version="$(ReactiveUIAvaloniaVersion)" />
 
-    <!-- Dev-only: визуальное дерево + инспектор свойств (аналог DevTools браузера) -->
-    <PackageReference Include="Avalonia.Diagnostics" Version="$(AvaloniaVersion)" Condition="'$(Configuration)' == 'Debug'" />
+    <!-- Dev-only: визуальное дерево + инспектор свойств -->
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1"
+      Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
   <!-- Avalonia Hot Reload -->
-  <!--
-    Живая перезагрузка XAML без перекомпиляции проекта.
-    PrivateAssets=All: пакет не утекает в продакшн-сборку.
-  -->
   <ItemGroup Label="Hot Reload" Condition="'$(Configuration)' == 'Debug'">
     <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)" PrivateAssets="All" />
   </ItemGroup>
 
-  <!-- Avalonia Community Controls -->
-  <!--
-    ВНИМАНИЕ: Avalonia.Controls.ItemsRepeater задепрекирован.
-    Рекомендуется мигрировать на встроенные ItemsControl из Avalonia 11.1+.
-    Пакет оставлен для обратной совместимости до рефакторинга UI.
-
-    ВНИМАНИЕ: Avalonia.Xaml.Behaviors — устаревшее имя пакета.
-    Актуальное имя: Xaml.Behaviors.Avalonia (требует ручной миграции XMLNS).
-    Пакет оставлен как есть до запланированной миграции.
-  -->
   <ItemGroup Label="Avalonia Community">
-    <PackageReference Include="Avalonia.Controls.ItemsRepeater" Version="11.1.5" />
-    <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.3.0.6" />
+    <!--
+        Avalonia.Controls.ItemsRepeater — внешний пакет нужен для PlaylistCoverPicker
+        (UniformGridLayout для сетки обложек). Пакет совместим с Avalonia 12.x.
+        ItemsRepeater из этого пакета отличается от встроенного ItemsControl.
+    -->
+    <PackageReference Include="Avalonia.Controls.ItemsRepeater" Version="12.0.0" />
+    <PackageReference Include="Xaml.Behaviors.Avalonia" Version="12.0.0" />
   </ItemGroup>
 
   <!-- Entity Framework Core -->
@@ -230,10 +225,8 @@
 
   <!-- UI Утилиты -->
   <ItemGroup Label="UI Utilities">
-    <!-- 3.3.0 — последняя версия совместимая с Avalonia 11.x.
-      3.8.0+ требует Avalonia >= 12.0.0.
-      Обновить вместе с миграцией на Avalonia 12. -->
-    <PackageReference Include="AsyncImageLoader.Avalonia" Version="3.3.0" />
+    <!-- 3.8.0 — Avalonia 12 support -->
+    <PackageReference Include="AsyncImageLoader.Avalonia" Version="$(AsyncImageLoaderVersion)" />
   </ItemGroup>
 
   <!-- Скриптование / YT-байпас -->
@@ -248,7 +241,7 @@
     При миграции на Avalonia 12.x нужно обновить до 0.92.0+.
   -->
   <ItemGroup Label="Linux Interop">
-    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0" />
   </ItemGroup>
 
 </Project>

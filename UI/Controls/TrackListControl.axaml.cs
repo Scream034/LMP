@@ -52,6 +52,13 @@ public partial class TrackListControl : UserControl
     private Control? _lastHighlightedItem;
     private long _dragPressTimestamp;
 
+    /// <summary>
+    /// Saved PointerPressedEventArgs from OnItemPointerPressed.
+    /// Avalonia 12 requires PointerPressedEventArgs (not PointerEventArgs)
+    /// for DoDragDropAsync — PR #20988.
+    /// </summary>
+    private PointerPressedEventArgs? _dragPressedArgs;
+
     // Scroll & Layout
     private ScrollViewer? _scrollViewer;
     private ItemsRepeater? _repeater;
@@ -351,6 +358,10 @@ public partial class TrackListControl : UserControl
 
     #region Drag & Drop
 
+    /// <summary>
+    /// O(1) индекс элемента по позиции Y.
+    /// Все строки фиксированной высоты <see cref="ItemHeight"/> — деление без итерации.
+    /// </summary>
     private int GetItemIndexFromPosition(Point positionInRepeater)
     {
         if (_repeater?.ItemsSource is not ICollection collection) return -1;
@@ -366,6 +377,7 @@ public partial class TrackListControl : UserControl
         _dragStartPoint = e.GetPosition(null);
         _dragPressTimestamp = Environment.TickCount64;
         _isDragging = false;
+        _dragPressedArgs = e;
 
         if (_repeater != null)
             _dragSourceIndex = GetItemIndexFromPosition(e.GetPosition(_repeater));
@@ -373,7 +385,7 @@ public partial class TrackListControl : UserControl
 
     private async void OnItemPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (!EnableReordering || _isDragging || _dragSourceIndex < 0) return;
+        if (!EnableReordering || _isDragging || _dragSourceIndex < 0 || _dragPressedArgs is null) return;
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
 
         var pos = e.GetPosition(null);
@@ -391,13 +403,14 @@ public partial class TrackListControl : UserControl
         using var dragData = new DragDataTransfer(_dragSourceIndex);
         source.Classes.Add("dragging");
 
-        try { await DragDrop.DoDragDropAsync(e, dragData, DragDropEffects.Move); }
+        try { await DragDrop.DoDragDropAsync(_dragPressedArgs, dragData, DragDropEffects.Move); }
         finally
         {
             source.Classes.Remove("dragging");
             CleanupDragStyles();
             _isDragging = false;
             _dragSourceIndex = -1;
+            _dragPressedArgs = null;
         }
     }
 
@@ -413,6 +426,7 @@ public partial class TrackListControl : UserControl
 
         _isDragging = false;
         _dragSourceIndex = -1;
+        _dragPressedArgs = null;
         CleanupDragStyles();
     }
 
@@ -440,12 +454,7 @@ public partial class TrackListControl : UserControl
         if (overItem == null) return;
         _lastHighlightedItem = overItem;
 
-        // ✅ ФИКС: relY относительно bounds элемента, а не теоретической позиции
-        var itemBounds = overItem.Bounds;
         var relY = pos.Y - _repeater.Bounds.Position.Y - (idx * ItemHeight);
-
-        // Альтернатива: relY в пределах элемента
-        // var relY = e.GetPosition(overItem).Y;
 
         if (relY < ItemHeight / 2)
         {
@@ -515,7 +524,6 @@ public partial class TrackListControl : UserControl
         if (idx < 0)
             return _repeater.ItemsSource is ICollection c ? c.Count - 1 : -1;
 
-        // ✅ ФИКС: relY в пределах элемента
         var targetElement = _repeater.TryGetElement(idx);
         var relY = targetElement != null ? e.GetPosition(targetElement).Y : pos.Y - (idx * ItemHeight);
 
@@ -787,5 +795,4 @@ public partial class TrackListControl : UserControl
     }
 
     #endregion
-
 }

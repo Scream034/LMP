@@ -641,7 +641,7 @@ public partial class PlayerBarView : UserControl
         SeekHintPopup.IsOpen = true;
 
         _seekHintDisposable.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(autoHideMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => SeekHintPopup.IsOpen = false);
     }
 
@@ -733,7 +733,7 @@ public partial class PlayerBarView : UserControl
 
         // Автоскрытие через Rx (SerialDisposable отменяет предыдущий таймер)
         _volumeTooltipHideDisposable.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(VolumeTooltipHideDelayMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => VolumeTooltipPopup.IsOpen = false);
     }
 
@@ -826,7 +826,7 @@ public partial class PlayerBarView : UserControl
             return;
 
         _volumePopupCloseDisposable.Disposable = Observable.Timer(TimeSpan.FromMilliseconds(VolumePopupCloseDelayMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 if (!_isVolumePopupHovered && !_isVolumeButtonHovered && !_isDraggingVolume)

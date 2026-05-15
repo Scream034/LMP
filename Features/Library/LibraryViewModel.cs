@@ -12,6 +12,7 @@ using System.Reactive.Disposables;
 using LMP.UI.Dialogs;
 using Avalonia.Threading;
 
+
 namespace LMP.Features.Library;
 
 /// <summary>
@@ -156,7 +157,7 @@ public sealed class LibraryViewModel : ViewModelBase
         Observable.FromEvent<Action<Core.Models.Playlist>, Core.Models.Playlist>(
                 h => _library.OnPlaylistChanged += h,
                 h => _library.OnPlaylistChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
             .Subscribe(OnPlaylistChangedIncremental)
             .DisposeWith(Disposables);
@@ -165,7 +166,7 @@ public sealed class LibraryViewModel : ViewModelBase
         Observable.FromEvent<Action<string>, string>(
                 h => _library.OnPlaylistRemoved += h,
                 h => _library.OnPlaylistRemoved -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Where(_ => !_isDisposed && !IsSyncing)
             .Subscribe(OnPlaylistRemovedIncremental)
             .DisposeWith(Disposables);
@@ -175,7 +176,7 @@ public sealed class LibraryViewModel : ViewModelBase
                 h => _library.OnDataChanged += h,
                 h => _library.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(500))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Where(__ => !_isDisposed && !IsSyncing)
             .Subscribe(__ => UpdateStatsInBackground())
             .DisposeWith(Disposables);

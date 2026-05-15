@@ -61,7 +61,7 @@ public sealed class LibraryService : IAsyncDisposable
         // Throttled settings save
         _saveSubscription = _saveSettingsSignal
             .Throttle(TimeSpan.FromSeconds(1))
-            .ObserveOn(RxApp.TaskpoolScheduler)
+            .ObserveOn(RxSchedulers.TaskpoolScheduler)
             .Subscribe(async _ =>
             {
                 try { await _settings.SetAsync("AppSettings", Settings); }
@@ -563,18 +563,42 @@ public sealed class LibraryService : IAsyncDisposable
         return all;
     }
 
+    /// <summary>
+    /// Loads ALL tracks of a playlist. Use for playback, queue, shuffle, download.
+    /// No artificial limits — returns the complete ordered track list.
+    /// </summary>
     public async Task<List<TrackInfo>> GetPlaylistTracksAsync(
-        string playlistId, int limit = 50, int offset = 0, CancellationToken ct = default)
+        string playlistId, CancellationToken ct = default)
     {
         var trackIds = await _playlists.GetTrackIdsAsync(playlistId, ct);
-        var pageIds = trackIds.Skip(offset).Take(limit).ToList();
+        if (trackIds.Count == 0) return [];
 
-        if (pageIds.Count == 0) return [];
+        await _registry.PreloadAsync(trackIds, ct);
 
-        await _registry.PreloadAsync(pageIds, ct);
+        var tracks = new List<TrackInfo>(trackIds.Count);
+        foreach (var id in trackIds)
+        {
+            var track = _registry.TryGet(id);
+            if (track != null) tracks.Add(track);
+        }
 
-        var tracks = new List<TrackInfo>(pageIds.Count);
-        foreach (var id in pageIds)
+        return tracks;
+    }
+
+    /// <summary>
+    /// Loads a page of playlist tracks with SQL-level LIMIT/OFFSET.
+    /// Use when only a subset is needed (e.g. cover picker, preview).
+    /// </summary>
+    public async Task<List<TrackInfo>> GetPlaylistTracksAsync(
+        string playlistId, int limit, int offset = 0, CancellationToken ct = default)
+    {
+        var trackIds = await _playlists.GetTrackIdsAsync(playlistId, limit, offset, ct);
+        if (trackIds.Count == 0) return [];
+
+        await _registry.PreloadAsync(trackIds, ct);
+
+        var tracks = new List<TrackInfo>(trackIds.Count);
+        foreach (var id in trackIds)
         {
             var track = _registry.TryGet(id);
             if (track != null) tracks.Add(track);

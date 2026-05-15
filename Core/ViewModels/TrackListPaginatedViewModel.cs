@@ -66,7 +66,7 @@ public abstract class TrackListPaginatedViewModel
         Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
                 h => Audio.OnTrackChanged += h,
                 h => Audio.OnTrackChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(track => UpdatePlaybackState(track, Audio.IsPlaying))
             .DisposeWith(Disposables);
 
@@ -74,7 +74,7 @@ public abstract class TrackListPaginatedViewModel
                 h => (a, b) => h((a, b)),
                 h => Audio.OnPlaybackStateChanged += h,
                 h => Audio.OnPlaybackStateChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => UpdatePlaybackState(Audio.CurrentTrack, x.isPlaying))
             .DisposeWith(Disposables);
     }
@@ -107,7 +107,7 @@ public abstract class TrackListPaginatedViewModel
                 h => (id, p) => h((id, p)),
                 h => Downloads.OnProgress += h,
                 h => Downloads.OnProgress -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => VmFactory.TryGet(x.id)?.SetDownloadState(true, x.progress))
             .DisposeWith(Disposables);
 
@@ -115,7 +115,7 @@ public abstract class TrackListPaginatedViewModel
                 h => (id, ok, path) => h((id, ok, path)),
                 h => Downloads.OnCompleted += h,
                 h => Downloads.OnCompleted -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(x => VmFactory.TryGet(x.id)?.SetDownloadState(false, 0f))
             .DisposeWith(Disposables);
     }

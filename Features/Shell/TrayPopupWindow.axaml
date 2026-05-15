@@ -5,7 +5,7 @@
     SizeToContent="WidthAndHeight"
     CanResize="False"
     ShowInTaskbar="False"
-    SystemDecorations="None"
+    WindowDecorations="None"
     ExtendClientAreaToDecorationsHint="False"
     Background="Transparent"
     Topmost="True"

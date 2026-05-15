@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Disposables;
+
 using System.Reactive.Linq;
 using System.Runtime.InteropServices;
 using Avalonia;
@@ -204,7 +205,6 @@ public partial class MainWindow : Window
             SuspendLevel.Soft when forceOptimize => TimeSpan.FromSeconds(15),
             _ => TimeSpan.FromSeconds(5)
         };
-        MemoryDiagnostics.Instance.SetMonitoringInterval(monitoringInterval);
 
         if (level != SuspendLevel.None && forceOptimize)
         {
@@ -692,24 +692,24 @@ public partial class MainWindow : Window
 #if WINDOWS
         // Обновляем tooltip при смене трека
         _playerControl.CurrentTrackObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => _trayManager?.UpdateTooltipFromPlayerState())
             .DisposeWith(_traySubscriptions);
 
         // Обновляем tooltip при смене состояния воспроизведения (play/pause)
         _playerControl.IsPlayingObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => _trayManager?.UpdateTooltipFromPlayerState())
             .DisposeWith(_traySubscriptions);
 
 #else
         _playerControl.IsPlayingObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(UpdatePlayPauseMenuText)
             .DisposeWith(_traySubscriptions);
 
         _playerControl.CurrentTrackObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(track =>
             {
                 bool hasTrack = track != null;
@@ -720,12 +720,12 @@ public partial class MainWindow : Window
             .DisposeWith(_traySubscriptions);
 
         _playerControl.RepeatModeObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => UpdateRepeatMenuText())
             .DisposeWith(_traySubscriptions);
 
         _playerControl.VolumeObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 if (_trayIcon != null)
@@ -736,7 +736,7 @@ public partial class MainWindow : Window
 
         // Поддержка внешних запросов на разворачивание
         _playerControl.ResumeRequestObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ =>
             {
                 if (_isInTray)

@@ -15,7 +15,7 @@
                 FontSize="13" FontWeight="SemiBold"
                 Foreground="{DynamicResource TextSecondaryBrush}" />
             <TextBox Text="{Binding Name, Mode=TwoWay}"
-                Watermark="{Binding L[Library_PlaylistNameHint]}"
+                PlaceholderText="{Binding L[Library_PlaylistNameHint]}"
                 IsReadOnly="{Binding IsSystemPlaylist}" />
             <TextBlock Text="{Binding L[EditPlaylist_SystemNameHint]}"
                 FontSize="11"
@@ -29,7 +29,7 @@
                 FontSize="13" FontWeight="SemiBold"
                 Foreground="{DynamicResource TextSecondaryBrush}" />
             <TextBox Text="{Binding Description, Mode=TwoWay}"
-                Watermark="{Binding L[EditPlaylist_DescriptionHint]}"
+                PlaceholderText="{Binding L[EditPlaylist_DescriptionHint]}"
                 AcceptsReturn="True"
                 TextWrapping="Wrap"
                 MinHeight="48"
@@ -96,7 +96,7 @@
                         IsVisible="{Binding IsCoverModeUrl}">
                         <TextBox Grid.Column="0"
                             Text="{Binding ThumbnailUrl, Mode=TwoWay}"
-                            Watermark="https://..."
+                            PlaceholderText="https://..."
                             FontSize="12" />
                         <Border Grid.Column="1"
                             Width="36" Height="36"
@@ -135,7 +135,7 @@
                             <TextBox Grid.Column="0"
                                 Text="{Binding SelectedFilePath, Mode=OneWay}"
                                 IsReadOnly="True"
-                                Watermark="{Binding L[CoverPicker_FileHint]}"
+                                PlaceholderText="{Binding L[CoverPicker_FileHint]}"
                                 FontSize="12" />
                             <!-- Кнопка выбора файла -->
                             <Button Grid.Column="1"
@@ -191,7 +191,7 @@
             <Grid ColumnDefinitions="*, Auto">
                 <TextBox Grid.Column="0"
                     Text="{Binding CustomColor, Mode=TwoWay}"
-                    Watermark="#FF6B35"
+                    PlaceholderText="#FF6B35"
                     FontSize="12" />
                 <Border Grid.Column="1"
                     Width="32" Height="32"
@@ -215,7 +215,7 @@
                 <TextBox Grid.Column="0"
                     Text="{Binding ComputedColor, Mode=OneWay}"
                     IsReadOnly="True"
-                    Watermark="{Binding L[EditPlaylist_ComputedColorNone]}"
+                    PlaceholderText="{Binding L[EditPlaylist_ComputedColorNone]}"
                     FontSize="12"
                     Foreground="{DynamicResource TextMutedBrush}" />
                 <Border Grid.Column="1"

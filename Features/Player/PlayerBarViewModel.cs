@@ -1,6 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
+
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
@@ -464,7 +465,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             _playerControl.ShuffleQueue();
             IsShuffleAnimating = true;
             Observable.Timer(TimeSpan.FromMilliseconds(ShuffleAnimationDurationMs))
-                .ObserveOn(RxApp.MainThreadScheduler)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(_ => IsShuffleAnimating = false)
                 .DisposeWith(Disposables);
         }, canShuffle));
@@ -533,7 +534,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private void SubscribeLightweight()
     {
         _playerControl.PlaybackStateObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(state =>
             {
                 IsPlaying = state.IsPlaying;
@@ -549,12 +550,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         _playerControl.CurrentTrackObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(HandleTrackChanged)
             .DisposeWith(Disposables);
 
         _playerControl.RepeatModeObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(mode =>
             {
                 RepeatMode = mode;
@@ -563,7 +564,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         _playerControl.ShuffleEnabledObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(enabled =>
             {
                 AutoShuffleEnabled = enabled;
@@ -572,7 +573,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         _playerControl.IsLoadingObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(loading =>
             {
                 IsLoading = loading;
@@ -581,12 +582,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .DisposeWith(Disposables);
 
         _playerControl.QueueCountObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => UpdateQueueState())
             .DisposeWith(Disposables);
 
         _playerControl.ForceSyncObservable
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => HandleForceSync())
             .DisposeWith(Disposables);
 
@@ -605,7 +606,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Observable.FromEvent<Action<AudioStreamInfo>, AudioStreamInfo>(
                 h => _audio.OnStreamInfoChanged += h,
                 h => _audio.OnStreamInfoChanged -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(UpdateStreamInfo)
             .DisposeWith(Disposables);
 
@@ -613,7 +614,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 h => _audio.OnMaxVolumeChanged += h,
                 h => _audio.OnMaxVolumeChanged -= h)
             .DistinctUntilChanged()
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(HandleMaxVolumeChanged)
             .DisposeWith(Disposables);
 
@@ -621,7 +622,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 h => _library.OnTrackUpdated += h,
                 h => _library.OnTrackUpdated -= h)
             .Where(t => CurrentTrack != null && t.Id == CurrentTrack.Id)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(t =>
             {
                 IsLiked = t.IsLiked;
@@ -645,7 +646,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         _nextSubject
             .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async _ =>
             {
                 try { await _playerControl.NextAsync(); }
@@ -655,7 +656,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         _prevSubject
             .Throttle(TimeSpan.FromMilliseconds(NavigationDebounceMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async _ =>
             {
                 try { await _playerControl.PreviousAsync(); }
@@ -675,7 +676,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Where(_ => !_isSeeking && !IsTrackResetting && !IsSeekBusy)
             .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
             .DistinctUntilChanged(pos => (long)(pos.TotalMilliseconds / PositionChangePrecisionMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(pos =>
             {
                 if (_isSeeking || IsTrackResetting || IsSeekBusy) return;
@@ -688,7 +689,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnSeekCompleted += h,
                 h => _audio.OnSeekCompleted -= h)
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(pos =>
             {
                 Volatile.Write(ref _seekBusyStartTicks, 0L);
@@ -703,17 +704,17 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 h => _audio.OnBufferStateChanged += h,
                 h => _audio.OnBufferStateChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(BufferStateThrottleMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(state => SyncBufferState(state))
             .DisposeWith(_heavySubscriptions);
 
         Observable.Interval(TimeSpan.FromMilliseconds(FallbackPositionIntervalMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => FallbackPositionUpdate())
             .DisposeWith(_heavySubscriptions);
 
         Observable.Interval(TimeSpan.FromMilliseconds(SpeedUpdateIntervalMs))
-            .ObserveOn(RxApp.MainThreadScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => UpdateDownloadSpeed())
             .DisposeWith(_heavySubscriptions);
     }

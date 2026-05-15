@@ -145,10 +145,13 @@ public sealed class DominantColorService
                 return null;
             }
 
-            // Resize до 50x50
+            // SKFilterQuality.Low deprecated → SKSamplingOptions(SKFilterMode.Linear).
+            // Bilinear filtering достаточен для downscale до 50×50 thumbnail:
+            // точность пиксельного усреднения не критична, а Linear на порядок
+            // быстрее MipmapMode.Linear при таком масштабе сжатия.
             using var resized = skBitmap.Resize(
                 new SKImageInfo(SampleSize, SampleSize),
-                SKFilterQuality.Low);
+                new SKSamplingOptions(SKFilterMode.Linear));
 
             if (resized == null)
                 return null;
