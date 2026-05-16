@@ -76,7 +76,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     private const int ResumeWarmupTimeoutMs = 500;
 
     /// <summary>Время на остановку потока декодера при Seek-операции (мс).</summary>
-    private const int SeekStopDecoderTimeoutMs = 200;
+    private const int SeekStopDecoderTimeoutMs = 50;
 
     /// <summary>Максимальное время блокировки (мс) при warmup во время Seek.</summary>
     private const int SeekWarmupTimeoutMs = 500;
@@ -116,6 +116,10 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     private Timer? _bufferTimer;
 
     private string? _currentTrackId;
+
+    /// <summary>Кэшированный делегат URL refresher. Инвалидируется при смене <see cref="_currentTrackId"/>.</summary>
+    private Func<CancellationToken, Task<string?>>? _cachedUrlRefresher;
+    private string? _cachedUrlRefresherTrackId;
 
     #endregion
 
@@ -425,11 +429,19 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         var ct = linkedCts.Token;
 
         var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
-
-        // Захват locked gain предыдущего трека — fallback для стриминга (когда pre-scan невозможен).
         float previousLockedGain = oldPipeline?.GetLockedNormalizationGain() ?? 1.0f;
 
-        if (oldPipeline != null) await oldPipeline.DisposeAsync();
+        // ═══ BACKGROUND DISPOSAL ═══
+        // Диспозим старый pipeline в фоне — не блокируем создание нового.
+        // DisposeAsync включает StopDecoding + decoder dispose (~50-200мс).
+        // Shared backend переиспользуется без конкуренции с новым pipeline:
+        // новый pipeline вызывает Reinit/FastPath, а не пересоздаёт backend.
+        if (oldPipeline != null)
+            _ = Task.Run(async () =>
+            {
+                try { await oldPipeline.DisposeAsync(); }
+                catch (Exception ex) { Log.Debug($"[AudioPlayer] Background dispose error: {ex.Message}"); }
+            });
 
         StopTimers();
 
@@ -455,20 +467,11 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             var replaced = Interlocked.Exchange(ref _activePipeline, pipeline);
             if (replaced != null) await replaced.DisposeAsync();
 
-            // Gain и нормализация — ДО pre-scan, чтобы SetNormalization включил флаг.
-            // Pre-scan проверяет _normalizationEnabled и работает только если включена.
             pipeline.SetInitialNormalizationGain(previousLockedGain);
             _options.OnPipelineConfiguring?.Invoke(pipeline);
 
-            // Pre-scan: полный LUFS анализ файла до старта воспроизведения.
-            // Для local cached files ~50-150ms. Для streaming — skip (CanSeek=false).
-            // После scan: source seeked back, decoder ready, _lockedGain set.
-            // Если scan не удался — fallback на real-time анализ в GetNormalizationGain.
             await pipeline.PreScanNormalizationAsync(ct);
 
-            // Регистрируем callback для персистирования gain в БД.
-            // Вызывается из fill thread при real-time фиксации, или уже был вызван в pre-scan.
-            // trackId захвачен в замыкании — нет обращения к изменяемому состоянию.
             var lockedTrackId = cmd.TrackId;
             if (lockedTrackId != null && _options.OnGainLocked != null)
             {
@@ -478,7 +481,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
             ct.ThrowIfCancellationRequested();
 
-            // Seek к позиции ПОСЛЕ pre-scan (pre-scan seeked source back to 0).
             if (cmd.SeekPosition is { TotalMilliseconds: > 0 } seekPos)
             {
                 long seekMs = (long)seekPos.TotalMilliseconds;
@@ -609,6 +611,17 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         try
         {
+            // ═══ OVERLAP PREFETCH ═══
+            // Запускаем prefetch целевого чанка ПАРАЛЛЕЛЬНО с остановкой decoder.
+            // Decoder завершается за 1-50мс. За это время prefetch может успеть
+            // загрузить чанк (~128KB с SSD ~0.5мс, по сети ~50-200мс).
+            // Если prefetch завершится до ResetDownloadEpoch в SeekAsync —
+            // чанк окажется в _ramChunks, и await critical chunk вернётся мгновенно.
+            // Fire-and-forget: если не успеет — SeekAsync загрузит сам.
+            if (pipeline.Source is Sources.CachingStreamSource cachingSource)
+                _ = cachingSource.TryPrefetchChunkForSeekAsync(
+                    (long)cmd.Position.TotalMilliseconds, _lifetimeCts.Token);
+
             await pipeline.StopDecodingAsync(TimeSpan.FromMilliseconds(SeekStopDecoderTimeoutMs));
 
             int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
@@ -641,11 +654,21 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
             if (wasPlaying)
             {
-                int seekThreshold = pipeline.SampleRate * pipeline.Channels * MinSeekResumeBufferMs / 1000;
+                // ═══ ADAPTIVE BUFFER THRESHOLD ═══
+                // Полностью закэшированный трек (LocalFileSource или IsFullyBuffered):
+                // данные в RAM/SSD, первый frame декодируется за ~5мс.
+                // Минимальный threshold (25% от стандартного) достаточен.
+                // Стриминг: стандартный threshold — сеть нестабильна.
+                bool isFastSource = pipeline.Source.IsFullyBuffered
+                    || pipeline.Source is Sources.LocalFileSource;
+
+                int msThreshold = isFastSource
+                    ? Math.Max(MinSeekResumeBufferMs / 4, 10)
+                    : MinSeekResumeBufferMs;
+
+                int seekThreshold = pipeline.SampleRate * pipeline.Channels * msThreshold / 1000;
                 await pipeline.WaitForBufferAsync(seekThreshold, SeekWarmupTimeoutMs, _lifetimeCts.Token);
 
-                // Переприменяем gain (пользователь мог изменить volume во время seek).
-                // SetNormalization НЕ сбрасывает locked gain если параметры не изменились.
                 _options.OnPipelineConfiguring?.Invoke(pipeline);
 
                 pipeline.ActivateFillLoop();
@@ -690,6 +713,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     private async Task HandleDisposeAsync()
     {
         await HandleStopAsync();
+        DisposeTimers();
         SetState(PlayerState.Disposed);
     }
 
@@ -699,37 +723,67 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     private void StartTimers()
     {
-        _positionTimer = new Timer(
-            _ => _events.RaisePositionChanged(Position),
-            null, 0, (int)_options.PositionUpdateInterval.TotalMilliseconds);
+        int interval = (int)_options.PositionUpdateInterval.TotalMilliseconds;
 
-        _bufferTimer = new Timer(
-            _ => RaiseBufferState(),
-            null, 0, BufferStateUpdateIntervalMs);
+        if (_positionTimer == null)
+        {
+            _positionTimer = new Timer(
+                _ => _events.RaisePositionChanged(Position),
+                null, 0, interval);
+        }
+        else
+        {
+            _positionTimer.Change(0, interval);
+        }
+
+        if (_bufferTimer == null)
+        {
+            _bufferTimer = new Timer(
+                _ => RaiseBufferState(),
+                null, 0, BufferStateUpdateIntervalMs);
+        }
+        else
+        {
+            _bufferTimer.Change(0, BufferStateUpdateIntervalMs);
+        }
     }
 
     private void StopTimers()
+    {
+        _positionTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        _bufferTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+    }
+
+    private void StartPositionTimerDelayed()
+    {
+        int interval = (int)_options.PositionUpdateInterval.TotalMilliseconds;
+
+        if (_positionTimer == null)
+        {
+            _positionTimer = new Timer(
+                _ => _events.RaisePositionChanged(Position),
+                null, interval, interval);
+        }
+        else
+        {
+            _positionTimer.Change(interval, interval);
+        }
+    }
+
+    private void StopPositionTimer()
+    {
+        _positionTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+    }
+
+    /// <summary>
+    /// Полная финализация таймеров. Вызывать только при Dispose.
+    /// </summary>
+    private void DisposeTimers()
     {
         _positionTimer?.Dispose();
         _positionTimer = null;
         _bufferTimer?.Dispose();
         _bufferTimer = null;
-    }
-
-    private void StartPositionTimerDelayed()
-    {
-        _positionTimer?.Dispose();
-        _positionTimer = new Timer(
-            _ => _events.RaisePositionChanged(Position),
-            null,
-            (int)_options.PositionUpdateInterval.TotalMilliseconds,
-            (int)_options.PositionUpdateInterval.TotalMilliseconds);
-    }
-
-    private void StopPositionTimer()
-    {
-        _positionTimer?.Dispose();
-        _positionTimer = null;
     }
 
     private void RaiseBufferState()
@@ -805,9 +859,18 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     private Func<CancellationToken, Task<string?>>? CreateUrlRefresher()
     {
         if (_options.UrlRefreshCallback == null || string.IsNullOrEmpty(_currentTrackId)) return null;
+
         var trackId = _currentTrackId;
+
+        // Reuse делегата пока trackId не изменился — исключает аллокацию замыкания
+        // на каждый вызов (StartDecoding, HandleSeekAsync).
+        if (_cachedUrlRefresher != null && _cachedUrlRefresherTrackId == trackId)
+            return _cachedUrlRefresher;
+
         var callback = _options.UrlRefreshCallback;
-        return ct => callback(trackId, ct).AsTask();
+        _cachedUrlRefresherTrackId = trackId;
+        _cachedUrlRefresher = ct => callback(trackId, ct).AsTask();
+        return _cachedUrlRefresher;
     }
 
     #endregion

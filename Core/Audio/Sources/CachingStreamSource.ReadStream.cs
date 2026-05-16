@@ -46,8 +46,16 @@ public sealed partial class CachingStreamSource
 
                 try { oldCts.Cancel(); }
                 catch (ObjectDisposedException) { }
-                try { oldCts.Dispose(); }
-                catch (ObjectDisposedException) { }
+
+                // Deferred Dispose: reader-поток может держать ссылку на oldCts
+                // между Volatile.Read(ref _readCts) и .Token — немедленный Dispose
+                // вызовет ObjectDisposedException в reader'е. Планируем Dispose
+                // через ThreadPool, давая reader'у время завершить доступ к .Token.
+                ThreadPool.QueueUserWorkItem(static state =>
+                {
+                    try { ((CancellationTokenSource)state!).Dispose(); }
+                    catch (ObjectDisposedException) { }
+                }, oldCts);
 
                 Volatile.Write(ref _position, value);
             }
@@ -56,6 +64,23 @@ public sealed partial class CachingStreamSource
         #endregion
 
         #region Read
+
+        /// <summary>
+        /// Безопасно извлекает <see cref="CancellationToken"/> из текущего <see cref="_readCts"/>.
+        /// Обрабатывает гонку с Position setter, который может задиспозить CTS
+        /// между Volatile.Read и обращением к .Token.
+        /// </summary>
+        private CancellationToken GetCurrentReadToken()
+        {
+            try
+            {
+                return Volatile.Read(ref _readCts)?.Token ?? CancellationToken.None;
+            }
+            catch (ObjectDisposedException)
+            {
+                return new CancellationToken(canceled: true);
+            }
+        }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -66,7 +91,7 @@ public sealed partial class CachingStreamSource
             // если парсер использует синхронный Read
             try
             {
-                var token = Volatile.Read(ref _readCts).Token;
+                var token = GetCurrentReadToken();
                 return ReadAsyncCore(buffer.AsMemory(offset, count), token)
                     .AsTask()
                     .ConfigureAwait(false)
@@ -94,7 +119,7 @@ public sealed partial class CachingStreamSource
             if (_fileStream != null)
                 return await _fileStream.ReadAsync(buffer, ct);
 
-            var readToken = Volatile.Read(ref _readCts).Token;
+            var readToken = GetCurrentReadToken();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readToken);
 
             return await ReadAsyncCore(buffer, linkedCts.Token);

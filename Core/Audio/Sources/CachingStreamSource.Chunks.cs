@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net.Http.Headers;
 using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Memory;
@@ -8,58 +9,68 @@ namespace LMP.Core.Audio.Sources;
 
 public sealed partial class CachingStreamSource
 {
+    #region Nested Types
+
     /// <summary>
-    /// Максимум попыток в <see cref="ReadAtAsync"/> при смене эпохи.
+    /// Данные одного загруженного чанка с явной моделью владения буфером.
     /// </summary>
+    /// <remarks>
+    /// Инкапсулирует <see cref="IMemoryOwner{T}"/>, полученный из <see cref="MemoryPool{T}.Shared"/>.
+    /// Вызов <see cref="Dispose"/> возвращает буфер в пул. Владелец объекта —
+    /// <c>_ramChunks</c>; при эвикции вызывается <see cref="Dispose"/>.
+    /// </remarks>
+    internal sealed class ChunkData : IDisposable
+    {
+        private IMemoryOwner<byte>? _owner;
+        private volatile bool _disposed;
+
+        /// <summary>Слайс памяти, ограниченный реальной длиной данных чанка.</summary>
+        public Memory<byte> Memory { get; }
+
+        /// <summary>Реальная длина данных (может быть меньше размера арендованного буфера).</summary>
+        public int Length { get; }
+
+        /// <param name="owner">Владение передаётся в этот объект — вызывающий НЕ должен вызывать Dispose на owner после этого.</param>
+        /// <param name="actualLength">Реальное количество байт данных в буфере.</param>
+        public ChunkData(IMemoryOwner<byte> owner, int actualLength)
+        {
+            _owner = owner;
+            Length = actualLength;
+            Memory = owner.Memory[..actualLength];
+        }
+
+        /// <summary>Возвращает буфер в <see cref="MemoryPool{T}.Shared"/>.</summary>
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _owner?.Dispose();
+            _owner = null;
+        }
+    }
+
+    #endregion
+
     private const int ReadAtMaxEpochRetries = 5;
     private const int ReadAtEpochRetryDelayMs = 50;
-
-    /// <summary>Максимум неудачных refresh подряд до circuit breaker.</summary>
     private const int MaxRefreshFailuresBeforeCircuitBreak = 2;
 
-    /// <summary>
-    /// Координация URL refresh: только один refresh одновременно.
-    /// </summary>
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
-
-    /// <summary>Timestamp последнего refresh.</summary>
     private DateTime _lastRefreshTime = DateTime.MinValue;
-
-    /// <summary>Счётчик последовательных 403.</summary>
     private int _consecutive403Count;
-
-    /// <summary>Последовательный номер запроса к YouTube (&amp;rn=).</summary>
     private int _requestSequenceNumber;
-
-    /// <summary>Счётчик последовательных неудачных URL refresh.</summary>
     private int _consecutiveRefreshFailures;
 
     #region Chunk Download Result
 
-    /// <summary>
-    /// Результат попытки загрузки чанка.
-    /// </summary>
     private enum ChunkDownloadResult
     {
-        /// <summary>Чанк успешно загружен.</summary>
         Success,
-
-        /// <summary>HTTP 403 — нужен URL refresh.</summary>
         Forbidden403,
-
-        /// <summary>Сетевая ошибка (IOException, HttpRequestException, timeout).</summary>
         NetworkError,
-
-        /// <summary>Фатальная ошибка (UMP format).</summary>
         Fatal,
-
-        /// <summary>Операция отменена (epoch change или dispose).</summary>
         Cancelled,
-
-        /// <summary>Не удалось получить слот загрузки (все заняты).</summary>
         SlotTimeout,
-
-        /// <summary>Чанк за пределами файла — не ошибка, просто нечего качать.</summary>
         OutOfRange
     }
 
@@ -68,32 +79,35 @@ public sealed partial class CachingStreamSource
     #region ReadAtAsync
 
     /// <summary>
-    /// Читает данные из указанной позиции, загружая чанки по необходимости.
+    /// Читает данные из позиции <paramref name="position"/>, загружая чанк при необходимости.
+    /// Порядок: RAM-кэш → диск → сеть.
     /// </summary>
     internal async Task<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
     {
-        if (position >= _contentLength)
-            return 0;
+        if (position >= _contentLength) return 0;
 
         int chunkIndex = (int)(position / _chunkSize);
         int offsetInChunk = (int)(position % _chunkSize);
 
-        if (chunkIndex >= _totalChunks)
-            return 0;
+        if (chunkIndex >= _totalChunks) return 0;
 
-        // Быстрый путь: RAM
         if (_ramChunks.TryGetValue(chunkIndex, out var ramEntry))
-            return CopyFromChunk(ramEntry.Data, ramEntry.Length, offsetInChunk, buffer);
+            return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
 
-        // Средний путь: диск
-        var diskData = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
-        if (diskData != null)
+        var diskResult = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
+        if (diskResult.HasValue)
         {
-            _ramChunks.TryAdd(chunkIndex, new ChunkData(diskData, diskData.Length));
-            return CopyFromChunk(diskData, diskData.Length, offsetInChunk, buffer);
+            var (owner, length) = diskResult.Value;
+            var chunkData = new ChunkData(owner, length);
+            if (_ramChunks.TryAdd(chunkIndex, chunkData))
+                return CopyFromChunk(chunkData.Memory.Span, chunkData.Length, offsetInChunk, buffer);
+
+            // Другой поток уже добавил — возвращаем буфер и читаем из существующего
+            chunkData.Dispose();
+            if (_ramChunks.TryGetValue(chunkIndex, out ramEntry))
+                return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
         }
 
-        // Медленный путь: загрузка из сети
         for (int attempt = 0; attempt < ReadAtMaxEpochRetries; attempt++)
         {
             ct.ThrowIfCancellationRequested();
@@ -101,49 +115,47 @@ public sealed partial class CachingStreamSource
             try
             {
                 var downloadToken = CurrentDownloadToken;
-                using var linkedCts = CancellationTokenSource
-                    .CreateLinkedTokenSource(ct, downloadToken);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
 
                 var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token);
 
-                if (result == ChunkDownloadResult.OutOfRange)
-                    return 0;
+                if (result == ChunkDownloadResult.OutOfRange) return 0;
 
                 if (_ramChunks.TryGetValue(chunkIndex, out ramEntry))
-                    return CopyFromChunk(ramEntry.Data, ramEntry.Length, offsetInChunk, buffer);
+                    return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
 
-                diskData = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
-                if (diskData != null)
+                diskResult = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
+                if (diskResult.HasValue)
                 {
-                    _ramChunks.TryAdd(chunkIndex, new ChunkData(diskData, diskData.Length));
-                    return CopyFromChunk(diskData, diskData.Length, offsetInChunk, buffer);
+                    var (owner, length) = diskResult.Value;
+                    var chunkData = new ChunkData(owner, length);
+                    if (_ramChunks.TryAdd(chunkIndex, chunkData))
+                        return CopyFromChunk(chunkData.Memory.Span, chunkData.Length, offsetInChunk, buffer);
+                    chunkData.Dispose();
+                    if (_ramChunks.TryGetValue(chunkIndex, out ramEntry))
+                        return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
                 }
             }
-            catch (ChunkDownloadFatalException)
-            {
-                throw;
-            }
+            catch (ChunkDownloadFatalException) { throw; }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                Log.Debug($"[CachingSource] ReadAt chunk {chunkIndex}: " +
-                          $"epoch changed, retry {attempt + 1}/{ReadAtMaxEpochRetries}");
+                Log.Debug($"[CachingSource] ReadAt chunk {chunkIndex}: epoch changed, retry {attempt + 1}/{ReadAtMaxEpochRetries}");
                 await Task.Delay(ReadAtEpochRetryDelayMs, ct);
             }
         }
 
         ct.ThrowIfCancellationRequested();
-        throw new IOException(
-            $"Failed to load chunk {chunkIndex} after {ReadAtMaxEpochRetries} retries");
+        throw new IOException($"Failed to load chunk {chunkIndex} after {ReadAtMaxEpochRetries} retries");
     }
 
     /// <summary>
-    /// Копирует данные из чанка в целевой буфер с учётом смещения.
+    /// Копирует данные из чанка в целевой буфер с учётом смещения <paramref name="offset"/>.
     /// </summary>
-    private static int CopyFromChunk(byte[] chunkData, int chunkLength, int offset, Memory<byte> buffer)
+    private static int CopyFromChunk(ReadOnlySpan<byte> chunkData, int chunkLength, int offset, Memory<byte> buffer)
     {
         int available = Math.Min(buffer.Length, chunkLength - offset);
         if (available <= 0) return 0;
-        chunkData.AsSpan(offset, available).CopyTo(buffer.Span);
+        chunkData.Slice(offset, available).CopyTo(buffer.Span);
         return available;
     }
 
@@ -152,36 +164,26 @@ public sealed partial class CachingStreamSource
     #region EnsureChunkAsync
 
     /// <summary>
-    /// Гарантирует доступность чанка. Загружает если нужно, с retry и circuit breaker.
-    /// Возвращает результат операции вместо броска исключений при штатных ситуациях.
+    /// Гарантирует доступность чанка с заданным индексом.
+    /// Использует retry-логику, circuit breaker и координацию параллельных загрузок.
     /// </summary>
     private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct)
     {
-        // Валидация индекса чанка — за пределами файла не качаем
-        if (index < 0 || index >= _totalChunks)
-            return ChunkDownloadResult.OutOfRange;
+        if (index < 0 || index >= _totalChunks) return ChunkDownloadResult.OutOfRange;
 
-        // Проверяем, есть ли данные для этого чанка (start >= contentLength)
         long chunkStart = (long)index * _chunkSize;
-        if (chunkStart >= _contentLength)
-            return ChunkDownloadResult.OutOfRange;
+        if (chunkStart >= _contentLength) return ChunkDownloadResult.OutOfRange;
 
-        if (_cacheEntry == null || IsChunkAvailable(index))
-            return ChunkDownloadResult.Success;
+        if (_cacheEntry == null || IsChunkAvailable(index)) return ChunkDownloadResult.Success;
 
-        // Ждём если кто-то уже качает этот чанк
         if (_activeDownloads.TryGetValue(index, out var existingTask))
         {
-            try
-            {
-                await existingTask.WaitAsync(ct);
-            }
+            try { await existingTask.WaitAsync(ct); }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
             catch (ChunkDownloadFatalException) { throw; }
             catch { }
 
-            if (IsChunkAvailable(index))
-                return ChunkDownloadResult.Success;
+            if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -193,9 +195,7 @@ public sealed partial class CachingStreamSource
         {
             ct.ThrowIfCancellationRequested();
 
-            // Перепроверяем — мог загрузиться пока ждали
-            if (IsChunkAvailable(index))
-                return ChunkDownloadResult.Success;
+            if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
 
             var downloadTask = DownloadChunkCoreAsync(index, ct);
 
@@ -209,7 +209,6 @@ public sealed partial class CachingStreamSource
                 catch (ChunkDownloadFatalException) { throw; }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    // Epoch change — можно retry
                     _activeDownloads.TryRemove(index, out _);
                     await Task.Delay(50, ct);
                     continue;
@@ -231,8 +230,7 @@ public sealed partial class CachingStreamSource
 
                     case ChunkDownloadResult.NetworkError:
                         int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
-                        Log.Warn($"[CachingSource] Chunk {index}: network retry " +
-                                 $"{attempt + 1}/{maxAttempts}, delay={delay}ms");
+                        Log.Warn($"[CachingSource] Chunk {index}: network retry {attempt + 1}/{maxAttempts}, delay={delay}ms");
                         await Task.Delay(delay, ct);
                         continue;
 
@@ -243,7 +241,6 @@ public sealed partial class CachingStreamSource
                     case ChunkDownloadResult.Cancelled:
                         if (!ct.IsCancellationRequested)
                         {
-                            Log.Debug($"[CachingSource] Chunk {index}: cancelled (epoch change), retry");
                             await Task.Delay(50, ct);
                             continue;
                         }
@@ -256,7 +253,6 @@ public sealed partial class CachingStreamSource
             }
             else
             {
-                // Другой поток уже качает — ждём его результат
                 if (_activeDownloads.TryGetValue(index, out var concurrentTask))
                 {
                     try { await concurrentTask.WaitAsync(ct); }
@@ -265,8 +261,7 @@ public sealed partial class CachingStreamSource
                     catch { }
                 }
 
-                if (IsChunkAvailable(index))
-                    return ChunkDownloadResult.Success;
+                if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
             }
         }
 
@@ -278,9 +273,7 @@ public sealed partial class CachingStreamSource
             trackId: _trackId);
     }
 
-    /// <summary>
-    /// Проверяет circuit breaker перед загрузкой.
-    /// </summary>
+    /// <summary>Проверяет circuit breaker перед началом загрузки.</summary>
     private void CheckCircuitBreaker(int index)
     {
         int failures = Volatile.Read(ref _consecutive403Count);
@@ -296,17 +289,13 @@ public sealed partial class CachingStreamSource
         }
     }
 
-    /// <summary>
-    /// Вычисляет задержку retry с учётом exponential backoff.
-    /// </summary>
+    /// <summary>Вычисляет задержку retry с экспоненциальным backoff.</summary>
     private int ComputeRetryDelay(int attempt)
     {
         int baseDelay = _config.NetworkRetryBaseDelayMs;
-
-        if (_config.UseExponentialBackoff)
-            return Math.Min(baseDelay * (1 << attempt), 10_000); // max 10s
-
-        return baseDelay;
+        return _config.UseExponentialBackoff
+            ? Math.Min(baseDelay * (1 << attempt), 10_000)
+            : baseDelay;
     }
 
     #endregion
@@ -314,23 +303,20 @@ public sealed partial class CachingStreamSource
     #region DownloadChunkCoreAsync
 
     /// <summary>
-    /// Скачивает один чанк. Вычисляет и валидирует HTTP Range перед запросом.
-    /// Возвращает результат вместо глотания ошибок.
+    /// Вычисляет HTTP Range, валидирует его и инициирует загрузку.
+    /// Возвращает результат вместо исключений для штатных ситуаций.
     /// </summary>
     private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct)
     {
         if (_cacheEntry == null || _cacheEntry.IsChunkDownloaded(index))
             return ChunkDownloadResult.Success;
 
-        // Вычисляем и валидируем range
         long start = (long)index * _chunkSize;
         long end = Math.Min(start + _chunkSize - 1, _contentLength - 1);
 
-        // Невалидный range — чанк полностью за пределами файла
         if (start >= _contentLength || start > end)
         {
-            Log.Debug($"[CachingSource] Chunk {index} out of range: " +
-                      $"start={start}, contentLength={_contentLength}");
+            Log.Debug($"[CachingSource] Chunk {index} out of range: start={start}, contentLength={_contentLength}");
             return ChunkDownloadResult.OutOfRange;
         }
 
@@ -339,8 +325,7 @@ public sealed partial class CachingStreamSource
         try
         {
             gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct);
-            if (!gotSlot)
-                return ChunkDownloadResult.SlotTimeout;
+            if (!gotSlot) return ChunkDownloadResult.SlotTimeout;
 
             if (_cacheEntry.IsChunkDownloaded(index) || ct.IsCancellationRequested)
             {
@@ -368,16 +353,14 @@ public sealed partial class CachingStreamSource
         finally
         {
             if (gotSlot)
-            {
                 try { _downloadSlots.Release(); } catch { }
-            }
         }
     }
 
     /// <summary>
-    /// HTTP загрузка чанка с предвычисленным и валидным range.
-    /// Использует ChunkPool для избежания LOH аллокаций.
-    /// ВСЕГДА await'ит до конца — никогда не бросает HTTP операцию "в полёте".
+    /// HTTP-загрузка чанка с явной моделью владения буфером через <see cref="MemoryPool{T}.Shared"/>.
+    /// Владение передаётся в <see cref="ChunkData"/> → <c>_ramChunks</c> → возврат при эвикции.
+    /// Для fire-and-forget записи на диск создаётся независимая копия через <see cref="ArrayPool{T}.Shared"/>.
     /// </summary>
     private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(
         int index, long start, long end, CancellationToken ct)
@@ -389,58 +372,29 @@ public sealed partial class CachingStreamSource
 
         using var request = CreateChunkRequest(index, start, end, rn);
 
-        // ═══ SEND — всегда ждём до конца ═══
         HttpResponseMessage response;
         try
         {
             response = await _httpClient.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
         }
-        catch (TaskCanceledException)
-        {
-            return ChunkDownloadResult.NetworkError;
-        }
-        catch (HttpRequestException)
-        {
-            return ChunkDownloadResult.NetworkError;
-        }
+        catch (TaskCanceledException) { return ChunkDownloadResult.NetworkError; }
+        catch (HttpRequestException) { return ChunkDownloadResult.NetworkError; }
 
         using (response)
         {
-            if (ct.IsCancellationRequested)
-                return ChunkDownloadResult.Cancelled;
+            if (ct.IsCancellationRequested) return ChunkDownloadResult.Cancelled;
 
             if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
-                int count = Interlocked.Increment(ref _consecutive403Count);
-
-                // ═══ EXTENDED 403 DIAGNOSTIC ═══
-                var nParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
-                var cParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "c");
-                var reqUa = request.Headers.UserAgent.ToString();
-
-                Log.Warn($"[CachingSource] ═══ 403 DIAGNOSTIC chunk {index} (consecutive={count}) ═══");
-                Log.Warn($"[CachingSource]   c={cParam ?? "?"}, UA={reqUa[..Math.Min(reqUa.Length, 50)]}...");
-                Log.Warn($"[CachingSource]   n-token: {nParam ?? "MISSING"} " +
-                         $"(len={nParam?.Length ?? 0}, looks_encrypted={nParam?.Length is > 15 and < 25})");
-
-                // Проверяем заголовки ответа для доп. информации
-                if (response.Headers.TryGetValues("X-Restrict-Formats-Hint", out var hints))
-                    Log.Warn($"[CachingSource]   Restrict-Hint: {string.Join(", ", hints)}");
-
-                var responseBody = "";
-                try { responseBody = await response.Content.ReadAsStringAsync(CancellationToken.None); }
-                catch { /* ignore */ }
-                if (responseBody.Length > 0)
-                    Log.Warn($"[CachingSource]   Response body: {responseBody[..Math.Min(responseBody.Length, 200)]}");
-
-                Log.Warn($"[CachingSource] ═══════════════════════════════════════════════════════");
-
+                Interlocked.Increment(ref _consecutive403Count);
+                await LogAndDiagnose403Async(index, request, response);
                 return ChunkDownloadResult.Forbidden403;
             }
-            else if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
+
+            if (response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
             {
-                Log.Debug($"[CachingSource] Chunk {index}: 416 Range Not Satisfiable (EOF)");
+                Log.Debug($"[CachingSource] Chunk {index}: 416 (EOF)");
                 return ChunkDownloadResult.OutOfRange;
             }
 
@@ -451,98 +405,93 @@ public sealed partial class CachingStreamSource
                 throw new ChunkDownloadFatalException(
                     "YouTube returned encrypted UMP format",
                     chunkIndex: index, consecutiveFailures: 0,
-                    reason: ChunkDownloadFailureReason.UmpFormat,
-                    trackId: _trackId);
+                    reason: ChunkDownloadFailureReason.UmpFormat, trackId: _trackId);
             }
 
             response.EnsureSuccessStatusCode();
 
-            // ═══ READ — через pooled buffer для избежания LOH ═══
-            byte[] rentedBuffer = ChunkPool.Shared.Rent(expectedBytes);
+            // Аренда через MemoryPool: владение передаётся в ChunkData.
+            // IMemoryOwner<byte> гарантирует возврат в пул через Dispose,
+            // исключая удержание рентованных буферов в RAM-кэше навсегда.
+            IMemoryOwner<byte> memoryOwner = MemoryPool<byte>.Shared.Rent(expectedBytes);
             int actualLength;
 
             try
             {
                 using var contentStream = await response.Content.ReadAsStreamAsync(CancellationToken.None);
-                actualLength = await ReadStreamFullyAsync(contentStream, rentedBuffer, expectedBytes);
+                actualLength = await ReadStreamFullyAsync(
+                    contentStream, memoryOwner.Memory[..expectedBytes], ct);
             }
             catch (Exception ex)
             {
-                ChunkPool.Shared.Return(rentedBuffer);
-                Log.Warn($"[CachingSource] Chunk {index} read: {ex.Message}");
+                memoryOwner.Dispose();
+                Log.Warn($"[CachingSource] Chunk {index} read error: {ex.Message}");
                 return ChunkDownloadResult.NetworkError;
             }
 
             if (ct.IsCancellationRequested)
             {
-                ChunkPool.Shared.Return(rentedBuffer);
+                memoryOwner.Dispose();
                 return ChunkDownloadResult.Cancelled;
             }
 
-            // ═══ VALIDATE ═══
             if (actualLength == 0)
             {
-                ChunkPool.Shared.Return(rentedBuffer);
+                memoryOwner.Dispose();
                 Log.Warn($"[CachingSource] Chunk {index}: empty response");
                 return ChunkDownloadResult.NetworkError;
             }
 
             if (actualLength < expectedBytes)
             {
-                if (start + actualLength >= _contentLength - _chunkSize)
+                bool isNearEof = start + actualLength >= _contentLength - _chunkSize;
+                if (!isNearEof)
                 {
-                    Log.Debug($"[CachingSource] Chunk {index}: partial read " +
-                              $"{actualLength}/{expectedBytes} (near EOF)");
-                }
-                else
-                {
-                    ChunkPool.Shared.Return(rentedBuffer);
-                    Log.Warn($"[CachingSource] Chunk {index} incomplete: " +
-                             $"{actualLength}/{expectedBytes}");
+                    memoryOwner.Dispose();
+                    Log.Warn($"[CachingSource] Chunk {index} incomplete: {actualLength}/{expectedBytes}");
                     return ChunkDownloadResult.NetworkError;
                 }
+                Log.Debug($"[CachingSource] Chunk {index}: partial {actualLength}/{expectedBytes} (near EOF)");
             }
 
-            // ═══ SAVE ═══
-            byte[] chunkData;
-            if (rentedBuffer.Length == actualLength)
+            // Передача владения в ChunkData. После этой строки вызывать
+            // memoryOwner.Dispose() запрещено — он принадлежит chunkData.
+            var chunkData = new ChunkData(memoryOwner, actualLength);
+
+            if (!_ramChunks.TryAdd(index, chunkData))
             {
-                chunkData = rentedBuffer;
+                // Другой поток уже сохранил этот чанк — возвращаем буфер
+                chunkData.Dispose();
             }
             else
             {
-                chunkData = new byte[actualLength];
-                Buffer.BlockCopy(rentedBuffer, 0, chunkData, 0, actualLength);
-                ChunkPool.Shared.Return(rentedBuffer);
+                // Копия для fire-and-forget: жизненный цикл не зависит от chunkData.
+                // ArrayPool используется для краткосрочного буфера копии.
+                byte[] diskCopy = ArrayPool<byte>.Shared.Rent(actualLength);
+                chunkData.Memory.Span.CopyTo(diskCopy.AsSpan(0, actualLength));
+                _ = WriteToDiskFireAndForgetAsync(index, diskCopy, actualLength);
+
+                if (_ramChunks.Count > _config.MaxRamChunks)
+                    EvictDistantRamChunks();
             }
-
-            _ramChunks.TryAdd(index, new ChunkData(chunkData, actualLength));
-
-            _ = WriteToDiskFireAndForgetAsync(index, chunkData);
-
-            if (_ramChunks.Count > _config.MaxRamChunks)
-                EvictDistantRamChunks();
 
             return ChunkDownloadResult.Success;
         }
     }
 
     /// <summary>
-    /// Полностью читает данные из потока в буфер (с учётом partial reads от TCP).
+    /// Читает поток до <paramref name="buffer"/>.Length байт или EOF.
+    /// <paramref name="ct"/> пробрасывается в <see cref="Stream.ReadAsync"/> — read прерывается при отмене.
     /// </summary>
     private static async ValueTask<int> ReadStreamFullyAsync(
-        Stream stream, byte[] buffer, int maxBytes)
+        Stream stream, Memory<byte> buffer, CancellationToken ct)
     {
         int totalRead = 0;
 
-        while (totalRead < maxBytes)
+        while (totalRead < buffer.Length)
         {
-            int read = await stream.ReadAsync(
-                buffer.AsMemory(totalRead, maxBytes - totalRead));
-
-            if (read == 0)
-                break; // EOF
-
+            int read = await stream.ReadAsync(buffer[totalRead..], ct);
+            if (read == 0) break;
             totalRead += read;
         }
 
@@ -551,18 +500,55 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Fire-and-forget запись чанка на диск.
-    /// Ошибки логируются, но не прерывают воспроизведение.
+    /// Принимает независимую копию данных, арендованную из <see cref="ArrayPool{T}.Shared"/>,
+    /// и возвращает её в пул после завершения записи.
     /// </summary>
-    private async Task WriteToDiskFireAndForgetAsync(int index, byte[] data)
+    private async Task WriteToDiskFireAndForgetAsync(int index, byte[] rentedCopy, int length)
     {
         try
         {
-            await _cacheManager.WriteChunkAsync(_cacheKey, index, data, CancellationToken.None);
+            await _cacheManager.WriteChunkAsync(
+                _cacheKey, index, rentedCopy.AsMemory(0, length), CancellationToken.None);
         }
         catch (IOException ex)
         {
             Log.Warn($"[CachingSource] Disk write chunk {index}: {ex.Message}");
         }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rentedCopy);
+        }
+    }
+
+    #endregion
+
+    #region 403 Diagnostics
+
+    /// <summary>Логирует расширенную диагностику при 403 Forbidden.</summary>
+    private async Task LogAndDiagnose403Async(
+        int index, HttpRequestMessage request, HttpResponseMessage response)
+    {
+        int count = Volatile.Read(ref _consecutive403Count);
+        var nParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
+        var cParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "c");
+        var reqUa = request.Headers.UserAgent.ToString();
+
+        Log.Warn($"[CachingSource] ═══ 403 DIAGNOSTIC chunk {index} (consecutive={count}) ═══");
+        Log.Warn($"[CachingSource]   c={cParam ?? "?"}, UA={reqUa[..Math.Min(reqUa.Length, 50)]}...");
+        Log.Warn($"[CachingSource]   n-token: {nParam ?? "MISSING"} " +
+                 $"(len={nParam?.Length ?? 0}, looks_encrypted={nParam?.Length is > 15 and < 25})");
+
+        if (response.Headers.TryGetValues("X-Restrict-Formats-Hint", out var hints))
+            Log.Warn($"[CachingSource]   Restrict-Hint: {string.Join(", ", hints)}");
+
+        string responseBody = "";
+        try { responseBody = await response.Content.ReadAsStringAsync(CancellationToken.None); }
+        catch { }
+
+        if (responseBody.Length > 0)
+            Log.Warn($"[CachingSource]   Body: {responseBody[..Math.Min(responseBody.Length, 200)]}");
+
+        Log.Warn($"[CachingSource] ════════════════════════════════════════════════════════");
     }
 
     #endregion
@@ -570,18 +556,16 @@ public sealed partial class CachingStreamSource
     #region URL Refresh
 
     /// <summary>
-    /// Координированный URL refresh. Один поток делает refresh, остальные ждут.
-    /// После успешного refresh сбрасывает счётчик 403.
-    /// При повторных неудачах (n-token не расшифрован, YouTube 403) — circuit breaker.
+    /// Координированный URL refresh: только один поток выполняет refresh,
+    /// остальные ждут его завершения. Содержит circuit breaker по числу неудачных refresh.
     /// </summary>
     private async Task CoordinatedRefreshAsync(CancellationToken ct)
     {
-        // Circuit breaker: если refresh уже не помогает — не тратим время
         int refreshFailures = Volatile.Read(ref _consecutiveRefreshFailures);
         if (refreshFailures >= MaxRefreshFailuresBeforeCircuitBreak)
         {
             throw new ChunkDownloadFatalException(
-                $"URL refresh circuit breaker OPEN: {refreshFailures} consecutive refresh failures (likely encrypted n-token)",
+                $"URL refresh circuit breaker OPEN: {refreshFailures} consecutive failures (encrypted n-token?)",
                 chunkIndex: -1,
                 consecutiveFailures: Volatile.Read(ref _consecutive403Count),
                 reason: ChunkDownloadFailureReason.Forbidden403,
@@ -596,7 +580,6 @@ public sealed partial class CachingStreamSource
             await _refreshLock.WaitAsync(ct);
             _refreshLock.Release();
 
-            // После чужого refresh проверяем circuit breaker
             if (Volatile.Read(ref _consecutiveRefreshFailures) >= MaxRefreshFailuresBeforeCircuitBreak)
             {
                 throw new ChunkDownloadFatalException(
@@ -623,27 +606,22 @@ public sealed partial class CachingStreamSource
             }
 
             var previousUrl = _currentUrl;
-
             await RefreshUrlAsync(ct);
             _lastRefreshTime = DateTime.UtcNow;
-
             Interlocked.Exchange(ref _consecutive403Count, 0);
             Log.Info("[CachingSource] 403 counter reset after URL refresh");
 
-            // Проверяем: изменился ли n-token после refresh?
-            // Если URL всё тот же (или n-token всё ещё зашифрован) — refresh бесполезен.
-            var newNToken = Youtube.Utils.UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
-            var oldNToken = Youtube.Utils.UrlEx.TryGetQueryParameterValue(previousUrl, "n");
+            var newNToken = UrlEx.TryGetQueryParameterValue(_currentUrl, "n");
+            var oldNToken = UrlEx.TryGetQueryParameterValue(previousUrl, "n");
 
             if (!string.IsNullOrEmpty(newNToken) &&
                 string.Equals(newNToken, oldNToken, StringComparison.Ordinal))
             {
                 int failures = Interlocked.Increment(ref _consecutiveRefreshFailures);
-                Log.Warn($"[CachingSource] URL refresh did NOT change n-token (attempt {failures}/{MaxRefreshFailuresBeforeCircuitBreak})");
+                Log.Warn($"[CachingSource] n-token unchanged after refresh (attempt {failures}/{MaxRefreshFailuresBeforeCircuitBreak})");
             }
             else
             {
-                // N-token changed — refresh was productive
                 Interlocked.Exchange(ref _consecutiveRefreshFailures, 0);
             }
 
@@ -659,6 +637,7 @@ public sealed partial class CachingStreamSource
 
     #region HTTP Request Building
 
+    /// <summary>Строит HTTP-запрос для загрузки чанка.</summary>
     private HttpRequestMessage CreateChunkRequest(int index, long start, long end, int rn)
     {
         bool isYouTube = _currentUrl.Contains("googlevideo.com/videoplayback");
@@ -666,29 +645,13 @@ public sealed partial class CachingStreamSource
         if (isYouTube)
         {
             string url = BuildYouTubeChunkUrl(_currentUrl, rn);
-
-            // ═══ DIAGNOSTIC: URL + ключевые параметры для верификации ═══
-            var nParam = UrlEx.TryGetQueryParameterValue(url, "n");
-            var cParam = UrlEx.TryGetQueryParameterValue(url, "c");
-            var sigParam = UrlEx.TryGetQueryParameterValue(url, "sig");
-
-            Log.Debug($"[CachingSource] Chunk {index} URL: {url[..Math.Min(url.Length, 300)]}");
-            Log.Debug($"[CachingSource] Chunk {index} params: " +
-                      $"c={cParam ?? "MISSING"}, " +
-                      $"n={nParam?[..Math.Min(nParam.Length, 15)] ?? "MISSING"}..., " +
-                      $"sig={(sigParam is not null ? $"{sigParam.Length}chars,ends=...{sigParam[^Math.Min(6, sigParam.Length)..]}]" : "MISSING")}");
+            LogChunkRequestParams(index, url);
 
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new RangeHeaderValue(start, end);
-
-            // ═══ FIX: User-Agent соответствует клиенту из URL ═══
-            // URL содержит c=WEB_REMIX → нужен Chrome UA, НЕ Android VR!
             SharedHttpClient.ApplyUserAgentFromUrl(request, url);
 
-            // ═══ DIAGNOSTIC: подтверждаем какой UA используется ═══
-            var appliedUa = request.Headers.UserAgent.ToString();
-            Log.Debug($"[CachingSource] Chunk {index} UA: {appliedUa[..Math.Min(appliedUa.Length, 60)]}...");
-
+            Log.Debug($"[CachingSource] Chunk {index} UA: {request.Headers.UserAgent.ToString()[..Math.Min(60, request.Headers.UserAgent.ToString().Length)]}...");
             return request;
         }
 
@@ -698,19 +661,26 @@ public sealed partial class CachingStreamSource
         return genericRequest;
     }
 
+    /// <summary>Логирует ключевые параметры URL чанка для диагностики.</summary>
+    private static void LogChunkRequestParams(int index, string url)
+    {
+        var nParam = UrlEx.TryGetQueryParameterValue(url, "n");
+        var cParam = UrlEx.TryGetQueryParameterValue(url, "c");
+        var sigParam = UrlEx.TryGetQueryParameterValue(url, "sig");
+
+        Log.Debug($"[CachingSource] Chunk {index} URL: {url[..Math.Min(url.Length, 300)]}");
+        Log.Debug($"[CachingSource] Chunk {index} params: c={cParam ?? "MISSING"}, " +
+                  $"n={nParam?[..Math.Min(nParam.Length, 15)] ?? "MISSING"}..., " +
+                  $"sig={(sigParam is not null ? $"{sigParam.Length}chars" : "MISSING")}");
+    }
+
     /// <summary>
-    /// Строит URL для chunk-запроса к YouTube.
-    /// SRP: chunk-специфичные параметры (rn, rbuf) добавляются ЗДЕСЬ,
-    /// а не в StreamClient. StreamClient готовит "чистый" base URL.
-    /// 
-    /// Использует UrlEx.SetQueryParameter для in-place замены —
-    /// если rn/rbuf уже есть, они обновятся на месте, если нет — добавятся в конец.
-    /// Порядок остальных параметров (n, sig, sparams и т.д.) гарантированно сохраняется.
+    /// Добавляет chunk-специфичные параметры <c>rn</c> и <c>rbuf</c> к базовому URL.
+    /// Использует in-place замену через <see cref="UrlEx.SetQueryParameter"/> —
+    /// существующие параметры обновляются, порядок остальных не изменяется.
     /// </summary>
     private static string BuildYouTubeChunkUrl(string baseUrl, int rn)
     {
-        // SetQueryParameter делает in-place замену если параметр существует,
-        // или append если нет. Порядок остальных параметров не меняется.
         string url = UrlEx.SetQueryParameter(baseUrl, "rn", rn.ToString());
         url = UrlEx.SetQueryParameter(url, "rbuf", "0");
         return url;
@@ -723,6 +693,9 @@ public sealed partial class CachingStreamSource
     private bool IsChunkAvailable(int index) =>
         _cacheEntry!.IsChunkDownloaded(index) || _ramChunks.ContainsKey(index);
 
+    /// <summary>
+    /// Эвикция удалённых чанков из RAM с корректным возвратом буферов в пул.
+    /// </summary>
     private void EvictDistantRamChunks()
     {
         int current = Volatile.Read(ref _currentChunk);
@@ -734,7 +707,10 @@ public sealed partial class CachingStreamSource
             .ToList();
 
         foreach (int idx in toEvict)
-            _ramChunks.TryRemove(idx, out _);
+        {
+            if (_ramChunks.TryRemove(idx, out var chunk))
+                chunk.Dispose();
+        }
     }
 
     #endregion

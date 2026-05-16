@@ -116,26 +116,35 @@ public sealed class LocalFileSource : IAudioSource
 
     /// <summary>
     /// Определяет формат контейнера по magic bytes, с fallback на расширение файла.
+    /// Буфер арендуется из <see cref="System.Buffers.ArrayPool{T}.Shared"/>
+    /// для избежания heap-аллокации при инициализации.
     /// </summary>
     private async Task<AudioFormat> DetectFormatAsync(CancellationToken ct)
     {
-        var header = new byte[FormatDetectionHeaderSize];
-        int totalRead = 0;
-
-        while (totalRead < FormatDetectionHeaderSize)
+        var header = System.Buffers.ArrayPool<byte>.Shared.Rent(FormatDetectionHeaderSize);
+        try
         {
-            int read = await _fileStream!.ReadAsync(
-                header.AsMemory(totalRead, FormatDetectionHeaderSize - totalRead), ct);
-            if (read == 0) break;
-            totalRead += read;
+            int totalRead = 0;
+
+            while (totalRead < FormatDetectionHeaderSize)
+            {
+                int read = await _fileStream!.ReadAsync(
+                    header.AsMemory(totalRead, FormatDetectionHeaderSize - totalRead), ct);
+                if (read == 0) break;
+                totalRead += read;
+            }
+
+            _fileStream!.Position = 0;
+
+            var format = AudioSourceFactory.DetectFormatByMagic(header);
+
+            if (format != AudioFormat.Unknown)
+                return format;
         }
-
-        _fileStream!.Position = 0;
-
-        var format = AudioSourceFactory.DetectFormatByMagic(header);
-
-        if (format != AudioFormat.Unknown)
-            return format;
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(header);
+        }
 
         // Fallback на расширение
         return Path.GetExtension(_filePath).ToLowerInvariant() switch

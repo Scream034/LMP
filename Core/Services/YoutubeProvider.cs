@@ -1879,13 +1879,12 @@ public partial class YoutubeProvider : IDisposable
     }
 
     public async Task<string?> DownloadTrackAsync(
-    TrackInfo track,
-    IProgress<float>? progress = null,
-    CancellationToken ct = default)
+      TrackInfo track,
+      IProgress<float>? progress = null,
+      CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrEmpty(track.Url)) return null;
 
-        // ─── Проверка cooldown ───
         try
         {
             ThrowIfInCooldown();
@@ -1916,6 +1915,44 @@ public partial class YoutubeProvider : IDisposable
 
             await _youtube.Videos.Streams.DownloadAsync(stream, filePath, progress: prog, cancellationToken: ct);
             NotifyStatus($"[YouTube] Downloaded: {fileName}");
+
+            // ═══ ДОЗАПОЛНЕНИЕ CHUNK-КЭША ИЗ СКАЧАННОГО ФАЙЛА ═══
+            // Fire-and-forget: не блокируем возврат к вызывающему.
+            // ResumeCacheFromDownloadedFileAsync читает скачанный файл с диска и
+            // дозаполняет недостающие чанки в chunk-кэш через WriteChunkAsync.
+            // Прогресс DownloadedChunks растёт плавно → BufferProgress корректен.
+            // При отмене — частично заполненный кэш корректен, докачается по сети.
+            var cacheManager = AudioSourceFactory.GlobalCache;
+            if (cacheManager != null)
+            {
+                var format = AudioSourceFactory.DetectFormat(stream.Url);
+                if (format == AudioFormat.Unknown)
+                {
+                    format = stream.Container.Name switch
+                    {
+                        "webm" => AudioFormat.WebM,
+                        "mp4" or "m4a" => AudioFormat.Mp4,
+                        "ogg" => AudioFormat.Ogg,
+                        _ => AudioFormat.Unknown
+                    };
+                }
+
+                if (format != AudioFormat.Unknown)
+                {
+                    int bitrate = (int)Math.Round(stream.Bitrate.KiloBitsPerSecond);
+                    string capturedFilePath = filePath;
+                    string capturedTrackId = track.Id;
+
+                    _ = Task.Run(async () =>
+                    {
+                        await cacheManager.ResumeCacheFromDownloadedFileAsync(
+                            capturedTrackId, capturedFilePath, format, bitrate,
+                            startChunkHint: 0,
+                            ct: CancellationToken.None);
+                    });
+                }
+            }
+
             return filePath;
         }
         catch (BotDetectionException)

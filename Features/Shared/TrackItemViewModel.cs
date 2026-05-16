@@ -17,6 +17,8 @@ public sealed class TrackItemViewModel : ViewModelBase
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
     private readonly DialogService _dialog;
+    private readonly LibraryService _library;
+
     private Action<TrackInfo>? _onPlay;
 
     public TrackInfo Track { get; }
@@ -80,6 +82,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         DownloadService downloads,
         MusicLibraryManager manager,
         DialogService dialog,
+        LibraryService library,
         Action<TrackInfo>? onPlay = null)
     {
         Track = track;
@@ -87,6 +90,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         _manager = manager;
         _downloads = downloads;
         _dialog = dialog;
+        _library = library;
         _onPlay = onPlay;
 
         PlayCommand = new TrackAsyncCommand(PlayAsync);
@@ -151,8 +155,8 @@ public sealed class TrackItemViewModel : ViewModelBase
 
             bool success = await cache.ExportTrackToDownloadsAsync(
                 Track.Id,
-                async id => await Program.Services.GetRequiredService<LibraryService>().GetTrackAsync(id),
-                async t => await Program.Services.GetRequiredService<LibraryService>().AddOrUpdateTrackAsync(t));
+                async id => await _library.GetTrackAsync(id),
+                async t => await _library.AddOrUpdateTrackAsync(t));
 
             if (success) Track.IsDownloaded = true;
         }

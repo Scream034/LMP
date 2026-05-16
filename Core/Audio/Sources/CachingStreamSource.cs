@@ -29,16 +29,6 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed partial class CachingStreamSource : IAudioSource
 {
-    #region Nested Types
-
-    /// <summary>
-    /// Хранит данные чанка вместе с реальной длиной.
-    /// Нужно потому что массив из ArrayPool может быть больше реальных данных.
-    /// </summary>
-    internal readonly record struct ChunkData(byte[] Data, int Length);
-
-    #endregion
-
     #region Fields
 
     // ── Configuration ──
@@ -209,9 +199,6 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _bitrate,
                 chunkSize: _chunkSize);
 
-
-            // если entry уже имеет данные, синхронизируем _chunkSize и
-            // _totalChunks с реальным разбиением из CacheEntry.
             if (_cacheEntry.DownloadedChunks > 0 && _cacheEntry.TotalChunks > 0
                 && _cacheEntry.TotalChunks != _totalChunks)
             {
@@ -236,12 +223,25 @@ public sealed partial class CachingStreamSource : IAudioSource
             _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             InitializeFirstEpoch();
 
-            await LoadInitialChunksAsync(_lifetimeCts.Token);
+            // ═══ ПАРАЛЛЕЛЬНАЯ ИНИЦИАЛИЗАЦИЯ ═══
+            // Chunk 0 нужен для ParseHeaders (EBML + Segment + Tracks ≤ 128KB).
+            // Пока парсятся заголовки, остальные initial chunks загружаются параллельно.
+            // Экономия: InitialChunksToLoad × RTT (было sequential, стало parallel с parsing).
+            await EnsureChunkAsync(0, _lifetimeCts.Token);
 
             _readStream = new AsyncCachingReadStream(this);
             _parser = CreateParser(_readStream);
 
-            if (!await _parser.ParseHeadersAsync(ct))
+            int totalInitial = Math.Min(_config.InitialChunksToLoad, _cacheEntry.TotalChunks);
+
+            var parseTask = _parser.ParseHeadersAsync(ct).AsTask();
+            var remainingTask = totalInitial > 1
+                ? LoadChunkRangeAsync(1, totalInitial, _lifetimeCts.Token)
+                : Task.CompletedTask;
+
+            await Task.WhenAll(parseTask, remainingTask);
+
+            if (!parseTask.Result)
                 throw new InvalidOperationException("Failed to parse container headers");
 
             Codec = _parser.Codec;
@@ -264,6 +264,17 @@ public sealed partial class CachingStreamSource : IAudioSource
             Log.Error($"[CachingSource] Init failed: {ex.Message}", ex);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Загружает диапазон чанков [from, count) параллельно.
+    /// </summary>
+    private async Task LoadChunkRangeAsync(int from, int count, CancellationToken ct)
+    {
+        var tasks = new Task[count - from];
+        for (int i = from; i < count; i++)
+            tasks[i - from] = EnsureChunkAsync(i, ct);
+        await Task.WhenAll(tasks);
     }
 
     private async Task<bool> InitializeFromCacheAsync(CancellationToken ct)
@@ -416,12 +427,18 @@ public sealed partial class CachingStreamSource : IAudioSource
     public void ReleaseRamBuffers()
     {
         int current = Volatile.Read(ref _currentChunk);
+        int evictionDistance = _config.RamEvictionDistance;
 
-        foreach (int idx in _ramChunks.Keys
-                     .Where(i => Math.Abs(i - current) > _config.RamEvictionDistance)
-                     .ToList())
+        // Итерируем по snapshot ключей напрямую — без LINQ, без промежуточного List.
+        // ConcurrentDictionary.Keys возвращает snapshot, безопасный для итерации
+        // при конкурентных модификациях.
+        foreach (var kvp in _ramChunks)
         {
-            _ramChunks.TryRemove(idx, out _);
+            if (Math.Abs(kvp.Key - current) > evictionDistance)
+            {
+                if (_ramChunks.TryRemove(kvp.Key, out var evicted))
+                    evicted.Dispose();
+            }
         }
     }
 
@@ -435,13 +452,24 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     #region Dispose
 
+    /// <summary>
+    /// Диспозит все чанки в RAM-кэше, возвращая арендованные буферы в <see cref="System.Buffers.MemoryPool{T}.Shared"/>.
+    /// </summary>
+    private void DisposeAllRamChunks()
+    {
+        foreach (var kvp in _ramChunks)
+        {
+            if (_ramChunks.TryRemove(kvp.Key, out var chunk))
+                chunk.Dispose();
+        }
+    }
+
     /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
-        // Разблокируем suspend gate чтобы preload loop мог завершиться
         _suspendGate.Set();
 
         lock (_epochLock)
@@ -460,7 +488,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         _parser?.Dispose();
         _readStream?.Dispose();
-        _ramChunks.Clear();
+        DisposeAllRamChunks();
         _downloadSlots.Dispose();
         _suspendGate.Dispose();
     }
@@ -471,7 +499,6 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
 
-        // Разблокируем suspend gate чтобы preload loop мог завершиться
         _suspendGate.Set();
 
         lock (_epochLock)
@@ -500,7 +527,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         _refreshLock.Dispose();
         _readStream?.Dispose();
-        _ramChunks.Clear();
+        DisposeAllRamChunks();
         _downloadSlots.Dispose();
         _suspendGate.Dispose();
     }

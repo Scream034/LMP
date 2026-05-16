@@ -114,6 +114,50 @@ public sealed class KWeightingFilter
     }
 
     /// <summary>
+    /// Обрабатывает блок interleaved сэмплов через K-weighting фильтр.
+    /// Использует <c>ref</c>-доступ к state массивам для bounds elision —
+    /// проверка диапазона выполняется один раз в начале, все последующие обращения
+    /// к <see cref="_shelfState"/> и <see cref="_highPassState"/> без bounds check.
+    /// </summary>
+    /// <param name="input">Входные interleaved PCM сэмплы [L,R,L,R,…].</param>
+    /// <param name="output">Выходной буфер для K-weighted сэмплов (того же размера).</param>
+    /// <remarks>
+    /// IIR фильтры имеют data dependency между последовательными сэмплами одного канала,
+    /// поэтому SIMD внутри канала невозможен. Оптимизация достигается за счёт:
+    /// <list type="bullet">
+    ///   <item>Bounds elision через <see cref="Unsafe.Add{T}(ref T, int)"/></item>
+    ///   <item>Кэширование коэффициентов в <c>in</c>-параметрах (register promotion)</item>
+    ///   <item>Минимизации virtual dispatch — единый метод вместо N вызовов ProcessSample</item>
+    /// </list>
+    /// </remarks>
+    public void ProcessBlock(ReadOnlySpan<float> input, Span<double> output)
+    {
+        int channels = _channels;
+        if (channels == 0 || input.Length == 0) return;
+
+        ref var shelfRef = ref MemoryMarshal.GetArrayDataReference(_shelfState);
+        ref var hpRef = ref MemoryMarshal.GetArrayDataReference(_highPassState);
+
+        // Локальные копии коэффициентов — помогает JIT поместить их в регистры
+        var shelf = _shelf;
+        var hp = _highPass;
+
+        int frameCount = input.Length / channels;
+        int idx = 0;
+
+        for (int frame = 0; frame < frameCount; frame++)
+        {
+            for (int ch = 0; ch < channels; ch++, idx++)
+            {
+                double x = input[idx];
+                x = Unsafe.Add(ref shelfRef, ch).Process(x, in shelf);
+                x = Unsafe.Add(ref hpRef, ch).Process(x, in hp);
+                output[idx] = x;
+            }
+        }
+    }
+
+    /// <summary>
     /// Сбрасывает внутреннее состояние фильтров всех каналов.
     /// Вызывается при seek или смене трека для устранения артефактов от предыдущего сигнала.
     /// </summary>

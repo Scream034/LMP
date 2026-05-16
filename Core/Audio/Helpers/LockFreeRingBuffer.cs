@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -19,6 +20,8 @@ namespace LMP.Core.Audio.Helpers;
 ///   на быструю побитовую маску (<c>&amp;</c>).</item>
 ///   <item><b>Cached Counters:</b> Каждая сторона (Producer/Consumer) кэширует
 ///   индекс противоположной стороны, минимизируя volatile reads между ядрами.</item>
+///   <item><b>Bounds Elision:</b> Hot path использует <see cref="Unsafe.Add{T}(ref T, int)"/>
+///   для прямого доступа к буферу, минуя bounds check.</item>
 /// </list>
 /// 
 /// <para><b>Ограничения:</b></para>
@@ -105,12 +108,14 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
 
     /// <summary>
     /// Создаёт циклический буфер.
-    /// Ёмкость автоматически округляется до ближайшей большей степени двойки.
+    /// Ёмкость автоматически округляется до ближайшей большей степени двойки
+    /// через <see cref="BitOperations.RoundUpToPowerOf2(uint)"/>,
+    /// который использует аппаратную инструкцию LZCNT на поддерживаемых платформах.
     /// </summary>
     /// <param name="requestedCapacity">Минимальная требуемая ёмкость.</param>
     public LockFreeRingBuffer(int requestedCapacity)
     {
-        _capacity = RoundUpToPowerOf2(Math.Max(requestedCapacity, 16));
+        _capacity = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(requestedCapacity, 16));
         _mask = _capacity - 1;
         _buffer = new T[_capacity];
     }
@@ -148,17 +153,22 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
     /// Записывает данные в буфер.
     /// Вызывается ТОЛЬКО Producer-ом (decoder loop).
     /// </summary>
+    /// <remarks>
+    /// Использует <see cref="Unsafe.Add{T}(ref T, int)"/> для обращений к <see cref="_buffer"/>,
+    /// что позволяет JIT исключить bounds check в hot path.
+    /// Безопасность гарантируется инвариантом: все индексы всегда <c>&amp; _mask</c>,
+    /// а <c>_mask = _capacity - 1</c>, где <c>_capacity == _buffer.Length</c>.
+    /// </remarks>
     /// <param name="data">Данные для записи.</param>
     /// <returns>Количество фактически записанных элементов.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int Write(ReadOnlySpan<T> data)
     {
-        int head = _producer.Head; // Локальное чтение (мы единственный writer)
+        int head = _producer.Head;
         int tail = _producer.CachedTail;
         int count = (head - tail + _capacity) & _mask;
         int available = _capacity - 1 - count;
 
-        // Если по локальному кэшу места нет — обновляем, читая реальный Tail
         if (available < data.Length)
         {
             tail = Volatile.Read(ref _consumer.Tail);
@@ -170,17 +180,25 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
         int toWrite = Math.Min(data.Length, available);
         if (toWrite == 0) return 0;
 
+        ref T bufferBase = ref MemoryMarshal.GetArrayDataReference(_buffer);
         int headIndex = head & _mask;
         int firstPart = Math.Min(toWrite, _capacity - headIndex);
 
-        // Копируем первую часть (до конца массива)
-        data[..firstPart].CopyTo(_buffer.AsSpan(headIndex, firstPart));
-
-        // Копируем вторую часть (с начала массива) при wrap-around
-        if (toWrite > firstPart)
+        // Первая часть (до конца массива) — bounds-free через Unsafe.Add
+        ref T src = ref MemoryMarshal.GetReference(data);
+        for (int i = 0; i < firstPart; i++)
         {
-            data[firstPart..toWrite]
-                .CopyTo(_buffer.AsSpan(0, toWrite - firstPart));
+            Unsafe.Add(ref bufferBase, headIndex + i) = Unsafe.Add(ref src, i);
+        }
+
+        // Вторая часть (wrap-around с начала массива)
+        int secondPart = toWrite - firstPart;
+        if (secondPart > 0)
+        {
+            for (int i = 0; i < secondPart; i++)
+            {
+                Unsafe.Add(ref bufferBase, i) = Unsafe.Add(ref src, firstPart + i);
+            }
         }
 
         // Memory Barrier: публикуем новый Head ПОСЛЕ записи данных.
@@ -193,16 +211,19 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
     /// Читает данные из буфера.
     /// Вызывается ТОЛЬКО Consumer-ом (audio callback / NAudio).
     /// </summary>
+    /// <remarks>
+    /// Аналогично <see cref="Write"/>, использует <see cref="Unsafe.Add{T}(ref T, int)"/>
+    /// для обращений к буферу без bounds check.
+    /// </remarks>
     /// <param name="output">Буфер для записи прочитанных данных.</param>
     /// <returns>Количество фактически прочитанных элементов.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int Read(Span<T> output)
     {
-        int tail = _consumer.Tail; // Локальное чтение (мы единственный reader)
+        int tail = _consumer.Tail;
         int head = _consumer.CachedHead;
         int count = (head - tail + _capacity) & _mask;
 
-        // Если по локальному кэшу данных нет — обновляем, читая реальный Head
         if (count < output.Length)
         {
             head = Volatile.Read(ref _producer.Head);
@@ -213,17 +234,25 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
         int toRead = Math.Min(output.Length, count);
         if (toRead == 0) return 0;
 
+        ref T bufferBase = ref MemoryMarshal.GetArrayDataReference(_buffer);
+        ref T dst = ref MemoryMarshal.GetReference(output);
         int tailIndex = tail & _mask;
         int firstPart = Math.Min(toRead, _capacity - tailIndex);
 
-        // Копируем первую часть
-        _buffer.AsSpan(tailIndex, firstPart).CopyTo(output[..firstPart]);
-
-        // Копируем вторую часть при wrap-around
-        if (toRead > firstPart)
+        // Первая часть — bounds-free через Unsafe.Add
+        for (int i = 0; i < firstPart; i++)
         {
-            _buffer.AsSpan(0, toRead - firstPart)
-                .CopyTo(output[firstPart..toRead]);
+            Unsafe.Add(ref dst, i) = Unsafe.Add(ref bufferBase, tailIndex + i);
+        }
+
+        // Вторая часть (wrap-around)
+        int secondPart = toRead - firstPart;
+        if (secondPart > 0)
+        {
+            for (int i = 0; i < secondPart; i++)
+            {
+                Unsafe.Add(ref dst, firstPart + i) = Unsafe.Add(ref bufferBase, i);
+            }
         }
 
         // Memory Barrier: освобождаем место (двигаем Tail) ПОСЛЕ чтения.
@@ -246,20 +275,5 @@ public sealed class LockFreeRingBuffer<T> where T : unmanaged
         Volatile.Write(ref _consumer.Tail, 0);
         _consumer.CachedHead = 0;
         _producer.CachedTail = 0;
-    }
-
-    /// <summary>
-    /// Округляет значение вверх до ближайшей степени двойки.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int RoundUpToPowerOf2(int value)
-    {
-        value--;
-        value |= value >> 1;
-        value |= value >> 2;
-        value |= value >> 4;
-        value |= value >> 8;
-        value |= value >> 16;
-        return value + 1;
     }
 }

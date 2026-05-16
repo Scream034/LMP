@@ -6,6 +6,13 @@ namespace LMP.Core.Audio.Helpers;
 /// <summary>
 /// Парсер WebM/Matroska контейнера для извлечения OPUS пакетов.
 /// </summary>
+/// <remarks>
+/// <para><b>Оптимизация I/O:</b></para>
+/// <para>Использует внутренний read-ahead буфер для минимизации async вызовов.
+/// Побайтовое чтение EBML-заголовков (VINT ID + VINT Size) происходит из буфера синхронно.
+/// Async ReadAsync к нижележащему потоку выполняется только при исчерпании буфера,
+/// что сокращает количество state machine allocations на порядки.</para>
+/// </remarks>
 public sealed class WebMParser : IDisposable
 {
     // EBML Element IDs
@@ -41,8 +48,19 @@ public sealed class WebMParser : IDisposable
     private const long DEFAULT_TIMECODE_SCALE = 1_000_000; // 1ms в наносекундах
     private const int ReadBufferSize = 64 * 1024;
 
+    /// <summary>Максимальный размер EBML элемента, который мы готовы буферизировать целиком (ID + Size + данные).</summary>
+    private const int InlineDataLimit = 8;
+
     private readonly Stream _stream;
+
+    // ═══ Buffered Reader State ═══
+    // Внутренний буфер для минимизации async вызовов.
+    // Все побайтовые чтения (VINT parsing, flags, timecodes) обслуживаются синхронно из буфера.
+    // Async refill вызывается только когда буфер исчерпан.
     private readonly byte[] _readBuffer;
+    private int _bufPos;
+    private int _bufLen;
+
     private readonly List<CuePoint> _cuePoints = [];
 
     private long _segmentOffset;
@@ -77,6 +95,141 @@ public sealed class WebMParser : IDisposable
     public int SampleRate { get; private set; }
     public int Channels { get; private set; } = 2;
 
+    #region Buffered Reader — синхронное чтение из внутреннего буфера
+
+    /// <summary>
+    /// Гарантирует наличие как минимум <paramref name="needed"/> байт в буфере.
+    /// Возвращает false при EOF до набора нужного количества.
+    /// </summary>
+    private async ValueTask<bool> EnsureBufferedAsync(int needed, CancellationToken ct)
+    {
+        int available = _bufLen - _bufPos;
+        if (available >= needed) return true;
+
+        // Сдвигаем оставшиеся байты в начало буфера
+        if (available > 0 && _bufPos > 0)
+        {
+            Buffer.BlockCopy(_readBuffer, _bufPos, _readBuffer, 0, available);
+        }
+        _bufPos = 0;
+        _bufLen = available;
+
+        // Дочитываем до нужного количества
+        while (_bufLen < needed)
+        {
+            int toRead = _readBuffer.Length - _bufLen;
+            int read = await _stream.ReadAsync(
+                _readBuffer.AsMemory(_bufLen, toRead), ct).ConfigureAwait(false);
+            if (read == 0) return _bufLen >= needed;
+            _bufLen += read;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Заполняет буфер максимально возможным количеством данных. Для потокового чтения.
+    /// </summary>
+    private async ValueTask FillBufferAsync(CancellationToken ct)
+    {
+        int available = _bufLen - _bufPos;
+        if (available > 0 && _bufPos > 0)
+        {
+            Buffer.BlockCopy(_readBuffer, _bufPos, _readBuffer, 0, available);
+        }
+        _bufPos = 0;
+        _bufLen = available;
+
+        int toRead = _readBuffer.Length - _bufLen;
+        if (toRead > 0)
+        {
+            int read = await _stream.ReadAsync(
+                _readBuffer.AsMemory(_bufLen, toRead), ct).ConfigureAwait(false);
+            _bufLen += read;
+        }
+    }
+
+    /// <summary>
+    /// Читает один байт из буфера. Вызывать только после <see cref="EnsureBufferedAsync"/>(1).
+    /// </summary>
+    private int BufferedReadByte()
+    {
+        if (_bufPos >= _bufLen) return -1;
+        return _readBuffer[_bufPos++];
+    }
+
+    /// <summary>
+    /// Возвращает <see cref="ReadOnlySpan{T}"/> на <paramref name="count"/> байт из буфера
+    /// и продвигает позицию. Вызывать только после <see cref="EnsureBufferedAsync"/>(<paramref name="count"/>).
+    /// </summary>
+    private ReadOnlySpan<byte> BufferedReadSpan(int count)
+    {
+        var span = _readBuffer.AsSpan(_bufPos, count);
+        _bufPos += count;
+        return span;
+    }
+
+    /// <summary>
+    /// Читает точно <paramref name="buffer"/>.Length байт, комбинируя буфер и async refill.
+    /// </summary>
+    private async ValueTask ReadExactAsync(Memory<byte> buffer, CancellationToken ct)
+    {
+        int offset = 0;
+        int remaining = buffer.Length;
+
+        // Сначала берём что есть в буфере
+        int buffered = Math.Min(remaining, _bufLen - _bufPos);
+        if (buffered > 0)
+        {
+            _readBuffer.AsSpan(_bufPos, buffered).CopyTo(buffer.Span[..buffered]);
+            _bufPos += buffered;
+            offset += buffered;
+            remaining -= buffered;
+        }
+
+        // Остальное читаем напрямую из stream, минуя буфер (для больших блоков)
+        while (remaining > 0)
+        {
+            int read = await _stream.ReadAsync(buffer[offset..], ct).ConfigureAwait(false);
+            if (read == 0) throw new EndOfStreamException();
+            offset += read;
+            remaining -= read;
+        }
+    }
+
+    /// <summary>
+    /// Пропускает <paramref name="count"/> байт, используя буфер и seek.
+    /// </summary>
+    private async ValueTask SkipBytesAsync(long count, CancellationToken ct)
+    {
+        // Сначала пропускаем буферизированные байты
+        int buffered = (int)Math.Min(count, _bufLen - _bufPos);
+        _bufPos += buffered;
+        count -= buffered;
+
+        if (count <= 0) return;
+
+        if (_stream.CanSeek)
+        {
+            _stream.Position += count;
+            // Инвалидируем буфер — позиция stream изменилась
+            _bufPos = 0;
+            _bufLen = 0;
+            return;
+        }
+
+        // Fallback: потоковый skip
+        while (count > 0)
+        {
+            await FillBufferAsync(ct).ConfigureAwait(false);
+            int skip = (int)Math.Min(count, _bufLen - _bufPos);
+            if (skip == 0) break;
+            _bufPos += skip;
+            count -= skip;
+        }
+    }
+
+    #endregion
+
     public async ValueTask<bool> ParseHeadersAsync(CancellationToken ct = default)
     {
         if (_headersParsed) return true;
@@ -91,11 +244,11 @@ public sealed class WebMParser : IDisposable
             (id, size) = await ReadElementHeaderAsync(ct);
             if (id != SEGMENT_ID) return false;
 
-            _segmentOffset = _stream.Position;
+            _segmentOffset = _stream.Position - (_bufLen - _bufPos);
 
             while (!ct.IsCancellationRequested)
             {
-                long elementStart = _stream.Position;
+                long elementStart = _stream.Position - (_bufLen - _bufPos);
                 (id, size) = await ReadElementHeaderAsync(ct);
 
                 switch (id)
@@ -116,6 +269,8 @@ public sealed class WebMParser : IDisposable
                         if (_stream.CanSeek)
                         {
                             _stream.Position = elementStart;
+                            _bufPos = 0;
+                            _bufLen = 0;
                         }
                         _headersParsed = true;
                         return true;
@@ -151,13 +306,8 @@ public sealed class WebMParser : IDisposable
                     continue;
 
                 case TIMECODE_ID:
-                    var timecodeData = ArrayPool<byte>.Shared.Rent((int)size);
-                    try
-                    {
-                        await ReadExactAsync(timecodeData.AsMemory(0, (int)size), ct);
-                        _currentClusterTimecode = ReadUnsignedInt(timecodeData.AsSpan(0, (int)size));
-                    }
-                    finally { ArrayPool<byte>.Shared.Return(timecodeData); }
+                    if (!await EnsureBufferedAsync((int)size, ct)) return null;
+                    _currentClusterTimecode = ReadUnsignedInt(BufferedReadSpan((int)size));
                     continue;
 
                 case SIMPLE_BLOCK_ID:
@@ -197,7 +347,11 @@ public sealed class WebMParser : IDisposable
     {
         if (size < 4) return null;
 
-        int trackNumberByte = await ReadByteAsync(ct);
+        // Заголовок SimpleBlock: trackNum(VINT) + timecodeOffset(2) + flags(1)
+        // Максимум 8 + 2 + 1 = 11 байт. Буферизируем минимум 4 байта для начала.
+        if (!await EnsureBufferedAsync(Math.Min(size, 12), ct)) return null;
+
+        int trackNumberByte = BufferedReadByte();
         if (trackNumberByte < 0) return null;
 
         int trackNumberLength = GetVIntLength((byte)trackNumberByte);
@@ -208,26 +362,16 @@ public sealed class WebMParser : IDisposable
         }
         else
         {
-            var trackBytes = ArrayPool<byte>.Shared.Rent(trackNumberLength);
-            try
-            {
-                trackBytes[0] = (byte)trackNumberByte;
-                await ReadExactAsync(trackBytes.AsMemory(1, trackNumberLength - 1), ct);
-                trackNumber = ReadVInt(trackBytes.AsSpan(0, trackNumberLength));
-            }
-            finally { ArrayPool<byte>.Shared.Return(trackBytes); }
+            if (!await EnsureBufferedAsync(trackNumberLength - 1, ct)) return null;
+            Span<byte> trackBytes = stackalloc byte[trackNumberLength];
+            trackBytes[0] = (byte)trackNumberByte;
+            BufferedReadSpan(trackNumberLength - 1).CopyTo(trackBytes[1..]);
+            trackNumber = ReadVInt(trackBytes);
         }
 
-        var timecodeBytes = ArrayPool<byte>.Shared.Rent(2);
-        short timecodeOffset;
-        try
-        {
-            await ReadExactAsync(timecodeBytes.AsMemory(0, 2), ct);
-            timecodeOffset = BinaryPrimitives.ReadInt16BigEndian(timecodeBytes);
-        }
-        finally { ArrayPool<byte>.Shared.Return(timecodeBytes); }
-
-        int flags = await ReadByteAsync(ct);
+        if (!await EnsureBufferedAsync(3, ct)) return null; // 2 timecode + 1 flags
+        short timecodeOffset = BinaryPrimitives.ReadInt16BigEndian(BufferedReadSpan(2));
+        int flags = BufferedReadByte();
         if (flags < 0) return null;
 
         bool isKeyFrame = (flags & 0x80) != 0;
@@ -249,7 +393,6 @@ public sealed class WebMParser : IDisposable
             return await ParseLacedBlockAsync(dataSize, lacingType, timecodeOffset, isKeyFrame, ct);
         }
 
-        // ═══ Аренда памяти вместо new byte[] ═══
         var memoryOwner = MemoryPool<byte>.Shared.Rent(dataSize);
         try
         {
@@ -259,7 +402,7 @@ public sealed class WebMParser : IDisposable
         }
         catch
         {
-            memoryOwner.Dispose(); // Защита от утечек при обрыве связи
+            memoryOwner.Dispose();
             throw;
         }
     }
@@ -267,7 +410,8 @@ public sealed class WebMParser : IDisposable
     private async ValueTask<AudioBlock?> ParseLacedBlockAsync(
         int dataSize, int lacingType, short timecodeOffset, bool isKeyFrame, CancellationToken ct)
     {
-        int frameCount = await ReadByteAsync(ct);
+        if (!await EnsureBufferedAsync(1, ct)) return null;
+        int frameCount = BufferedReadByte();
         if (frameCount < 0) return null;
         frameCount++;
 
@@ -284,7 +428,8 @@ public sealed class WebMParser : IDisposable
 
                 while (true)
                 {
-                    int b = await ReadByteAsync(ct);
+                    if (!await EnsureBufferedAsync(1, ct)) return null;
+                    int b = BufferedReadByte();
                     if (b < 0) return null;
                     totalSizeBytes++;
                     firstFrameSize += b;
@@ -295,7 +440,8 @@ public sealed class WebMParser : IDisposable
                 {
                     while (true)
                     {
-                        int b = await ReadByteAsync(ct);
+                        if (!await EnsureBufferedAsync(1, ct)) return null;
+                        int b = BufferedReadByte();
                         if (b < 0) return null;
                         totalSizeBytes++;
                         if (b < 255) break;
@@ -311,7 +457,8 @@ public sealed class WebMParser : IDisposable
                 break;
 
             case LACING_EBML:
-                int vintByte = await ReadByteAsync(ct);
+                if (!await EnsureBufferedAsync(1, ct)) return null;
+                int vintByte = BufferedReadByte();
                 if (vintByte < 0) return null;
 
                 int vintLength = GetVIntLength((byte)vintByte);
@@ -322,23 +469,18 @@ public sealed class WebMParser : IDisposable
                 }
                 else
                 {
-                    var vintBytes = ArrayPool<byte>.Shared.Rent(vintLength);
-                    try
-                    {
-                        vintBytes[0] = (byte)vintByte;
-                        await ReadExactAsync(vintBytes.AsMemory(1, vintLength - 1), ct);
-                        firstFrameSize = (int)ReadVInt(vintBytes.AsSpan(0, vintLength));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(vintBytes);
-                    }
+                    if (!await EnsureBufferedAsync(vintLength - 1, ct)) return null;
+                    Span<byte> vintBytes = stackalloc byte[vintLength];
+                    vintBytes[0] = (byte)vintByte;
+                    BufferedReadSpan(vintLength - 1).CopyTo(vintBytes[1..]);
+                    firstFrameSize = (int)ReadVInt(vintBytes);
                 }
 
                 int skipVintBytes = 0;
                 for (int i = 1; i < frameCount - 1; i++)
                 {
-                    int b = await ReadByteAsync(ct);
+                    if (!await EnsureBufferedAsync(1, ct)) return null;
+                    int b = BufferedReadByte();
                     if (b < 0) return null;
                     int len = GetVIntLength((byte)b);
                     skipVintBytes++;
@@ -375,39 +517,22 @@ public sealed class WebMParser : IDisposable
 
     private async ValueTask ParseInfoAsync(long size, CancellationToken ct)
     {
-        long endPosition = _stream.Position + size;
+        long endPosition = _stream.Position - (_bufLen - _bufPos) + size;
 
-        while (_stream.Position < endPosition)
+        while (StreamPositionWithBuffer() < endPosition)
         {
             var (id, elementSize) = await ReadElementHeaderAsync(ct);
 
             switch (id)
             {
                 case TIMECODE_SCALE_ID:
-                    // ReadUnsignedInt!
-                    var scaleData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(scaleData.AsMemory(0, (int)elementSize), ct);
-                        _timecodeScale = ReadUnsignedInt(scaleData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(scaleData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return;
+                    _timecodeScale = ReadUnsignedInt(BufferedReadSpan((int)elementSize));
                     break;
 
                 case DURATION_ID:
-                    var durationData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(durationData.AsMemory(0, (int)elementSize), ct);
-                        _duration = (long)ReadFloat(durationData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(durationData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return;
+                    _duration = (long)ReadFloat(BufferedReadSpan((int)elementSize));
                     break;
 
                 default:
@@ -419,9 +544,9 @@ public sealed class WebMParser : IDisposable
 
     private async ValueTask ParseTracksAsync(long size, CancellationToken ct)
     {
-        long endPosition = _stream.Position + size;
+        long endPosition = StreamPositionWithBuffer() + size;
 
-        while (_stream.Position < endPosition)
+        while (StreamPositionWithBuffer() < endPosition)
         {
             var (id, elementSize) = await ReadElementHeaderAsync(ct);
 
@@ -438,42 +563,24 @@ public sealed class WebMParser : IDisposable
 
     private async ValueTask ParseTrackEntryAsync(long size, CancellationToken ct)
     {
-        long endPosition = _stream.Position + size;
+        long endPosition = StreamPositionWithBuffer() + size;
         int trackNumber = 0;
         int trackType = 0;
 
-        while (_stream.Position < endPosition)
+        while (StreamPositionWithBuffer() < endPosition)
         {
             var (id, elementSize) = await ReadElementHeaderAsync(ct);
 
             switch (id)
             {
                 case TRACK_NUMBER_ID:
-                    // ReadUnsignedInt!
-                    var numData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(numData.AsMemory(0, (int)elementSize), ct);
-                        trackNumber = (int)ReadUnsignedInt(numData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(numData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return;
+                    trackNumber = (int)ReadUnsignedInt(BufferedReadSpan((int)elementSize));
                     break;
 
                 case TRACK_TYPE_ID:
-                    // ReadUnsignedInt!
-                    var typeData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(typeData.AsMemory(0, (int)elementSize), ct);
-                        trackType = (int)ReadUnsignedInt(typeData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(typeData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return;
+                    trackType = (int)ReadUnsignedInt(BufferedReadSpan((int)elementSize));
                     break;
 
                 case CODEC_PRIVATE_ID:
@@ -499,39 +606,22 @@ public sealed class WebMParser : IDisposable
 
     private async ValueTask ParseAudioSettingsAsync(long size, CancellationToken ct)
     {
-        long endPosition = _stream.Position + size;
+        long endPosition = StreamPositionWithBuffer() + size;
 
-        while (_stream.Position < endPosition)
+        while (StreamPositionWithBuffer() < endPosition)
         {
             var (id, elementSize) = await ReadElementHeaderAsync(ct);
 
             switch (id)
             {
                 case SAMPLING_FREQUENCY_ID:
-                    var freqData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(freqData.AsMemory(0, (int)elementSize), ct);
-                        SampleRate = (int)ReadFloat(freqData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(freqData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return;
+                    SampleRate = (int)ReadFloat(BufferedReadSpan((int)elementSize));
                     break;
 
                 case CHANNELS_ID:
-                    // ReadUnsignedInt!
-                    var chData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(chData.AsMemory(0, (int)elementSize), ct);
-                        Channels = (int)ReadUnsignedInt(chData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(chData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return;
+                    Channels = (int)ReadUnsignedInt(BufferedReadSpan((int)elementSize));
                     break;
 
                 default:
@@ -543,9 +633,9 @@ public sealed class WebMParser : IDisposable
 
     private async ValueTask ParseCuesAsync(long size, CancellationToken ct)
     {
-        long endPosition = _stream.Position + size;
+        long endPosition = StreamPositionWithBuffer() + size;
 
-        while (_stream.Position < endPosition)
+        while (StreamPositionWithBuffer() < endPosition)
         {
             var (id, elementSize) = await ReadElementHeaderAsync(ct);
 
@@ -566,48 +656,30 @@ public sealed class WebMParser : IDisposable
 
     private async ValueTask<CuePoint?> ParseCuePointAsync(long size, CancellationToken ct)
     {
-        long endPosition = _stream.Position + size;
+        long endPosition = StreamPositionWithBuffer() + size;
         long time = 0;
         long clusterPosition = 0;
 
-        while (_stream.Position < endPosition)
+        while (StreamPositionWithBuffer() < endPosition)
         {
             var (id, elementSize) = await ReadElementHeaderAsync(ct);
 
             switch (id)
             {
                 case CUE_TIME_ID:
-                    // ReadUnsignedInt!
-                    var timeData = ArrayPool<byte>.Shared.Rent((int)elementSize);
-                    try
-                    {
-                        await ReadExactAsync(timeData.AsMemory(0, (int)elementSize), ct);
-                        time = ReadUnsignedInt(timeData.AsSpan(0, (int)elementSize));
-                    }
-                    finally
-                    {
-                        ArrayPool<byte>.Shared.Return(timeData);
-                    }
+                    if (!await EnsureBufferedAsync((int)elementSize, ct)) return null;
+                    time = ReadUnsignedInt(BufferedReadSpan((int)elementSize));
                     break;
 
                 case CUE_TRACK_POSITIONS_ID:
-                    long posEnd = _stream.Position + elementSize;
-                    while (_stream.Position < posEnd)
+                    long posEnd = StreamPositionWithBuffer() + elementSize;
+                    while (StreamPositionWithBuffer() < posEnd)
                     {
                         var (posId, posSize) = await ReadElementHeaderAsync(ct);
                         if (posId == CUE_CLUSTER_POSITION_ID)
                         {
-                            // ReadUnsignedInt!
-                            var posData = ArrayPool<byte>.Shared.Rent((int)posSize);
-                            try
-                            {
-                                await ReadExactAsync(posData.AsMemory(0, (int)posSize), ct);
-                                clusterPosition = ReadUnsignedInt(posData.AsSpan(0, (int)posSize));
-                            }
-                            finally
-                            {
-                                ArrayPool<byte>.Shared.Return(posData);
-                            }
+                            if (!await EnsureBufferedAsync((int)posSize, ct)) return null;
+                            clusterPosition = ReadUnsignedInt(BufferedReadSpan((int)posSize));
                         }
                         else
                         {
@@ -626,53 +698,69 @@ public sealed class WebMParser : IDisposable
         return new CuePoint(timeMs, clusterPosition);
     }
 
+    /// <summary>
+    /// Читает EBML Element Header (ID + Size) из буфера.
+    /// </summary>
+    /// <remarks>
+    /// EBML header состоит из двух VINT: Element ID (маркер сохраняется) и Element Size (маркер снимается).
+    /// Максимальный размер: 8 (ID) + 8 (Size) = 16 байт.
+    /// Буферизация гарантирует, что парсинг заголовка выполняется синхронно
+    /// из внутреннего буфера без async state machine allocation.
+    /// </remarks>
     private async ValueTask<(uint Id, long Size)> ReadElementHeaderAsync(CancellationToken ct)
     {
-        int firstByte = await ReadByteAsync(ct);
+        // Заголовок EBML: max 8 (ID VINT) + 8 (Size VINT) = 16 байт.
+        // Буферизируем минимум 2 байта (по 1 на каждый VINT минимальной длины).
+        if (!await EnsureBufferedAsync(2, ct)) return (0, 0);
+
+        int firstByte = BufferedReadByte();
         if (firstByte < 0) return (0, 0);
 
-        // ID — это VINT (с маркерным битом)
+        // ID — VINT с маркерным битом (маркер остаётся)
         int idLength = GetVIntLength((byte)firstByte);
-        var idBytes = ArrayPool<byte>.Shared.Rent(idLength);
+        if (idLength > 1 && !await EnsureBufferedAsync(idLength - 1, ct)) return (0, 0);
+
         uint id;
-        try
+        if (idLength == 1)
         {
-            idBytes[0] = (byte)firstByte;
-            if (idLength > 1)
-            {
-                await ReadExactAsync(idBytes.AsMemory(1, idLength - 1), ct);
-            }
-            // ID читаем КАК ЕСТЬ (включая маркер), это Element ID
-            id = (uint)ReadUnsignedInt(idBytes.AsSpan(0, idLength));
+            id = (uint)firstByte;
         }
-        finally
+        else
         {
-            ArrayPool<byte>.Shared.Return(idBytes);
+            Span<byte> idBytes = stackalloc byte[idLength];
+            idBytes[0] = (byte)firstByte;
+            BufferedReadSpan(idLength - 1).CopyTo(idBytes[1..]);
+            id = (uint)ReadUnsignedInt(idBytes);
         }
 
-        firstByte = await ReadByteAsync(ct);
+        // Size — VINT (маркерный бит снимается)
+        if (!await EnsureBufferedAsync(1, ct)) return (0, 0);
+        firstByte = BufferedReadByte();
         if (firstByte < 0) return (0, 0);
 
-        // Size — это VINT (маркер показывает длину, сам маркер убираем)
         int sizeLength = GetVIntLength((byte)firstByte);
-        var sizeBytes = ArrayPool<byte>.Shared.Rent(sizeLength);
+        if (sizeLength > 1 && !await EnsureBufferedAsync(sizeLength - 1, ct)) return (0, 0);
+
         long size;
-        try
+        if (sizeLength == 1)
         {
-            sizeBytes[0] = (byte)firstByte;
-            if (sizeLength > 1)
-            {
-                await ReadExactAsync(sizeBytes.AsMemory(1, sizeLength - 1), ct);
-            }
-            size = ReadVInt(sizeBytes.AsSpan(0, sizeLength));
+            size = firstByte & 0x7F;
         }
-        finally
+        else
         {
-            ArrayPool<byte>.Shared.Return(sizeBytes);
+            Span<byte> sizeBytes = stackalloc byte[sizeLength];
+            sizeBytes[0] = (byte)firstByte;
+            BufferedReadSpan(sizeLength - 1).CopyTo(sizeBytes[1..]);
+            size = ReadVInt(sizeBytes);
         }
 
         return (id, size);
     }
+
+    /// <summary>
+    /// Виртуальная позиция в потоке с учётом буферизированных, но непрочитанных байт.
+    /// </summary>
+    private long StreamPositionWithBuffer() => _stream.Position - (_bufLen - _bufPos);
 
     #region Read Helpers
 
@@ -732,42 +820,16 @@ public sealed class WebMParser : IDisposable
         };
     }
 
-    private async ValueTask<int> ReadByteAsync(CancellationToken ct)
-    {
-        int read = await _stream.ReadAsync(_readBuffer.AsMemory(0, 1), ct);
-        return read == 1 ? _readBuffer[0] : -1;
-    }
-
-    private async ValueTask ReadExactAsync(Memory<byte> buffer, CancellationToken ct)
-    {
-        int totalRead = 0;
-        while (totalRead < buffer.Length)
-        {
-            int read = await _stream.ReadAsync(buffer[totalRead..], ct);
-            if (read == 0)
-                throw new EndOfStreamException();
-            totalRead += read;
-        }
-    }
-
-    private async ValueTask SkipBytesAsync(long count, CancellationToken ct)
-    {
-        if (_stream.CanSeek)
-        {
-            _stream.Position += count;
-            return;
-        }
-
-        while (count > 0)
-        {
-            int toRead = (int)Math.Min(count, _readBuffer.Length);
-            int read = await _stream.ReadAsync(_readBuffer.AsMemory(0, toRead), ct);
-            if (read == 0) break;
-            count -= read;
-        }
-    }
-
     #endregion
+
+    /// <summary>
+    /// Сбрасывает состояние парсера для продолжения чтения с новой позиции потока.
+    public void Reset()
+    {
+        _bufPos = 0;
+        _bufLen = 0;
+        _currentClusterTimecode = 0;
+    }
 
     public void Dispose()
     {

@@ -104,6 +104,7 @@ public class TrackViewModelFactory
             _downloads,
             _manager,
             _dialog,
+            _library,
             playAction);
     }
 

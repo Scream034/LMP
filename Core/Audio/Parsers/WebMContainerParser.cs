@@ -12,40 +12,40 @@ public sealed class WebMContainerParser : IContainerParser
 {
     private readonly WebMParser _parser;
     private bool _disposed;
-    
+
     // Хранит ссылку на арендованный буфер текущего фрейма, чтобы вернуть его при чтении следующего
     private IMemoryOwner<byte>? _currentFrameOwner;
-    
+
     public long DurationMs => _parser.DurationMs;
     public AudioCodec Codec => AudioCodec.Opus;
     public byte[]? DecoderConfig => _parser.CodecPrivate;
     public int SampleRate => _parser.SampleRate > 0 ? _parser.SampleRate : 48000;
     public int Channels => _parser.Channels > 0 ? _parser.Channels : 2;
-    
+
     public WebMContainerParser(Stream stream)
     {
         _parser = new WebMParser(stream);
     }
-    
+
     public async ValueTask<bool> ParseHeadersAsync(CancellationToken ct = default)
     {
         return await _parser.ParseHeadersAsync(ct);
     }
-    
+
     public async ValueTask<AudioFrame?> ReadNextFrameAsync(CancellationToken ct = default)
     {
         // ═══ GC ZERO: Возвращаем ПРЕДЫДУЩИЙ буфер в пул ═══
         // Декодер уже отработал с ним в предыдущей итерации цикла.
         ReleaseCurrentFrame();
-        
+
         var block = await _parser.ReadNextBlockAsync(ct);
-        
+
         if (block == null)
             return null;
-            
+
         // Сохраняем владельца, чтобы освободить его при следующем вызове
         _currentFrameOwner = block.Value.Owner;
-        
+
         return new AudioFrame
         {
             // Передаём только ту часть памяти, где реально лежат данные фрейма
@@ -55,7 +55,7 @@ public sealed class WebMContainerParser : IContainerParser
             IsKeyFrame = block.Value.IsKeyFrame
         };
     }
-    
+
     /// <summary>
     /// Ищет ближайшую точку входа для seek.
     /// </summary>
@@ -90,33 +90,28 @@ public sealed class WebMContainerParser : IContainerParser
         // и AudioPipeline.SetDecodedSamplesPosition пересчитает sample position.
         return (bytePos, cue.TimeMs);
     }
-    
+
     public void Reset()
     {
-        // Очищаем текущий фрейм при перемотке
         ReleaseCurrentFrame();
-        
-        // ═══ Сбрасываем состояние парсера ═══
-        // _currentClusterTimecode должен обновиться из первого Cluster после seek.
-        // WebMParser.ReadNextBlockAsync сам обновит его при чтении TIMECODE_ID.
-        // Никаких дополнительных действий не нужно — Reset фрейма достаточно.
+        _parser.Reset();
     }
-    
+
     private void ReleaseCurrentFrame()
     {
         _currentFrameOwner?.Dispose();
         _currentFrameOwner = null;
     }
-    
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        
+
         ReleaseCurrentFrame();
         _parser.Dispose();
     }
-    
+
     public ValueTask DisposeAsync()
     {
         Dispose();

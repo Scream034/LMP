@@ -169,9 +169,18 @@ public sealed partial class CachingStreamSource
                 else idleCycles = 0;
 
                 // Background fill
+                // ═══ Для частично закэшированных треков (resumed sessions) ═══
+                // Если read-ahead полностью покрыт, но трек не полный — немедленный
+                // background fill без ожидания idleCycles. При 12/20 чанков и позиции
+                // в начале файла preload loop мог простаивать 6+ секунд, оставляя
+                // пробелы в кэше. Seek в непокрытую область → сетевой fetch → underruns.
+                bool isResumedPartialCache = _cacheEntry.DownloadedChunks > 0
+                    && !_cacheEntry.IsComplete
+                    && chunksAhead >= _config.ReadAheadChunks;
+
                 bool canBackgroundFill =
                     !activePreload
-                    && idleCycles >= _config.BackgroundFillIdleCycles
+                    && (isResumedPartialCache || idleCycles >= _config.BackgroundFillIdleCycles)
                     && pending < _config.MaxConcurrentDownloads
                     && chunksAhead >= _config.MinBufferAheadForBackgroundFill
                     && (_config.MaxBackgroundChunksPerSession == 0
@@ -182,19 +191,35 @@ public sealed partial class CachingStreamSource
                     if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
                         continue;
 
-                    int? target = FindNearestMissingChunk(currentNormal);
+                    // Для resumed partial cache — до 3 чанков за цикл вместо 1.
+                    // 3 × 128KB = 384KB/цикл. При PreloadIntervalMs=200 → ~1.5MB/сек
+                    // фонового заполнения. Seek в пробел станет on-demand вместо обязательного.
+                    int fillBatch = isResumedPartialCache
+                        ? Math.Min(3, _config.MaxConcurrentDownloads - pending)
+                        : 1;
 
-                    if (target.HasValue
-                        && target.Value < _totalChunks
-                        && !IsChunkAvailable(target.Value)
-                        && !_activeDownloads.ContainsKey(target.Value))
+                    for (int f = 0; f < fillBatch; f++)
                     {
-                        _ = SafeEnsureChunkAsync(target.Value, tokenNormal);
-                        _backgroundChunksLoaded++;
-                        await Task.Delay(_config.BackgroundFillIntervalMs, ct);
+                        int? target = FindNearestMissingChunk(currentNormal);
+
+                        if (target.HasValue
+                            && target.Value < _totalChunks
+                            && !IsChunkAvailable(target.Value)
+                            && !_activeDownloads.ContainsKey(target.Value))
+                        {
+                            _ = SafeEnsureChunkAsync(target.Value, tokenNormal);
+                            _backgroundChunksLoaded++;
+                        }
+                        else
+                        {
+                            break;
+                        }
                     }
+
+                    await Task.Delay(_config.BackgroundFillIntervalMs, ct);
                 }
 
+#if DEBUG
                 // Progress reporting
                 int progress = (int)_cacheEntry.DownloadProgress;
                 if (progress / 25 > lastReportedProgress / 25)
@@ -203,6 +228,7 @@ public sealed partial class CachingStreamSource
                               $"({_cacheEntry.DownloadedChunks}/{_cacheEntry.TotalChunks})");
                     lastReportedProgress = progress;
                 }
+#endif
 
                 // RAM eviction
                 if (_ramChunks.Count > _config.MaxRamChunks)

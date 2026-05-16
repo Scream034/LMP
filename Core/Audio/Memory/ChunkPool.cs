@@ -3,62 +3,60 @@ using System.Buffers;
 namespace LMP.Core.Audio.Memory;
 
 /// <summary>
-/// Пул переиспользуемых буферов для чанков стриминга.
-/// Разработан специально для избежания аллокаций в Large Object Heap (LOH).
-/// Массивы больше 85KB по умолчанию попадают в LOH, что вызывает фрагментацию и долгие паузы GC.
+/// Тонкая обёртка над <see cref="ArrayPool{T}.Shared"/> для аудио-буферов стриминга.
 /// </summary>
+/// <remarks>
+/// <para>Делегирует в <see cref="ArrayPool{T}.Shared"/>, который использует
+/// <c>[ThreadStatic]</c> TLS как первый уровень кэша (zero-lock в common case, ~6 ns)
+/// и per-core partitioned стеки как второй уровень.</para>
+/// <para>В отличие от <c>ArrayPool.Create()</c> (<c>ConfigurableArrayPool</c>),
+/// <c>Shared</c> автоматически освобождает неиспользуемые массивы через Gen2 GC callback,
+/// не раздувая LOH на зафиксированных буферах.</para>
+/// <para>Запросы больше <c>maxPooledChunkSize</c> аллоцируются через <c>new byte[]</c>
+/// (экстремально редкий случай) и собираются GC самостоятельно.</para>
+/// </remarks>
 public sealed class ChunkPool
 {
-    /// <summary>
-    /// Глобальный экземпляр пула для всего аудио движка.
-    /// </summary>
-    public static ChunkPool Shared { get; } = new(
-        maxPooledChunkSize: 512 * 1024,  // Поддержка чанков до 512KB
-        maxPooledPerBucket: 32);         // До 32 буферов на каждый размер
+    /// <summary>Глобальный экземпляр пула для всего аудио движка.</summary>
+    public static ChunkPool Shared { get; } = new(maxPooledChunkSize: 512 * 1024);
 
-    private readonly ArrayPool<byte> _pool;
-    private readonly int _maxSize;
+    private readonly int _maxPooledSize;
 
-    /// <summary>
-    /// Инициализирует новый пул чанков.
-    /// </summary>
-    public ChunkPool(int maxPooledChunkSize, int maxPooledPerBucket)
+    /// <param name="maxPooledChunkSize">
+    /// Максимальный размер буфера, обслуживаемого через пул.
+    /// Запросы выше этого лимита аллоцируются напрямую.
+    /// </param>
+    public ChunkPool(int maxPooledChunkSize)
     {
-        _maxSize = maxPooledChunkSize;
-        _pool = ArrayPool<byte>.Create(maxPooledChunkSize, maxPooledPerBucket);
+        _maxPooledSize = maxPooledChunkSize;
     }
 
     /// <summary>
-    /// Арендует буфер размером не менее запрошенного.
+    /// Арендует буфер размером не менее <paramref name="minimumSize"/>.
+    /// Возвращённый массив может быть больше запрошенного — используйте
+    /// <c>.AsSpan(0, actualLength)</c> для работы с реальными данными.
     /// </summary>
-    /// <remarks>
-    /// <b>ВНИМАНИЕ:</b> Возвращённый массив почти всегда БОЛЬШЕ запрошенного размера <paramref name="minimumSize"/>.
-    /// При работе с ним всегда используйте <c>.AsSpan(0, realLength)</c> или <c>.AsMemory(0, realLength)</c>.
-    /// </remarks>
-    /// <param name="minimumSize">Минимально необходимый размер буфера.</param>
-    /// <returns>Массив байт.</returns>
     public byte[] Rent(int minimumSize)
     {
-        if (minimumSize > _maxSize)
-        {
-            // Fallback для экстремально больших запросов (крайне редкий кейс, уходит в LOH)
+        if (minimumSize > _maxPooledSize)
             return new byte[minimumSize];
-        }
 
-        return _pool.Rent(minimumSize);
+        return ArrayPool<byte>.Shared.Rent(minimumSize);
     }
 
     /// <summary>
-    /// Возвращает буфер обратно в пул для повторного использования.
+    /// Возвращает арендованный буфер в пул. <c>null</c> безопасно игнорируется.
+    /// Буферы, выходящие за <c>maxPooledChunkSize</c>, собираются GC автоматически.
     /// </summary>
-    /// <param name="buffer">Массив, который нужно вернуть.</param>
-    /// <param name="clearArray">Укажите <c>true</c>, если данные содержат конфиденциальную информацию (не нужно для аудио).</param>
-    public void Return(byte[] buffer, bool clearArray = false)
+    /// <param name="clearArray">
+    /// <c>true</c> для обнуления содержимого перед возвратом.
+    /// Для аудио данных очистка не требуется.
+    /// </param>
+    public void Return(byte[]? buffer, bool clearArray = false)
     {
-        if (buffer.Length <= _maxSize)
-        {
-            _pool.Return(buffer, clearArray);
-        }
-        // Буферы больше _maxSize были созданы через new byte[], GC соберёт их сам.
+        if (buffer is null) return;
+
+        if (buffer.Length <= _maxPooledSize)
+            ArrayPool<byte>.Shared.Return(buffer, clearArray);
     }
 }
