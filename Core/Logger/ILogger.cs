@@ -8,4 +8,6 @@ public interface ILogger
     void Warn(string message, string? category = null);
     void Error(string message, Exception? ex = null, string? category = null);
     void Fatal(string message, Exception? ex = null, string? category = null);
+
+    LogLevel MinLevel { get; set; }
 }

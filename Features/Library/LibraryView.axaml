@@ -256,8 +256,8 @@
                                                               VerticalAlignment="Center" />
                                                 </Border>
                                                 <!-- Thumbnail -->
-                                                <Image controls:QualityImage.Source="{Binding ThumbnailUrl}"
-                                                       controls:QualityImage.Quality="High"
+                                                <Image controls:SmartImage.Source="{Binding ThumbnailUrl}"
+                                                       controls:SmartImage.Quality="High"
                                                        Stretch="UniformToFill"
                                                        Width="220" Height="220"
                                                        IsVisible="{Binding HasThumbnail}" />

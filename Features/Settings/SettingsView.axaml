@@ -53,8 +53,8 @@
                                         Width="36" Height="36"
                                         IsVisible="{Binding AccountAvatarUrl,
                                             Converter={x:Static StringConverters.IsNullOrEmpty}}" />
-                                    <Image ui:QualityImage.Source="{Binding AccountAvatarUrl}"
-                                        ui:QualityImage.Quality="Low"
+                                    <Image ui:SmartImage.Source="{Binding AccountAvatarUrl}"
+                                        ui:SmartImage.Quality="Low"
                                         Stretch="UniformToFill"
                                         IsVisible="{Binding AccountAvatarUrl,
                                             Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

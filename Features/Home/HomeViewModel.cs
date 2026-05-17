@@ -7,21 +7,23 @@ using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
-
 using System.Reactive.Linq;
 
 namespace LMP.Features.Home;
 
 /// <summary>
 /// ViewModel главного экрана. Категории + поиск через YouTube с кэшированием.
-/// Smart Parent (трек-активность, прогресс загрузки) унаследован от TrackListPaginatedViewModel.
+/// Smart Parent (трек-активность, прогресс загрузки) унаследован от TrackListReorderableViewModel.
+///
+/// <para><b>Reorderable вместо Paginated:</b> список YouTube-треков загружается целиком
+/// за один запрос, после чего пользователь может перетаскивать треки локально.
+/// VirtualizingStackPanel справляется с ~100 элементами без InfiniteScroll.</para>
 /// </summary>
-public sealed class HomeViewModel : TrackListPaginatedViewModel
+public sealed class HomeViewModel : TrackListReorderableViewModel
 {
     #region Constants
 
-    private const int DefaultBatchSize = 30;
-    private const int DefaultPrefetch = 20;
+    private const int DefaultFetchSize = 100;
 
     #endregion
 
@@ -33,7 +35,6 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
     private readonly EventHandler<string> _languageChangedHandler;
 
     private string _currentQuery = "";
-    private int _fetchOffset;
     private CancellationTokenSource? _categoryCts;
     private bool _isDisposed;
 
@@ -41,25 +42,26 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
 
     #region Properties
 
-    protected override int BatchSize => DefaultBatchSize;
-    protected override int PrefetchThreshold => DefaultPrefetch;
-
     [Reactive] public bool IsContentReady { get; private set; }
     [Reactive] public string Greeting { get; private set; } = string.Empty;
-    [Reactive] public bool ShowDebugInfo { get; set; }
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
 
     public ObservableCollection<CategoryItem> Categories { get; } = [];
-    public DebugStats Stats { get; } = new();
 
-    public ReadOnlyObservableCollection<TrackItemViewModel> ActiveTracks => Items;
+    /// <summary>
+    /// Перетаскивание доступно только без активного фильтра.
+    /// С фильтром визуальные индексы расходятся с мастер-списком.
+    /// </summary>
+    public bool CanReorderItems => CanReorder;
+
+    public bool EnableSmoothLoading => LibService.Settings.EnableSmoothLoading;
 
     #endregion
 
     #region Commands
 
-    public ReactiveCommand<Unit, bool> ToggleDebugCommand { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
+    public ReactiveCommand<(int oldIndex, int newIndex), Unit> MoveItemCommand { get; }
 
     #endregion
 
@@ -89,11 +91,16 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
 
         InitializeCategories();
 
-        ToggleDebugCommand = CreateCommand(
-            ReactiveCommand.Create(() => ShowDebugInfo = !ShowDebugInfo));
-
         RefreshCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(async () => await LoadTracksAsync(force: true)));
+
+        MoveItemCommand = CreateCommand(
+            ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(
+                async tuple => await MoveItemAsync(tuple.oldIndex, tuple.newIndex)));
+
+        this.WhenAnyValue(x => x.FilterQuery)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(CanReorderItems)))
+            .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.SelectedCategory)
             .WhereNotNull()
@@ -122,7 +129,7 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
 
     #endregion
 
-    #region TrackListPaginatedViewModel Implementation
+    #region TrackListReorderableViewModel Implementation
 
     protected override void OnPlay(TrackInfo track)
     {
@@ -130,32 +137,24 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 
-    protected override async Task<List<TrackInfo>> FetchMoreFromNetworkAsync(CancellationToken ct)
+    /// <summary>
+    /// Загрузка треков по ID-списку используется ReorderableViewModel при
+    /// восстановлении состояния. Для Home треки берём из SearchCacheService
+    /// по текущему запросу — они не хранятся в LibraryService постоянно.
+    /// </summary>
+    protected override async Task<List<TrackInfo>> LoadTracksAsync(
+        IEnumerable<string> ids, CancellationToken ct)
     {
-        if (SelectedCategory?.IsSpecial == true) return [];
+        if (string.IsNullOrEmpty(_currentQuery)) return [];
 
-        _fetchOffset += 50;
-        var newTracks = await _youtube.SearchAsync(_currentQuery, _fetchOffset + 50);
-        if (ct.IsCancellationRequested) return [];
-
-        var result = newTracks.Skip(TotalCount).ToList();
-
-        if (result.Count > 0)
+        var cached = await _searchCache.GetAsync(_currentQuery, SearchSource.YouTube, 30);
+        if (cached is { Count: > 0 })
         {
-            var snapshot = GetItemsSnapshot();
-            var all = new List<TrackInfo>(snapshot.Count + result.Count);
-            all.AddRange(snapshot);
-            all.AddRange(result);
-            _ = _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, all);
-
-            var imageUrls = result.Take(10)
-                .Select(static t => t.ThumbnailUrl)
-                .Where(static u => !string.IsNullOrEmpty(u));
-            _ = _imageCache.PrefetchAsync(imageUrls, ct);
+            var idSet = ids.ToHashSet();
+            return cached.Where(t => idSet.Contains(t.Id)).ToList();
         }
 
-        UpdateStats();
-        return result;
+        return [];
     }
 
     #endregion
@@ -172,8 +171,7 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
         _categoryCts = new CancellationTokenSource();
         var ct = _categoryCts.Token;
 
-        ClearItems();
-        _fetchOffset = 0;
+        IsLoading = true;
 
         try
         {
@@ -181,9 +179,9 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
 
             if (category.IsSpecial)
             {
-                var recent = await LibService.GetRecentlyPlayedAsync(100);
+                var recent = await LibService.GetRecentlyPlayedAsync(DefaultFetchSize);
                 if (ct.IsCancellationRequested) return;
-                await InitializeItemsAsync(recent, canFetchMore: false);
+                InitializeWithData(recent);
             }
             else
             {
@@ -202,7 +200,7 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
                 }
                 else
                 {
-                    tracks = await _youtube.SearchAsync(_currentQuery, 100);
+                    tracks = await _youtube.SearchAsync(_currentQuery, DefaultFetchSize);
                     if (ct.IsCancellationRequested) return;
 
                     if (tracks.Count > 0)
@@ -215,15 +213,17 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
                 _ = _imageCache.PrefetchAsync(imageUrls!, ct);
 
                 if (ct.IsCancellationRequested) return;
-                await InitializeItemsAsync(tracks, canFetchMore: true);
+                InitializeWithData(tracks);
             }
-
-            UpdateStats();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Error($"[HomeVM] Load error: {ex.Message}");
+        }
+        finally
+        {
+            IsLoading = false;
         }
     }
 
@@ -232,7 +232,7 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
         try
         {
             await Task.Delay(3000, ct);
-            var fresh = await _youtube.SearchAsync(_currentQuery, 100);
+            var fresh = await _youtube.SearchAsync(_currentQuery, DefaultFetchSize);
             if (ct.IsCancellationRequested || fresh.Count == 0) return;
             await _searchCache.SetAsync(_currentQuery, SearchSource.YouTube, fresh);
         }
@@ -247,9 +247,10 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
     {
         var key = DateTime.Now.Hour switch
         {
-            < 12 => "Home_Greeting_Morning",
-            < 18 => "Home_Greeting_Afternoon",
-            _ => "Home_Greeting_Evening"
+            >= 0 and < 5  => "Home_Greeting_Night",
+            >= 5 and < 12 => "Home_Greeting_Morning",
+            >= 12 and < 18 => "Home_Greeting_Afternoon",
+            _              => "Home_Greeting_Evening"
         };
         Greeting = SL[key];
     }
@@ -264,9 +265,9 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
         ReadOnlySpan<(string key, string fallback, string query, bool special)> defs =
         [
             ("Category_RecentlyPlayed", "Recently Played", "",                         true),
-            ("Category_Trending",       "Trending",        "trending music 2024",      false),
-            ("Category_Pop",            "Pop",             "pop hits 2024",            false),
-            ("Category_HipHop",         "Hip-Hop",         "hip hop 2024",             false),
+            ("Category_Trending",       "Trending",        "trending music 2025",      false),
+            ("Category_Pop",            "Pop",             "pop hits 2025",            false),
+            ("Category_HipHop",         "Hip-Hop",         "hip hop 2025",             false),
             ("Category_Electronic",     "Electronic",      "electronic music",         false),
             ("Category_LoFi",           "Lo-Fi",           "lofi hip hop chill beats", false),
             ("Category_Rock",           "Rock",            "rock music",               false),
@@ -292,15 +293,6 @@ public sealed class HomeViewModel : TrackListPaginatedViewModel
             Categories.RemoveAt(Categories.Count - 1);
 
         SelectedCategory ??= Categories.FirstOrDefault();
-    }
-
-    private void UpdateStats()
-    {
-        var cacheStats = _searchCache.GetStats();
-        Stats.TotalTracks = TotalCount;
-        Stats.DisplayedTracks = Items.Count;
-        Stats.CachedTracks = cacheStats.DiskItems;
-        Stats.MemoryUsage = $"{GC.GetTotalMemory(false) / 1024 / 1024} MB";
     }
 
     #endregion
@@ -332,12 +324,4 @@ public sealed class CategoryItem : ReactiveObject
     public string Query { get; set; } = string.Empty;
     public bool IsSpecial { get; set; }
     public string LocKey { get; set; } = "";
-}
-
-public sealed class DebugStats : ReactiveObject
-{
-    [Reactive] public int TotalTracks { get; set; }
-    [Reactive] public int DisplayedTracks { get; set; }
-    [Reactive] public int CachedTracks { get; set; }
-    [Reactive] public string MemoryUsage { get; set; } = "0 MB";
 }

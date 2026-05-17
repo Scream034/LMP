@@ -57,9 +57,14 @@ public sealed class ImageCacheService : IDisposable
     private int _loadCounter;
     private const int CleanupInterval = 50;
 
+    /// <summary>
+    /// Минимальный размер кэша покрывает два экрана треков (~20 видимых × 2) + буфер.
+    /// При Low quality (120px): 80 × 57KB ≈ 4.5MB — разумный дефолт.
+    /// Настраивается через Settings.Storage.MaxBitmapCacheItems.
+    /// </summary>
     private int MaxMemoryItems => _library.Settings.Storage.MaxBitmapCacheItems > 0
         ? _library.Settings.Storage.MaxBitmapCacheItems
-        : 25;
+        : 80;
 
     // Реальный лимит в байтах:
     // Low (120px):  120×120×4 = 57.6KB × 25 items ≈ 1.4MB — правильно

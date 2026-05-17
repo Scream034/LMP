@@ -56,10 +56,7 @@
   "Home_Greeting_Morning": "Good morning",
   "Home_Greeting_Afternoon": "Good afternoon",
   "Home_Greeting_Evening": "Good evening",
-  "Home_Debug_Total": "TOTAL",
-  "Home_Debug_Displayed": "SHOWN",
-  "Home_Debug_Cached": "CACHED",
-  "Home_Debug_Memory": "RAM",
+  "Home_Greeting_Night": "Good night",
 
   "Category_RecentlyPlayed": "Recently Played",
   "Category_Trending": "Trending",

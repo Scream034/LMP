@@ -35,6 +35,7 @@ public partial class MainWindow : Window
     private Button? _maximizeButton;
     private Button? _closeButton;
     private Border? _dragArea;
+    private Grid? _rootGrid;
 
     private CancellationTokenSource? _cleanupCts;
     private CancellationTokenSource? _deactivateCts;
@@ -115,11 +116,11 @@ public partial class MainWindow : Window
         _copyHintOverlay = this.FindControl<Border>("CopyHintOverlay");
         _copyHintText = this.FindControl<TextBlock>("CopyHintText");
         _copyHintIcon = this.FindControl<PathIcon>("CopyHintIcon");
+        _rootGrid = this.FindControl<Grid>("RootGrid");
 
         // Трекинг позиции курсора для позиционирования toast
-        var rootGrid = this.FindControl<Grid>("RootGrid") ?? Content as Grid;
-        if (rootGrid != null)
-            MousePositionHelper.Attach(rootGrid);
+        if (_rootGrid != null)
+            MousePositionHelper.Attach(_rootGrid);
 
         PropertyChanged += MainWindow_PropertyChanged;
         Deactivated += OnWindowDeactivated;
@@ -136,6 +137,7 @@ public partial class MainWindow : Window
         _maximizeButton = this.FindControl<Button>("MaximizeButton");
         _closeButton = this.FindControl<Button>("CloseButton");
         _dragArea = this.FindControl<Border>("DragArea");
+        _rootGrid = this.FindControl<Grid>("RootGrid");
 
         _minimizeButton?.Click += (_, _) => HandleMinimizeClick();
         _maximizeButton?.Click += (_, _) => ToggleMaximize();
@@ -269,7 +271,7 @@ public partial class MainWindow : Window
 
     private void UpdateMaximizePadding(WindowState state)
     {
-        if (this.Content is not Grid rootGrid) return;
+        if (_rootGrid is null) return;
 
         if (state == WindowState.Maximized)
         {
@@ -285,7 +287,7 @@ public partial class MainWindow : Window
                 double right = (bounds.Right - workArea.Right) / scaling;
                 double bottom = (bounds.Bottom - workArea.Bottom) / scaling;
 
-                rootGrid.Margin = new Thickness(
+                _rootGrid.Margin = new Thickness(
                     Math.Max(0, left),
                     Math.Max(0, top),
                     Math.Max(0, right),
@@ -294,7 +296,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            rootGrid.Margin = new Thickness(0);
+            _rootGrid.Margin = new Thickness(0);
         }
     }
 

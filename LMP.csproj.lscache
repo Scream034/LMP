@@ -127,7 +127,6 @@ Core/
  Helpers/
   BatchObservableCollection.cs
   Clipboard.cs
-  DebouncedImage.cs
   ErrorSoundPlayer.cs
   LoggingHandler.cs
   MemoryCleanupHelper.cs
@@ -471,7 +470,7 @@ UI/Controls/
  FilterBar.axaml.cs
  PlaylistCoverPicker.axaml.cs
  PlaylistEditorControl.axaml.cs
- QualityImage.cs
+ SmartImage.cs
  TrackListControl.axaml.cs
 UI/Dialogs/
  AddToPlaylistDialogViewModel.cs

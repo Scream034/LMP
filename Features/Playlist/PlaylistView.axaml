@@ -79,8 +79,8 @@
                                 IsVisible="{Binding ThumbnailUrl,
                                     Converter={x:Static StringConverters.IsNullOrEmpty}}" />
                             <Image
-                                controls:QualityImage.Source="{Binding ThumbnailUrl}"
-                                controls:QualityImage.Quality="High"
+                                controls:SmartImage.Source="{Binding ThumbnailUrl}"
+                                controls:SmartImage.Quality="High"
                                 Stretch="UniformToFill"
                                 IsVisible="{Binding ThumbnailUrl,
                                     Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

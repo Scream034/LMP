@@ -5,7 +5,6 @@ using LMP.Core.Services;
 using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Audio;
 using LMP.Core.Helpers;
 
@@ -13,6 +12,48 @@ namespace LMP.Features.Shared;
 
 public sealed class TrackItemViewModel : ViewModelBase
 {
+    #region Weak Event Subscription
+
+    /// <summary>
+    /// Разрывает сильную ссылку Track → VM через делегат.
+    ///
+    /// Проблема: TrackInfo живёт в TrackRegistry._pinned (GC Root).
+    /// Track.PropertyChanged += handler создаёт делегат с Target=VM.
+    /// Пока Track жив (pinned) — жив делегат — жива VM — жива вся ReactiveUI-цепочка (~15 объектов).
+    /// VM никогда не собирается GC, кэш фабрики растёт бесконечно.
+    ///
+    /// Решение: Handle() содержит WeakReference&lt;VM&gt;.
+    /// Track.PropertyChanged держит сильную ссылку на этот маленький объект (~40 байт),
+    /// но НЕ на VM. VM собирается GC когда страница навигации очищает коллекцию.
+    /// При следующем Handle() — TryGetTarget возвращает false → автоматический unsub.
+    /// </summary>
+    private sealed class WeakPropertyChangedSubscription
+    {
+        private readonly WeakReference<TrackItemViewModel> _weak;
+        private readonly INotifyPropertyChanged _source;
+
+        internal WeakPropertyChangedSubscription(TrackItemViewModel vm, INotifyPropertyChanged source)
+        {
+            _weak = new WeakReference<TrackItemViewModel>(vm);
+            _source = source;
+            source.PropertyChanged += Handle;
+        }
+
+        private void Handle(object? sender, PropertyChangedEventArgs e)
+        {
+            if (_weak.TryGetTarget(out var vm))
+                vm.OnTrackPropertyChanged(sender, e);
+            else
+                _source.PropertyChanged -= Handle;
+        }
+
+        internal void Unsubscribe() => _source.PropertyChanged -= Handle;
+    }
+
+    private readonly WeakPropertyChangedSubscription _trackSubscription;
+
+    #endregion
+
     private readonly AudioEngine _audio;
     private readonly MusicLibraryManager _manager;
     private readonly DownloadService _downloads;
@@ -29,6 +70,17 @@ public sealed class TrackItemViewModel : ViewModelBase
     public string Author => Track.Author;
     public TimeSpan Duration => Track.Duration;
     public string ThumbnailUrl => Track.ThumbnailUrl;
+
+    /// <summary>
+    /// Проброс Track.IsLiked для одноуровневого XAML-биндинга.
+    /// Обновляется через OnTrackPropertyChanged → устраняет DataContextNode + 2× PropertyAccessorNode.
+    /// </summary>
+    public bool IsLiked => Track.IsLiked;
+
+    /// <summary>
+    /// Проброс Track.IsDownloaded для одноуровневого XAML-биндинга.
+    /// </summary>
+    public bool IsDownloaded => Track.IsDownloaded;
 
     public string FormattedDuration => Duration.TotalHours >= 1
         ? Duration.ToString(@"h\:mm\:ss")
@@ -111,20 +163,24 @@ public sealed class TrackItemViewModel : ViewModelBase
             if (IsQueueContext) _audio.RemoveFromQueue(Track);
         });
 
-        Track.PropertyChanged += OnTrackPropertyChanged;
+        _trackSubscription = new WeakPropertyChangedSubscription(this, track);
     }
 
     private void OnTrackPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
         {
+            case nameof(Track.IsLiked):
+                this.RaisePropertyChanged(nameof(IsLiked));
+                break;
+
             case nameof(Track.IsDownloaded):
-                // Трек скачан → прогресс-бар больше не нужен
                 if (Track.IsDownloaded && IsDownloading)
                 {
                     IsDownloading = false;
                     DownloadProgress = 0f;
                 }
+                this.RaisePropertyChanged(nameof(IsDownloaded));
                 this.RaisePropertyChanged(nameof(DownloadStatusText));
                 this.RaisePropertyChanged(nameof(ShowCachedIcon));
                 break;
@@ -174,9 +230,6 @@ public sealed class TrackItemViewModel : ViewModelBase
 
     public void SetDownloadState(bool isDownloading, float progress)
     {
-        // Если трек уже скачан — принудительно сбрасываем состояние загрузки,
-        // независимо от того что передал вызывающий.
-        // Защита от race condition: OnCompleted → IsDownloaded=true → SetDownloadState(true, 1.0)
         if (Track.IsDownloaded)
             isDownloading = false;
 
@@ -231,7 +284,7 @@ public sealed class TrackItemViewModel : ViewModelBase
         if (IsDisposed) return;
         if (disposing)
         {
-            Track.PropertyChanged -= OnTrackPropertyChanged;
+            _trackSubscription.Unsubscribe();
             _onPlay = null;
             StartRadioAction = null;
             RemoveFromPlaylistAction = null;

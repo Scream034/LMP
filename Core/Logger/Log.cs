@@ -12,45 +12,48 @@ public static class Log
     private static volatile bool _isInitialized;
 
     /// <summary>
+    /// Минимальный уровень логирования. Сообщения ниже этого уровня
+    /// отбрасываются до создания строки — интерполяция не вычисляется.
+    /// По умолчанию: Debug в Debug-сборке, Info в Release.
+    /// </summary>
+#if DEBUG
+    public static LogLevel MinLevel { get; set; } = LogLevel.Debug;
+#else
+    public static LogLevel MinLevel { get; set; } = LogLevel.Info;
+#endif
+
+    /// <summary>
+    /// Проверка активности уровня. Используется InterpolatedStringHandler-ами
+    /// для short-circuit вычисления интерполированных строк.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsLevelEnabled(LogLevel level) =>
+        _isInitialized && level >= MinLevel;
+
+    /// <summary>
     /// Инициализация системы логгирования.
     /// Должна вызываться в начале Main, ПОСЛЕ создания папок (G.Folder.Create).
     /// </summary>
-    /// <param name="logDirectory">
-    /// Путь к папке логов. Если null — используется G.Folder.Logs.
-    /// </param>
     public static void Initialize(string? logDirectory = null)
     {
         if (_isInitialized) return;
-        
-        // Определяем папку логов
-        // Приоритет: явно переданная > G.Folder.Logs > fallback
+
         var logsPath = logDirectory ?? GetDefaultLogDirectory();
-        
+
         _processor = new AsyncLogProcessor(logsPath);
         _isInitialized = true;
 
         Info($"=== LOGGER INITIALIZED === Path: {logsPath}");
     }
 
-    /// <summary>
-    /// Получает путь к папке логов по умолчанию.
-    /// Использует G.Folder.Logs если класс G доступен.
-    /// </summary>
     private static string GetDefaultLogDirectory()
     {
-        try
-        {
-            // G.Folder.Logs = %APPDATA%/LMP/Logs
-            return G.Folder.Logs;
-        }
+        try { return G.Folder.Logs; }
         catch
         {
-            // Fallback если G ещё не инициализирован (не должно случиться)
             return Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "LMP",
-                "Logs"
-            );
+                "LMP", "Logs");
         }
     }
 
@@ -61,65 +64,328 @@ public static class Log
     public static void Shutdown()
     {
         if (!_isInitialized || _processor == null) return;
-        
         Info("=== LOGGER SHUTDOWN ===");
-        
-        // Синхронный Dispose — гарантирует запись всех логов
         _processor.Dispose();
         _processor = null;
         _isInitialized = false;
     }
 
-    /// <summary>
-    /// Асинхронное завершение работы.
-    /// </summary>
+    /// <summary>Асинхронное завершение работы.</summary>
     public static async ValueTask ShutdownAsync()
     {
         if (!_isInitialized || _processor == null) return;
-        
         Info("=== LOGGER SHUTDOWN ===");
-        
         await _processor.DisposeAsync().ConfigureAwait(false);
         _processor = null;
         _isInitialized = false;
     }
 
-    /// <summary>
-    /// Внутренний метод отправки сообщения в очередь.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Enqueue(LogLevel level, string? message, Exception? ex = null)
+    private static void Enqueue(LogLevel level, string message, Exception? ex = null)
     {
-        // Быстрый выход если логгер не инициализирован
-        if (!_isInitialized || _processor == null) return;
-
-        var msg = message ?? "null";
-        _processor.Enqueue(new LogMessage(level, msg, ex));
+        if (!_isInitialized || _processor == null || level < MinLevel) return;
+        _processor.Enqueue(new LogMessage(level, message, ex));
     }
 
-    // === Public API ===
+    // ═══ String overloads — для литералов и уже готовых строк ═══
 
     /// <summary>Самый детальный уровень. Для трассировки потока выполнения.</summary>
     public static void Trace(string message) => Enqueue(LogLevel.Trace, message);
-    
-    /// <summary>Отладочная информация. Не показывается в Release.</summary>
+
+    /// <summary>Отладочная информация.</summary>
     public static void Debug(string message) => Enqueue(LogLevel.Debug, message);
 
     /// <summary>Информационные сообщения. Основной уровень.</summary>
     public static void Info(string message) => Enqueue(LogLevel.Info, message);
 
-    /// <summary>Предупреждения. Что-то не так, но работа продолжается.</summary>
+    /// <summary>Предупреждения.</summary>
     public static void Warn(string message) => Enqueue(LogLevel.Warning, message);
 
-    /// <summary>Ошибки. Операция не выполнена, но приложение работает.</summary>
+    /// <summary>Ошибки.</summary>
     public static void Error(string message, Exception? ex = null) => Enqueue(LogLevel.Error, message, ex);
 
-    /// <summary>Фатальные ошибки. Приложение не может продолжать работу.</summary>
+    /// <summary>Фатальные ошибки.</summary>
     public static void Fatal(string message, Exception? ex = null) => Enqueue(LogLevel.Fatal, message, ex);
+
+    // ═══ InterpolatedStringHandler overloads — zero-alloc при отключённом уровне ═══
+    // Компилятор выбирает этот overload когда аргумент — интерполированная строка $"...".
+    // Если IsLevelEnabled() = false, AppendFormatted/AppendLiteral не вызываются —
+    // аллокации нет вообще. Строка не строится даже частично.
+
+    /// <summary>Trace с zero-alloc интерполяцией.</summary>
+    public static void Trace(TraceInterpolatedStringHandler handler)
+    {
+        if (handler.IsEnabled) Enqueue(LogLevel.Trace, handler.ToStringAndClear());
+    }
+
+    /// <summary>Debug с zero-alloc интерполяцией.</summary>
+    public static void Debug(DebugInterpolatedStringHandler handler)
+    {
+        if (handler.IsEnabled) Enqueue(LogLevel.Debug, handler.ToStringAndClear());
+    }
+
+    /// <summary>Info с zero-alloc интерполяцией.</summary>
+    public static void Info(InfoInterpolatedStringHandler handler)
+    {
+        if (handler.IsEnabled) Enqueue(LogLevel.Info, handler.ToStringAndClear());
+    }
+
+    /// <summary>Warn с zero-alloc интерполяцией.</summary>
+    public static void Warn(WarnInterpolatedStringHandler handler)
+    {
+        if (handler.IsEnabled) Enqueue(LogLevel.Warning, handler.ToStringAndClear());
+    }
+
+    /// <summary>Error с zero-alloc интерполяцией.</summary>
+    public static void Error(ErrorInterpolatedStringHandler handler, Exception? ex = null)
+    {
+        if (handler.IsEnabled) Enqueue(LogLevel.Error, handler.ToStringAndClear(), ex);
+    }
+
+    /// <summary>Fatal с zero-alloc интерполяцией.</summary>
+    public static void Fatal(FatalInterpolatedStringHandler handler, Exception? ex = null)
+    {
+        if (handler.IsEnabled) Enqueue(LogLevel.Fatal, handler.ToStringAndClear(), ex);
+    }
 
     /// <summary>Перегрузка для объектов (как Console.WriteLine).</summary>
     public static void Info(object? obj) => Info(obj?.ToString() ?? "null");
-    
+
     /// <summary>Перегрузка для объектов.</summary>
     public static void Debug(object? obj) => Debug(obj?.ToString() ?? "null");
+
+    // ═══ InterpolatedStringHandler per level ═══
+    // Отдельный тип на каждый уровень — компилятор разрешает overload статически,
+    // без передачи LogLevel как runtime-аргумента.
+    // out bool isEnabled — сигнал компилятору: если false, тело $"..." не вычисляется.
+
+    /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
+    [InterpolatedStringHandler]
+    public ref struct TraceInterpolatedStringHandler
+    {
+        private LogInterpolatedStringHandlerBase _impl;
+        internal readonly bool IsEnabled;
+
+        public TraceInterpolatedStringHandler(int literalLength, int formattedCount, out bool isEnabled)
+        {
+            _impl = new LogInterpolatedStringHandlerBase(literalLength, formattedCount, LogLevel.Trace, out isEnabled);
+            IsEnabled = isEnabled;
+        }
+
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendLiteral"/>
+        public void AppendLiteral(string s) => _impl.AppendLiteral(s);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T)"/>
+        public void AppendFormatted<T>(T value) => _impl.AppendFormatted(value);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,string?)"/>
+        public void AppendFormatted<T>(T value, string? format) => _impl.AppendFormatted(value, format);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int)"/>
+        public void AppendFormatted<T>(T value, int alignment) => _impl.AppendFormatted(value, alignment);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int,string?)"/>
+        public void AppendFormatted<T>(T value, int alignment, string? format) => _impl.AppendFormatted(value, alignment, format);
+        internal string ToStringAndClear() => _impl.ToStringAndClear();
+    }
+
+    /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
+    [InterpolatedStringHandler]
+    public ref struct DebugInterpolatedStringHandler
+    {
+        private LogInterpolatedStringHandlerBase _impl;
+        internal readonly bool IsEnabled;
+
+        public DebugInterpolatedStringHandler(int literalLength, int formattedCount, out bool isEnabled)
+        {
+            _impl = new LogInterpolatedStringHandlerBase(literalLength, formattedCount, LogLevel.Debug, out isEnabled);
+            IsEnabled = isEnabled;
+        }
+
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendLiteral"/>
+        public void AppendLiteral(string s) => _impl.AppendLiteral(s);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T)"/>
+        public void AppendFormatted<T>(T value) => _impl.AppendFormatted(value);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,string?)"/>
+        public void AppendFormatted<T>(T value, string? format) => _impl.AppendFormatted(value, format);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int)"/>
+        public void AppendFormatted<T>(T value, int alignment) => _impl.AppendFormatted(value, alignment);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int,string?)"/>
+        public void AppendFormatted<T>(T value, int alignment, string? format) => _impl.AppendFormatted(value, alignment, format);
+        internal string ToStringAndClear() => _impl.ToStringAndClear();
+    }
+
+    /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
+    [InterpolatedStringHandler]
+    public ref struct InfoInterpolatedStringHandler
+    {
+        private LogInterpolatedStringHandlerBase _impl;
+        internal readonly bool IsEnabled;
+
+        public InfoInterpolatedStringHandler(int literalLength, int formattedCount, out bool isEnabled)
+        {
+            _impl = new LogInterpolatedStringHandlerBase(literalLength, formattedCount, LogLevel.Info, out isEnabled);
+            IsEnabled = isEnabled;
+        }
+
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendLiteral"/>
+        public void AppendLiteral(string s) => _impl.AppendLiteral(s);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T)"/>
+        public void AppendFormatted<T>(T value) => _impl.AppendFormatted(value);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,string?)"/>
+        public void AppendFormatted<T>(T value, string? format) => _impl.AppendFormatted(value, format);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int)"/>
+        public void AppendFormatted<T>(T value, int alignment) => _impl.AppendFormatted(value, alignment);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int,string?)"/>
+        public void AppendFormatted<T>(T value, int alignment, string? format) => _impl.AppendFormatted(value, alignment, format);
+        internal string ToStringAndClear() => _impl.ToStringAndClear();
+    }
+
+    /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
+    [InterpolatedStringHandler]
+    public ref struct WarnInterpolatedStringHandler
+    {
+        private LogInterpolatedStringHandlerBase _impl;
+        internal readonly bool IsEnabled;
+
+        public WarnInterpolatedStringHandler(int literalLength, int formattedCount, out bool isEnabled)
+        {
+            _impl = new LogInterpolatedStringHandlerBase(literalLength, formattedCount, LogLevel.Warning, out isEnabled);
+            IsEnabled = isEnabled;
+        }
+
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendLiteral"/>
+        public void AppendLiteral(string s) => _impl.AppendLiteral(s);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T)"/>
+        public void AppendFormatted<T>(T value) => _impl.AppendFormatted(value);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,string?)"/>
+        public void AppendFormatted<T>(T value, string? format) => _impl.AppendFormatted(value, format);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int)"/>
+        public void AppendFormatted<T>(T value, int alignment) => _impl.AppendFormatted(value, alignment);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int,string?)"/>
+        public void AppendFormatted<T>(T value, int alignment, string? format) => _impl.AppendFormatted(value, alignment, format);
+        internal string ToStringAndClear() => _impl.ToStringAndClear();
+    }
+
+    /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
+    [InterpolatedStringHandler]
+    public ref struct ErrorInterpolatedStringHandler
+    {
+        private LogInterpolatedStringHandlerBase _impl;
+        internal readonly bool IsEnabled;
+
+        public ErrorInterpolatedStringHandler(int literalLength, int formattedCount, out bool isEnabled)
+        {
+            _impl = new LogInterpolatedStringHandlerBase(literalLength, formattedCount, LogLevel.Error, out isEnabled);
+            IsEnabled = isEnabled;
+        }
+
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendLiteral"/>
+        public void AppendLiteral(string s) => _impl.AppendLiteral(s);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T)"/>
+        public void AppendFormatted<T>(T value) => _impl.AppendFormatted(value);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,string?)"/>
+        public void AppendFormatted<T>(T value, string? format) => _impl.AppendFormatted(value, format);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int)"/>
+        public void AppendFormatted<T>(T value, int alignment) => _impl.AppendFormatted(value, alignment);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int,string?)"/>
+        public void AppendFormatted<T>(T value, int alignment, string? format) => _impl.AppendFormatted(value, alignment, format);
+        internal string ToStringAndClear() => _impl.ToStringAndClear();
+    }
+
+    /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
+    [InterpolatedStringHandler]
+    public ref struct FatalInterpolatedStringHandler
+    {
+        private LogInterpolatedStringHandlerBase _impl;
+        internal readonly bool IsEnabled;
+
+        public FatalInterpolatedStringHandler(int literalLength, int formattedCount, out bool isEnabled)
+        {
+            _impl = new LogInterpolatedStringHandlerBase(literalLength, formattedCount, LogLevel.Fatal, out isEnabled);
+            IsEnabled = isEnabled;
+        }
+
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendLiteral"/>
+        public void AppendLiteral(string s) => _impl.AppendLiteral(s);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T)"/>
+        public void AppendFormatted<T>(T value) => _impl.AppendFormatted(value);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,string?)"/>
+        public void AppendFormatted<T>(T value, string? format) => _impl.AppendFormatted(value, format);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int)"/>
+        public void AppendFormatted<T>(T value, int alignment) => _impl.AppendFormatted(value, alignment);
+        /// <inheritdoc cref="LogInterpolatedStringHandlerBase.AppendFormatted{T}(T,int,string?)"/>
+        public void AppendFormatted<T>(T value, int alignment, string? format) => _impl.AppendFormatted(value, alignment, format);
+        internal string ToStringAndClear() => _impl.ToStringAndClear();
+    }
+
+    /// <summary>
+    /// Общая реализация строителя интерполированной строки для всех уровней логов.
+    ///
+    /// <para><b>Механизм zero-alloc:</b> компилятор передаёт <c>out bool isEnabled</c>
+    /// в конструктор ДО вычисления аргументов интерполяции. Если <c>isEnabled = false</c>,
+    /// вся правая часть <c>$"..."</c> не вычисляется — аллокаций нет совсем.</para>
+    ///
+    /// <para><b>Почему ref struct:</b> <see cref="DefaultInterpolatedStringHandler"/>
+    /// — ref struct. Наш wrapper тоже обязан быть ref struct, чтобы хранить его
+    /// по значению без boxing.</para>
+    ///
+    /// <para><b>Alignment overloads:</b> компилятор генерирует вызовы
+    /// <c>AppendFormatted(value, int alignment)</c> и
+    /// <c>AppendFormatted(value, int alignment, string? format)</c>
+    /// при использовании форматирования с выравниванием: <c>{x,-45}</c>, <c>{x,15:F2}</c>.
+    /// Без этих перегрузок — CS1739.</para>
+    /// </summary>
+    public ref struct LogInterpolatedStringHandlerBase
+    {
+        private DefaultInterpolatedStringHandler _inner;
+        private readonly bool _enabled;
+
+        internal LogInterpolatedStringHandlerBase(
+            int literalLength,
+            int formattedCount,
+            LogLevel level,
+            out bool isEnabled)
+        {
+            _enabled = isEnabled = IsLevelEnabled(level);
+            _inner = _enabled
+                ? new DefaultInterpolatedStringHandler(literalLength, formattedCount)
+                : default;
+        }
+
+        /// <summary>Добавляет строковый литерал. No-op если уровень отключён.</summary>
+        public void AppendLiteral(string s)
+        {
+            if (_enabled) _inner.AppendLiteral(s);
+        }
+
+        /// <summary>Добавляет форматируемое значение. No-op если уровень отключён.</summary>
+        public void AppendFormatted<T>(T value)
+        {
+            if (_enabled) _inner.AppendFormatted(value);
+        }
+
+        /// <summary>Добавляет форматируемое значение с format-строкой. No-op если уровень отключён.</summary>
+        public void AppendFormatted<T>(T value, string? format)
+        {
+            if (_enabled) _inner.AppendFormatted(value, format);
+        }
+
+        /// <summary>
+        /// Добавляет форматируемое значение с выравниванием: <c>{x,-45}</c>, <c>{x,15}</c>.
+        /// No-op если уровень отключён.
+        /// </summary>
+        public void AppendFormatted<T>(T value, int alignment)
+        {
+            if (_enabled) _inner.AppendFormatted(value, alignment);
+        }
+
+        /// <summary>
+        /// Добавляет форматируемое значение с выравниванием и format-строкой: <c>{x,15:F2}</c>.
+        /// No-op если уровень отключён.
+        /// </summary>
+        public void AppendFormatted<T>(T value, int alignment, string? format)
+        {
+            if (_enabled) _inner.AppendFormatted(value, alignment, format);
+        }
+
+        internal string ToStringAndClear() =>
+            _enabled ? _inner.ToStringAndClear() : string.Empty;
+    }
 }

@@ -47,7 +47,9 @@
     <!-- Полностью уникальные стили для seek bar.                           -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
 
-    <!-- Track container hover (расширение при наведении) -->
+    <!-- RenderTransformOrigin задан в разметке как "0.5,1.0" (bottom-center).
+     Scale растёт вверх от нижнего края — thumb не выходит за SeekContainer,
+     нижний край дорожки остаётся зафиксированным. -->
     <Style Selector="Grid.track-container">
         <Setter Property="RenderTransform" Value="scaleY(1)" />
         <Setter Property="Transitions">
@@ -56,6 +58,12 @@
                     Easing="CubicEaseOut" />
             </Transitions>
         </Setter>
+    </Style>
+    <Style Selector="Grid.seek-container:pointerover Grid.track-container">
+        <Setter Property="RenderTransform" Value="scaleY(2.0)" />
+    </Style>
+    <Style Selector="Grid.seek-container.dragging Grid.track-container">
+        <Setter Property="RenderTransform" Value="scaleY(2.0)" />
     </Style>
     <Style Selector="Grid.seek-container:pointerover Grid.track-container">
         <Setter Property="RenderTransform" Value="scaleY(1.5)" />
@@ -107,21 +115,38 @@
         </Setter>
     </Style>
 
-    <!-- Preview fill (подсветка области при наведении) -->
-    <Style Selector="Border.slider-preview">
-        <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
+    <Style Selector="Border.seek-preview-cursor">
         <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.1" />
+            </Transitions>
+        </Setter>
     </Style>
-    <Style Selector="Border.slider-preview.active">
-        <Setter Property="Opacity" Value="0.5" />
+    <Style Selector="Border.seek-preview-cursor.active">
+        <Setter Property="Opacity" Value="0.7" />
     </Style>
 
-    <!-- Progress bar: мгновенное скрытие при сбросе -->
+    <!--
+    DoubleTransition на Width убирается из progress-bar и playing-glow.
+    Интерполяция теперь на стороне RAF-loop в code-behind (ApplySeekFrame),
+    который обновляет Width каждый кадр по clock-anchor схеме.
+    Transition здесь создавал рассинхрон: progress двигался плавно,
+    thumb/cursor — дискретно, потому что Canvas.SetLeft не имеет transition.
+    При RAF-подходе все три элемента обновляются в одном кадре — рассинхрон исключён.
+-->
     <Style Selector="Border.progress-bar">
         <Setter Property="Transitions">
             <Transitions />
         </Setter>
     </Style>
+
+    <Style Selector="Grid.dragging Border.progress-bar">
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
+    </Style>
+
     <Style Selector="Border.progress-bar.hidden">
         <Setter Property="Width" Value="0" />
         <Setter Property="Transitions">
@@ -129,11 +154,18 @@
         </Setter>
     </Style>
 
-    <!-- Playing glow (пульсирующее свечение при воспроизведении) -->
     <Style Selector="Border.playing-glow">
-        <Setter Property="Opacity" Value="0" />
-        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
     </Style>
+
+    <Style Selector="Grid.dragging Border.playing-glow">
+        <Setter Property="Transitions">
+            <Transitions />
+        </Setter>
+    </Style>
+
     <Style Selector="Border.playing-glow.active">
         <Style.Animations>
             <Animation IterationCount="Infinite" Duration="0:0:1.5">
@@ -199,7 +231,7 @@
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-       <!-- ═══ AUTO-SHUFFLE INDICATOR ═══ -->
+    <!-- ═══ AUTO-SHUFFLE INDICATOR ═══ -->
     <Style Selector="Button.playback-btn.auto-enabled">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
@@ -231,5 +263,29 @@
                 </KeyFrame>
             </Animation>
         </Style.Animations>
+    </Style>
+
+
+    <Style Selector="Border.mode-hint">
+        <Setter Property="Background" Value="{DynamicResource BgSkeletonBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="BoxShadow" Value="0 4 12 0 #40000000" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,1" />
+        <Setter Property="RenderTransform" Value="translateY(8px)" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25"
+                    Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.mode-hint.visible">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="RenderTransform" Value="translateY(0)" />
     </Style>
 </Styles>

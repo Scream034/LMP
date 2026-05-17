@@ -46,7 +46,6 @@ public sealed partial class CachingStreamSource
     /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
-        int lastReportedProgress = -1;
         int idleCycles = 0;
         _backgroundChunksLoaded = 0;
 
@@ -220,6 +219,7 @@ public sealed partial class CachingStreamSource
                 }
 
 #if DEBUG
+                int lastReportedProgress = -1;
                 // Progress reporting
                 int progress = (int)_cacheEntry.DownloadProgress;
                 if (progress / 25 > lastReportedProgress / 25)

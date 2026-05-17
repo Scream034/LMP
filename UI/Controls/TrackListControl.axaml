@@ -1,7 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:svm="using:LMP.Features.Shared"
-    xmlns:h="using:LMP.Core.Helpers"
+    xmlns:ctrl="using:LMP.UI.Controls"
     xmlns:ir="using:Avalonia.Controls"
     x:Class="LMP.UI.Controls.TrackListControl"
     x:Name="Root"
@@ -43,12 +43,12 @@
             </MenuItem>
             <MenuItem Header="{Binding DownloadStatusText}"
                 Command="{Binding SaveToDownloadsCommand}"
-                IsEnabled="{Binding !Track.IsDownloaded}">
+                IsEnabled="{Binding !IsDownloaded}">
                 <MenuItem.Icon>
                     <PathIcon
-                        Data="{Binding Track.IsDownloaded,
-                        Converter={StaticResource BoolToGeometryConverter},
-                        ConverterParameter='CheckCircle|Download'}"
+                        Data="{Binding IsDownloaded,
+                            Converter={StaticResource BoolToGeometryConverter},
+                            ConverterParameter='CheckCircle|Download'}"
                         Width="16" Height="16" />
                 </MenuItem.Icon>
             </MenuItem>
@@ -112,7 +112,9 @@
                                             Background="{DynamicResource BgSkeletonBrush}">
                                             <Image Stretch="UniformToFill"
                                                 RenderOptions.BitmapInterpolationMode="LowQuality"
-                                                h:DebouncedImage.Source="{Binding ThumbnailUrl}" />
+                                                ctrl:SmartImage.Source="{Binding ThumbnailUrl}"
+                                                ctrl:SmartImage.Quality="Low"
+                                                ctrl:SmartImage.Debounce="80" />
                                         </Border>
                                         <Panel Classes="cover-overlay" IsHitTestVisible="False">
                                             <Border CornerRadius="6"
@@ -154,7 +156,7 @@
                                     Margin="0,0,84,0"
                                     Foreground="{DynamicResource AccentBrush}"
                                     Data="{StaticResource Icon.CheckCircle}"
-                                    IsVisible="{Binding Track.IsDownloaded}"
+                                    IsVisible="{Binding IsDownloaded}"
                                     ToolTip.Tip="{Binding L[Track_Downloaded]}"
                                     IsHitTestVisible="False" />
 
@@ -169,19 +171,30 @@
                                     ToolTip.Tip="{Binding L[Track_Cached]}"
                                     IsHitTestVisible="False" />
 
-                                <ProgressBar
+                                <Border
                                     Width="32" Height="3"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center"
                                     Margin="0,0,84,0"
-                                    Value="{Binding DownloadProgress}" Maximum="1"
+                                    Background="{DynamicResource BgSecondaryBrush}"
+                                    CornerRadius="1.5"
+                                    ClipToBounds="True"
                                     IsVisible="{Binding IsDownloading}"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    IsHitTestVisible="False" />
+                                    IsHitTestVisible="False">
+                                    <Border
+                                        Width="32" Height="3"
+                                        HorizontalAlignment="Left"
+                                        CornerRadius="1.5"
+                                        Background="{DynamicResource AccentBrush}"
+                                        RenderTransformOrigin="0, 0.5">
+                                        <Border.RenderTransform>
+                                            <ScaleTransform ScaleX="{Binding DownloadProgress}" />
+                                        </Border.RenderTransform>
+                                    </Border>
+                                </Border>
 
-                                <Button
-                                    Classes="icon-btn like-btn"
-                                    Classes.is-liked="{Binding Track.IsLiked}"
+                                <Button Classes="icon-btn like-btn"
+                                    Classes.is-liked="{Binding IsLiked}"
                                     Width="28" Height="28"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center"
@@ -189,9 +202,9 @@
                                     Command="{Binding ToggleLikeCommand}"
                                     ToolTip.Tip="{Binding L[Track_ToggleLike]}">
                                     <PathIcon Width="16" Height="16"
-                                        Data="{Binding Track.IsLiked,
-                            Converter={StaticResource BoolToGeometryConverter},
-                            ConverterParameter='Heart|HeartOutline'}" />
+                                        Data="{Binding IsLiked,
+                                            Converter={StaticResource BoolToGeometryConverter},
+                                            ConverterParameter='Heart|HeartOutline'}" />
                                 </Button>
 
                                 <TextBlock

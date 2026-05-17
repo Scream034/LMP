@@ -626,16 +626,23 @@ public partial class TrackListControl : UserControl
         EndOfListText = L["Search_EndOfList"] ?? "End of list";
     }
 
+    /// <summary>
+    /// Проставляет контекстные флаги всем VM в коллекции.
+    /// Пропускает VM у которых значение уже совпадает — устраняет
+    /// лавину RaisePropertyChanged при повторных вызовах с теми же данными.
+    /// </summary>
     private void UpdateItemsContext()
     {
         if (Items == null) return;
+
+        var isPlaylist = IsPlaylistContext;
+        var isQueue = IsQueueContext;
+
         foreach (var item in Items)
         {
-            if (item is TrackItemViewModel track)
-            {
-                track.IsPlaylistContext = IsPlaylistContext;
-                track.IsQueueContext = IsQueueContext;
-            }
+            if (item is not TrackItemViewModel vm) continue;
+            if (vm.IsPlaylistContext != isPlaylist) vm.IsPlaylistContext = isPlaylist;
+            if (vm.IsQueueContext != isQueue) vm.IsQueueContext = isQueue;
         }
     }
 

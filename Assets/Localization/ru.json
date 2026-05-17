@@ -52,13 +52,11 @@
   "Nav_Library_Tip": "Ваши плейлисты и коллекция",
   "Nav_Queue_Tip": "Текущая очередь воспроизведения",
   "Nav_Settings_Tip": "Настройки приложения",
+
   "Home_Greeting_Morning": "Доброе утро",
   "Home_Greeting_Afternoon": "Добрый день",
   "Home_Greeting_Evening": "Добрый вечер",
-  "Home_Debug_Total": "ВСЕГО",
-  "Home_Debug_Displayed": "ПОКАЗАНО",
-  "Home_Debug_Cached": "КЭШИРОВАНО",
-  "Home_Debug_Memory": "ОЗУ",
+  "Home_Greeting_Night": "Доброй ночи",
 
   "Category_RecentlyPlayed": "Недавнее",
   "Category_Trending": "В тренде",
