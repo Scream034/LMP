@@ -26,7 +26,9 @@
     ExtendClientAreaTitleBarHeightHint="-1"
     WindowDecorations="BorderOnly">
 
-    <Grid x:Name="RootGrid" RowDefinitions="Auto, *, Auto">
+    <Grid x:Name="RootGrid"
+        RowDefinitions="Auto, *, Auto"
+        Margin="{Binding $parent[Window].OffScreenMargin}">
 
         <!-- ═══ TITLE BAR + NAVIGATION (46px) ═══ -->
         <Grid Grid.Row="0" Height="46" Background="{DynamicResource BgSecondaryBrush}"

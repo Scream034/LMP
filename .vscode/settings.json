@@ -9,5 +9,19 @@
         "**/.hg": true,
         "**/.DS_Store": true,
         "**/Thumbs.db": true
+    },
+    "[bat]": {
+        "files.encoding": "utf8bom"
+    },
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+    "terminal.integrated.profiles.windows": {
+        "Command Prompt": {
+            "path": "C:\\Windows\\System32\\cmd.exe",
+            "args": ["/k", "chcp 65001 >nul"]
+        },
+        "PowerShell": {
+            "source": "PowerShell",
+            "icon": "terminal-powershell"
+        }
     }
 }

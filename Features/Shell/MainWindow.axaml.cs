@@ -235,8 +235,6 @@ public partial class MainWindow : Window
 
     private void HandleWindowStateChanged(WindowState state)
     {
-        UpdateMaximizePadding(state);
-
         var maximizeIcon = this.FindControl<Border>("MaximizeIcon");
         var restoreIcon = this.FindControl<Grid>("RestoreIcon");
         maximizeIcon?.IsVisible = state != WindowState.Maximized;
@@ -266,37 +264,6 @@ public partial class MainWindow : Window
         {
             _isMinimized = false;
             ApplySuspendLevel();
-        }
-    }
-
-    private void UpdateMaximizePadding(WindowState state)
-    {
-        if (_rootGrid is null) return;
-
-        if (state == WindowState.Maximized)
-        {
-            var screen = Screens.ScreenFromWindow(this);
-            if (screen != null)
-            {
-                var scaling = screen.Scaling;
-                var bounds = screen.Bounds;
-                var workArea = screen.WorkingArea;
-
-                double left = (workArea.X - bounds.X) / scaling;
-                double top = (workArea.Y - bounds.Y) / scaling;
-                double right = (bounds.Right - workArea.Right) / scaling;
-                double bottom = (bounds.Bottom - workArea.Bottom) / scaling;
-
-                _rootGrid.Margin = new Thickness(
-                    Math.Max(0, left),
-                    Math.Max(0, top),
-                    Math.Max(0, right),
-                    Math.Max(0, bottom));
-            }
-        }
-        else
-        {
-            _rootGrid.Margin = new Thickness(0);
         }
     }
 
