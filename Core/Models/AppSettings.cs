@@ -1,3 +1,5 @@
+using LMP.Core.Audio.Normalization;
+
 namespace LMP.Core.Models;
 
 public enum YoutubeClientProfile
@@ -85,24 +87,6 @@ public enum AudioQualityPreference
 {
     BestAvailable,
     Standard
-}
-
-/// <summary>
-/// Режим нормализации громкости.
-/// </summary>
-public enum NormalizationMode
-{
-    /// <summary>
-    /// Двусторонняя нормализация: тихие треки усиливаются до таргета, громкие понижаются.
-    /// Поведение аналогично Spotify — консистентная громкость независимо от источника.
-    /// </summary>
-    Bidirectional,
-
-    /// <summary>
-    /// Односторонняя нормализация: только понижение треков громче таргета.
-    /// Тихие треки остаются без изменений. Поведение аналогично YouTube.
-    /// </summary>
-    DownwardOnly
 }
 
 public sealed class ProxySettings

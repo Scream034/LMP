@@ -24,10 +24,6 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.Url).HasMaxLength(512);
             entity.Property(e => e.ThumbnailUrl).HasMaxLength(512);
 
-            // SQLite REAL; NaN stored as IEEE 754 bit pattern.
-            // No default value constraint — handled in C# (float.NaN).
-            entity.Property(e => e.LoudnessDb);
-
             entity.HasIndex(e => e.IsLiked);
             entity.HasIndex(e => e.IsDownloaded);
             entity.HasIndex(e => e.UpdatedAt);

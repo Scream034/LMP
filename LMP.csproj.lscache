@@ -88,6 +88,10 @@ Core/Audio/
   IContainerParser.cs
   IPlaybackBackend.cs
  Memory/ChunkPool.cs
+ Normalization/
+  EbuR128Analyzer.cs
+  NormalizationConfig.cs
+  NormalizationGainResolver.cs
  Parsers/
   Mp4ContainerParser.cs
   WebMContainerParser.cs

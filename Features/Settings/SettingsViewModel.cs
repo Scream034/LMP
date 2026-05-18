@@ -7,6 +7,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
+using LMP.Core.Audio.Normalization;
 using LMP.Core.Helpers;
 using LMP.Core.Models;
 using LMP.Core.Services;

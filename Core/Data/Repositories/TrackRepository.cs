@@ -316,7 +316,6 @@ public sealed partial class TrackRepository : ITrackRepository
         PreferredContainer = e.PreferredContainer,
         PreferredBitrate = e.PreferredBitrate,
         RadioSeedId = e.RadioSeedId,
-        LoudnessDb = e.LoudnessDb ?? float.NaN,
         CachedNormalizationGain = e.CachedNormalizationGain ?? float.NaN
     };
 
@@ -338,8 +337,6 @@ public sealed partial class TrackRepository : ITrackRepository
         PreferredContainer = m.PreferredContainer,
         PreferredBitrate = m.PreferredBitrate,
         RadioSeedId = m.RadioSeedId,
-        LoudnessDb = float.IsNaN(m.LoudnessDb) || !float.IsFinite(m.LoudnessDb)
-            ? null : m.LoudnessDb,
         CachedNormalizationGain = float.IsNaN(m.CachedNormalizationGain) || !float.IsFinite(m.CachedNormalizationGain)
             ? null : m.CachedNormalizationGain
     };
@@ -361,10 +358,6 @@ public sealed partial class TrackRepository : ITrackRepository
         entity.PreferredContainer = model.PreferredContainer ?? entity.PreferredContainer;
         entity.PreferredBitrate = model.PreferredBitrate > 0 ? model.PreferredBitrate : entity.PreferredBitrate;
         entity.RadioSeedId = model.RadioSeedId ?? entity.RadioSeedId;
-
-        // Обновляем только если модель содержит валидные данные
-        if (!float.IsNaN(model.LoudnessDb) && float.IsFinite(model.LoudnessDb))
-            entity.LoudnessDb = model.LoudnessDb;
 
         if (!float.IsNaN(model.CachedNormalizationGain) && float.IsFinite(model.CachedNormalizationGain))
             entity.CachedNormalizationGain = model.CachedNormalizationGain;

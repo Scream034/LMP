@@ -476,7 +476,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             if (lockedTrackId != null && _options.OnGainLocked != null)
             {
                 var gainCallback = _options.OnGainLocked;
-                pipeline.SetGainLockedCallback(g => gainCallback(lockedTrackId, g));
+                pipeline.Analyzer.SetGainLockedCallback(g => gainCallback(lockedTrackId, g));
             }
 
             ct.ThrowIfCancellationRequested();

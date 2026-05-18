@@ -23,12 +23,6 @@ public sealed class TrackEntity
     public string? RadioSeedId { get; set; }
 
     /// <summary>
-    /// Content loudness relative to YouTube reference level (-14 LUFS), in dB.
-    /// Null when not yet obtained. Persisted from InnerTube API.
-    /// </summary>
-    public float? LoudnessDb { get; set; }
-
-    /// <summary>
     /// Cached linear normalization gain computed by EBU R128 analysis (pre-scan or real-time).
     /// Null = not yet computed. Stored as linear multiplier (e.g. 0.562, 1.78).
     /// Takes priority over LoudnessDb-derived gain when present.

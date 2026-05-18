@@ -810,9 +810,7 @@ public partial class YoutubeProvider : IDisposable
 
                             // Обновляем loudness только если InnerTube вернул валидное значение.
                             // Не перезаписываем уже известные метаданные (например, из БД или pre-scan).
-                            var loudness = selectedStream.LoudnessDb;
-                            if (!float.IsNaN(loudness) && float.IsFinite(loudness) && !track.HasLoudnessMetadata)
-                                track.LoudnessDb = loudness;
+                            track.TrySetGainFromLoudness(selectedStream.LoudnessDb);
 
                             return (url, size, bitrate, codec, container);
                         }

@@ -145,30 +145,30 @@ public partial class CopyLinkButton : UserControl
         {
             ShowHint(success);
 
-            if (_icon != null) _icon.Opacity = 0;
+            _icon?.Opacity = 0;
             await Task.Delay(FadeDurationMs, cts.Token);
 
             SetIconState(
                 success ? SuccessIconKey : ErrorIconKey,
                 success ? "AccentBrush"  : "SystemErrorRedBrush");
 
-            if (_icon != null) _icon.Opacity = 1;
+            _icon?.Opacity = 1;
 
             await Task.Delay(StateDurationMs, cts.Token);
 
             HideHint();
 
-            if (_icon != null) _icon.Opacity = 0;
+            _icon?.Opacity = 0;
             await Task.Delay(FadeDurationMs, cts.Token);
 
             ApplyIdleState();
-            if (_icon != null) _icon.Opacity = 1;
+            _icon?.Opacity = 1;
         }
         catch (OperationCanceledException)
         {
             HideHint();
             ApplyIdleState();
-            if (_icon != null) _icon.Opacity = 1;
+            _icon?.Opacity = 1;
         }
     }
 
@@ -200,8 +200,7 @@ public partial class CopyLinkButton : UserControl
 
     private void HideHint()
     {
-        if (_hintPopup != null)
-            _hintPopup.IsOpen = false;
+        _hintPopup?.IsOpen = false;
     }
 
     /// <summary>

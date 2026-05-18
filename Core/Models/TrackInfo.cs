@@ -195,44 +195,60 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     #region Audio Normalization
 
     /// <summary>
-    /// Content loudness относительно YouTube reference (-14 LUFS), в dB.
-    /// Получается напрямую из InnerTube API (поле loudnessDb в формате стрима).
-    /// Семантика: положительное = трек громче таргета, YouTube его понижает.
-    /// float.NaN = значение ещё не получено (требуется pre-scan или реальный анализ).
-    /// </summary>
-    /// <remarks>
-    /// Конвертация в linear gain для нормализации:
-    /// <c>gain = MathF.Pow(10f, -LoudnessDb / 20f)</c>
-    /// Пример: LoudnessDb = +3.5 → gain = 0.668 (понижение на 3.5 dB)
-    ///         LoudnessDb = -2.0 → gain = 1.259 (повышение на 2 dB)
-    /// </remarks>
-    public float LoudnessDb { get; set; } = float.NaN;
-
-    /// <summary>
-    /// Закэшированный linear gain нормализации, вычисленный EBU R128 анализом (pre-scan или real-time).
-    /// float.NaN = ещё не вычислен. Загружается из БД, не сериализуется в JSON.
-    /// Приоритет: CachedNormalizationGain > LoudnessDb-derived gain для повторного воспроизведения.
+    /// Закэшированный linear gain нормализации.
+    /// Единственный источник истины для воспроизведения.
+    ///
+    /// <para><b>Откуда берётся:</b></para>
+    /// <list type="bullet">
+    ///   <item>YouTube InnerTube API — через <see cref="TrySetGainFromLoudness"/></item>
+    ///   <item>EBU R128 pre-scan или real-time — через <see cref="SetGain"/></item>
+    /// </list>
+    ///
+    /// <para><c>float.NaN</c> = не вычислен → требуется анализ.</para>
     /// </summary>
     [JsonIgnore]
     public float CachedNormalizationGain { get; set; } = float.NaN;
 
-    /// <summary>Возвращает true если loudness метаданные получены и валидны.</summary>
-    [JsonIgnore]
-    public bool HasLoudnessMetadata => !float.IsNaN(LoudnessDb) && float.IsFinite(LoudnessDb);
-
-    /// <summary>Возвращает true если gain нормализации уже вычислен и закэширован в БД.</summary>
+    /// <summary>Возвращает true если gain вычислен и готов к применению.</summary>
     [JsonIgnore]
     public bool HasCachedNormalizationGain =>
         !float.IsNaN(CachedNormalizationGain) && float.IsFinite(CachedNormalizationGain);
 
     /// <summary>
-    /// Вычисляет linear gain нормализации из loudness метаданных YouTube.
+    /// Устанавливает gain напрямую (из EBU R128 анализа).
+    /// Не перезаписывает уже существующий gain.
     /// </summary>
-    /// <returns>Linear gain множитель, или 1.0f если метаданные отсутствуют.</returns>
-    [JsonIgnore]
-    public float NormalizationGain => HasLoudnessMetadata
-        ? MathF.Pow(10f, -LoudnessDb / 20f)
-        : 1.0f;
+    /// <param name="gain">Linear gain множитель.</param>
+    /// <returns>true если gain установлен.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool SetGain(float gain)
+    {
+        if (HasCachedNormalizationGain) return false;
+        if (!float.IsFinite(gain) || gain <= 0f) return false;
+
+        CachedNormalizationGain = gain;
+        return true;
+    }
+
+    /// <summary>
+    /// Вычисляет linear gain из YouTube loudnessDb и кэширует.
+    /// Не перезаписывает уже существующий gain.
+    /// </summary>
+    /// <remarks>
+    /// Конвертация: <c>gain = 10^(−loudnessDb / 20)</c>.
+    /// Пример: loudnessDb=6.80 → gain=0.457x (понижение на ~6.8 dB).
+    /// </remarks>
+    /// <param name="loudnessDb">Значение поля loudnessDb из InnerTube adaptiveFormats.</param>
+    /// <returns>true если gain успешно вычислен и установлен.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TrySetGainFromLoudness(float loudnessDb)
+    {
+        if (HasCachedNormalizationGain) return false;
+        if (float.IsNaN(loudnessDb) || !float.IsFinite(loudnessDb)) return false;
+
+        float gain = MathF.Pow(10f, -loudnessDb / 20f);
+        return SetGain(gain);
+    }
 
     #endregion
 
@@ -283,6 +299,9 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
         if (fresh.IsDisliked && !IsDisliked)
             IsDisliked = true;
+
+        if (fresh.HasCachedNormalizationGain && !HasCachedNormalizationGain)
+            CachedNormalizationGain = fresh.CachedNormalizationGain;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
