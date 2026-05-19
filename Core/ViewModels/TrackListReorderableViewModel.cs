@@ -1,4 +1,3 @@
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using LMP.Core.Helpers;
 using LMP.Core.Models;

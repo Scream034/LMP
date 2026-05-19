@@ -43,7 +43,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     [Reactive] public bool IsFetchingFromNetwork { get; protected set; }
     [Reactive] public bool HasMoreItems { get; protected set; }
     [Reactive] public bool ReachedEnd { get; protected set; }
-    [Reactive] public bool EnableSmoothLoading { get; set; }
 
     public string FilterQuery
     {
@@ -63,7 +62,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     protected PaginatedViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
-        EnableSmoothLoading = LibService.Settings.EnableSmoothLoading;
 
         var filterPredicate = this.WhenAnyValue(x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(200))

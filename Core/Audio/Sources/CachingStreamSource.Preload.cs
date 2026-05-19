@@ -49,6 +49,10 @@ public sealed partial class CachingStreamSource
         int idleCycles = 0;
         _backgroundChunksLoaded = 0;
 
+#if DEBUG
+        int lastReportedProgress = -1;
+#endif
+
         while (!ct.IsCancellationRequested && _cacheEntry is { IsComplete: false })
         {
             try
@@ -91,7 +95,7 @@ public sealed partial class CachingStreamSource
                                 await EnsureChunkAsync(idx, downloadToken);
                             }
                             catch (OperationCanceledException) { break; }
-                            catch (Exceptions.ChunkDownloadFatalException)
+                            catch (ChunkDownloadFatalException)
                             {
                                 Log.Debug($"[CachingSource] Critical chunk {idx} fatal in suspend mode");
                                 break;
@@ -218,21 +222,20 @@ public sealed partial class CachingStreamSource
                     await Task.Delay(_config.BackgroundFillIntervalMs, ct);
                 }
 
-#if DEBUG
-                int lastReportedProgress = -1;
-                // Progress reporting
-                int progress = (int)_cacheEntry.DownloadProgress;
-                if (progress / 25 > lastReportedProgress / 25)
-                {
-                    Log.Debug($"[CachingSource] Progress: {progress}% " +
-                              $"({_cacheEntry.DownloadedChunks}/{_cacheEntry.TotalChunks})");
-                    lastReportedProgress = progress;
-                }
-#endif
-
                 // RAM eviction
                 if (_ramChunks.Count > _config.MaxRamChunks)
                     ReleaseRamBuffers();
+
+#if DEBUG
+                // ═══ Progress reporting (moved out of #if DEBUG, deduplicated) ═══
+                int progress = (int)(_cacheEntry?.DownloadProgress ?? 0);
+                if (progress != lastReportedProgress)
+                {
+                    Log.Debug($"[CachingSource] Progress: {progress}% " +
+                              $"({_cacheEntry?.DownloadedChunks ?? 0}/{_cacheEntry?.TotalChunks ?? 0})");
+                    lastReportedProgress = progress;
+                }
+#endif
             }
             catch (OperationCanceledException) { break; }
             catch { }

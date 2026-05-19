@@ -6,7 +6,6 @@
     xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Search.SearchView"
     x:DataType="vm:SearchViewModel"
-    x:CompileBindings="True"
     x:Name="SearchRoot">
 
     <Grid RowDefinitions="Auto, *">
@@ -166,8 +165,7 @@
                 IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
                 ReachedEnd="{Binding ReachedEnd}"
                 LoadMoreCommand="{Binding LoadMoreCommand}"
-                UseSearchLoader="True"
-                EnableSmoothLoading="{Binding EnableSmoothLoading}" />
+                UseSearchLoader="True" />
         </ScrollViewer>
     </Grid>
 </UserControl>

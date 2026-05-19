@@ -918,4 +918,131 @@
         Selector="Button.ctrl-btn-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- NAV SIDEBAR — Вертикальный аналог nav-tab для боковых панелей     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--                                                                     -->
+    <!-- Зеркалирует визуальный язык nav-tab: те же цвета, те же переходы, -->
+    <!-- но с левым border-индикатором вместо нижнего.                      -->
+    <!-- Без Opacity-манипуляций — только цветовые переходы (как nav-tab).  -->
+    <!--                                                                     -->
+    <!-- ИСПОЛЬЗОВАНИЕ: <ListBox Classes="nav-sidebar" ... />               -->
+    <!--                                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- Сброс дефолтного фона ListBox -->
+    <Style Selector="ListBox.nav-sidebar">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+    </Style>
+
+    <!-- Base: идентично nav-tab — прозрачный фон, TextMuted, тонкий border -->
+    <Style Selector="ListBox.nav-sidebar ListBoxItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightTransparentBrush}" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border
+                    Name="PART_Border"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+                    <ContentPresenter
+                        Content="{TemplateBinding Content}"
+                        HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                        VerticalAlignment="Center" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- Иконка и текст в base-состоянии -->
+    <Style Selector="ListBox.nav-sidebar ListBoxItem PathIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem TextBlock">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- Hover: TextSecondary + BgHighlight border (идентично nav-tab:pointerover) -->
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover PathIcon">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+
+    <!-- Selected: TextPrimary + AccentBrush border (идентично nav-tab.active) -->
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected PathIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- Selected + Hover: держим accent (аналог nav-tab.active — IsHitTestVisible=False там) -->
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover PathIcon">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- Fluent override: сброс дефолтного фона selection -->
+    <Style Selector="ListBox.nav-sidebar ListBoxItem /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
 </Styles>

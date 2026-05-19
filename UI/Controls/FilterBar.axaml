@@ -3,8 +3,7 @@
     xmlns:local="using:LMP.UI.Controls"
     x:Class="LMP.UI.Controls.FilterBar"
     x:Name="Root"
-    x:DataType="local:FilterBar"
-    x:CompileBindings="True">
+    x:DataType="local:FilterBar">
 
     <TextBox Text="{Binding FilterText, ElementName=Root, Mode=TwoWay}"
         PlaceholderText="{Binding Watermark, ElementName=Root}"

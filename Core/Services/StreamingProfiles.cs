@@ -48,7 +48,7 @@ public static class StreamingProfiles
         BackgroundFillIdleCycles = 8,
         BackgroundFillIntervalMs = 5000,
         MaxBackgroundChunksPerSession = 30,
-        MinBufferAheadForBackgroundFill = 4,
+        MinBufferAheadForBackgroundFill = 2,
 
         PreloadIntervalMs = 1200
     };
@@ -81,7 +81,7 @@ public static class StreamingProfiles
         BackgroundFillIdleCycles = 5,
         BackgroundFillIntervalMs = 3000,
         MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 6,
+        MinBufferAheadForBackgroundFill = 3,
 
         PreloadIntervalMs = 800
     };
@@ -114,7 +114,7 @@ public static class StreamingProfiles
         BackgroundFillIdleCycles = 3,
         BackgroundFillIntervalMs = 1500,
         MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 8,
+        MinBufferAheadForBackgroundFill = 4,
 
         PreloadIntervalMs = 500
     };
@@ -147,7 +147,7 @@ public static class StreamingProfiles
         BackgroundFillIdleCycles = 2,
         BackgroundFillIntervalMs = 500,
         MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 10,
+        MinBufferAheadForBackgroundFill = 6,
 
         PreloadIntervalMs = 300
     };

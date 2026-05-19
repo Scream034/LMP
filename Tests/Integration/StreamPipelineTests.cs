@@ -411,7 +411,7 @@ public static class StreamPipelineTests
 
         if (!string.IsNullOrEmpty(nToken))
         {
-            var decryptor = services.GetRequiredService<LMP.Core.Youtube.Bridge.NToken.NTokenDecryptor>();
+            var decryptor = services.GetRequiredService<Core.Youtube.Bridge.NToken.NTokenDecryptor>();
 
             try
             {

@@ -327,8 +327,6 @@
   "Settings_SearchCache": "Cache Search Results",
   "Settings_SearchCacheDesc": "Store search results for faster repeated searches",
   "Settings_SearchCacheTtl": "Cache Duration",
-  "Settings_SmoothLoading": "Smooth Loading Animations",
-  "Settings_SmoothLoadingDesc": "Show smooth skeleton loaders instead of instant content",
   "Settings_PlayErrorSound": "Error Sound",
   "Settings_PlayErrorSoundDesc": "Play a sound when a playback error occurs.",
   "Settings_ErrorBehavior": "Playback Error Behavior",

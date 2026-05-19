@@ -5,7 +5,6 @@
     xmlns:asyncImage="using:AsyncImageLoader"
     xmlns:vm="using:LMP.Features.Player"
     xmlns:controls="using:LMP.UI.Controls"
-    x:CompileBindings="True"
     x:DataType="vm:PlayerBarViewModel"
     Padding="0,5,0,0"
     ClipToBounds="True"
@@ -32,7 +31,7 @@
                     HorizontalAlignment="Stretch"
                     VerticalAlignment="Top"
                     Classes="track-container"
-                    ClipToBounds="False"
+                    ClipToBounds="True"
                     RenderTransformOrigin="0.5,0.0">
 
                     <!--  Layer 0: Background track  -->
@@ -109,26 +108,35 @@
                             IsHitTestVisible="False" />
                     </Canvas>
 
-                    <!--  Layer 4: Progress bar  -->
+                    <!--  Layer 4: Progress bar — full-width, slides via TranslateTransform.X  -->
+                    <!--  HorizontalAlignment="Stretch" даёт Width = parent width.
+                        TranslateTransform.X = -(width * (1 - ratio)) сдвигает влево.
+                        ClipToBounds на TrackContainer скрывает выступ.
+                        Не трогает layout, не масштабирует CornerRadius. -->
                     <Border
                         Name="ProgressBar"
-                        Width="0"
-                        HorizontalAlignment="Left"
+                        HorizontalAlignment="Stretch"
                         Background="{DynamicResource AccentBrush}"
                         Classes="progress-bar"
-                        CornerRadius="2" />
+                        CornerRadius="2">
+                        <Border.RenderTransform>
+                            <TranslateTransform X="-10000" />
+                        </Border.RenderTransform>
+                    </Border>
 
-                    <!--  Layer 5: Playing glow  -->
+                    <!--  Layer 5: Playing glow — full-width, slides alongside ProgressBar  -->
                     <Border
                         Name="PlayingGlow"
                         Height="4"
-                        Width="0"
-                        HorizontalAlignment="Left"
+                        HorizontalAlignment="Stretch"
                         Classes="playing-glow"
                         Classes.active="{Binding IsPlaying}"
                         Classes.suspended="{Binding IsSuspended}"
                         CornerRadius="2"
                         IsHitTestVisible="False">
+                        <Border.RenderTransform>
+                            <TranslateTransform X="-10000" />
+                        </Border.RenderTransform>
                         <Border.Background>
                             <LinearGradientBrush StartPoint="100%,50%" EndPoint="0%,50%">
                                 <GradientStop Offset="0" Color="{DynamicResource AccentHover}" />
@@ -151,19 +159,29 @@
                     IsHitTestVisible="False">
                     <Border
                         Name="SeekCursor"
+                        Canvas.Left="0"
                         Canvas.Top="-4"
                         Width="2"
                         Height="12"
                         Background="{DynamicResource AccentBrush}"
                         Classes="seek-cursor"
-                        CornerRadius="1" />
+                        CornerRadius="1">
+                        <Border.RenderTransform>
+                            <TranslateTransform X="0" />
+                        </Border.RenderTransform>
+                    </Border>
                     <Ellipse
                         Name="SeekThumb"
+                        Canvas.Left="0"
                         Canvas.Top="-5"
                         Width="14"
                         Height="14"
                         Classes="slider-thumb"
-                        Fill="{DynamicResource AccentBrush}" />
+                        Fill="{DynamicResource AccentBrush}">
+                        <Ellipse.RenderTransform>
+                            <TranslateTransform X="0" />
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
                 </Canvas>
 
                 <!--  Hit area  -->

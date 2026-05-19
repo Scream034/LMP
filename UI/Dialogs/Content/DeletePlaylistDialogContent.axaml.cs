@@ -4,7 +4,7 @@ namespace LMP.UI.Dialogs.Content;
 
 /// <summary>
 /// View для диалога удаления плейлиста.
-/// DataContext: <see cref="LMP.UI.Dialogs.DeletePlaylistDialogViewModel"/>
+/// DataContext: <see cref="DeletePlaylistDialogViewModel"/>
 /// </summary>
 public partial class DeletePlaylistDialogContent : UserControl
 {

@@ -3,8 +3,7 @@
     xmlns:d="using:LMP.UI.Dialogs"
     xmlns:asyncImage="using:AsyncImageLoader"
     x:Class="LMP.UI.Controls.PlaylistCoverPicker"
-    x:DataType="d:PlaylistCoverPickerViewModel"
-    x:CompileBindings="True">
+    x:DataType="d:PlaylistCoverPickerViewModel">
 
     <Grid RowDefinitions="Auto, *">
 

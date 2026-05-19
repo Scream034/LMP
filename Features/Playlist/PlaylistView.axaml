@@ -6,8 +6,7 @@
     xmlns:i="using:Avalonia.Xaml.Interactivity"
     xmlns:b="using:LMP.Core.Behaviors"
     x:Class="LMP.Features.Playlist.PlaylistView"
-    x:DataType="vm:PlaylistViewModel"
-    x:CompileBindings="True">
+    x:DataType="vm:PlaylistViewModel">
 
     <UserControl.Styles>
         <Style Selector="GridSplitter.header-splitter">
@@ -140,7 +139,6 @@
                 Margin="24,12,24,0"
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"
-                EnableSmoothLoading="{Binding EnableSmoothLoading}"
                 IsPlaylistContext="{Binding CanEdit}"
                 EnableReordering="{Binding CanReorderItems}"
                 MoveItemCommand="{Binding MoveItemCommand}" />
@@ -199,7 +197,7 @@
 
                         <PathIcon Data="{StaticResource Icon.CloudCheck}"
                             Width="14" Height="14"
-                            Foreground="{DynamicResource TextMutedBrush}"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
                             IsVisible="{Binding IsCloud}"
                             VerticalAlignment="Center"
                             ToolTip.Tip="{Binding L[Library_CloudSyncTooltip]}" />

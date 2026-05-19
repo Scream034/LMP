@@ -1,8 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Reactive;
-using Avalonia;
-using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using LMP.Core.Helpers;
 using LMP.Core.Services;

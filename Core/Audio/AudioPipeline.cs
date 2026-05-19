@@ -230,7 +230,10 @@ public sealed class AudioPipeline : IAsyncDisposable
             sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
 
             if (sharedBackend is NAudioBackend naBackend)
+            {
                 naBackend.SetDeviceLostCallback(pipeline.NotifyDeviceLost);
+                naBackend.SetStarvationCallback(pipeline.NotifyStarvation);
+            }
 
             Log.Info($"[AudioPipeline] Created (shared backend): {streamInfo.FormatDisplay}");
 
@@ -494,7 +497,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                     retryCount = 0;
                 }
                 catch (OperationCanceledException) { break; }
-                catch (Exceptions.UrlExpiredException) when (urlRefresher != null)
+                catch (UrlExpiredException) when (urlRefresher != null)
                 {
                     var newUrl = await urlRefresher(ct);
                     if (!string.IsNullOrEmpty(newUrl))
@@ -504,7 +507,7 @@ public sealed class AudioPipeline : IAsyncDisposable
                     }
                     throw;
                 }
-                catch (Exceptions.ChunkDownloadFatalException) { throw; }
+                catch (ChunkDownloadFatalException) { throw; }
                 catch (FileNotFoundException ex)
                 {
                     Log.Warn($"[AudioPipeline] Cache file deleted during playback: {ex.Message}");
@@ -680,6 +683,33 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (_disposed) return;
         _backend.Flush();
         _pcmBuffer.Clear();
+    }
+
+    /// <summary>
+    /// Вызывается когда backend не получает данных > 1 секунды при открытом gate.
+    /// Логирует диагностику состояния decoder / source / ring buffer
+    /// для пост-мортем анализа причины starvation.
+    /// </summary>
+    internal void NotifyStarvation()
+    {
+        if (_disposed) return;
+
+        var decoderTask = _decoderTask;
+        bool decoderAlive = decoderTask is { IsCompleted: false };
+        int ringCount = _pcmBuffer.Count;
+        int ringAvailable = _pcmBuffer.Available;
+
+        Log.Error($"[AudioPipeline] Starvation: decoder={(decoderAlive ? "alive" : "dead")}, " +
+                  $"ring={ringCount}/{ringCount + ringAvailable}, " +
+                  $"source={_source.GetType().Name}, " +
+                  $"pos={_source.PositionMs}ms/{_source.DurationMs}ms");
+
+        // Если decoder мёртв (завершился) но ring buffer пуст и track не закончился —
+        // это ненормальная ситуация. Source мог потерять данные.
+        if (!decoderAlive && ringCount == 0 && _source.PositionMs < _source.DurationMs - 1000)
+        {
+            Log.Error("[AudioPipeline] Decoder died prematurely — likely I/O starvation or unhandled exception");
+        }
     }
 
     /// <summary>

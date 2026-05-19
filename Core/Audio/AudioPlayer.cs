@@ -567,7 +567,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             if (_activePipeline != pipeline) return;
 
             Log.Error("[AudioPlayer] Pipeline lifetime ended unexpectedly (device lost)");
-            HandleError(new Exceptions.AudioDeviceException(GetDeviceErrorMessage()));
+            HandleError(new AudioDeviceException(GetDeviceErrorMessage()));
 
             int session = Interlocked.Increment(ref _sessionId);
 
@@ -688,7 +688,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             cmd.Completion?.TrySetCanceled();
             StartPositionTimerDelayed();
         }
-        catch (Exceptions.AudioDeviceException ex)
+        catch (AudioDeviceException ex)
         {
             Log.Error($"[AudioPlayer] Audio device lost during seek: {ex.Message}");
             cmd.Completion?.TrySetException(ex);
@@ -703,7 +703,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             if (wasPlaying)
             {
                 try { pipeline.Start(); }
-                catch (Exceptions.AudioDeviceException devEx) { HandleError(devEx); return; }
+                catch (AudioDeviceException devEx) { HandleError(devEx); return; }
             }
             StartPositionTimerDelayed();
         }
@@ -799,6 +799,23 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
     #region Helpers
 
+    /// <summary>
+    /// Обработчик естественного завершения трека (decoder дочитал EOF).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>КРИТИЧНО:</b> Cleanup (flush backend, dispose pipeline, stop timers)
+    /// выполняется ЗДЕСЬ, ДО <see cref="SetState"/>(<see cref="PlayerState.Idle"/>).</para>
+    ///
+    /// <para><b>Почему:</b> <see cref="AudioEngine.HandlePlayerTrackEnded"/> вызывает
+    /// <see cref="Stop"/> который гвардится на <c>_state == Idle</c>.
+    /// Если SetState(Idle) выполнен до Stop() — StopCommand никогда не отправляется,
+    /// backend gate остаётся открытым, fill loop крутится вечно → starvation.</para>
+    ///
+    /// <para><b>Thread safety:</b> Вызывается из decoder thread.
+    /// <see cref="StopTimers"/> — Timer.Change(Infinite) thread-safe.
+    /// <see cref="IPlaybackBackend.Flush"/> — защищён _stateLock в NAudioBackend.
+    /// Pipeline dispose — через fire-and-forget Task.Run.</para>
+    /// </remarks>
     private void OnTrackEnded()
     {
         var currentState = _state;
@@ -807,6 +824,29 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         {
             return;
         }
+
+        var pipeline = _activePipeline;
+        Log.Info($"[AudioPlayer] Track ended: {_currentTrackId}, " +
+                 $"pos={pipeline?.Source.PositionMs ?? 0}ms/{pipeline?.Source.DurationMs ?? 0}ms");
+
+        // ═══ CLEANUP ДО SetState(Idle) ═══
+        // Если SetState(Idle) выполнить первым — AudioEngine.Stop() → _player.Stop()
+        // увидит Idle и вернётся без отправки StopCommand.
+        // HandleStopAsync никогда не вызовется → утечка pipeline + backend + timers.
+        StopTimers();
+        _sharedBackend.Flush();
+
+        var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
+        if (oldPipeline != null)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await oldPipeline.DisposeAsync(); }
+                catch (Exception ex) { Log.Debug($"[AudioPlayer] Track-end dispose: {ex.Message}"); }
+            });
+        }
+
+        _currentTrackId = null;
 
         _events.RaiseTrackEnded();
         SetState(PlayerState.Idle);

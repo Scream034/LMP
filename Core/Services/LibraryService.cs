@@ -221,7 +221,6 @@ public sealed class LibraryService : IAsyncDisposable
         SearchBatchSize = d.SearchBatchSize,
         EnableSearchCache = d.EnableSearchCache,
         SearchCacheTtlMinutes = d.SearchCacheTtlMinutes,
-        EnableSmoothLoading = d.EnableSmoothLoading,
         PlaylistHeaderHeight = d.PlaylistHeaderHeight,
         LastSearchQuery = d.LastSearchQuery,
         SearchHistory = d.SearchHistory ?? []

@@ -1,6 +1,5 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -18,36 +17,6 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Features.Settings;
 
-#region Section markers for VirtualizingStackPanel
-
-/// <summary>
-/// Базовый маркер секции настроек.
-/// <para>
-/// Каждая секция — отдельный тип → Avalonia выбирает DataTemplate по DataType.
-/// VirtualizingStackPanel материализует только видимые секции (~2-3 из 9),
-/// остальные ~150 контролов не существуют в visual tree.
-/// </para>
-/// </summary>
-public abstract class SettingsSectionBase(SettingsViewModel owner)
-{
-    /// <summary>Ссылка на VM — все биндинги внутри DataTemplate идут через Owner.*</summary>
-    public SettingsViewModel Owner { get; } = owner;
-}
-
-public sealed class TitleSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class AccountLanguageSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class NetworkSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class StorageCacheSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class MemorySection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class AppearanceSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class AudioSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class PlaybackSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class WindowBehaviorSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class GeneralSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-public sealed class BottomPaddingSection(SettingsViewModel owner) : SettingsSectionBase(owner);
-
-#endregion
-
 /// <summary>
 /// Обёртка над произвольным значением с именем для отображения в ComboBox.
 /// <para>
@@ -64,8 +33,17 @@ public sealed class LocalizedItem<T>(T value, string name)
     public override string ToString() => Name;
 }
 
+/// <summary>Пресеты количества bitmap-объектов в RAM-кэше изображений.</summary>
 public enum ImageCachePreset { Custom, Low, Medium, High }
 
+/// <summary>
+/// ViewModel страницы настроек.
+/// <para>
+/// Архитектура: sidebar (ListBox с 9 items) + ContentControl справа.
+/// В каждый момент в visual tree живёт одна страница (~10–15 контролов).
+/// Все страницы получают DataContext = этот VM напрямую (без Owner.*).
+/// </para>
+/// </summary>
 public sealed class SettingsViewModel : ViewModelBase, IDisposable
 {
     private readonly LibraryService _library;
@@ -83,75 +61,148 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private bool _isLoadingSettings;
     private bool _isDisposed;
 
+    /// <summary>
+    /// Признак готовности контента.
+    /// <para>
+    /// Пока <c>false</c> — показывается skeleton-заглушка.
+    /// После <c>true</c> — sidebar + страница контента.
+    /// </para>
+    /// </summary>
     [Reactive] public bool IsContentReady { get; private set; }
 
+    #region Sidebar
+
     /// <summary>
-    /// Коллекция секций для ItemsControl + VirtualizingStackPanel.
-    /// Каждый элемент — маркер секции со ссылкой на этот VM.
+    /// Элементы sidebar — по одному на секцию настроек.
+    /// <para>
+    /// ListBox отображает их иконкой + названием через DataTemplate по DataType.
+    /// ContentControl справа подбирает страницу по типу выбранного элемента.
+    /// В каждый момент в visual tree — одна страница (~10–15 контролов).
+    /// </para>
     /// </summary>
-    public ObservableCollection<SettingsSectionBase> Sections { get; } = [];
+    public ObservableCollection<SettingsSidebarItemBase> SidebarItems { get; } = [];
+
+    /// <summary>Текущий выбранный элемент sidebar — определяет какая страница отображается.</summary>
+    [Reactive] public SettingsSidebarItemBase? SelectedSidebarItem { get; set; }
+
+    /// <summary>
+    /// Управляет видимостью текстовых лейблов в sidebar.
+    /// <para>
+    /// <c>true</c>  — sidebar достаточно широкий, показываем иконку + текст.<br/>
+    /// <c>false</c> — sidebar узкий, показываем только иконки (tooltip всегда виден).
+    /// Значение устанавливается из code-behind при изменении ширины колонки GridSplitter-ом.
+    /// </para>
+    /// </summary>
+    [Reactive] public bool IsSidebarExpanded { get; set; } = true;
+
+    #endregion
 
     #region Account
 
+    /// <summary>Признак авторизации пользователя через cookies.</summary>
     [Reactive] public bool IsAuthenticated { get; private set; }
 
-    public string AccountName     => IsAuthenticated ? _auth.State.UserName  : SL["Auth_NotSignedIn"];
+    /// <summary>Имя пользователя или локализованная строка "не авторизован".</summary>
+    public string AccountName => IsAuthenticated ? _auth.State.UserName : SL["Auth_NotSignedIn"];
+
+    /// <summary>URL аватара или <c>null</c> если не авторизован — управляет видимостью Image/Icon.</summary>
     public string? AccountAvatarUrl => IsAuthenticated ? _auth.State.AvatarUrl : null;
-    public string AccountSubtitle  => IsAuthenticated ? _auth.State.UserEmail : SL["Auth_Guest"];
+
+    /// <summary>Email или локализованная строка "гость".</summary>
+    public string AccountSubtitle => IsAuthenticated ? _auth.State.UserEmail : SL["Auth_Guest"];
 
     #endregion
 
     #region Network
 
-    public ObservableCollection<LocalizedItem<InternetProfile>>      InternetProfileOptions { get; } = [];
-    [Reactive] public LocalizedItem<InternetProfile>?                SelectedInternetProfile { get; set; }
+    /// <summary>Доступные профили скорости интернета для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<InternetProfile>> InternetProfileOptions { get; } = [];
 
+    /// <summary>Выбранный профиль скорости; синхронизируется с настройками через подписку.</summary>
+    [Reactive] public LocalizedItem<InternetProfile>? SelectedInternetProfile { get; set; }
+
+    /// <summary>Доступные YouTube-клиенты для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<YoutubeClientProfile>> ClientOptions { get; } = [];
-    [Reactive] public LocalizedItem<YoutubeClientProfile>?           SelectedClient { get; set; }
 
-    [Reactive] public bool   ProxyEnabled { get; set; }
-    [Reactive] public string ProxyHost    { get; set; } = "";
-    [Reactive] public int    ProxyPort    { get; set; } = 8080;
-    [Reactive] public bool   ProxyAuth    { get; set; }
-    [Reactive] public string ProxyUser    { get; set; } = "";
-    [Reactive] public string ProxyPass    { get; set; } = "";
-    [Reactive] public bool   NetworkRestartRequired { get; set; }
+    /// <summary>Выбранный YouTube-клиент; синхронизируется с настройками через подписку.</summary>
+    [Reactive] public LocalizedItem<YoutubeClientProfile>? SelectedClient { get; set; }
+
+    [Reactive] public bool ProxyEnabled { get; set; }
+    [Reactive] public string ProxyHost { get; set; } = "";
+    [Reactive] public int ProxyPort { get; set; } = 8080;
+    [Reactive] public bool ProxyAuth { get; set; }
+    [Reactive] public string ProxyUser { get; set; } = "";
+    [Reactive] public string ProxyPass { get; set; } = "";
+
+    /// <summary>
+    /// Признак того, что изменения сети требуют перезапуска.
+    /// <para>Устанавливается при смене профиля, прокси или клиента.</para>
+    /// </summary>
+    [Reactive] public bool NetworkRestartRequired { get; set; }
 
     #endregion
 
     #region Storage
 
+    /// <summary>Текущий путь к папке загрузок.</summary>
     [Reactive] public string DownloadPath { get; set; } = string.Empty;
 
+    /// <summary>Пресеты количества bitmap-объектов в RAM для ComboBox.</summary>
     public ObservableCollection<LocalizedItem<ImageCachePreset>> ImageCachePresets { get; } = [];
-    [Reactive] public LocalizedItem<ImageCachePreset>?           SelectedImageCachePreset { get; set; }
+
+    /// <summary>Выбранный пресет; <c>null</c> означает Custom (произвольное значение слайдера).</summary>
+    [Reactive] public LocalizedItem<ImageCachePreset>? SelectedImageCachePreset { get; set; }
+
+    /// <summary>Максимальное количество bitmap-объектов в RAM-кэше.</summary>
     [Reactive] public int MaxBitmapCacheItems { get; set; }
 
-    [Reactive] public int ImageCacheLimitMb       { get; set; }
-    [Reactive] public int AudioCacheLimitMb       { get; set; }
+    [Reactive] public int ImageCacheLimitMb { get; set; }
+    [Reactive] public int AudioCacheLimitMb { get; set; }
     [Reactive] public int DownloadedTracksLimitMb { get; set; }
 
-    [Reactive] public string ImageCacheStats       { get; private set; } = "...";
-    [Reactive] public string AudioCacheStats       { get; private set; } = "...";
+    /// <summary>Статистика кэша изображений в формате "X MB / Y MB (N files, RAM: M)".</summary>
+    [Reactive] public string ImageCacheStats { get; private set; } = "...";
+
+    /// <summary>Статистика аудиокэша в формате "X MB / Y MB (N files)".</summary>
+    [Reactive] public string AudioCacheStats { get; private set; } = "...";
+
+    /// <summary>Доля занятого места в кэше изображений [0..1] для ProgressBar.</summary>
     [Reactive] public double ImageCacheUsagePercent { get; private set; }
+
+    /// <summary>Доля занятого места в аудиокэше [0..1] для ProgressBar.</summary>
     [Reactive] public double AudioCacheUsagePercent { get; private set; }
-    [Reactive] public string DownloadsStats         { get; private set; } = "...";
-    [Reactive] public double DownloadsUsagePercent  { get; private set; }
-    [Reactive] public bool   AutoSaveToDownloads    { get; set; }
+
+    /// <summary>Статистика загрузок в формате "X MB / Y MB (N files)".</summary>
+    [Reactive] public string DownloadsStats { get; private set; } = "...";
+
+    /// <summary>Доля занятого места загрузками [0..1] для ProgressBar.</summary>
+    [Reactive] public double DownloadsUsagePercent { get; private set; }
+
+    /// <summary>Автоматически сохранять загрузки в папку Downloads.</summary>
+    [Reactive] public bool AutoSaveToDownloads { get; set; }
 
     #endregion
 
     #region Theme
 
+    /// <summary>Встроенные и пользовательские пресеты тем для ComboBox.</summary>
     public ObservableCollection<ThemeSettings> ThemePresets { get; } = [];
-    [Reactive] public ThemeSettings? SelectedPreset      { get; set; }
-    [Reactive] public Color AccentColor                  { get; set; }
-    [Reactive] public Color BgPrimaryColor               { get; set; }
-    [Reactive] public Color BgSecondaryColor             { get; set; }
-    [Reactive] public Color BgElevatedColor              { get; set; }
-    [Reactive] public Color TextPrimaryColor             { get; set; }
-    [Reactive] public Color TextSecondaryColor           { get; set; }
-    [Reactive] public bool  HasUnsavedThemeChanges       { get; set; }
+
+    /// <summary>Выбранный пресет темы; при смене — цвета применяются к color picker'ам.</summary>
+    [Reactive] public ThemeSettings? SelectedPreset { get; set; }
+
+    [Reactive] public Color AccentColor { get; set; }
+    [Reactive] public Color BgPrimaryColor { get; set; }
+    [Reactive] public Color BgSecondaryColor { get; set; }
+    [Reactive] public Color BgElevatedColor { get; set; }
+    [Reactive] public Color TextPrimaryColor { get; set; }
+    [Reactive] public Color TextSecondaryColor { get; set; }
+
+    /// <summary>
+    /// Признак несохранённых изменений темы.
+    /// <para>Управляет видимостью кнопок Apply / Reset.</para>
+    /// </summary>
+    [Reactive] public bool HasUnsavedThemeChanges { get; set; }
 
     #endregion
 
@@ -166,45 +217,69 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     /// <summary>Выбранный элемент качества; синхронизируется с настройками через подписку.</summary>
     [Reactive] public LocalizedItem<AudioQualityPreference>? SelectedQualityItem { get; set; }
 
-    [Reactive] public int   MaxVolumeLimit          { get; set; }
-    [Reactive] public float TargetGainDb            { get; set; }
-    [Reactive] public bool  RememberTrackFormat     { get; set; }
-    [Reactive] public bool  VolumeBoostEnabled      { get; set; }
-    [Reactive] public bool  AudioNormalizationEnabled { get; set; }
+    [Reactive] public int MaxVolumeLimit { get; set; }
+    [Reactive] public float TargetGainDb { get; set; }
+    [Reactive] public bool RememberTrackFormat { get; set; }
+    [Reactive] public bool VolumeBoostEnabled { get; set; }
+    [Reactive] public bool AudioNormalizationEnabled { get; set; }
     [Reactive] public float NormalizationTargetLufs { get; set; }
-    [Reactive] public float NormalizationMaxGain    { get; set; }
+    [Reactive] public float NormalizationMaxGain { get; set; }
 
-    public ObservableCollection<LocalizedItem<VolumeCurveType>>       VolumeCurveOptions      { get; } = [];
-    [Reactive] public LocalizedItem<VolumeCurveType>?                 SelectedVolumeCurve     { get; set; }
+    /// <summary>Варианты кривой громкости для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<VolumeCurveType>> VolumeCurveOptions { get; } = [];
 
-    public ObservableCollection<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions    { get; } = [];
-    [Reactive] public LocalizedItem<PlaybackErrorBehavior>?           SelectedErrorBehavior   { get; set; }
-    [Reactive] public bool PlayErrorSound   { get; set; }
+    /// <summary>Выбранная кривая громкости; синхронизируется с настройками через подписку.</summary>
+    [Reactive] public LocalizedItem<VolumeCurveType>? SelectedVolumeCurve { get; set; }
+
+    /// <summary>Варианты поведения при ошибке воспроизведения для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<PlaybackErrorBehavior>> ErrorBehaviorOptions { get; } = [];
+
+    /// <summary>Выбранное поведение при ошибке; синхронизируется с настройками через подписку.</summary>
+    [Reactive] public LocalizedItem<PlaybackErrorBehavior>? SelectedErrorBehavior { get; set; }
+
+    [Reactive] public bool PlayErrorSound { get; set; }
     [Reactive] public bool SkipNTokenTracks { get; set; }
 
-    public ObservableCollection<LocalizedItem<NormalizationMode>> NormalizationModeOptions  { get; } = [];
-    [Reactive] public LocalizedItem<NormalizationMode>?           SelectedNormalizationMode { get; set; }
+    /// <summary>Варианты режима нормализации для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<NormalizationMode>> NormalizationModeOptions { get; } = [];
 
+    /// <summary>Выбранный режим нормализации; синхронизируется с настройками через подписку.</summary>
+    [Reactive] public LocalizedItem<NormalizationMode>? SelectedNormalizationMode { get; set; }
+
+    /// <summary>
+    /// Флаг программного отката при отмене выключения нормализации.
+    /// <para>
+    /// Без него отмена диалога приводит к повторному срабатыванию подписки
+    /// на AudioNormalizationEnabled и бесконечному циклу подтверждений.
+    /// </para>
+    /// </summary>
     private bool _isRevertingNormalization;
 
     #endregion
 
     #region UI & Behavior
 
-    [Reactive] public bool DiscordRpcEnabled     { get; set; }
-    [Reactive] public bool AutoPlayOnPaste       { get; set; }
-    [Reactive] public bool EnableSmoothLoading   { get; set; }
-    [Reactive] public int  SearchBatchSize       { get; set; }
-    [Reactive] public bool EnableSearchCache     { get; set; }
-    [Reactive] public int  SearchCacheTtlMinutes { get; set; }
+    [Reactive] public bool DiscordRpcEnabled { get; set; }
+    [Reactive] public bool AutoPlayOnPaste { get; set; }
+    [Reactive] public int SearchBatchSize { get; set; }
+    [Reactive] public bool EnableSearchCache { get; set; }
+    [Reactive] public int SearchCacheTtlMinutes { get; set; }
 
+    /// <summary>Список доступных языков — статический, берётся из LocalizationService.</summary>
     public static List<LanguageItem> Languages => LocalizationService.Instance.AvailableLanguages;
+
+    /// <summary>Выбранный язык; при смене применяется немедленно.</summary>
     [Reactive] public LanguageItem? SelectedLanguage { get; set; }
 
-    public ObservableCollection<LocalizedItem<CloseAction>> CloseActionOptions  { get; } = [];
-    [Reactive] public LocalizedItem<CloseAction>?           SelectedCloseAction { get; set; }
+    /// <summary>Варианты действия при закрытии окна для ComboBox.</summary>
+    public ObservableCollection<LocalizedItem<CloseAction>> CloseActionOptions { get; } = [];
+
+    /// <summary>Выбранное действие при закрытии; синхронизируется с настройками через подписку.</summary>
+    [Reactive] public LocalizedItem<CloseAction>? SelectedCloseAction { get; set; }
+
     [Reactive] public bool MinimizeToTray { get; set; }
 
+    /// <summary>Флаг однократной инициализации подписок.</summary>
     private bool _subscriptionsSetup;
 
     #endregion
@@ -213,41 +288,54 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
     /// <summary>
     /// Элемент пресета GPU-кэша.
-    /// ToString() → Name: ComboBox не создаёт DataTemplate-контейнеры.
+    /// <para>ToString() → Name: ComboBox не создаёт DataTemplate-контейнеры.</para>
     /// </summary>
     public sealed record GpuCachePresetItem(long Mb, string Name)
     {
         public override string ToString() => Name;
     }
 
-    public ObservableCollection<GpuCachePresetItem> GpuCachePresets        { get; } = [];
-    [Reactive] public GpuCachePresetItem?           SelectedGpuCachePreset { get; set; }
-    [Reactive] public bool GpuCacheRestartRequired  { get; private set; }
+    /// <summary>Пресеты размера GPU-кэша текстур для ComboBox.</summary>
+    public ObservableCollection<GpuCachePresetItem> GpuCachePresets { get; } = [];
 
-    [Reactive] public bool AutoMemoryCleanupEnabled     { get; set; }
-    [Reactive] public int  MemoryCleanupIntervalMinutes { get; set; }
-    [Reactive] public int  MemoryPressureThresholdMb    { get; set; }
+    /// <summary>Выбранный пресет GPU-кэша; при смене требует перезапуска.</summary>
+    [Reactive] public GpuCachePresetItem? SelectedGpuCachePreset { get; set; }
 
+    /// <summary>Признак того, что изменение GPU-кэша требует перезапуска приложения.</summary>
+    [Reactive] public bool GpuCacheRestartRequired { get; private set; }
+
+    [Reactive] public bool AutoMemoryCleanupEnabled { get; set; }
+    [Reactive] public int MemoryCleanupIntervalMinutes { get; set; }
+    [Reactive] public int MemoryPressureThresholdMb { get; set; }
+
+    /// <summary>Принудительная очистка памяти прямо сейчас (aggressive GC).</summary>
     public ReactiveCommand<Unit, Unit> CleanupMemoryNowCommand { get; }
 
     #endregion
 
     #region Commands
 
-    public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand    { get; }
-    public ReactiveCommand<Unit, Unit> ClearHistoryCommand          { get; }
-    public ReactiveCommand<Unit, Unit> ResetLibraryCommand          { get; }
-    public ReactiveCommand<Unit, Unit> LoginCommand                 { get; }
-    public ReactiveCommand<Unit, Unit> LogoutCommand                { get; }
-    public ReactiveCommand<Unit, Unit> ClearImageCacheCommand       { get; }
-    public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand       { get; }
-    public ReactiveCommand<Unit, Unit> ApplyThemeCommand            { get; }
-    public ReactiveCommand<Unit, Unit> ResetThemeCommand            { get; }
-    public ReactiveCommand<Unit, Unit> ClearDownloadsCommand        { get; }
+    public ReactiveCommand<Unit, Unit> BrowseDownloadPathCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearHistoryCommand { get; }
+    public ReactiveCommand<Unit, Unit> ResetLibraryCommand { get; }
+    public ReactiveCommand<Unit, Unit> LoginCommand { get; }
+    public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearImageCacheCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand { get; }
+    public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
+    public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
+    public ReactiveCommand<Unit, Unit> ClearDownloadsCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowNormalizationInfoCommand { get; }
 
     #endregion
 
+    /// <summary>
+    /// Создаёт VM настроек и инициализирует команды и sidebar.
+    /// <para>
+    /// Тяжёлая инициализация (загрузка настроек, подписки) вынесена
+    /// в <see cref="OnNavigatedToAsync"/> чтобы не блокировать UI при навигации.
+    /// </para>
+    /// </summary>
     public SettingsViewModel(
         LibraryService library,
         TrackRegistry registry,
@@ -259,46 +347,46 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         AudioEngine audio,
         YoutubeProvider youtube)
     {
-        _library      = library;
-        _registry     = registry;
-        _searchCache  = searchCache;
-        _imageCache   = imageCache;
+        _library = library;
+        _registry = registry;
+        _searchCache = searchCache;
+        _imageCache = imageCache;
         _themeManager = themeManager;
-        _auth         = auth;
-        _dialog       = dialog;
-        _audio        = audio;
-        _youtube      = youtube;
+        _auth = auth;
+        _dialog = dialog;
+        _audio = audio;
+        _youtube = youtube;
 
-        LoginCommand                 = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
-        LogoutCommand                = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
-        BrowseDownloadPathCommand    = CreateCommand(ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync));
-        ClearHistoryCommand          = CreateCommand(ReactiveCommand.CreateFromTask(ClearHistoryAsync));
-        ResetLibraryCommand          = CreateCommand(ReactiveCommand.CreateFromTask(ResetLibraryAsync));
-        ClearImageCacheCommand       = CreateCommand(ReactiveCommand.CreateFromTask(ClearImageCacheAsync));
-        ClearAudioCacheCommand       = CreateCommand(ReactiveCommand.CreateFromTask(ClearAudioCacheAsync));
-        ApplyThemeCommand            = CreateCommand(ReactiveCommand.Create(ApplyTheme));
-        ResetThemeCommand            = CreateCommand(ReactiveCommand.Create(ResetTheme));
-        ClearDownloadsCommand        = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
-        CleanupMemoryNowCommand      = CreateCommand(ReactiveCommand.Create(
+        LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
+        LogoutCommand = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
+        BrowseDownloadPathCommand = CreateCommand(ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync));
+        ClearHistoryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearHistoryAsync));
+        ResetLibraryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ResetLibraryAsync));
+        ClearImageCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearImageCacheAsync));
+        ClearAudioCacheCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearAudioCacheAsync));
+        ApplyThemeCommand = CreateCommand(ReactiveCommand.Create(ApplyTheme));
+        ResetThemeCommand = CreateCommand(ReactiveCommand.Create(ResetTheme));
+        ClearDownloadsCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearDownloadsAsync));
+        CleanupMemoryNowCommand = CreateCommand(ReactiveCommand.Create(
             () => MemoryCleanupHelper.PerformCleanup(aggressive: true)));
         ShowNormalizationInfoCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShowNormalizationInfoAsync));
 
-        // Секции для виртуализации — порядок = порядок в UI
-        Sections =
+        // Sidebar: порядок = порядок в UI.
+        // В каждый момент рендерится только одна страница — виртуализация бесплатная архитектурно.
+        SidebarItems =
         [
-            new TitleSection(this),
-            new AccountLanguageSection(this),
-            new NetworkSection(this),
-            new StorageCacheSection(this),
-            new MemorySection(this),
-            new AppearanceSection(this),
-            new AudioSection(this),
-            new PlaybackSection(this),
-            new WindowBehaviorSection(this),
-            new GeneralSection(this),
-            new BottomPaddingSection(this),
+            new AccountLanguageSidebarItem(this),
+            new NetworkSidebarItem(this),
+            new StorageCacheSidebarItem(this),
+            new MemorySidebarItem(this),
+            new AppearanceSidebarItem(this),
+            new AudioSidebarItem(this),
+            new PlaybackSidebarItem(this),
+            new WindowBehaviorSidebarItem(this),
+            new GeneralSidebarItem(this),
         ];
 
+        // Подписки, которые не зависят от загрузки настроек — можно в конструкторе.
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)
@@ -331,27 +419,44 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
     }
 
+    /// <summary>
+    /// Вызывается при переходе на страницу настроек.
+    /// <para>
+    /// Порядок: короткая задержка → инициализация списков → загрузка настроек →
+    /// статистика → подписки → выбор первой секции → <see cref="IsContentReady"/> = true.
+    /// Задержка 50ms нужна чтобы skeleton успел отрендериться до тяжёлой синхронной работы.
+    /// </para>
+    /// </summary>
     public override async Task OnNavigatedToAsync()
     {
         if (_isDisposed) return;
 
-        await Task.Delay(50);
+        await Task.Delay(50).ConfigureAwait(false);
         if (_isDisposed) return;
 
-        InitializeLists();
-        LoadAllSettings();
-        UpdateCacheStats();
-        SetupSubscriptions();
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            InitializeLists();
+            LoadAllSettings();
+            UpdateCacheStats();
+            SetupSubscriptions();
 
-        if (IsAuthenticated && _auth.State.UserName == "Guest")
-            _ = FetchUserProfileQuietlyAsync();
+            // Выбираем первую секцию — страница отрендерится лениво после IsContentReady
+            SelectedSidebarItem ??= SidebarItems.FirstOrDefault();
 
-        IsContentReady = true;
+            if (IsAuthenticated && _auth.State.UserName == "Guest")
+                _ = FetchUserProfileQuietlyAsync();
 
-        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+            IsContentReady = true;
+        });
+
         MemoryCleanupHelper.PerformCleanup(aggressive: false);
     }
 
+    /// <summary>
+    /// Фоновое получение профиля пользователя если при логине он не был загружен.
+    /// <para>Ошибки подавляются — это best-effort операция, не критичная для работы.</para>
+    /// </summary>
     private async Task FetchUserProfileQuietlyAsync()
     {
         try
@@ -373,6 +478,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>При смене языка — перестраиваем все локализованные списки ComboBox.</summary>
     private void OnLanguageChanged(object? sender, string e) => RefreshLocalizedLists();
 
     private void InitializeLists()
@@ -382,17 +488,21 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         InitGpuCachePresets();
     }
 
+    /// <summary>
+    /// Инициализирует пресеты GPU-кэша.
+    /// <para>
+    /// Покрытие обложек 120px: 1 текстура ≈ 56KB.
+    /// 32MB  → ~570  обложек  (минимум, слабые GPU/iGPU).
+    /// 64MB  → ~1140 обложек  (рекомендуется, дефолт).
+    /// 128MB → ~2280 обложек  (мощные GPU).
+    /// 256MB → ~4560 обложек  (максимум).
+    /// </para>
+    /// </summary>
     private void InitGpuCachePresets()
     {
         GpuCachePresets.Clear();
-
-        // Покрытие обложек 120px: 1 текстура ≈ 56KB
-        // 32MB  → ~570  обложек  (минимум, слабые GPU/iGPU)
-        // 64MB  → ~1140 обложек  (рекомендуется, дефолт)
-        // 128MB → ~2280 обложек  (мощные GPU)
-        // 256MB → ~4560 обложек  (максимум)
-        GpuCachePresets.Add(new GpuCachePresetItem(32,  $"32 MB  ({SL["Cache_Low"]})"));
-        GpuCachePresets.Add(new GpuCachePresetItem(64,  $"64 MB  ({SL["Cache_Medium"]}) ✓"));
+        GpuCachePresets.Add(new GpuCachePresetItem(32, $"32 MB  ({SL["Cache_Low"]})"));
+        GpuCachePresets.Add(new GpuCachePresetItem(64, $"64 MB  ({SL["Cache_Medium"]}) ✓"));
         GpuCachePresets.Add(new GpuCachePresetItem(128, $"128 MB ({SL["Cache_High"]})"));
         GpuCachePresets.Add(new GpuCachePresetItem(256, $"256 MB ({SL["Cache_Ultra"]})"));
 
@@ -401,9 +511,15 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                               ?? GpuCachePresets[1];
     }
 
+    /// <summary>
+    /// Перестраивает список встроенных и пользовательских пресетов тем.
+    /// <para>
+    /// Пользовательский пресет добавляется только если текущая тема
+    /// не совпадает ни с одним встроенным по ключевым цветам.
+    /// </para>
+    /// </summary>
     private void RefreshThemePresets()
     {
-        var currentSelection = SelectedPreset;
         ThemePresets.Clear();
 
         foreach (var preset in ThemeManagerService.GetBuiltInPresets())
@@ -412,7 +528,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         var saved = _themeManager.GetCurrentTheme();
         var isBuiltIn = ThemePresets.Any(p =>
             string.Equals(p.AccentColor, saved.AccentColor, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(p.BgPrimary,   saved.BgPrimary,   StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(p.BgPrimary, saved.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(p.BgSecondary, saved.BgSecondary, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(p.AccentHover, saved.AccentHover, StringComparison.OrdinalIgnoreCase));
 
@@ -420,6 +536,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             ThemePresets.Add(saved);
     }
 
+    /// <summary>
+    /// Загружает цвета текущей темы в color picker'ы и выбирает соответствующий пресет.
+    /// <para>
+    /// Флаг <c>_isLoadingTheme</c> подавляет запись <see cref="HasUnsavedThemeChanges"/>
+    /// во время программного изменения цветов.
+    /// </para>
+    /// </summary>
     private void LoadThemeColors()
     {
         _isLoadingTheme = true;
@@ -430,7 +553,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
             var matchingPreset = ThemePresets.FirstOrDefault(p =>
                 string.Equals(p.AccentColor, currentTheme.AccentColor, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(p.BgPrimary,   currentTheme.BgPrimary,   StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(p.BgPrimary, currentTheme.BgPrimary, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(p.BgSecondary, currentTheme.BgSecondary, StringComparison.OrdinalIgnoreCase));
 
             matchingPreset ??= ThemePresets.FirstOrDefault(p =>
@@ -445,27 +568,49 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// Применяет текущие цвета color picker'ов как новую тему и сохраняет её.
+    /// <para>
+    /// Производные цвета (BgHighlight, BgHover, BgOverlay и т.д.) вычисляются
+    /// автоматически на основе BgSecondary через LightenColor/DarkenColor.
+    /// Semantic-цвета (SystemError, SystemInfoBlue, SystemWarnOrange) наследуются
+    /// от дефолтной темы — пользователь их не редактирует в color picker'ах.
+    /// </para>
+    /// </summary>
     private void ApplyTheme()
     {
         static string GetRgbHex(Color c) => $"{c.R:X2}{c.G:X2}{c.B:X2}";
 
+        // Берём semantic-цвета из текущей темы — они не меняются через color picker'ы
+        var current = _themeManager.GetCurrentTheme();
+
         var theme = new ThemeSettings
         {
-            Name           = SelectedPreset?.Name ?? SL["Theme_Custom"],
-            AccentColor    = AccentColor.ToString(),
-            AccentHover    = SmartAccentHover(AccentColor).ToString(),
-            BgPrimary      = BgPrimaryColor.ToString(),
-            BgSecondary    = BgSecondaryColor.ToString(),
-            BgElevated     = BgElevatedColor.ToString(),
-            BgHighlight    = LightenColor(BgSecondaryColor, 0.1).ToString(),
-            BgHover        = LightenColor(BgSecondaryColor, 0.2).ToString(),
-            BgSkeleton     = LightenColor(BgSecondaryColor, 0.05).ToString(),
+            Name = SelectedPreset?.Name ?? SL["Theme_Custom"],
+
+            // Backgrounds
+            AccentColor = AccentColor.ToString(),
+            AccentHover = SmartAccentHover(AccentColor).ToString(),
+            BgPrimary = BgPrimaryColor.ToString(),
+            BgSecondary = BgSecondaryColor.ToString(),
+            BgElevated = BgElevatedColor.ToString(),
+            BgHighlight = LightenColor(BgSecondaryColor, 0.1).ToString(),
+            BgHover = LightenColor(BgSecondaryColor, 0.2).ToString(),
+            BgSkeleton = LightenColor(BgSecondaryColor, 0.05).ToString(),
             BgSkeletonDeep = DarkenColor(BgSecondaryColor, 0.2).ToString(),
-            BgOverlay      = $"#CC{GetRgbHex(BgPrimaryColor)}",
-            TextPrimary    = TextPrimaryColor.ToString(),
-            TextSecondary  = TextSecondaryColor.ToString(),
-            TextMuted      = DarkenColor(TextSecondaryColor, 0.3).ToString(),
-            TextDark       = BgPrimaryColor.ToString()
+            BgOverlay = $"#CC{GetRgbHex(BgPrimaryColor)}",
+
+            // Text
+            TextPrimary = TextPrimaryColor.ToString(),
+            TextSecondary = TextSecondaryColor.ToString(),
+            TextMuted = DarkenColor(TextSecondaryColor, 0.3).ToString(),
+            TextDark = BgPrimaryColor.ToString(),
+
+            // Semantic — наследуем, пользователь их не трогает
+            SystemError = current.SystemError,
+            SystemErrorBg = current.SystemErrorBg,
+            SystemInfoBlue = current.SystemInfoBlue,
+            SystemWarnOrange = current.SystemWarnOrange,
         };
 
         _themeManager.SaveTheme(theme);
@@ -481,14 +626,28 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         _isLoadingTheme = false;
     }
 
+    /// <summary>
+    /// Вычисляет hover-цвет акцента с учётом яркости.
+    /// <para>
+    /// Светлый акцент затемняется, тёмный — светлеет,
+    /// чтобы hover всегда был визуально отличим.
+    /// </para>
+    /// </summary>
     private static Color SmartAccentHover(Color accent)
     {
         var brightness = (0.299 * accent.R + 0.587 * accent.G + 0.114 * accent.B) / 255.0;
         return brightness > 0.7
-            ? DarkenColor(accent,  0.15)
+            ? DarkenColor(accent, 0.15)
             : LightenColor(accent, 0.15);
     }
 
+    /// <summary>
+    /// Перестраивает все локализованные списки ComboBox с сохранением текущего выбора.
+    /// <para>
+    /// Вызывается при инициализации и при смене языка. Текущий выбор
+    /// сохраняется через Value, а не через индекс — безопасно при перестройке коллекции.
+    /// </para>
+    /// </summary>
     private void RefreshLocalizedLists()
     {
         var currentProfile = SelectedInternetProfile?.Value ?? _library.Settings.InternetProfile;
@@ -500,49 +659,49 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         var currentImgPreset = SelectedImageCachePreset?.Value ?? ImageCachePreset.Custom;
         ImageCachePresets.Clear();
-        ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.Low,    $"{SL["Cache_Low"]} (20)"));
+        ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.Low, $"{SL["Cache_Low"]} (20)"));
         ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.Medium, $"{SL["Cache_Medium"]} (50)"));
-        ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.High,   $"{SL["Cache_High"]} (100)"));
+        ImageCachePresets.Add(new LocalizedItem<ImageCachePreset>(ImageCachePreset.High, $"{SL["Cache_High"]} (100)"));
         if (currentImgPreset != ImageCachePreset.Custom)
             SelectedImageCachePreset = ImageCachePresets.FirstOrDefault(x => x.Value == currentImgPreset);
 
         var currentClient = SelectedClient?.Value ?? _library.Settings.YoutubeClient;
         ClientOptions.Clear();
         ClientOptions.Add(new(YoutubeClientProfile.AndroidVR, SL["Client_AndroidVR"]));
-        ClientOptions.Add(new(YoutubeClientProfile.TV,        SL["Client_TV"]));
-        ClientOptions.Add(new(YoutubeClientProfile.Web,       SL["Client_Web"]));
+        ClientOptions.Add(new(YoutubeClientProfile.TV, SL["Client_TV"]));
+        ClientOptions.Add(new(YoutubeClientProfile.Web, SL["Client_Web"]));
         SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == currentClient) ?? ClientOptions[0];
 
         var currentCurve = SelectedVolumeCurve?.Value ?? _library.Settings.Audio.VolumeCurve;
         VolumeCurveOptions.Clear();
-        VolumeCurveOptions.Add(new(VolumeCurveType.Linear,       SL["VolumeCurve_Linear"]));
-        VolumeCurveOptions.Add(new(VolumeCurveType.Quadratic,    SL["VolumeCurve_Quadratic"]));
-        VolumeCurveOptions.Add(new(VolumeCurveType.Logarithmic,  SL["VolumeCurve_Logarithmic"]));
-        VolumeCurveOptions.Add(new(VolumeCurveType.Cubic,        SL["VolumeCurve_Cubic"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Linear, SL["VolumeCurve_Linear"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Quadratic, SL["VolumeCurve_Quadratic"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Logarithmic, SL["VolumeCurve_Logarithmic"]));
+        VolumeCurveOptions.Add(new(VolumeCurveType.Cubic, SL["VolumeCurve_Cubic"]));
         VolumeCurveOptions.Add(new(VolumeCurveType.SpeedOfLight, SL["VolumeCurve_SpeedOfLight"]));
         SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == currentCurve)
                            ?? VolumeCurveOptions[1];
 
         var currentErrorBehavior = SelectedErrorBehavior?.Value ?? _library.Settings.Audio.CriticalErrorBehavior;
         ErrorBehaviorOptions.Clear();
-        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Dialog,       SL["Settings_ErrorBehavior_Dialog"]));
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Dialog, SL["Settings_ErrorBehavior_Dialog"]));
         ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.ToastAndSkip, SL["Settings_ErrorBehavior_ToastAndSkip"]));
-        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Ignore,       SL["Settings_ErrorBehavior_Ignore"]));
+        ErrorBehaviorOptions.Add(new(PlaybackErrorBehavior.Ignore, SL["Settings_ErrorBehavior_Ignore"]));
         SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == currentErrorBehavior)
                              ?? ErrorBehaviorOptions[0];
 
         var currentCloseAction = SelectedCloseAction?.Value ?? _library.Settings.CloseAction;
         CloseActionOptions.Clear();
-        CloseActionOptions.Add(new(CloseAction.Exit,           SL["CloseAction_Exit"]));
+        CloseActionOptions.Add(new(CloseAction.Exit, SL["CloseAction_Exit"]));
         CloseActionOptions.Add(new(CloseAction.MinimizeToTray, SL["CloseAction_MinimizeToTray"]));
-        CloseActionOptions.Add(new(CloseAction.Ask,            SL["CloseAction_Ask"]));
+        CloseActionOptions.Add(new(CloseAction.Ask, SL["CloseAction_Ask"]));
         SelectedCloseAction = CloseActionOptions.FirstOrDefault(x => x.Value == currentCloseAction)
                            ?? CloseActionOptions[2];
 
         var currentNormMode = SelectedNormalizationMode?.Value ?? _library.Settings.Audio.NormalizationMode;
         NormalizationModeOptions.Clear();
         NormalizationModeOptions.Add(new(NormalizationMode.Bidirectional, SL["NormMode_Bidirectional"]));
-        NormalizationModeOptions.Add(new(NormalizationMode.DownwardOnly,  SL["NormMode_DownwardOnly"]));
+        NormalizationModeOptions.Add(new(NormalizationMode.DownwardOnly, SL["NormMode_DownwardOnly"]));
         SelectedNormalizationMode = NormalizationModeOptions.FirstOrDefault(x => x.Value == currentNormMode)
                                  ?? NormalizationModeOptions[0];
 
@@ -556,6 +715,14 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(QualityOptions));
     }
 
+    /// <summary>
+    /// Регистрирует все Rx-подписки на изменения свойств → сохранение в настройки.
+    /// <para>
+    /// Вызывается однократно после <see cref="LoadAllSettings"/> чтобы подписки
+    /// не срабатывали на программную установку начальных значений.
+    /// Все подписки добавляются в <c>Disposables</c> и освобождаются при Dispose.
+    /// </para>
+    /// </summary>
     private void SetupSubscriptions()
     {
         if (_subscriptionsSetup) return;
@@ -595,7 +762,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
         this.WhenAnyValue(
                 x => x.ProxyEnabled, x => x.ProxyHost, x => x.ProxyPort,
-                x => x.ProxyAuth,    x => x.ProxyUser, x => x.ProxyPass)
+                x => x.ProxyAuth, x => x.ProxyUser, x => x.ProxyPass)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
             .Subscribe(_ => { NetworkRestartRequired = true; SaveNetworkSettings(); })
@@ -659,10 +826,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 _isUpdatingPreset = true;
                 MaxBitmapCacheItems = p!.Value switch
                 {
-                    ImageCachePreset.Low    => 20,
+                    ImageCachePreset.Low => 20,
                     ImageCachePreset.Medium => 50,
-                    ImageCachePreset.High   => 100,
-                    _                       => MaxBitmapCacheItems
+                    ImageCachePreset.High => 100,
+                    _ => MaxBitmapCacheItems
                 };
                 _isUpdatingPreset = false;
             })
@@ -681,18 +848,18 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
                 _isUpdatingPreset = true;
                 SelectedImageCachePreset = val switch
                 {
-                    20  => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low),
-                    50  => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium),
+                    20 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low),
+                    50 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium),
                     100 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High),
-                    _   => null
+                    _ => null
                 };
                 _isUpdatingPreset = false;
             })
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(
-                x => x.AccentColor,     x => x.BgPrimaryColor,    x => x.BgSecondaryColor,
-                x => x.BgElevatedColor, x => x.TextPrimaryColor,  x => x.TextSecondaryColor)
+                x => x.AccentColor, x => x.BgPrimaryColor, x => x.BgSecondaryColor,
+                x => x.BgElevatedColor, x => x.TextPrimaryColor, x => x.TextSecondaryColor)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
             .Subscribe(_ => { if (!_isLoadingTheme) HasUnsavedThemeChanges = true; })
@@ -845,12 +1012,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .Subscribe(v => _library.UpdateSettings(s => s.AutoPlayOnUrlPaste = v))
             .DisposeWith(Disposables);
 
-        this.WhenAnyValue(x => x.EnableSmoothLoading)
-            .Skip(1)
-            .Where(_ => !_isLoadingSettings)
-            .Subscribe(v => _library.UpdateSettings(s => s.EnableSmoothLoading = v))
-            .DisposeWith(Disposables);
-
         this.WhenAnyValue(x => x.RememberTrackFormat)
             .Skip(1)
             .Where(_ => !_isLoadingSettings)
@@ -880,6 +1041,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             .DisposeWith(Disposables);
     }
 
+    /// <summary>
+    /// Загружает все настройки из <see cref="LibraryService"/> в свойства VM.
+    /// <para>
+    /// Флаг <c>_isLoadingSettings</c> подавляет все Rx-подписки на время загрузки,
+    /// чтобы программная установка значений не триггерила обратную запись в настройки.
+    /// </para>
+    /// </summary>
     private void LoadAllSettings()
     {
         _isLoadingSettings = true;
@@ -887,35 +1055,34 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         {
             var s = _library.Settings;
 
-            DownloadPath          = _library.DownloadPath;
-            DiscordRpcEnabled     = s.DiscordRpcEnabled;
-            AutoPlayOnPaste       = s.AutoPlayOnUrlPaste;
-            SearchBatchSize       = s.SearchBatchSize;
-            EnableSmoothLoading   = s.EnableSmoothLoading;
-            MaxVolumeLimit        = s.MaxVolumeLimit;
-            TargetGainDb          = s.TargetGainDb;
-            RememberTrackFormat   = s.RememberTrackFormat;
-            EnableSearchCache     = s.EnableSearchCache;
+            DownloadPath = _library.DownloadPath;
+            DiscordRpcEnabled = s.DiscordRpcEnabled;
+            AutoPlayOnPaste = s.AutoPlayOnUrlPaste;
+            SearchBatchSize = s.SearchBatchSize;
+            MaxVolumeLimit = s.MaxVolumeLimit;
+            TargetGainDb = s.TargetGainDb;
+            RememberTrackFormat = s.RememberTrackFormat;
+            EnableSearchCache = s.EnableSearchCache;
             SearchCacheTtlMinutes = s.SearchCacheTtlMinutes;
-            SelectedLanguage      = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
+            SelectedLanguage = Languages.FirstOrDefault(x => x.Code == s.LanguageCode) ?? Languages[0];
 
             var mem = s.Memory;
-            AutoMemoryCleanupEnabled     = mem.AutoCleanupEnabled;
+            AutoMemoryCleanupEnabled = mem.AutoCleanupEnabled;
             MemoryCleanupIntervalMinutes = mem.AutoCleanupIntervalMinutes > 0 ? mem.AutoCleanupIntervalMinutes : 30;
-            MemoryPressureThresholdMb    = mem.PressureThresholdMb > 0 ? mem.PressureThresholdMb : 400;
+            MemoryPressureThresholdMb = mem.PressureThresholdMb > 0 ? mem.PressureThresholdMb : 400;
 
-            VolumeBoostEnabled        = s.Audio.VolumeBoostEnabled;
+            VolumeBoostEnabled = s.Audio.VolumeBoostEnabled;
             AudioNormalizationEnabled = s.Audio.NormalizationEnabled;
-            NormalizationTargetLufs   = s.Audio.NormalizationTargetLufs;
-            NormalizationMaxGain      = s.Audio.NormalizationMaxGain;
+            NormalizationTargetLufs = s.Audio.NormalizationTargetLufs;
+            NormalizationMaxGain = s.Audio.NormalizationMaxGain;
             SelectedNormalizationMode = NormalizationModeOptions.FirstOrDefault(x => x.Value == s.Audio.NormalizationMode)
                                      ?? NormalizationModeOptions[0];
-            SelectedVolumeCurve       = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
+            SelectedVolumeCurve = VolumeCurveOptions.FirstOrDefault(x => x.Value == s.Audio.VolumeCurve)
                                      ?? VolumeCurveOptions[1];
-            PlayErrorSound            = s.Audio.PlayErrorSound;
-            SelectedErrorBehavior     = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
+            PlayErrorSound = s.Audio.PlayErrorSound;
+            SelectedErrorBehavior = ErrorBehaviorOptions.FirstOrDefault(x => x.Value == s.Audio.CriticalErrorBehavior)
                                      ?? ErrorBehaviorOptions[0];
-            SkipNTokenTracks          = s.Audio.SkipNTokenTracks;
+            SkipNTokenTracks = s.Audio.SkipNTokenTracks;
 
             SelectedQualityItem = QualityOptions.FirstOrDefault(x => x.Value == s.QualityPreference)
                                ?? QualityOptions[0];
@@ -925,29 +1092,29 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
 
             SelectedInternetProfile = InternetProfileOptions.FirstOrDefault(x => x.Value == s.InternetProfile)
                                    ?? InternetProfileOptions[1];
-            SelectedClient          = ClientOptions.FirstOrDefault(x => x.Value == s.YoutubeClient)
+            SelectedClient = ClientOptions.FirstOrDefault(x => x.Value == s.YoutubeClient)
                                    ?? ClientOptions[0];
 
             ProxyEnabled = s.Proxy.Enabled;
-            ProxyHost    = s.Proxy.Host;
-            ProxyPort    = s.Proxy.Port;
-            ProxyAuth    = s.Proxy.UseAuth;
-            ProxyUser    = s.Proxy.Username;
-            ProxyPass    = s.Proxy.Password;
+            ProxyHost = s.Proxy.Host;
+            ProxyPort = s.Proxy.Port;
+            ProxyAuth = s.Proxy.UseAuth;
+            ProxyUser = s.Proxy.Username;
+            ProxyPass = s.Proxy.Password;
 
-            ImageCacheLimitMb       = s.Storage.ImageCacheLimitMb;
-            AudioCacheLimitMb       = s.Storage.AudioCacheLimitMb;
+            ImageCacheLimitMb = s.Storage.ImageCacheLimitMb;
+            AudioCacheLimitMb = s.Storage.AudioCacheLimitMb;
             DownloadedTracksLimitMb = s.Storage.DownloadedTracksLimitMb;
-            AutoSaveToDownloads     = s.Storage.AutoSaveToDownloads;
+            AutoSaveToDownloads = s.Storage.AutoSaveToDownloads;
 
             MaxBitmapCacheItems = s.Storage.MaxBitmapCacheItems > 0 ? s.Storage.MaxBitmapCacheItems : 40;
-            _isUpdatingPreset   = true;
+            _isUpdatingPreset = true;
             SelectedImageCachePreset = MaxBitmapCacheItems switch
             {
-                20  => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low),
-                50  => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium),
+                20 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Low),
+                50 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.Medium),
                 100 => ImageCachePresets.FirstOrDefault(x => x.Value == ImageCachePreset.High),
-                _   => null
+                _ => null
             };
             _isUpdatingPreset = false;
 
@@ -963,22 +1130,30 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>Применяет пресет темы к color picker'ам и выставляет флаг несохранённых изменений.</summary>
     private void ApplyPresetToColorPickers(ThemeSettings preset)
     {
         ApplyThemeToColorPickers(preset);
         HasUnsavedThemeChanges = true;
     }
 
+    /// <summary>
+    /// Распаковывает цвета темы в свойства color picker'ов.
+    /// <para>
+    /// Флаг <c>_isLoadingTheme</c> предотвращает срабатывание подписки
+    /// на изменение цветов, которая выставляет <see cref="HasUnsavedThemeChanges"/>.
+    /// </para>
+    /// </summary>
     private void ApplyThemeToColorPickers(ThemeSettings theme)
     {
         _isLoadingTheme = true;
         try
         {
-            AccentColor        = ParseColorSafe(theme.AccentColor);
-            BgPrimaryColor     = ParseColorSafe(theme.BgPrimary);
-            BgSecondaryColor   = ParseColorSafe(theme.BgSecondary);
-            BgElevatedColor    = ParseColorSafe(theme.BgElevated);
-            TextPrimaryColor   = ParseColorSafe(theme.TextPrimary);
+            AccentColor = ParseColorSafe(theme.AccentColor);
+            BgPrimaryColor = ParseColorSafe(theme.BgPrimary);
+            BgSecondaryColor = ParseColorSafe(theme.BgSecondary);
+            BgElevatedColor = ParseColorSafe(theme.BgElevated);
+            TextPrimaryColor = ParseColorSafe(theme.TextPrimary);
             TextSecondaryColor = ParseColorSafe(theme.TextSecondary);
         }
         finally
@@ -987,6 +1162,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         }
     }
 
+    /// <summary>Сбрасывает тему к дефолтной и обновляет color picker'ы.</summary>
     private void ResetTheme()
     {
         _themeManager.ResetToDefault();
@@ -994,38 +1170,46 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         SelectedPreset = ThemePresets.FirstOrDefault();
     }
 
+    /// <summary>
+    /// Парсит hex-цвет без выброса исключения.
+    /// <para>При некорректном значении возвращает Magenta как визуальный сигнал ошибки.</para>
+    /// </summary>
     private static Color ParseColorSafe(string hex)
     {
-        try   { return Color.Parse(hex); }
-        catch { return Colors.Magenta;   }
+        try { return Color.Parse(hex); }
+        catch { return Colors.Magenta; }
     }
 
+    /// <summary>Осветляет цвет на заданный фактор [0..1].</summary>
     private static Color LightenColor(Color c, double factor) =>
         Color.FromArgb(c.A,
             (byte)Math.Min(255, c.R + (255 - c.R) * factor),
             (byte)Math.Min(255, c.G + (255 - c.G) * factor),
             (byte)Math.Min(255, c.B + (255 - c.B) * factor));
 
+    /// <summary>Затемняет цвет на заданный фактор [0..1].</summary>
     private static Color DarkenColor(Color c, double factor) =>
         Color.FromArgb(c.A,
             (byte)(c.R * (1 - factor)),
             (byte)(c.G * (1 - factor)),
             (byte)(c.B * (1 - factor)));
 
+    /// <summary>Сохраняет сетевые настройки (профиль + прокси) одним вызовом.</summary>
     private void SaveNetworkSettings()
     {
         _library.UpdateSettings(s =>
         {
             s.InternetProfile = SelectedInternetProfile?.Value ?? InternetProfile.Medium;
-            s.Proxy.Enabled   = ProxyEnabled;
-            s.Proxy.Host      = ProxyHost;
-            s.Proxy.Port      = ProxyPort;
-            s.Proxy.UseAuth   = ProxyAuth;
-            s.Proxy.Username  = ProxyUser;
-            s.Proxy.Password  = ProxyPass;
+            s.Proxy.Enabled = ProxyEnabled;
+            s.Proxy.Host = ProxyHost;
+            s.Proxy.Port = ProxyPort;
+            s.Proxy.UseAuth = ProxyAuth;
+            s.Proxy.Username = ProxyUser;
+            s.Proxy.Password = ProxyPass;
         });
     }
 
+    /// <summary>Сохраняет лимиты дискового кэша и обновляет статистику.</summary>
     private void SaveStorageSettings()
     {
         _library.UpdateSettings(s =>
@@ -1053,21 +1237,25 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         UpdateCacheStats();
     }
 
+    /// <summary>
+    /// Обновляет статистику и проценты заполнения всех кэшей.
+    /// <para>Вызывается после очистки кэша или изменения лимитов.</para>
+    /// </summary>
     private void UpdateCacheStats()
     {
         var (memItems, _, imgCount, imgSizeMb) = _imageCache.GetStats();
 
         var cache = AudioSourceFactory.GlobalCache;
-        var (audioFileCount, audioSizeMb)       = cache?.GetStatsCompact() ?? (0, 0);
+        var (audioFileCount, audioSizeMb) = cache?.GetStatsCompact() ?? (0, 0);
         var (downloadFileCount, downloadSizeMb) = AudioCacheManager.GetDownloadsStats();
 
         ImageCacheStats = $"{imgSizeMb} MB / {ImageCacheLimitMb} MB ({imgCount} {SL["Common_Files"]}, RAM: {memItems})";
         AudioCacheStats = $"{audioSizeMb} MB / {AudioCacheLimitMb} MB ({audioFileCount} {SL["Common_Files"]})";
-        DownloadsStats  = $"{downloadSizeMb} MB / {DownloadedTracksLimitMb} MB ({downloadFileCount} {SL["Common_Files"]})";
+        DownloadsStats = $"{downloadSizeMb} MB / {DownloadedTracksLimitMb} MB ({downloadFileCount} {SL["Common_Files"]})";
 
-        ImageCacheUsagePercent = ImageCacheLimitMb > 0       ? Math.Clamp((double)imgSizeMb      / ImageCacheLimitMb,       0, 1) : 0;
-        AudioCacheUsagePercent = AudioCacheLimitMb > 0       ? Math.Clamp((double)audioSizeMb    / AudioCacheLimitMb,       0, 1) : 0;
-        DownloadsUsagePercent  = DownloadedTracksLimitMb > 0 ? Math.Clamp((double)downloadSizeMb / DownloadedTracksLimitMb, 0, 1) : 0;
+        ImageCacheUsagePercent = ImageCacheLimitMb > 0 ? Math.Clamp((double)imgSizeMb / ImageCacheLimitMb, 0, 1) : 0;
+        AudioCacheUsagePercent = AudioCacheLimitMb > 0 ? Math.Clamp((double)audioSizeMb / AudioCacheLimitMb, 0, 1) : 0;
+        DownloadsUsagePercent = DownloadedTracksLimitMb > 0 ? Math.Clamp((double)downloadSizeMb / DownloadedTracksLimitMb, 0, 1) : 0;
     }
 
     private async Task LoginAsync()
@@ -1096,6 +1284,13 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         RaiseAccountProperties();
     }
 
+    /// <summary>
+    /// Поднимает PropertyChanged для всех вычисляемых свойств аккаунта.
+    /// <para>
+    /// Нужно при логине/логауте — свойства AccountName, AccountAvatarUrl, AccountSubtitle
+    /// не являются [Reactive], их значения зависят от IsAuthenticated и _auth.State.
+    /// </para>
+    /// </summary>
     private void RaiseAccountProperties()
     {
         this.RaisePropertyChanged(nameof(AccountName));
@@ -1135,7 +1330,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         foreach (var track in _registry.GetPinnedTracks().Where(t => t.IsDownloaded))
         {
             track.IsDownloaded = false;
-            track.LocalPath    = null;
+            track.LocalPath = null;
         }
 
         UpdateCacheStats();
@@ -1149,6 +1344,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             SL["Common_GotIt"]);
     }
 
+    /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;

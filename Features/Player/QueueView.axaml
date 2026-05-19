@@ -3,8 +3,7 @@
     xmlns:vm="using:LMP.Features.Player"
     xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Player.QueueView"
-    x:DataType="vm:QueueViewModel"
-    x:CompileBindings="True">
+    x:DataType="vm:QueueViewModel">
 
     <Grid>
         <!-- Empty State -->
@@ -85,7 +84,6 @@
                     IsLoading="False"
                     IsLoadingMore="False"
                     ReachedEnd="True"
-                    EnableSmoothLoading="False"
                     IsQueueContext="True"
                     EnableReordering="{Binding CanReorderItems}"
                     MoveItemCommand="{Binding MoveItemCommand}" />

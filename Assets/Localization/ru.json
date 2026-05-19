@@ -325,8 +325,6 @@
   "Settings_SearchCache": "Кэшировать результаты поиска",
   "Settings_SearchCacheDesc": "Сохранять результаты поиска для более быстрого повторного поиска",
   "Settings_SearchCacheTtl": "Длительность кэша",
-  "Settings_SmoothLoading": "Плавная анимация загрузки",
-  "Settings_SmoothLoadingDesc": "Показывать плавные скелетоны вместо мгновенного появления контента",
   "Settings_PlayErrorSound": "Звук ошибки",
   "Settings_PlayErrorSoundDesc": "Воспроизводить звук при возникновении ошибки воспроизведения.",
   "Settings_ErrorBehavior": "Поведение при ошибке воспроизведения",

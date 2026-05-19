@@ -1,0 +1,72 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.Features.Settings"
+    x:Class="LMP.Features.Settings.Pages.GeneralPage"
+    x:DataType="vm:SettingsViewModel"
+    x:CompileBindings="True">
+
+    <StackPanel Margin="32,24">
+        <Grid ColumnDefinitions="Auto, *" Margin="0,0,0,16">
+            <PathIcon Grid.Column="0" Data="{StaticResource Icon.Settings}"
+                Width="20" Height="20" VerticalAlignment="Center"
+                Foreground="{DynamicResource AccentBrush}" />
+            <TextBlock Grid.Column="1" Classes="h2"
+                Text="{Binding L[Settings_General]}"
+                VerticalAlignment="Center" Margin="8,0,0,0" />
+        </Grid>
+
+        <Border Classes="card">
+            <StackPanel Spacing="16">
+
+                <!-- ── Discord RPC ── -->
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Classes="label" Text="{Binding L[General_Discord]}" />
+                            <Border Classes="feature-badge coming-soon">
+                                <TextBlock Text="СКОРО" />
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Classes="desc" Text="{Binding L[General_DiscordDesc]}" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1"
+                        IsChecked="{Binding DiscordRpcEnabled}"
+                        IsEnabled="False" />
+                </Grid>
+
+                <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                <!-- ── Search cache ── -->
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <TextBlock Classes="label" Text="{Binding L[Settings_SearchCache]}" />
+                        <TextBlock Classes="desc" Text="{Binding L[Settings_SearchCacheDesc]}" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding EnableSearchCache}" />
+                </Grid>
+
+                <Grid ColumnDefinitions="*, 200, 70"
+                    IsEnabled="{Binding EnableSearchCache}">
+                    <TextBlock Classes="label"
+                        Text="{Binding L[Settings_SearchCacheTtl]}"
+                        VerticalAlignment="Center" />
+                    <Slider Grid.Column="1" Minimum="15" Maximum="480"
+                        Value="{Binding SearchCacheTtlMinutes}"
+                        Margin="12,0" />
+                    <TextBlock Grid.Column="2" Classes="value-label"
+                        Text="{Binding SearchCacheTtlMinutes,
+                                          StringFormat='{}{0} min'}" />
+                </Grid>
+
+                <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                <!-- ── Reset ── -->
+                <Button Content="{Binding L[Storage_ResetApp]}"
+                    Command="{Binding ResetLibraryCommand}"
+                    HorizontalAlignment="Left"
+                    Foreground="{DynamicResource SystemErrorBrush}" />
+
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

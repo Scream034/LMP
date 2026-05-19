@@ -3,8 +3,7 @@
     xmlns:vm="using:LMP.Features.Home"
     xmlns:controls="using:LMP.UI.Controls"
     x:Class="LMP.Features.Home.HomeView"
-    x:DataType="vm:HomeViewModel"
-    x:CompileBindings="True">
+    x:DataType="vm:HomeViewModel">
 
     <Grid RowDefinitions="Auto, *">
 
@@ -51,7 +50,6 @@
                 Margin="24,12,24,0"
                 Items="{Binding Items}"
                 IsLoading="{Binding IsLoading}"
-                EnableSmoothLoading="{Binding EnableSmoothLoading}"
                 EnableReordering="{Binding CanReorderItems}"
                 MoveItemCommand="{Binding MoveItemCommand}" />
         </ScrollViewer>

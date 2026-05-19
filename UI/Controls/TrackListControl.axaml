@@ -4,8 +4,7 @@
     xmlns:ctrl="using:LMP.UI.Controls"
     xmlns:ir="using:Avalonia.Controls"
     x:Class="LMP.UI.Controls.TrackListControl"
-    x:Name="Root"
-    x:CompileBindings="True">
+    x:Name="Root">
 
     <UserControl.Resources>
         <MenuFlyout x:Key="SharedTrackMenuFlyout"
@@ -80,7 +79,9 @@
                 DragDrop.AllowDrop="{Binding EnableReordering, ElementName=Root}"
                 DragDrop.DragOver="OnDragOver"
                 DragDrop.Drop="OnDrop"
-                DragDrop.DragLeave="OnDragLeave">
+                DragDrop.DragLeave="OnDragLeave"
+                TextOptions.BaselinePixelAlignment="Unaligned"
+                TextOptions.TextHintingMode="None">
 
                 <ir:ItemsRepeater.Layout>
                     <StackLayout Spacing="0" />
@@ -97,9 +98,10 @@
                             PointerMoved="OnItemPointerMoved"
                             PointerReleased="OnItemPointerReleased">
 
-                            <Panel Background="Transparent">
+                            <Panel Background="Transparent"
+                                IsHitTestVisible="True">
 
-                                <!-- COVER -->
+                                <!-- COVER: убрана лишняя Panel-обёртка, оверлей через Grid -->
                                 <Button Classes="cover-btn"
                                     Width="44" Height="44"
                                     HorizontalAlignment="Left"
@@ -107,8 +109,10 @@
                                     Margin="8,0,0,0"
                                     Command="{Binding PlayCommand}"
                                     ToolTip.Tip="{Binding L[Player_Play]}">
-                                    <Panel>
-                                        <Border CornerRadius="6" ClipToBounds="True"
+                                    <Grid>
+                                        <Border CornerRadius="6"
+                                            ClipToBounds="True"
+                                            UseLayoutRounding="True"
                                             Background="{DynamicResource BgSkeletonBrush}">
                                             <Image Stretch="UniformToFill"
                                                 RenderOptions.BitmapInterpolationMode="LowQuality"
@@ -116,7 +120,8 @@
                                                 ctrl:SmartImage.Quality="Low"
                                                 ctrl:SmartImage.Debounce="80" />
                                         </Border>
-                                        <Panel Classes="cover-overlay" IsHitTestVisible="False">
+                                        <Panel Classes="cover-overlay"
+                                            IsHitTestVisible="False">
                                             <Border CornerRadius="6"
                                                 Background="{DynamicResource BgOverlayBrush}" />
                                             <PathIcon Width="24" Height="24"
@@ -124,74 +129,75 @@
                                                 HorizontalAlignment="Center"
                                                 VerticalAlignment="Center"
                                                 Data="{Binding IsPlaying,
-                                    Converter={StaticResource BoolToGeometryConverter},
-                                    ConverterParameter='Pause|Play'}" />
+                                        Converter={StaticResource BoolToGeometryConverter},
+                                        ConverterParameter='Pause|Play'}" />
                                         </Panel>
-                                    </Panel>
+                                    </Grid>
                                 </Button>
 
-                                <Grid RowDefinitions="Auto,Auto"
+                                <!-- TITLE + AUTHOR: UseLayoutRounding=False чтобы не конфликтовать
+                                с Unaligned -->
+                                <StackPanel Orientation="Vertical"
                                     HorizontalAlignment="Stretch"
                                     VerticalAlignment="Center"
                                     Margin="64,0,108,0"
+                                    Spacing="2"
+                                    UseLayoutRounding="False"
                                     IsHitTestVisible="False">
-                                    <TextBlock Grid.Row="0"
+                                    <TextBlock
                                         Text="{Binding Title}"
                                         Classes="track-title"
                                         TextTrimming="CharacterEllipsis"
                                         MaxLines="1"
                                         FontSize="14" />
-                                    <TextBlock Grid.Row="1"
+                                    <TextBlock
                                         Text="{Binding Author}"
                                         Foreground="{DynamicResource TextMutedBrush}"
                                         TextTrimming="CharacterEllipsis"
                                         MaxLines="1"
                                         FontSize="12" />
-                                </Grid>
+                                </StackPanel>
 
-                                <PathIcon
+                                <!-- STATUS ICON: одна Panel вместо трёх независимых IsVisible -->
+                                <Panel
                                     Width="16" Height="16"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center"
                                     Margin="0,0,84,0"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    Data="{StaticResource Icon.CheckCircle}"
-                                    IsVisible="{Binding IsDownloaded}"
-                                    ToolTip.Tip="{Binding L[Track_Downloaded]}"
-                                    IsHitTestVisible="False" />
-
-                                <PathIcon
-                                    Width="16" Height="16"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,84,0"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    Data="{StaticResource Icon.CloudCheck}"
-                                    IsVisible="{Binding ShowCachedIcon}"
-                                    ToolTip.Tip="{Binding L[Track_Cached]}"
-                                    IsHitTestVisible="False" />
-
-                                <Border
-                                    Width="32" Height="3"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,84,0"
-                                    Background="{DynamicResource BgSecondaryBrush}"
-                                    CornerRadius="1.5"
-                                    ClipToBounds="True"
-                                    IsVisible="{Binding IsDownloading}"
                                     IsHitTestVisible="False">
+
+                                    <PathIcon
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Data="{StaticResource Icon.CheckCircle}"
+                                        IsVisible="{Binding IsDownloaded}"
+                                        ToolTip.Tip="{Binding L[Track_Downloaded]}" />
+
+                                    <PathIcon
+                                        Foreground="{DynamicResource AccentBrush}"
+                                        Data="{StaticResource Icon.CloudCheck}"
+                                        IsVisible="{Binding ShowCachedIcon}"
+                                        ToolTip.Tip="{Binding L[Track_Cached]}" />
+
                                     <Border
                                         Width="32" Height="3"
-                                        HorizontalAlignment="Left"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource BgSecondaryBrush}"
                                         CornerRadius="1.5"
-                                        Background="{DynamicResource AccentBrush}"
-                                        RenderTransformOrigin="0, 0.5">
-                                        <Border.RenderTransform>
-                                            <ScaleTransform ScaleX="{Binding DownloadProgress}" />
-                                        </Border.RenderTransform>
+                                        ClipToBounds="True"
+                                        IsVisible="{Binding IsDownloading}">
+                                        <Border
+                                            Width="32" Height="3"
+                                            HorizontalAlignment="Left"
+                                            CornerRadius="1.5"
+                                            Background="{DynamicResource AccentBrush}"
+                                            RenderTransformOrigin="0, 0.5">
+                                            <Border.RenderTransform>
+                                                <ScaleTransform ScaleX="{Binding DownloadProgress}" />
+                                            </Border.RenderTransform>
+                                        </Border>
                                     </Border>
-                                </Border>
+                                </Panel>
 
                                 <Button Classes="icon-btn like-btn"
                                     Classes.is-liked="{Binding IsLiked}"
@@ -203,17 +209,17 @@
                                     ToolTip.Tip="{Binding L[Track_ToggleLike]}">
                                     <PathIcon Width="16" Height="16"
                                         Data="{Binding IsLiked,
-                                            Converter={StaticResource BoolToGeometryConverter},
-                                            ConverterParameter='Heart|HeartOutline'}" />
+                                Converter={StaticResource BoolToGeometryConverter},
+                                ConverterParameter='Heart|HeartOutline'}" />
                                 </Button>
 
                                 <TextBlock
                                     Classes="duration-text"
-                                    Width="36"
+                                    Width="46"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center"
                                     Margin="0,0,10,0"
-                                    TextAlignment="Right"
+                                    TextAlignment="Center"
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     FontSize="12"
                                     Text="{Binding FormattedDuration}"
@@ -239,7 +245,7 @@
             </ir:ItemsRepeater>
 
             <!-- ═══ FOOTER ═══ -->
-            <StackPanel Margin="0,8,0,16"
+            <StackPanel Margin="0,8,0,80"
                 DataContext="{Binding #Root}"
                 IsHitTestVisible="False">
                 <StackPanel.IsVisible>

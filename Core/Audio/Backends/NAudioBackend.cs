@@ -132,6 +132,12 @@ public sealed class NAudioBackend : IPlaybackBackend
     /// </summary>
     private const int ChunkDivisor = 20;
 
+    /// <summary>
+    /// Порог underrun'ов для вызова starvation callback.
+    /// 200 × 5ms = 1 секунда непрерывной тишины при открытом gate.
+    /// </summary>
+    private const int StarvationThreshold = 200;
+
     #endregion
 
     #region Fields
@@ -195,6 +201,13 @@ public sealed class NAudioBackend : IPlaybackBackend
     private float _fadeGain;
     private volatile bool _fadingIn;
     private volatile bool _fadingOut;
+
+    /// <summary>
+    /// Callback, вызываемый при длительном отсутствии данных (starvation).
+    /// Позволяет pipeline/player диагностировать причину и эскалировать ошибку.
+    /// Вызывается из fill loop — не должен блокировать.
+    /// </summary>
+    private Action? _onStarvation;
 
     #endregion
 
@@ -384,6 +397,16 @@ public sealed class NAudioBackend : IPlaybackBackend
     public void SetDeviceLostCallback(Action? callback)
     {
         _onDeviceLost = callback;
+    }
+
+    /// <summary>
+    /// Устанавливает callback для уведомления о длительном отсутствии аудио данных.
+    /// Вызывается когда fill loop не получает данных > 1 секунды при открытом gate.
+    /// Callback вызывается из fill loop — не должен блокировать.
+    /// </summary>
+    public void SetStarvationCallback(Action? callback)
+    {
+        _onStarvation = callback;
     }
 
     #endregion
@@ -584,11 +607,26 @@ public sealed class NAudioBackend : IPlaybackBackend
                 if (framesRead <= 0)
                 {
                     int underruns = Interlocked.Increment(ref _consecutiveUnderrunCount);
+
                     if (underruns == UnderrunLogThreshold)
                     {
                         Log.Warn($"[NAudioBackend] ⚠ {underruns} underruns. " +
                                  $"BufferedMs={(int)provider.BufferedDuration.TotalMilliseconds}");
                     }
+
+                    // ═══ FIX: Starvation detection ═══
+                    // 200 × 5ms = 1 секунда непрерывной тишины.
+                    // Однократный вызов: callback решает — логировать, rebuffer или raise error.
+                    // Без этого fill loop крутится бесконечно с framesRead=0,
+                    // пользователь слышит тишину без индикации ошибки.
+                    if (underruns == StarvationThreshold)
+                    {
+                        Log.Error($"[NAudioBackend] Starvation detected: {underruns} consecutive underruns");
+                        var cb = _onStarvation;
+                        if (cb != null)
+                            Task.Run(cb, ct);
+                    }
+
                     Thread.Sleep(EmptyCallbackSleepMs);
                     continue;
                 }

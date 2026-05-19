@@ -8,7 +8,6 @@ using LMP.Core.ViewModels;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using System.Reactive.Disposables;
 using LMP.Core.Audio;
 
 

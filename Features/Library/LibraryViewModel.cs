@@ -8,7 +8,6 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using LMP.Core.Youtube.Search;
-using System.Reactive.Disposables;
 using LMP.UI.Dialogs;
 using Avalonia.Threading;
 
@@ -346,10 +345,16 @@ public sealed class LibraryViewModel : ViewModelBase
 
     #region Обработчики событий
 
+    /// <summary>
+    /// Вызывается из <see cref="CookieAuthService.OnAuthStateChanged"/>.
+    /// Событие может стрелять с сетевого/таймерного потока — диспатчим на UI.
+    /// </summary>
     private void OnAuthChanged()
     {
         if (_isDisposed) return;
-        IsAuthenticated = _auth.IsAuthenticated;
+        Dispatcher.UIThread.Post(
+            () => IsAuthenticated = _auth.IsAuthenticated,
+            DispatcherPriority.Background);
     }
 
     #endregion

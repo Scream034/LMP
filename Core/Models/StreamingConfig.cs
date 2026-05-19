@@ -123,7 +123,21 @@ public sealed record StreamingConfig
         public const int BackgroundFillIdleCycles = 5;
         public const int BackgroundFillIntervalMs = 3000;
         public const int MaxBackgroundChunksPerSession = 0;  // unlimited
-        public const int MinBufferAheadForBackgroundFill = 6;
+
+        /// <summary>
+        /// Минимум буфера впереди перед началом фоновой докачки.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>ВАЖНО:</b> Значение ДОЛЖНО быть ≤ ReadAheadChunks.
+        /// Preload loop считает chunksAhead в диапазоне [0..ReadAheadChunks],
+        /// максимум = ReadAheadChunks + 1 итераций. При значении > ReadAheadChunks
+        /// условие <c>chunksAhead >= MinBufferAheadForBackgroundFill</c>
+        /// НИКОГДА не выполняется → background fill заблокирован навсегда.</para>
+        ///
+        /// <para><b>Было:</b> 6 (при ReadAheadChunks=4 → max chunksAhead=5 → 5≥6 = false → dead).</para>
+        /// <para><b>Стало:</b> 3 — background fill стартует когда ≥3 чанков впереди доступны.</para>
+        /// </remarks>
+        public const int MinBufferAheadForBackgroundFill = 3;
 
         // Preload loop
         public const int PreloadIntervalMs = 800;

@@ -1,12 +1,10 @@
 ﻿using LMP.Core.Models;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
-using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 
 namespace LMP.Features.Home;
@@ -53,8 +51,6 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
     /// С фильтром визуальные индексы расходятся с мастер-списком.
     /// </summary>
     public bool CanReorderItems => CanReorder;
-
-    public bool EnableSmoothLoading => LibService.Settings.EnableSmoothLoading;
 
     #endregion
 

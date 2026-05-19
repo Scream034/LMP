@@ -2,8 +2,6 @@
 using Avalonia.Media;
 using LMP.Core.Models;
 using System.Globalization;
-using Avalonia.Input;
-using LMP.Core.Services;
 using Avalonia.Platform;
 using Avalonia.Media.Imaging;
 using Avalonia.Controls;

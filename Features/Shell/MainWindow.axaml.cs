@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Disposables;
-
 using System.Reactive.Linq;
 using System.Runtime.InteropServices;
 using Avalonia;
@@ -18,18 +17,56 @@ using ReactiveUI;
 namespace LMP.Features.Shell;
 
 /// <summary>
-/// Главное окно приложения. Управляет жизненным циклом, состоянием окна (Tray/Minimize),
-/// и системными ресурсами в зависимости от активности пользователя.
-/// 
-/// <para><b>Tray:</b> Иконка ВСЕГДА видна в системном трее (и на Windows, и на Linux/macOS).
-/// Скрывается только при полном закрытии приложения.</para>
-/// 
-/// <para><b>Tooltip формат:</b> <c>{AppName}: {TrackTitle} ({Volume}{VolumeEmoji})</c>
-/// через <see cref="TrayTooltipHelper"/> (DRY).</para>
+/// Главное окно приложения.
+///
+/// <para><b>Lifecycle:</b> управляет видимостью окна (Normal / Minimized / Tray),
+/// уровнем приостановки (<see cref="SuspendLevel"/>) и системными ресурсами.</para>
+///
+/// <para><b>Suspend архитектура (три уровня):</b></para>
+/// <list type="bullet">
+///   <item><b>None</b> — окно активно, все подписки работают</item>
+///   <item><b>Soft</b> — окно свёрнуто в taskbar или потеряло фокус (500мс debounce)</item>
+///   <item><b>Hard</b> — окно свёрнуто в tray, максимальная экономия ресурсов</item>
+/// </list>
+///
+/// <para><b>Tray:</b> иконка ВСЕГДА видна в системном трее.
+/// На Windows — нативный <see cref="TrayManager"/> с перехватом WM_MOUSEWHEEL.
+/// На других платформах — стандартный Avalonia <see cref="TrayIcon"/>.</para>
+///
+/// <para><b>Restore race condition fix:</b>
+/// <see cref="_isRestoringFromTray"/> guard блокирует <see cref="OnWindowDeactivated"/>
+/// во время <see cref="RestoreFromTray"/>, предотвращая re-suspend через 500мс
+/// из-за того что Windows может послать Deactivated после Show()+Activate().</para>
 /// </summary>
 public partial class MainWindow : Window
 {
-    #region Fields
+    #region Constants
+
+    /// <summary>Задержка перед Soft Suspend при потере фокуса (мс).</summary>
+    private const int DeactivateSuspendDelayMs = 500;
+
+    /// <summary>Минимальный интервал между GC-очистками (мс).</summary>
+    private const int MinCleanupIntervalMs = 30_000;
+
+    /// <summary>Задержка восстановления tooltip после показа громкости (мс).</summary>
+    private const int TooltipRestoreDelayMs = 3000;
+
+    /// <summary>
+    /// Минимальный интервал между toggle-ами окна из трея (мс).
+    /// На Windows debounce в <see cref="TrayManager.TryInvokeToggle"/>.
+    /// На non-Windows — в <see cref="ToggleTrayWindow"/>.
+    /// </summary>
+    public const int ToggleCooldownMs = 1000;
+
+    /// <summary>Длительность отображения Copy Hint (мс).</summary>
+    private const int CopyHintDurationMs = 1800;
+
+    /// <summary>Длительность fade-out Copy Hint (мс).</summary>
+    private const int CopyHintFadeDurationMs = 150;
+
+    #endregion
+
+    #region Fields — Window Chrome
 
     private Button? _minimizeButton;
     private Button? _maximizeButton;
@@ -37,50 +74,62 @@ public partial class MainWindow : Window
     private Border? _dragArea;
     private Grid? _rootGrid;
 
-    private CancellationTokenSource? _cleanupCts;
-    private CancellationTokenSource? _deactivateCts;
+    #endregion
 
-    /// <summary>Окно свернуто в системный трей (максимальная экономия ресурсов).</summary>
+    #region Fields — Window State
+
+    /// <summary>Окно свёрнуто в системный трей (Hard Suspend).</summary>
     private volatile bool _isInTray;
 
-    /// <summary>Окно свернуто в панель задач.</summary>
+    /// <summary>Окно свёрнуто в панель задач (Soft Suspend).</summary>
     private volatile bool _isMinimized;
 
-    /// <summary>Окно потеряло фокус (находится на фоне или перекрыто).</summary>
+    /// <summary>Окно потеряло фокус (Soft Suspend после debounce).</summary>
     private volatile bool _isDeactivated;
 
-    private DateTime _lastCleanupTime = DateTime.MinValue;
-    private const int MinCleanupIntervalMs = 30_000;
-
-    /// <summary>Задержка перед переходом в режим Soft Suspend при потере фокуса.</summary>
-    private const int DeactivateSuspendDelayMs = 500;
-
-    /// <summary>Задержка перед восстановлением tooltip после временного показа громкости (мс).</summary>
-    private const int TooltipRestoreDelayMs = 3000;
-
     /// <summary>
-    /// Минимальный интервал между toggle-ами окна из трея (мс).
-    /// На Windows debounce выполняется в <see cref="TrayManager.TryInvokeToggle"/>.
-    /// На non-Windows — в <see cref="ToggleTrayWindow"/>.
+    /// Guard: окно восстанавливается из трея.
+    ///
+    /// <para>Предотвращает re-suspend от Deactivated race condition на Windows:
+    /// <c>Show()</c> + <c>Activate()</c> может вызвать Deactivated до того
+    /// как окно получит foreground focus. Без guard'а это приводило к
+    /// resume → 500мс → re-suspend.</para>
+    ///
+    /// <para>Сбрасывается в <see cref="OnWindowActivated"/> (нормальный путь)
+    /// или через fallback таймер 1.5с (если фокус не пришёл).</para>
     /// </summary>
-    public const int ToggleCooldownMs = 1000;
+    private volatile bool _isRestoringFromTray;
 
+    /// <summary>Принудительное закрытие (минуя диалог подтверждения).</summary>
     private bool _forceClose;
+
+    #endregion
+
+    #region Fields — Services
 
     private PlayerControlService? _playerControl;
     private LibraryService? _library;
 
-    /// <summary>Подписки на PlayerControlService (работают всегда, даже в трее).</summary>
+    #endregion
+
+    #region Fields — Suspend Timers
+
+    private CancellationTokenSource? _cleanupCts;
+    private CancellationTokenSource? _deactivateCts;
+    private DateTime _lastCleanupTime = DateTime.MinValue;
+
+    #endregion
+
+    #region Fields — Tray
+
+    /// <summary>Подписки на PlayerControlService (живут всё время жизни окна).</summary>
     private CompositeDisposable? _traySubscriptions;
 
 #if WINDOWS
     /// <summary>Нативный менеджер трея (lazy mouse hook для скролла громкости).</summary>
     private TrayManager? _trayManager;
 
-    /// <summary>
-    /// Таймер восстановления tooltip после показа громкости (debounce).
-    /// Заменяет CancellationTokenSource + Task.Delay — без TaskCanceledException спама.
-    /// </summary>
+    /// <summary>Таймер восстановления tooltip после показа громкости (debounce).</summary>
     private Avalonia.Threading.DispatcherTimer? _tooltipRestoreTimer;
 #else
     /// <summary>Стандартный менеджер трея от Avalonia для Linux/macOS.</summary>
@@ -93,7 +142,14 @@ public partial class MainWindow : Window
     private NativeMenuItem? _queueItem;
     private NativeMenuItem? _cleanMemItem;
     private NativeMenuItem? _exitItem;
+
+    /// <summary>Timestamp последнего toggle (non-Windows debounce).</summary>
+    private long _lastToggleTime;
 #endif
+
+    #endregion
+
+    #region Fields — Copy Hint
 
     private readonly Canvas? _copyHintCanvas;
     private readonly Border? _copyHintOverlay;
@@ -101,12 +157,9 @@ public partial class MainWindow : Window
     private readonly PathIcon? _copyHintIcon;
     private CancellationTokenSource? _copyHintCts;
 
-    private const int CopyHintDurationMs = 1800;
-    private const int CopyHintFadeDurationMs = 150;
-
     #endregion
 
-    #region Constructor & Init
+    #region Constructor & Initialization
 
     public MainWindow()
     {
@@ -118,11 +171,10 @@ public partial class MainWindow : Window
         _copyHintIcon = this.FindControl<PathIcon>("CopyHintIcon");
         _rootGrid = this.FindControl<Grid>("RootGrid");
 
-        // Трекинг позиции курсора для позиционирования toast
         if (_rootGrid != null)
             MousePositionHelper.Attach(_rootGrid);
 
-        PropertyChanged += MainWindow_PropertyChanged;
+        PropertyChanged += OnWindowPropertyChanged;
         Deactivated += OnWindowDeactivated;
         Activated += OnWindowActivated;
 
@@ -145,54 +197,31 @@ public partial class MainWindow : Window
 
         var titleBar = this.FindControl<Grid>("TitleBar");
         titleBar?.PointerPressed += OnTitleBarPointerPressed;
-
         _dragArea?.DoubleTapped += (_, _) => ToggleMaximize();
 
-        try
-        {
-            _library = Program.Services.GetRequiredService<LibraryService>();
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Window] LibraryService not available: {ex.Message}");
-        }
+        try { _library = Program.Services.GetRequiredService<LibraryService>(); }
+        catch (Exception ex) { Log.Warn($"[Window] LibraryService not available: {ex.Message}"); }
 
         SetupTrayIcon();
     }
 
     #endregion
 
-    #region Suspend Level Management
+    #region Suspend Management
 
     /// <summary>
-    /// Определяет текущий уровень приостановки (Suspend) на основе состояния окна.
+    /// Определяет текущий уровень приостановки на основе состояния окна.
     /// </summary>
     private SuspendLevel DetermineSuspendLevel()
     {
         if (_isInTray) return SuspendLevel.Hard;
-        if (_isMinimized) return SuspendLevel.Soft;
-        if (_isDeactivated) return SuspendLevel.Soft;
+        if (_isMinimized || _isDeactivated) return SuspendLevel.Soft;
         return SuspendLevel.None;
     }
 
     /// <summary>
-    /// Проверяет настройку пользователя на предмет необходимости оптимизации при неактивности.
-    /// </summary>
-    private bool ShouldOptimizeWhenInactive()
-    {
-        try
-        {
-            return _library?.Settings.OptimizeWhenInactive ?? true;
-        }
-        catch
-        {
-            return true;
-        }
-    }
-
-    /// <summary>
-    /// Применяет текущий уровень suspend. Управляет частотой мониторинга памяти,
-    /// очисткой мусора (GC) и оповещает ViewModelBase о необходимости отключить тяжелые UI-компоненты.
+    /// Применяет текущий уровень suspend ко всем VM через <see cref="ViewModelBase.BroadcastSuspendLevel"/>.
+    /// Планирует GC-очистку для Hard/Soft режимов.
     /// </summary>
     private void ApplySuspendLevel()
     {
@@ -200,13 +229,6 @@ public partial class MainWindow : Window
         bool forceOptimize = level == SuspendLevel.Hard || ShouldOptimizeWhenInactive();
 
         ViewModelBase.BroadcastSuspendLevel(level, forceOptimize);
-
-        var monitoringInterval = level switch
-        {
-            SuspendLevel.Hard => TimeSpan.FromSeconds(30),
-            SuspendLevel.Soft when forceOptimize => TimeSpan.FromSeconds(15),
-            _ => TimeSpan.FromSeconds(5)
-        };
 
         if (level != SuspendLevel.None && forceOptimize)
         {
@@ -221,40 +243,41 @@ public partial class MainWindow : Window
         }
     }
 
-    #endregion
-
-    #region Window State & Maximize Fix
-
-    private void MainWindow_PropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    private bool ShouldOptimizeWhenInactive()
     {
-        if (e.Property != WindowStateProperty) return;
-
-        var state = (WindowState)e.NewValue!;
-        HandleWindowStateChanged(state);
+        try { return _library?.Settings.OptimizeWhenInactive ?? true; }
+        catch { return true; }
     }
 
+    #endregion
+
+    #region Window State (Minimize / Maximize)
+
+    private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property == WindowStateProperty)
+            HandleWindowStateChanged((WindowState)e.NewValue!);
+    }
+
+    /// <summary>
+    /// Обрабатывает смену состояния окна.
+    /// MinimizeToTray: если настройка включена, перехватывает Minimized → прячет в трей.
+    /// </summary>
     private void HandleWindowStateChanged(WindowState state)
     {
-        var maximizeIcon = this.FindControl<Border>("MaximizeIcon");
-        var restoreIcon = this.FindControl<Grid>("RestoreIcon");
-        maximizeIcon?.IsVisible = state != WindowState.Maximized;
-        restoreIcon?.IsVisible = state == WindowState.Maximized;
+        UpdateMaximizeRestoreIcons(state);
 
         if (state == WindowState.Minimized)
         {
-            try
+            if (ShouldMinimizeToTray())
             {
-                if (_library?.Settings.MinimizeToTray == true)
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    {
-                        WindowState = WindowState.Normal;
-                        MinimizeToTray();
-                    });
-                    return;
-                }
+                    WindowState = WindowState.Normal;
+                    MinimizeToTray();
+                });
+                return;
             }
-            catch { }
 
             _isMinimized = true;
             _isDeactivated = false;
@@ -269,33 +292,54 @@ public partial class MainWindow : Window
 
     private void HandleMinimizeClick()
     {
-        try
-        {
-            if (_library?.Settings.MinimizeToTray == true)
-            {
-                MinimizeToTray();
-                return;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[Window] MinimizeToTray check failed: {ex.Message}");
-        }
+        if (ShouldMinimizeToTray())
+            MinimizeToTray();
+        else
+            WindowState = WindowState.Minimized;
+    }
 
-        WindowState = WindowState.Minimized;
+    private void ToggleMaximize()
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+    }
+
+    /// <summary>
+    /// Обновляет иконки Maximize/Restore в title bar.
+    /// </summary>
+    private void UpdateMaximizeRestoreIcons(WindowState state)
+    {
+        var maximizeIcon = this.FindControl<Border>("MaximizeIcon");
+        var restoreIcon = this.FindControl<Grid>("RestoreIcon");
+
+        if (maximizeIcon != null) maximizeIcon.IsVisible = state != WindowState.Maximized;
+        if (restoreIcon != null) restoreIcon.IsVisible = state == WindowState.Maximized;
+    }
+
+    /// <summary>
+    /// Проверяет пользовательскую настройку MinimizeToTray.
+    /// </summary>
+    private bool ShouldMinimizeToTray()
+    {
+        try { return _library?.Settings.MinimizeToTray == true; }
+        catch { return false; }
     }
 
     #endregion
 
-    #region Window Deactivation & Activation
+    #region Window Focus (Activate / Deactivate)
 
     /// <summary>
-    /// Вызывается при потере окном фокуса.
-    /// Использует таймер для предотвращения ложных срабатываний.
+    /// Потеря фокуса. Запускает debounce-таймер на <see cref="DeactivateSuspendDelayMs"/>.
+    ///
+    /// <remarks><see cref="_isRestoringFromTray"/> guard блокирует deactivation
+    /// во время restore из трея — на Windows <c>Show()</c> + <c>Activate()</c>
+    /// часто вызывают Deactivated до получения foreground focus.</remarks>
     /// </summary>
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
-        if (_isInTray || _isMinimized) return;
+        if (_isInTray || _isMinimized || _isRestoringFromTray) return;
 
         CancelDeactivateSuspend();
         _deactivateCts = new CancellationTokenSource();
@@ -307,28 +351,28 @@ public partial class MainWindow : Window
 
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
-                if (!IsActive && !_isInTray && !_isMinimized)
+                if (!IsActive && !_isInTray && !_isMinimized && !_isRestoringFromTray)
                 {
                     _isDeactivated = true;
                     ApplySuspendLevel();
-                    Log.Debug("[Window] App deactivated, suspend level applied.");
+                    Log.Debug("[Window] Deactivated → Soft Suspend");
                 }
             });
         }, TaskScheduler.Default);
     }
 
     /// <summary>
-    /// Вызывается при возвращении фокуса окну.
-    /// Отменяет запланированный suspend, восстанавливает нормальную работу UI,
-    /// и немедленно снимает mouse hook (пользователь теперь взаимодействует с окном).
+    /// Возвращение фокуса. Отменяет pending suspend, снимает mouse hook,
+    /// сбрасывает <see cref="_isRestoringFromTray"/> guard.
     /// </summary>
     private void OnWindowActivated(object? sender, EventArgs e)
     {
         CancelDeactivateSuspend();
 
+        _isRestoringFromTray = false;
+
         if (_isInTray) return;
 
-        // ═══ Немедленно снимаем hook — пользователь в окне, скролл на трее невозможен ═══
 #if WINDOWS
         _trayManager?.ForceUninstallHook();
 #endif
@@ -337,29 +381,26 @@ public partial class MainWindow : Window
         {
             _isDeactivated = false;
             ApplySuspendLevel();
-            Log.Debug("[Window] App activated, suspend level lifted.");
+            Log.Debug("[Window] Activated → Suspend lifted");
         }
     }
 
     private void CancelDeactivateSuspend()
     {
-        if (_deactivateCts != null)
-        {
-            _deactivateCts.Cancel();
-            _deactivateCts.Dispose();
-            _deactivateCts = null;
-        }
+        if (_deactivateCts is null) return;
+
+        _deactivateCts.Cancel();
+        _deactivateCts.Dispose();
+        _deactivateCts = null;
     }
 
     #endregion
 
-    #region Tray Icon Setup
+    #region Tray — Setup
 
     /// <summary>
-    /// Настраивает иконку системного трея.
-    /// На Windows — нативный TrayManager с перехватом WM_MOUSEWHEEL.
-    /// На других платформах — стандартный Avalonia TrayIcon.
-    /// Иконка показывается ВСЕГДА и не скрывается при восстановлении окна.
+    /// Инициализирует иконку трея. На Windows — нативный TrayManager,
+    /// на других платформах — Avalonia TrayIcon. Иконка показывается сразу.
     /// </summary>
     private void SetupTrayIcon()
     {
@@ -375,20 +416,18 @@ public partial class MainWindow : Window
 #endif
 
             SubscribeToPlayerControl();
-            Log.Info("[Tray] Tray icon configured successfully");
+            Log.Info("[Tray] Configured");
         }
         catch (Exception ex)
         {
-            Log.Warn($"[Tray] Failed to setup tray icon: {ex.Message}");
+            Log.Warn($"[Tray] Setup failed: {ex.Message}");
         }
     }
 
 #if WINDOWS
 
     /// <summary>
-    /// Настраивает нативный Windows TrayManager.
-    /// Иконка показывается СРАЗУ (не только при MinimizeToTray).
-    /// ЛКМ по иконке — toggle show/hide главного окна.
+    /// Создаёт нативный Windows TrayManager с mouse hook для скролла громкости.
     /// </summary>
     private void SetupWindowsTray()
     {
@@ -401,20 +440,21 @@ public partial class MainWindow : Window
                 Close();
             }),
             onOpenQueue: () => Avalonia.Threading.Dispatcher.UIThread.Post(OnTrayGoToQueue),
-            onVolumeChanged: newVolume =>
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => HandleTrayVolumeChanged(newVolume)),
+            onVolumeChanged: vol =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => HandleTrayVolumeChanged(vol)),
             isWindowVisible: () => IsVisible && !_isInTray && WindowState != WindowState.Minimized);
 
-        var iconHandle = LoadWindowsIcon();
-        _trayManager.SetIcon(iconHandle);
+        _trayManager.SetIcon(LoadWindowsIcon());
         _trayManager.Show();
         _trayManager.UpdateTooltipFromPlayerState();
 
-        Log.Debug("[Tray] Windows TrayManager created, icon always visible");
+        Log.Debug("[Tray] Windows TrayManager created");
     }
 
-    [LibraryImport("user32.dll", EntryPoint = "LoadImageW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
-    private static partial IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint load);
+    [LibraryImport("user32.dll", EntryPoint = "LoadImageW",
+        StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial IntPtr LoadImage(
+        IntPtr hInst, string name, uint type, int cx, int cy, uint load);
 
     [LibraryImport("user32.dll", EntryPoint = "LoadIconW")]
     private static partial IntPtr LoadIconW(IntPtr hInstance, IntPtr lpIconName);
@@ -423,81 +463,79 @@ public partial class MainWindow : Window
     private const uint LR_LOADFROMFILE = 0x0010;
 
     /// <summary>
-    /// Загружает иконку из ресурсов приложения для Win32 Shell_NotifyIcon.
-    /// Пробует avares:// пути, при неудаче возвращает IDI_APPLICATION.
+    /// Загружает иконку из avares:// ресурсов для Shell_NotifyIcon.
+    /// Fallback: IDI_APPLICATION (стандартная системная иконка).
     /// </summary>
     private static IntPtr LoadWindowsIcon()
     {
-        try
-        {
-            string[] iconPaths = ["avares://LMP/Assets/app.ico", "avares://LMP/Assets/icon.ico"];
+        string[] candidates = ["avares://LMP/Assets/app.ico", "avares://LMP/Assets/icon.ico"];
 
-            foreach (var path in iconPaths)
+        foreach (var path in candidates)
+        {
+            try
             {
-                try
-                {
-                    var uri = new Uri(path);
-                    if (!Avalonia.Platform.AssetLoader.Exists(uri)) continue;
+                var uri = new Uri(path);
+                if (!Avalonia.Platform.AssetLoader.Exists(uri)) continue;
 
-                    using var stream = Avalonia.Platform.AssetLoader.Open(uri);
+                string tempPath = Path.Combine(Path.GetTempPath(), "lmp_tray_icon.ico");
 
-                    string tempPath = Path.Combine(Path.GetTempPath(), "lmp_tray_icon.ico");
-                    using (var fs = File.Create(tempPath))
-                    {
-                        stream.CopyTo(fs);
-                    }
+                using (var source = Avalonia.Platform.AssetLoader.Open(uri))
+                using (var fs = File.Create(tempPath))
+                    source.CopyTo(fs);
 
-                    IntPtr hIcon = LoadImage(IntPtr.Zero, tempPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
+                IntPtr hIcon = LoadImage(IntPtr.Zero, tempPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
 
-                    try { File.Delete(tempPath); } catch { }
+                try { File.Delete(tempPath); } catch { /* best effort */ }
 
-                    if (hIcon != IntPtr.Zero)
-                        return hIcon;
-                }
-                catch
-                {
-                    continue;
-                }
+                if (hIcon != IntPtr.Zero) return hIcon;
             }
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[Tray] LoadWindowsIcon failed: {ex.Message}");
+            catch { continue; }
         }
 
-        return LoadIconW(IntPtr.Zero, 32512);
+        return LoadIconW(IntPtr.Zero, 32512); // IDI_APPLICATION
     }
 
 #else
 
     /// <summary>
-    /// Настраивает Avalonia TrayIcon для Linux/macOS.
-    /// Иконка показывается СРАЗУ (не только при MinimizeToTray).
+    /// Настраивает Avalonia TrayIcon для Linux/macOS с контекстным меню.
     /// </summary>
     private void SetupAvaloniaTray()
     {
         var icons = TrayIcon.GetIcons(Application.Current!);
-        if (icons == null || icons.Count == 0)
+        if (icons is not { Count: > 0 })
         {
-            Log.Warn("[Tray] No TrayIcon defined in App.axaml TrayIcon.Icons");
+            Log.Warn("[Tray] No TrayIcon defined in App.axaml");
             return;
         }
 
         _trayIcon = icons[0];
         LoadTrayIconImage();
-
-        // ═══ ВСЕГДА показываем иконку ═══
         _trayIcon.IsVisible = true;
+        _trayIcon.Clicked += (_, _) =>
+        {
+            ToggleTrayWindow();
+            UpdateShowHideItemText();
+        };
+
+        BuildAvaloniaTrayMenu();
+        UpdateTrayTooltip();
+
+        LocalizationService.Instance.LanguageChanged += OnTrayLanguageChanged;
+    }
+
+    /// <summary>
+    /// Собирает нативное контекстное меню трея (non-Windows).
+    /// </summary>
+    private void BuildAvaloniaTrayMenu()
+    {
+        if (_trayIcon is null) return;
 
         var L = LocalizationService.Instance;
         var menu = new NativeMenu();
 
         _showItem = new NativeMenuItem(FormatShowHideText());
-        _showItem.Click += (_, _) =>
-        {
-            ToggleTrayWindow();
-            UpdateShowHideItemText();
-        };
+        _showItem.Click += (_, _) => { ToggleTrayWindow(); UpdateShowHideItemText(); };
         menu.Add(_showItem);
 
         menu.Add(new NativeMenuItemSeparator());
@@ -531,24 +569,10 @@ public partial class MainWindow : Window
         menu.Add(new NativeMenuItemSeparator());
 
         _exitItem = new NativeMenuItem($"×  {L["Tray_Exit"] ?? "Exit"}");
-        _exitItem.Click += (_, _) =>
-        {
-            _forceClose = true;
-            Close();
-        };
+        _exitItem.Click += (_, _) => { _forceClose = true; Close(); };
         menu.Add(_exitItem);
 
         _trayIcon.Menu = menu;
-
-        _trayIcon.Clicked += (_, _) =>
-        {
-            ToggleTrayWindow();
-            UpdateShowHideItemText();
-        };
-
-        _trayIcon.ToolTipText = FormatTrayTooltip(_playerControl?.CurrentTrack);
-
-        LocalizationService.Instance.LanguageChanged += OnTrayLanguageChanged;
     }
 
     /// <summary>
@@ -556,9 +580,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void LoadTrayIconImage()
     {
-        if (_trayIcon == null) return;
+        if (_trayIcon is null) return;
 
-        string[] iconPaths =
+        string[] candidates =
         [
             "avares://LMP/Assets/app.ico",
             "avares://LMP/Assets/icon.ico",
@@ -567,7 +591,7 @@ public partial class MainWindow : Window
             "avares://LMP/Assets/logo.ico"
         ];
 
-        foreach (var path in iconPaths)
+        foreach (var path in candidates)
         {
             try
             {
@@ -578,99 +602,143 @@ public partial class MainWindow : Window
                 _trayIcon.Icon = new WindowIcon(stream);
                 return;
             }
-            catch { }
+            catch { /* try next */ }
         }
 
-        if (Icon != null)
-        {
-            _trayIcon.Icon = Icon;
-        }
-    }
-
-    /// <summary>
-    /// Формирует текст пункта Show/Hide в зависимости от текущей видимости окна.
-    /// </summary>
-    private string FormatShowHideText()
-    {
-        var L = LocalizationService.Instance;
-        bool isVisible = IsVisible && !_isInTray && WindowState != WindowState.Minimized;
-
-        return isVisible
-            ? $"●  {L["Tray_Hide"] ?? "Hide"}"
-            : $"●  {L["Tray_Show"] ?? "Show"}";
-    }
-
-    /// <summary>
-    /// Обновляет текст пункта Show/Hide в меню трея после toggle видимости окна.
-    /// </summary>
-    private void UpdateShowHideItemText()
-    {
-        if (_showItem != null)
-            _showItem.Header = FormatShowHideText();
+        if (Icon != null) _trayIcon.Icon = Icon;
     }
 
 #endif
 
+    #endregion
+
+    #region Tray — Show / Restore
+
     /// <summary>
     /// Toggle видимости окна по ЛКМ на иконке трея.
-    /// Если окно видимо и активно — сворачиваем в трей.
-    /// Если окно скрыто (в трее) или свёрнуто — восстанавливаем.
-    /// 
-    /// <para><b>Debounce:</b> На Windows debounce реализован в
-    /// <see cref="TrayManager.TryInvokeToggle"/> (WndProc уровень).
-    /// На non-Windows — здесь через <see cref="_lastToggleTime"/>.</para>
+    /// Debounce: на Windows — в <see cref="TrayManager.TryInvokeToggle"/>,
+    /// на non-Windows — здесь через <see cref="_lastToggleTime"/>.
     /// </summary>
     private void ToggleTrayWindow()
     {
 #if !WINDOWS
-        // Non-Windows debounce (на Windows — в TrayManager.TryInvokeToggle)
         long now = Environment.TickCount64;
-        long elapsed = now - Volatile.Read(ref _lastToggleTime);
-
-        if (elapsed < ToggleCooldownMs)
+        if (now - Volatile.Read(ref _lastToggleTime) < ToggleCooldownMs)
         {
-            Log.Debug($"[Window] Toggle throttled (elapsed={elapsed}ms)");
+            Log.Debug("[Window] Toggle throttled");
             return;
         }
-
         Volatile.Write(ref _lastToggleTime, now);
 #endif
 
         if (_isInTray || !IsVisible || WindowState == WindowState.Minimized)
-        {
             RestoreFromTray();
-        }
         else
-        {
             MinimizeToTray();
+    }
+
+    /// <summary>
+    /// Сворачивает окно в трей (Hard Suspend).
+    /// Иконка уже видна — просто прячем окно.
+    /// </summary>
+    private void MinimizeToTray()
+    {
+        Hide();
+
+        _isInTray = true;
+        _isMinimized = false;
+        _isDeactivated = false;
+        CancelDeactivateSuspend();
+        ApplySuspendLevel();
+
+#if !WINDOWS
+        UpdateShowHideItemText();
+#endif
+
+        Log.Info("[Window] Minimized to tray");
+    }
+
+    /// <summary>
+    /// Восстанавливает окно из трея.
+    ///
+    /// <para><b>Порядок операций критичен:</b></para>
+    /// <list type="number">
+    ///   <item><see cref="_isRestoringFromTray"/> guard — блокирует Deactivated race</item>
+    ///   <item><see cref="CancelDeactivateSuspend"/> — отменяет pending таймер</item>
+    ///   <item><c>Show()</c>/<c>Activate()</c> — могут вызвать Deactivated, но guard блокирует</item>
+    ///   <item>Флаги сбрасываются ПОСЛЕ Show — исключает "щель" между состояниями</item>
+    ///   <item><see cref="ApplySuspendLevel"/> безусловно — гарантирует resume</item>
+    ///   <item>Guard сбрасывается в <see cref="OnWindowActivated"/> или fallback 1.5с</item>
+    /// </list>
+    /// </summary>
+    private void RestoreFromTray()
+    {
+        // 1. Guard ДО Show — блокирует Deactivated race на Windows
+        _isRestoringFromTray = true;
+        CancelDeactivateSuspend();
+
+        // 2. Показываем (может вызвать Deactivated — guard блокирует)
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+
+        // 3. Флаги ПОСЛЕ Show
+        _isInTray = false;
+        _isMinimized = false;
+        _isDeactivated = false;
+
+        // 4. Безусловный resume
+        _playerControl?.ForceSync();
+        ApplySuspendLevel();
+
+        // 5. Fallback: если Activated не сработал за 1.5с — снимаем guard
+        _ = ClearRestoreGuardFallbackAsync();
+
+#if !WINDOWS
+        UpdateShowHideItemText();
+#endif
+
+        Log.Info("[Window] Restored from tray");
+    }
+
+    /// <summary>
+    /// Fallback сброс restore guard. Нормальный путь: guard сбрасывается
+    /// в <see cref="OnWindowActivated"/> (~50–200мс). Fallback нужен если
+    /// Windows не дал foreground focus (редкий случай).
+    /// </summary>
+    private async Task ClearRestoreGuardFallbackAsync()
+    {
+        await Task.Delay(1500);
+
+        if (_isRestoringFromTray)
+        {
+            _isRestoringFromTray = false;
+            Log.Debug("[Window] Restore guard cleared by fallback");
         }
     }
 
     #endregion
 
-    #region Player Control Subscriptions
+    #region Tray — Player Subscriptions
 
     /// <summary>
-    /// Подписывается на изменения состояния плеера для обновления трея.
-    /// Подписки живут всё время жизни окна (включая tray-режим).
+    /// Подписки на PlayerControlService для обновления трея.
+    /// Живут всё время жизни окна (включая tray-режим).
     /// </summary>
     private void SubscribeToPlayerControl()
     {
-        if (_playerControl == null || _traySubscriptions == null) return;
+        if (_playerControl is null || _traySubscriptions is null) return;
 
 #if WINDOWS
-        // Обновляем tooltip при смене трека
         _playerControl.CurrentTrackObservable
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => _trayManager?.UpdateTooltipFromPlayerState())
             .DisposeWith(_traySubscriptions);
 
-        // Обновляем tooltip при смене состояния воспроизведения (play/pause)
         _playerControl.IsPlayingObservable
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => _trayManager?.UpdateTooltipFromPlayerState())
             .DisposeWith(_traySubscriptions);
-
 #else
         _playerControl.IsPlayingObservable
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -681,10 +749,8 @@ public partial class MainWindow : Window
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(track =>
             {
-                bool hasTrack = track != null;
-                if (_trayIcon != null)
-                    _trayIcon.ToolTipText = FormatTrayTooltip(track);
-                UpdatePlaybackItemsEnabled(hasTrack);
+                UpdatePlaybackItemsEnabled(track != null);
+                UpdateTrayTooltip();
             })
             .DisposeWith(_traySubscriptions);
 
@@ -695,39 +761,42 @@ public partial class MainWindow : Window
 
         _playerControl.VolumeObservable
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                if (_trayIcon != null)
-                    _trayIcon.ToolTipText = FormatTrayTooltip(_playerControl.CurrentTrack);
-            })
+            .Subscribe(_ => UpdateTrayTooltip())
             .DisposeWith(_traySubscriptions);
 #endif
 
-        // Поддержка внешних запросов на разворачивание
+        // Поддержка внешних запросов на resume (например из Volume popup при suspend)
         _playerControl.ResumeRequestObservable
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                if (_isInTray)
-                {
-                    RestoreFromTray();
-                }
-                else if (ViewModelBase.CurrentSuspendLevel != SuspendLevel.None)
-                {
-                    _isDeactivated = false;
-                    _isMinimized = false;
-                    ApplySuspendLevel();
-                }
-            })
+            .Subscribe(_ => HandleExternalResumeRequest())
             .DisposeWith(_traySubscriptions);
+    }
+
+    /// <summary>
+    /// Обрабатывает внешний запрос на resume (например из PlayerBarView при hover на Volume).
+    /// </summary>
+    private void HandleExternalResumeRequest()
+    {
+        if (_isInTray)
+        {
+            RestoreFromTray();
+            return;
+        }
+
+        if (ViewModelBase.CurrentSuspendLevel != SuspendLevel.None)
+        {
+            _isDeactivated = false;
+            _isMinimized = false;
+            ApplySuspendLevel();
+        }
     }
 
     #endregion
 
-    #region Tray Menu Actions
+    #region Tray — Menu Actions
 
     /// <summary>
-    /// Восстанавливает окно из трея и переходит на страницу очереди.
+    /// Восстанавливает окно и навигирует на страницу очереди.
     /// </summary>
     private void OnTrayGoToQueue()
     {
@@ -736,77 +805,84 @@ public partial class MainWindow : Window
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             if (DataContext is MainWindowViewModel vm)
-            {
                 vm.NavigateCommand.Execute("Queue").Subscribe();
-            }
         });
     }
 
-    /// <summary>
-    /// Обработчик кнопки "Clear Memory" из трей-меню.
-    /// </summary>
     private static void OnTrayClearMemory()
     {
-        Log.Info("[Tray] Manual memory cleanup requested");
+        Log.Info("[Tray] Manual memory cleanup");
         MemoryCleanupHelper.PerformCleanup(aggressive: true);
     }
 
     /// <summary>
-    /// Обрабатывает изменение громкости через скролл колесиком над иконкой трея.
-    /// Показывает tooltip с акцентом на громкости, затем восстанавливает стандартный
-    /// через <see cref="TooltipRestoreDelayMs"/> после последнего scroll event.
-    /// 
-    /// <para><b>Debounce:</b> DispatcherTimer перезапускается при каждом вызове.
-    /// Это устраняет спам TaskCanceledException который был с CTS + Task.Delay.</para>
+    /// Обрабатывает изменение громкости через скролл на иконке трея (Windows).
+    /// Показывает tooltip с акцентом на громкости, debounce-восстанавливает стандартный.
     /// </summary>
     private void HandleTrayVolumeChanged(int newVolume)
     {
 #if WINDOWS
-        if (_trayManager == null) return;
+        if (_trayManager is null) return;
 
         _trayManager.UpdateTooltipWithVolumeAccent();
 
-        // ═══ Debounce: перезапускаем таймер восстановления ═══
-        if (_tooltipRestoreTimer == null)
-        {
-            _tooltipRestoreTimer = new Avalonia.Threading.DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(TooltipRestoreDelayMs)
-            };
-            _tooltipRestoreTimer.Tick += (_, _) =>
-            {
-                _tooltipRestoreTimer.Stop();
-                _trayManager?.UpdateTooltipFromPlayerState();
-            };
-        }
-
+        _tooltipRestoreTimer ??= CreateTooltipRestoreTimer();
         _tooltipRestoreTimer.Stop();
         _tooltipRestoreTimer.Start();
 #endif
-        Log.Debug($"[Tray] Volume changed via tray: {newVolume}%");
+        Log.Debug($"[Tray] Volume: {newVolume}%");
     }
 
-    #endregion
-
-    #region Tray Tooltip Formatting (non-Windows)
-
-#if !WINDOWS
+#if WINDOWS
     /// <summary>
-    /// Формирует tooltip трея для non-Windows платформ.
-    /// Делегирует в <see cref="TrayTooltipHelper"/> (DRY).
+    /// Создаёт DispatcherTimer для debounce-восстановления tooltip.
+    /// Один экземпляр на весь lifecycle окна.
     /// </summary>
-    private string FormatTrayTooltip(TrackInfo? track)
+    private Avalonia.Threading.DispatcherTimer CreateTooltipRestoreTimer()
     {
-        var volume = _playerControl?.CurrentVolume ?? 0;
-        return TrayTooltipHelper.Format(track, volume);
+        var timer = new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(TooltipRestoreDelayMs)
+        };
+
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _trayManager?.UpdateTooltipFromPlayerState();
+        };
+
+        return timer;
     }
 #endif
 
     #endregion
 
-    #region Tray State Updates (non-Windows)
+    #region Tray — Platform Helpers (non-Windows)
 
 #if !WINDOWS
+
+    private string FormatShowHideText()
+    {
+        var L = LocalizationService.Instance;
+        bool isVisible = IsVisible && !_isInTray && WindowState != WindowState.Minimized;
+
+        return isVisible
+            ? $"●  {L["Tray_Hide"] ?? "Hide"}"
+            : $"●  {L["Tray_Show"] ?? "Show"}";
+    }
+
+    private void UpdateShowHideItemText()
+    {
+        if (_showItem != null) _showItem.Header = FormatShowHideText();
+    }
+
+    private void UpdateTrayTooltip()
+    {
+        if (_trayIcon is null) return;
+        int volume = _playerControl?.CurrentVolume ?? 0;
+        _trayIcon.ToolTipText = TrayTooltipHelper.Format(_playerControl?.CurrentTrack, volume);
+    }
+
     private void UpdatePlaybackItemsEnabled(bool enabled)
     {
         if (_playPauseItem != null) _playPauseItem.IsEnabled = enabled;
@@ -817,7 +893,7 @@ public partial class MainWindow : Window
 
     private void UpdatePlayPauseMenuText(bool isPlaying)
     {
-        if (_playPauseItem == null) return;
+        if (_playPauseItem is null) return;
         var L = LocalizationService.Instance;
 
         _playPauseItem.Header = isPlaying
@@ -827,14 +903,11 @@ public partial class MainWindow : Window
 
     private void UpdateRepeatMenuText()
     {
-        if (_repeatItem == null || _playerControl == null) return;
-
+        if (_repeatItem is null || _playerControl is null) return;
         var L = LocalizationService.Instance;
-        var repeatMode = _playerControl.RepeatMode;
 
-        _repeatItem.Header = repeatMode switch
+        _repeatItem.Header = _playerControl.RepeatMode switch
         {
-            RepeatMode.None => $"↻  {L["Tray_Repeat"] ?? "Repeat"}",
             RepeatMode.All => $"↻• {L["Tray_RepeatAll"] ?? "All"}",
             RepeatMode.One => $"↺• {L["Tray_RepeatOne"] ?? "One"}",
             _ => $"↻  {L["Tray_Repeat"] ?? "Repeat"}"
@@ -858,62 +931,10 @@ public partial class MainWindow : Window
             UpdateRepeatMenuText();
         }
 
-        if (_trayIcon != null)
-            _trayIcon.ToolTipText = FormatTrayTooltip(_playerControl?.CurrentTrack);
-    }
-#endif
-
-    #endregion
-
-    #region Tray Show / Restore
-
-    /// <summary>
-    /// Сворачивает окно в трей. Иконка уже видна (всегда показана),
-    /// просто прячем окно и переходим в Hard Suspend.
-    /// </summary>
-    private void MinimizeToTray()
-    {
-        Hide();
-
-        _isInTray = true;
-        _isMinimized = false;
-        _isDeactivated = false;
-        ApplySuspendLevel();
-
-#if !WINDOWS
-        UpdateShowHideItemText();
-#endif
-
-        Log.Info("[Window] Minimized to tray");
+        UpdateTrayTooltip();
     }
 
-    /// <summary>
-    /// Восстанавливает окно из трея.
-    /// Иконка остаётся видимой (не скрываем — она всегда в трее).
-    /// </summary>
-    private void RestoreFromTray()
-    {
-        bool wasInTray = _isInTray;
-        _isInTray = false;
-        _isMinimized = false;
-        _isDeactivated = false;
-
-        Show();
-        WindowState = WindowState.Normal;
-        Activate();
-
-        if (wasInTray)
-        {
-            _playerControl?.ForceSync();
-            ApplySuspendLevel();
-        }
-
-#if !WINDOWS
-        UpdateShowHideItemText();
 #endif
-
-        Log.Info("[Window] Restored from tray");
-    }
 
     #endregion
 
@@ -953,17 +974,13 @@ public partial class MainWindow : Window
         var dialog = Program.Services.GetRequiredService<DialogService>();
         var result = await dialog.ShowCloseActionDialogAsync();
 
-        if (result == null) return;
+        if (result is null) return;
 
         if (result.IsChecked)
-        {
             _library?.UpdateSettings(s => s.CloseAction = result.Value);
-        }
 
         if (result.Value == CloseAction.MinimizeToTray)
-        {
             MinimizeToTray();
-        }
         else
         {
             _forceClose = true;
@@ -973,10 +990,10 @@ public partial class MainWindow : Window
 
     #endregion
 
-    #region Memory Management (Cleanup)
+    #region Memory Cleanup
 
     /// <summary>
-    /// Планирует отложенную очистку памяти через <see cref="MemoryCleanupHelper"/>.
+    /// Планирует отложенную очистку памяти. Предыдущий таймер отменяется.
     /// </summary>
     private void ScheduleCleanup(TimeSpan delay)
     {
@@ -998,58 +1015,47 @@ public partial class MainWindow : Window
                 _lastCleanupTime = now;
                 MemoryCleanupHelper.PerformCleanup(aggressive: false);
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { /* expected */ }
         });
     }
 
     private void CancelCleanup()
     {
-        if (_cleanupCts != null)
-        {
-            _cleanupCts.Cancel();
-            _cleanupCts.Dispose();
-            _cleanupCts = null;
-        }
+        if (_cleanupCts is null) return;
+
+        _cleanupCts.Cancel();
+        _cleanupCts.Dispose();
+        _cleanupCts = null;
     }
 
     #endregion
 
-    #region Drag & Move
+    #region Title Bar & Drag
 
     private void OnTitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        // Не перехватываем drag если клик по кнопке
         if (e.Source is Button) return;
 
         if (e.Source is Visual visual)
         {
-            var parent = visual;
-            while (parent != null)
+            for (var parent = visual; parent != null; parent = parent.GetVisualParent())
             {
                 if (parent is Button) return;
-                parent = parent.GetVisualParent();
             }
         }
 
         if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
             BeginMoveDrag(e);
-        }
-    }
-
-    private void ToggleMaximize()
-    {
-        WindowState = WindowState == WindowState.Maximized
-            ? WindowState.Normal
-            : WindowState.Maximized;
     }
 
     #endregion
 
-    #region Copy Hint
+    #region Copy Hint Overlay
 
     /// <summary>
-    /// Получает запрос от любого VM или контрола.
-    /// Всегда гарантирует выполнение на UI-потоке.
+    /// Обработчик запроса от <see cref="CopyHintService"/>.
+    /// Гарантирует выполнение на UI-потоке.
     /// </summary>
     private void OnCopyHintRequested(string text, CopyHintKind kind, Point? cursorPosition)
     {
@@ -1064,16 +1070,13 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Показывает toast у позиции курсора или в нижнем центре окна как fallback.
-    /// CTS отменяет предыдущий цикл при быстрых запросах.
+    /// Показывает toast у позиции курсора (или в нижнем центре как fallback).
+    /// CTS отменяет предыдущий цикл при быстрых повторных запросах.
     /// </summary>
     private async void ShowCopyHint(string text, CopyHintKind kind, Point? cursorPosition)
     {
         if (_copyHintOverlay is null || _copyHintText is null || _copyHintCanvas is null)
-        {
-            Log.Warn("[CopyHint] Controls not resolved, skipping");
             return;
-        }
 
         _copyHintCts?.Cancel();
         _copyHintCts?.Dispose();
@@ -1082,19 +1085,18 @@ public partial class MainWindow : Window
 
         try
         {
-            ApplyCopyHintKind(kind);
+            ApplyCopyHintStyle(kind);
             _copyHintText.Text = text;
 
-            // Показываем для измерения размера
+            // Показываем невидимо для layout measurement
             _copyHintOverlay.IsVisible = true;
             _copyHintOverlay.Opacity = 0;
 
-            // Один кадр — дать layout-движку измерить размер overlay
+            // Ждём один render pass для корректного DesiredSize
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
                 () => { }, Avalonia.Threading.DispatcherPriority.Render);
 
-            PositionHint(cursorPosition);
-
+            PositionCopyHint(cursorPosition);
             _copyHintOverlay.Opacity = 1;
 
             await Task.Delay(CopyHintDurationMs, cts.Token);
@@ -1104,50 +1106,39 @@ public partial class MainWindow : Window
 
             _copyHintOverlay.IsVisible = false;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { /* new hint requested */ }
     }
 
     /// <summary>
-    /// Позиционирует toast над точкой курсора с коррекцией выхода за границы окна.
-    /// Если сверху места недостаточно, перемещает подсказку под курсор.
+    /// Позиционирует hint над курсором. Если сверху нет места — под курсором.
     /// </summary>
-    private void PositionHint(Point? cursorPosition)
+    private void PositionCopyHint(Point? cursorPosition)
     {
-        if (_copyHintCanvas is null || _copyHintOverlay is null)
-            return;
+        if (_copyHintCanvas is null || _copyHintOverlay is null) return;
 
-        double hintWidth = _copyHintOverlay.DesiredSize.Width;
-        double hintHeight = _copyHintOverlay.DesiredSize.Height;
-        double canvasWidth = _copyHintCanvas.Bounds.Width;
-        double canvasHeight = _copyHintCanvas.Bounds.Height;
+        double hintW = _copyHintOverlay.DesiredSize.Width;
+        double hintH = _copyHintOverlay.DesiredSize.Height;
+        double canvasW = _copyHintCanvas.Bounds.Width;
+        double canvasH = _copyHintCanvas.Bounds.Height;
 
-        if (cursorPosition is null)
+        const double margin = 8.0;
+
+        if (cursorPosition is not { } cursor)
         {
-            // Fallback: Центр-низ
-            double fallbackX = Math.Max(8, (canvasWidth - hintWidth) * 0.5);
-            double fallbackY = Math.Max(8, canvasHeight - hintHeight - 120);
-            Canvas.SetLeft(_copyHintOverlay, fallbackX);
-            Canvas.SetTop(_copyHintOverlay, fallbackY);
+            // Fallback: центр-низ
+            Canvas.SetLeft(_copyHintOverlay, Math.Max(margin, (canvasW - hintW) * 0.5));
+            Canvas.SetTop(_copyHintOverlay, Math.Max(margin, canvasH - hintH - 120));
             return;
         }
 
-        double x = cursorPosition.Value.X - (hintWidth / 2); // Центрируем по горизонтали относительно курсора
+        double x = cursor.X - hintW / 2.0;
+        double y = cursor.Y - hintH - 12; // над курсором
 
-        // Пытаемся разместить НАД курсором (с отступом 12px)
-        double y = cursorPosition.Value.Y - hintHeight - 12;
+        if (y < margin)
+            y = cursor.Y + 24; // под курсором
 
-        // Проверка выхода за верхнюю границу
-        if (y < 8)
-        {
-            // Если места сверху нет, прыгаем ПОД курсор (+24px)
-            y = cursorPosition.Value.Y + 24;
-        }
-
-        // Ограничиваем X, чтобы не вылезти за края окна
-        x = Math.Clamp(x, 8, canvasWidth - hintWidth - 8);
-
-        // Ограничиваем Y (на случай очень длинных списков)
-        y = Math.Clamp(y, 8, canvasHeight - hintHeight - 8);
+        x = Math.Clamp(x, margin, canvasW - hintW - margin);
+        y = Math.Clamp(y, margin, canvasH - hintH - margin);
 
         Canvas.SetLeft(_copyHintOverlay, x);
         Canvas.SetTop(_copyHintOverlay, y);
@@ -1155,28 +1146,25 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Применяет иконку и цвет акцента по типу hint-а.
-    /// Использует StaticResource из Icons.axaml — zero alloc после первого парсинга.
     /// </summary>
-    private void ApplyCopyHintKind(CopyHintKind kind)
+    private void ApplyCopyHintStyle(CopyHintKind kind)
     {
         if (_copyHintIcon is null || _copyHintOverlay is null) return;
 
-        var (iconKey, resourceKey) = kind switch
+        var (iconKey, brushKey) = kind switch
         {
             CopyHintKind.Warning => ("Icon.InformationOutline", "SystemWarnOrangeBrush"),
             CopyHintKind.Error => ("Icon.Close", "SystemErrorRedBrush"),
             _ => ("Icon.CheckCircle", "AccentBrush")
         };
 
-        var themeVariant = Application.Current?.ActualThemeVariant;
+        var theme = Application.Current?.ActualThemeVariant;
 
-        if (Application.Current?.Resources.TryGetResource(iconKey, themeVariant, out var geo) == true
+        if (Application.Current?.Resources.TryGetResource(iconKey, theme, out var geo) == true
             && geo is StreamGeometry geometry)
-        {
             _copyHintIcon.Data = geometry;
-        }
 
-        if (Application.Current?.Resources.TryGetResource(resourceKey, themeVariant, out var res) == true
+        if (Application.Current?.Resources.TryGetResource(brushKey, theme, out var res) == true
             && res is IBrush brush)
         {
             _copyHintIcon.Foreground = brush;
@@ -1186,29 +1174,32 @@ public partial class MainWindow : Window
 
     #endregion
 
-    #region Dispose
+    #region Cleanup
 
     protected override void OnClosed(EventArgs e)
     {
+        // Timers
         CancelDeactivateSuspend();
         CancelCleanup();
 
+        // Tray
 #if WINDOWS
         _tooltipRestoreTimer?.Stop();
         _tooltipRestoreTimer = null;
         _trayManager?.Dispose();
 #else
-        if (_trayIcon != null)
-            _trayIcon.IsVisible = false;
+        if (_trayIcon != null) _trayIcon.IsVisible = false;
         LocalizationService.Instance.LanguageChanged -= OnTrayLanguageChanged;
 #endif
 
         _traySubscriptions?.Dispose();
 
-        PropertyChanged -= MainWindow_PropertyChanged;
+        // Window events
+        PropertyChanged -= OnWindowPropertyChanged;
         Deactivated -= OnWindowDeactivated;
         Activated -= OnWindowActivated;
 
+        // Copy hint
         CopyHintService.Instance.HintRequested -= OnCopyHintRequested;
         _copyHintCts?.Cancel();
         _copyHintCts?.Dispose();

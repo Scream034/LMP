@@ -166,15 +166,6 @@ public partial class TrackListControl : UserControl
         set => SetValue(UseSearchLoaderProperty, value);
     }
 
-    public static readonly StyledProperty<bool> EnableSmoothLoadingProperty =
-        AvaloniaProperty.Register<TrackListControl, bool>(nameof(EnableSmoothLoading), true);
-
-    public bool EnableSmoothLoading
-    {
-        get => GetValue(EnableSmoothLoadingProperty);
-        set => SetValue(EnableSmoothLoadingProperty, value);
-    }
-
     public static readonly StyledProperty<bool> IsPlaylistContextProperty =
         AvaloniaProperty.Register<TrackListControl, bool>(nameof(IsPlaylistContext), false);
 
@@ -647,26 +638,22 @@ public partial class TrackListControl : UserControl
     }
 
     #endregion
-
-    #region Snap Scroll
-
     /// <summary>
     /// Выравнивает позицию ScrollViewer по целочисленной сетке высоты трека
-    /// с лёгкой интерполяцией (lerp) для колеса мыши.
+    /// с velocity-based ballistics и time-based ease-out cubic анимацией.
     ///
-    /// <para><b>Стратегия по источнику события:</b></para>
-    /// <list type="bullet">
-    ///   <item><b>Mouse wheel</b> — вычисляет target на N × <see cref="_itemHeight"/>,
-    ///   затем плавно интерполирует за ~6-8 кадров (100ms).</item>
-    ///   <item><b>Scrollbar drag</b> — без вмешательства. ScrollViewer обрабатывает нативно,
-    ///   никакого snap и lerp — пользователь контролирует позицию напрямую.</item>
-    ///   <item><b>Touchpad</b> — дельта &lt; порога → не перехватываем.</item>
-    /// </list>
+    /// <para><b>Ballistics (Enhanced Scroll Precision):</b></para>
+    /// <para>Количество треков на тик зависит от скорости вращения колеса — интервала
+    /// между последовательными wheel-событиями. Медленно = 1 трек (точность),
+    /// быстро = до MaxTracksPerTick (навигация). Кривая степенная, не линейная —
+    /// ощущение аналогично Windows Enhanced Pointer Precision.</para>
     ///
-    /// <para><b>Почему scrollbar НЕ snap'ится:</b> при drag thumb пользователь
-    /// непрерывно задаёт позицию. Snap после отпускания → «прыжок назад»,
-    /// нарушающий ожидание (UX anti-pattern: loss of control).
-    /// Wheel дискретен по природе → snap + lerp = плавность без потери контроля.</para>
+    /// <para><b>Накопление:</b> при удержании колеса target накапливается от предыдущего
+    /// значения, анимация плавно "подхватывается" без рывка.</para>
+    ///
+    /// <para><b>Integer pixel rendering:</b> _targetOffset всегда snap-aligned (целый пиксель).
+    /// Промежуточные lerp-кадры используют дробные px — TextOptions.BaselinePixelAlignment=Unaligned
+    /// на ItemsRepeater компенсирует sub-pixel text rendering.</para>
     /// </summary>
     private sealed class SnapScrollHelper : IDisposable
     {
@@ -678,33 +665,65 @@ public partial class TrackListControl : UserControl
         /// </summary>
         private const double TouchpadDeltaThreshold = 0.5;
 
-        /// <summary>Треков на один тик колеса мыши.</summary>
-        private const double WheelTracksPerTick = 3.0;
+        /// <summary>
+        /// Минимальное количество треков на тик — при очень медленном скролле.
+        /// 1 трек = максимальная точность, ощущение контроля.
+        /// </summary>
+        private const double MinTracksPerTick = 1.0;
 
         /// <summary>
-        /// Коэффициент экспоненциальной интерполяции за кадр.
-        /// 0.25 = 25% оставшегося расстояния за кадр → ~6 кадров до визуальной остановки.
+        /// Максимальное количество треков на тик — при очень быстром скролле.
         /// </summary>
-        private const double LerpFactor = 0.25;
+        private const double MaxTracksPerTick = 6.0;
 
         /// <summary>
-        /// Порог расстояния до target при котором lerp завершается snap'ом.
-        /// Меньше 0.5px — sub-pixel, нет смысла продолжать анимацию.
+        /// Интервал между тиками (мс) при котором используется MinTracksPerTick.
+        /// Больше этого значения = пользователь скроллит медленно и точно.
         /// </summary>
-        private const double LerpSnapThreshold = 0.5;
+        private const double SlowTickIntervalMs = 300.0;
+
+        /// <summary>
+        /// Интервал между тиками (мс) при котором используется MaxTracksPerTick.
+        /// Меньше этого значения = пользователь скроллит быстро.
+        /// </summary>
+        private const double FastTickIntervalMs = 30.0;
+
+        /// <summary>
+        /// Коэффициент степени кривой баллистики.
+        /// 0.5 = √ (квадратный корень) — плавный рост, не слишком агрессивный.
+        /// Аналогично формуле BetterTouchTool: output = input × (1 + strength × √(|input|/4)).
+        /// </summary>
+        private const double BallisticsCurveExponent = 0.5;
+
+        /// <summary>Базовая длительность анимации (мс) для шага в 3 трека.</summary>
+        private const double BaseAnimDurationMs = 130.0;
+
+        /// <summary>Минимальная длительность анимации — для коротких шагов (1 трек).</summary>
+        private const double MinAnimDurationMs = 60.0;
+
+        /// <summary>Максимальная длительность анимации — для длинных шагов (6 треков).</summary>
+        private const double MaxAnimDurationMs = 200.0;
+
+        /// <summary>
+        /// Порог расстояния до maxOffset при котором snap заменяется точным maxOffset.
+        /// </summary>
+        private const double BottomSnapEpsilon = 0.5;
 
         #endregion
 
         private readonly ScrollViewer _sv;
         private readonly double _itemHeight;
-        private readonly DispatcherTimer _lerpTimer;
+        private readonly DispatcherTimer _animTimer;
 
-        /// <summary>Целевая позиция скролла (всегда snap-aligned).</summary>
         private double _targetOffset;
+        private double _animStartOffset;
+        private long _animStartTime;
+        private long _animDurationActual;
 
-        /// <summary>Флаг: lerp-анимация активна.</summary>
+        /// <summary>Timestamp последнего wheel-события для вычисления velocity.</summary>
+        private long _lastWheelTime;
+
         private bool _isAnimating;
-
         private bool _disposed;
 
         public SnapScrollHelper(ScrollViewer sv, double itemHeight)
@@ -712,94 +731,149 @@ public partial class TrackListControl : UserControl
             _sv = sv;
             _itemHeight = itemHeight;
             _targetOffset = sv.Offset.Y;
+            _lastWheelTime = Environment.TickCount64;
 
-            // Tunnel: перехватываем до дефолтного обработчика ScrollViewer
             sv.AddHandler(
                 InputElement.PointerWheelChangedEvent,
                 OnWheel,
                 RoutingStrategies.Tunnel,
                 handledEventsToo: false);
 
-            // Lerp-таймер: ~60fps, запускается только во время wheel-анимации.
-            // CPU = 0 при drag scrollbar и в покое.
-            _lerpTimer = new DispatcherTimer(DispatcherPriority.Render)
+            _animTimer = new DispatcherTimer(DispatcherPriority.Render)
             {
                 Interval = TimeSpan.FromMilliseconds(16)
             };
-            _lerpTimer.Tick += OnLerpTick;
+            _animTimer.Tick += OnAnimTick;
         }
 
         private void OnWheel(object? sender, PointerWheelEventArgs e)
         {
-            // Тачпад: пропускаем, ScrollViewer обрабатывает нативно
             if (Math.Abs(e.Delta.Y) < TouchpadDeltaThreshold) return;
 
             e.Handled = true;
 
             double maxOffset = Math.Max(0, _sv.Extent.Height - _sv.Viewport.Height);
-            double step = Math.Sign(-e.Delta.Y) * _itemHeight * WheelTracksPerTick;
+            if (maxOffset <= 0) return;
 
-            // Если уже анимируемся — продолжаем от текущего target, а не от текущего offset.
-            // Это даёт «накопление» инерции при быстром прокручивании колеса.
+            // ═══ BALLISTICS: velocity-based tracks per tick ═══
+            long now = Environment.TickCount64;
+            double intervalMs = Math.Clamp(now - _lastWheelTime, 1, SlowTickIntervalMs);
+            _lastWheelTime = now;
+
+            double tracksPerTick = ComputeTracksPerTick(intervalMs);
+
+            double direction = Math.Sign(-e.Delta.Y);
+            double step = direction * _itemHeight * tracksPerTick;
+
+            // Накапливаем от текущего target если анимация уже идёт
             double baseOffset = _isAnimating ? _targetOffset : _sv.Offset.Y;
-            _targetOffset = SnapToGrid(Math.Clamp(baseOffset + step, 0, maxOffset));
+            double raw = Math.Clamp(baseOffset + step, 0, maxOffset);
 
-            StartLerp();
+            if (raw >= maxOffset - BottomSnapEpsilon)
+                _targetOffset = maxOffset;
+            else if (raw <= BottomSnapEpsilon)
+                _targetOffset = 0;
+            else
+                _targetOffset = SnapToGrid(raw, direction);
+
+            // Адаптивная длительность: пропорционально реальной дистанции
+            double distance = Math.Abs(_targetOffset - _sv.Offset.Y);
+            double referenceStep = _itemHeight * 3.0;
+            _animDurationActual = (long)Math.Clamp(
+                BaseAnimDurationMs * (distance / referenceStep),
+                MinAnimDurationMs,
+                MaxAnimDurationMs);
+
+            StartAnim();
         }
 
         /// <summary>
-        /// Кадр lerp-анимации: экспоненциальное приближение к target.
-        /// Один вызов Offset = один layout pass. Завершается когда расстояние &lt; 0.5px.
+        /// Вычисляет количество треков на тик по velocity-кривой.
+        ///
+        /// <para>Кривая степенная (exponent=0.5, т.е. √):
+        /// быстрый рост в начале (медленный → средний scroll),
+        /// плавный выход к MaxTracksPerTick при высокой скорости.
+        /// Это соответствует поведению Windows Enhanced Pointer Precision.</para>
+        ///
+        /// <para>intervalMs → нормализуем в [0..1] где 0=быстро, 1=медленно →
+        /// применяем обратную степенную кривую → интерполируем треки.</para>
         /// </summary>
-        private void OnLerpTick(object? sender, EventArgs e)
+        private static double ComputeTracksPerTick(double intervalMs)
         {
-            double current = _sv.Offset.Y;
-            double distance = _targetOffset - current;
+            // t=0 → быстро (MaxTracks), t=1 → медленно (MinTracks)
+            double t = Math.Clamp(
+                (intervalMs - FastTickIntervalMs) / (SlowTickIntervalMs - FastTickIntervalMs),
+                0.0, 1.0);
 
-            if (Math.Abs(distance) < LerpSnapThreshold)
+            // Степенная кривая: √t даёт быстрый рост при малых t (высокая скорость),
+            // плавный выход при больших t (низкая скорость)
+            double curved = Math.Pow(t, BallisticsCurveExponent);
+
+            return MinTracksPerTick + (MaxTracksPerTick - MinTracksPerTick) * (1.0 - curved);
+        }
+
+        /// <summary>
+        /// Кадр time-based анимации с ease-out cubic.
+        /// Прогресс по реальному времени — не зависит от fps.
+        /// </summary>
+        private void OnAnimTick(object? sender, EventArgs e)
+        {
+            double elapsed = (Environment.TickCount64 - _animStartTime) / (double)_animDurationActual;
+
+            if (elapsed >= 1.0)
             {
                 SetOffset(_targetOffset);
-                StopLerp();
+                StopAnim();
                 return;
             }
 
-            SetOffset(current + distance * LerpFactor);
-        }
-
-        private void StartLerp()
-        {
-            if (_isAnimating) return;
-            _isAnimating = true;
-            _lerpTimer.Start();
-        }
-
-        private void StopLerp()
-        {
-            _isAnimating = false;
-            _lerpTimer.Stop();
+            SetOffset(_animStartOffset + (_targetOffset - _animStartOffset) * EaseOutCubic(elapsed));
         }
 
         /// <summary>
-        /// Округляет offset до ближайшей границы трека.
-        /// Результат всегда целочисленный если itemHeight целое (60).
+        /// Запускает или перезапускает анимацию от текущей визуальной позиции.
+        /// Перезапуск при новом wheel-событии во время анимации — плавное «подхватывание».
         /// </summary>
-        private double SnapToGrid(double offset) =>
-            Math.Round(offset / _itemHeight) * _itemHeight;
-
-        private void SetOffset(double y)
+        private void StartAnim()
         {
-            _sv.Offset = new Vector(_sv.Offset.X, y);
+            _animStartOffset = _sv.Offset.Y;
+            _animStartTime = Environment.TickCount64;
+
+            if (_isAnimating) return;
+
+            _isAnimating = true;
+            _animTimer.Start();
         }
+
+        private void StopAnim()
+        {
+            _isAnimating = false;
+            _animTimer.Stop();
+        }
+
+        /// <summary>Ease-out cubic: f(t) = 1 - (1-t)³</summary>
+        private static double EaseOutCubic(double t) => 1.0 - Math.Pow(1.0 - t, 3.0);
+
+        /// <summary>
+        /// Направление-зависимый snap:
+        /// вниз → Ceiling (всегда доходим до следующей границы),
+        /// вверх → Floor (не перепрыгиваем назад).
+        /// </summary>
+        private double SnapToGrid(double offset, double direction) =>
+            direction > 0
+                ? Math.Ceiling(offset / _itemHeight) * _itemHeight
+                : Math.Floor(offset / _itemHeight) * _itemHeight;
+
+        private void SetOffset(double y) =>
+            _sv.Offset = new Vector(_sv.Offset.X, y);
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
 
-            _lerpTimer.Stop();
+            _animTimer.Stop();
             _sv.RemoveHandler(InputElement.PointerWheelChangedEvent, OnWheel);
         }
     }
-
-    #endregion
 }

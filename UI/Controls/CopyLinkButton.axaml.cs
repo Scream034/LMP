@@ -4,7 +4,6 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using LMP.Core.Helpers;
-using LMP.Core.Services;
 
 namespace LMP.UI.Controls;
 

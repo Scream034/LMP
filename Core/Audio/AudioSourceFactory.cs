@@ -67,13 +67,13 @@ public static class AudioSourceFactory
     /// Строит уникальный ключ кэша: trackId + формат + **нормализованный** битрейт.
     /// 
     /// <para><b>ЕДИНСТВЕННЫЙ ИСТОЧНИК ИСТИНЫ</b> для генерации cache key.
-    /// Используется в <see cref="CreateAsync"/> и <see cref="Cache.AudioCacheManager"/>.</para>
+    /// Используется в <see cref="CreateAsync"/> и <see cref="AudioCacheManager"/>.</para>
     /// 
     /// <para><b>Почему нормализация:</b></para>
     /// <para>YouTube возвращает битрейты вроде 127, 134, 131 kbps для одного формата.
     /// Без нормализации один трек дублировался бы в кэше с ключами:
     /// <c>track_WebM_127</c>, <c>track_WebM_134</c>, <c>track_WebM_131</c>.
-    /// Нормализация (см. <see cref="AudioConstants.NormalizeBitrate"/>) группирует
+    /// Нормализация (см. <see cref="NormalizeBitrate"/>) группирует
     /// 127-134 → 128, экономя ~60% места в кэше.</para>
     /// </summary>
     /// <param name="trackId">ID трека.</param>

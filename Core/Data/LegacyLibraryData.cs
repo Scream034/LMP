@@ -81,5 +81,4 @@ internal sealed class LegacyLibraryData
     public int SearchBatchSize { get; set; } = 30;
     public bool EnableSearchCache { get; set; } = true;
     public int SearchCacheTtlMinutes { get; set; } = 120;
-    public bool EnableSmoothLoading { get; set; } = true;
 }

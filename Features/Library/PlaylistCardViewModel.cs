@@ -1,6 +1,5 @@
 ﻿using System.Reactive;
-using System.Reactive.Disposables;
-
+using System.Reactive.Linq;
 using LMP.Core.Helpers;
 using LMP.Core.Services;
 using LMP.Core.ViewModels;
@@ -158,14 +157,14 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <param name="onDelete">Callback удаления (опционально).</param>
     /// <param name="onEdit">Callback редактирования (опционально).</param>
     public PlaylistCardViewModel(
-        CookieAuthService auth,
-        Core.Models.Playlist playlist,
-        int trackCount,
-        Action<string> onOpen,
-        Func<Core.Models.Playlist, Task> addToQueueAction,
-        Func<Core.Models.Playlist, Task> playAction,
-        Func<string, Task>? onDelete = null,
-        Func<Core.Models.Playlist, Task>? onEdit = null)
+      CookieAuthService auth,
+      Core.Models.Playlist playlist,
+      int trackCount,
+      Action<string> onOpen,
+      Func<Core.Models.Playlist, Task> addToQueueAction,
+      Func<Core.Models.Playlist, Task> playAction,
+      Func<string, Task>? onDelete = null,
+      Func<Core.Models.Playlist, Task>? onEdit = null)
     {
         Playlist = playlist;
         _auth = auth;
@@ -185,7 +184,9 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             if (!_isDisposed) _onOpen(Playlist.Id);
         }));
 
-        var canDelete = this.WhenAnyValue(x => x.CanDelete);
+        var canDelete = this.WhenAnyValue(x => x.CanDelete)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+
         DeleteCommand = CreateCommand(ReactiveCommand.CreateFromTask(async () =>
             {
                 if (!_isDisposed && _onDelete != null) await _onDelete(Playlist.Id);
@@ -217,7 +218,8 @@ public sealed class PlaylistCardViewModel : ViewModelBase
                     LocalizationService.Instance["Playlist_LinkCopied"] ?? "Copied!",
                     CopyHintKind.Success);
             },
-            this.WhenAnyValue(x => x.YoutubeUrl, url => !string.IsNullOrEmpty(url))));
+            this.WhenAnyValue(x => x.YoutubeUrl, url => !string.IsNullOrEmpty(url))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)));
 
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)))

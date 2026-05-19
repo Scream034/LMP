@@ -10,10 +10,10 @@ using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using LMP.UI.Dialogs;
 using Microsoft.Extensions.DependencyInjection;
+using Avalonia.Threading;
 
 
 namespace LMP.Features.Playlist;
@@ -65,12 +65,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     #endregion
 
     #region Properties
-
-    /// <summary>
-    /// Проксирует настройку плавной загрузки для TrackListControl.
-    /// Читается из Settings один раз при открытии плейлиста.
-    /// </summary>
-    public bool EnableSmoothLoading => LibService.Settings.EnableSmoothLoading;
 
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
@@ -162,18 +156,18 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     #region Constructor
 
     public PlaylistViewModel(
-        AudioEngine audio,
-        DownloadService downloads,
-        MusicLibraryManager manager,
-        DialogService dialog,
-        TrackViewModelFactory vmFactory,
-        DominantColorService dominantColor,
-        MainWindowViewModel mainWindow,
-        PlaylistSyncService syncService,
-        PlaylistEditService editService,
-        PlayerControlService playerControl,
-        CookieAuthService auth)
-        : base(audio, downloads, vmFactory)
+      AudioEngine audio,
+      DownloadService downloads,
+      MusicLibraryManager manager,
+      DialogService dialog,
+      TrackViewModelFactory vmFactory,
+      DominantColorService dominantColor,
+      MainWindowViewModel mainWindow,
+      PlaylistSyncService syncService,
+      PlaylistEditService editService,
+      PlayerControlService playerControl,
+      CookieAuthService auth)
+      : base(audio, downloads, vmFactory)
     {
         _manager = manager;
         _dialog = dialog;
@@ -194,7 +188,16 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             HeaderHeightMax);
         _headerHeight = new GridLength(savedHeight);
 
-        var hasTracks = this.WhenAnyValue(x => x.TrackCount, static c => c > 0);
+        var hasTracks = this.WhenAnyValue(x => x.TrackCount, static c => c > 0)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+
+        var canEdit = this.WhenAnyValue(x => x.CanEdit)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+
+        var canRefresh = this.WhenAnyValue(
+                x => x.IsCloud, x => x.IsSyncing,
+                static (isCloud, isSyncing) => isCloud && !isSyncing)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         PlayAllCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(PlayAllAsync, hasTracks));
@@ -221,10 +224,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             await LoadPlaylistAsync(_currentPlaylistId);
         }));
 
-        var canRefresh = this.WhenAnyValue(
-            x => x.IsCloud, x => x.IsSyncing,
-            static (isCloud, isSyncing) => isCloud && !isSyncing);
-
         RefreshPlaylistCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(RefreshPlaylistAsync, canRefresh));
 
@@ -234,12 +233,11 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         DownloadAllCommand = CreateCommand(
             ReactiveCommand.CreateFromTask(DownloadAllAsync, hasTracks));
 
-        MergePlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
-            MergePlaylistAsync,
-            this.WhenAnyValue(x => x.CanEdit)));
+        MergePlaylistCommand = CreateCommand(
+            ReactiveCommand.CreateFromTask(MergePlaylistAsync, canEdit));
 
-        AddToQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
-            Audio.EnqueueRange(GetLoadedItemsSnapshot()), hasTracks));
+        AddToQueueCommand = CreateCommand(
+            ReactiveCommand.Create(() => Audio.EnqueueRange(GetLoadedItemsSnapshot()), hasTracks));
 
         MoveItemCommand = CreateCommand(
             ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
@@ -250,13 +248,13 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
                 await MoveItemAsync(tuple.oldIndex, tuple.newIndex);
             }));
 
-        EditPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
-            EditPlaylistAsync,
-            this.WhenAnyValue(x => x.CanEdit)));
+        EditPlaylistCommand = CreateCommand(
+            ReactiveCommand.CreateFromTask(EditPlaylistAsync, canEdit));
 
         CopyPlaylistLinkCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             CopyPlaylistLinkAsync,
-            this.WhenAnyValue(x => x.HasYoutubeLink)));
+            this.WhenAnyValue(x => x.HasYoutubeLink)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)));
 
         this.WhenAnyValue(x => x.CanEdit, x => x.FilterQuery)
             .Subscribe(_ => CanReorderItems = CanEdit && CanReorder)
@@ -267,12 +265,10 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
                 h => LibService.OnDataChanged -= h)
             .Throttle(TimeSpan.FromMilliseconds(600))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ =>
+            .Subscribe(_ =>
             {
                 if (_isSuspended) return;
 
-                // Локальная мутация (move/remove) недавно — состояние уже актуально в UI,
-                // полный reload приведёт к визуальному миганию.
                 if ((DateTime.Now - _lastLocalMutationTime).TotalMilliseconds < LocalMutationDebounceMs)
                 {
                     Log.Debug("[Playlist] Ignoring OnDataChanged (recent local mutation)");
@@ -281,8 +277,11 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
                 InvalidateAllTracksCache();
 
-                if (!string.IsNullOrEmpty(_currentPlaylistId))
-                    await LoadPlaylistAsync(_currentPlaylistId);
+                if (string.IsNullOrEmpty(_currentPlaylistId)) return;
+
+                Dispatcher.UIThread.InvokeAsync(
+                    () => LoadPlaylistAsync(_currentPlaylistId),
+                    DispatcherPriority.Background);
             });
 
         SubscribeToPlaybackSource();
@@ -450,17 +449,19 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     ///   <item>И состояние — Playing ИЛИ Paused (не Stopped)</item>
     /// </list></para>
     ///
-    /// <para><b>IsPaused = true:</b> кнопка показывает Pause → клик возобновит.
-    /// Это корректное поведение — пользователь видит что этот плейлист активен.</para>
+    /// <para><b>ObserveOn до CombineLatest:</b> оба source-observable переводятся на
+    /// MainThread ДО соединения — CombineLatest-проекция и все downstream-цепочки
+    /// гарантированно живут в UI-потоке, исключая cross-thread CanExecuteChanged.</para>
     /// </summary>
     private void SubscribeToPlaybackSource()
     {
         _playerControl.ActivePlaylistIdObservable
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .CombineLatest(
-                _playerControl.PlaybackStateObservable,
+                _playerControl.PlaybackStateObservable
+                    .ObserveOn(RxSchedulers.MainThreadScheduler),
                 (id, state) => id == _currentPlaylistId && (state.IsPlaying || state.IsPaused))
             .DistinctUntilChanged()
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(v => IsPlayingThisPlaylist = v)
             .DisposeWith(Disposables);
     }

@@ -1,993 +1,240 @@
 ﻿<UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:LMP.Features.Settings"
-    xmlns:ui="using:LMP.UI.Controls"
-    xmlns:controls="using:LMP.Features.Settings.Controls"
+    xmlns:pages="using:LMP.Features.Settings.Pages"
     x:Class="LMP.Features.Settings.SettingsView"
-    x:DataType="vm:SettingsViewModel"
-    x:CompileBindings="True">
+    x:DataType="vm:SettingsViewModel">
 
-    <Grid>
+    <!--
+        UserControl.Styles полностью убраны.
+        Все стили сайдбара живут в UI/Theme/Buttons.axaml → ListBox.nav-sidebar.
+        Это обеспечивает единый визуальный язык с nav-tab из MainWindow
+        и устраняет дублирование ~70 строк стилей.
+    -->
 
-        <!-- ═══ Skeleton: пока !IsContentReady ═══ -->
-        <ScrollViewer IsVisible="{Binding !IsContentReady}">
-            <StackPanel Margin="32" Spacing="24">
-                <Border Classes="skeleton" Height="36" Width="200" CornerRadius="8"
-                    HorizontalAlignment="Left" />
-                <Border Classes="skeleton" Height="180" CornerRadius="12" />
-                <Border Classes="skeleton" Height="36" Width="160" CornerRadius="8"
-                    HorizontalAlignment="Left" />
-                <Border Classes="skeleton" Height="220" CornerRadius="12" />
-                <Border Classes="skeleton" Height="36" Width="180" CornerRadius="8"
-                    HorizontalAlignment="Left" />
-                <Border Classes="skeleton" Height="300" CornerRadius="12" />
-                <Border Classes="skeleton" Height="36" Width="170" CornerRadius="8"
-                    HorizontalAlignment="Left" />
-                <Border Classes="skeleton" Height="200" CornerRadius="12" />
-            </StackPanel>
-        </ScrollViewer>
+    <Grid ColumnDefinitions="Auto, 4, *" Name="LayoutGrid">
 
         <!--
-            ScrollViewer обязателен: ItemsControl не имеет встроенного скролла.
-            VirtualizingStackPanel работает только внутри ScrollViewer — он получает
-            viewport-размер и материализует только видимые элементы.
+            Sidebar
+            Panel-обёртка: ListBox + градиент снизу.
+            Градиент: BgPrimaryTransparent → BgPrimary (тот же RGB, альфа 0→255).
+            Правило anti-flash: transparent-стоп должен совпадать по RGB
+            с целевым цветом — иначе интерполяция даёт белую вспышку.
+            MinWidth/MaxWidth на ColumnDefinition[0] ограничивают GridSplitter.
+            IsSidebarExpanded управляет видимостью TextBlock — переключается
+            в code-behind когда ширина пересекает CollapsedThreshold (120px).
         -->
-        <ScrollViewer IsVisible="{Binding IsContentReady}">
-            <ItemsControl ItemsSource="{Binding Sections}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <VirtualizingStackPanel />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
+        <Border Grid.Column="0"
+            Background="{DynamicResource BgSecondaryBrush}"
+            ClipToBounds="True">
 
-                <ItemsControl.DataTemplates>
+            <Panel>
+                <ListBox ItemsSource="{Binding SidebarItems}"
+                    SelectedItem="{Binding SelectedSidebarItem}"
+                    Name="SidebarList"
+                    Classes="nav-sidebar"
+                    Margin="0,8">
 
-                    <!-- ══════════════════ TITLE ══════════════════ -->
-                    <DataTemplate DataType="vm:TitleSection" x:DataType="vm:TitleSection">
-                        <TextBlock Classes="h1"
-                            Text="{Binding Owner.L[Settings_Title]}"
-                            Margin="32,32,32,0" />
-                    </DataTemplate>
+                    <ListBox.DataTemplates>
 
-                    <!-- ══════════════════ ACCOUNT & LANGUAGE ══════════════════ -->
-                    <DataTemplate DataType="vm:AccountLanguageSection"
-                        x:DataType="vm:AccountLanguageSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:AccountLanguageSidebarItem"
+                            x:DataType="vm:AccountLanguageSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Account_Language]}">
                                 <PathIcon Data="{StaticResource Icon.Account}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Account_Language]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Account_Language]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="20">
+                        </DataTemplate>
 
-                                    <Grid ColumnDefinitions="Auto, *, Auto">
-                                        <Border Width="64" Height="64" CornerRadius="32"
-                                            ClipToBounds="True" Margin="0,0,20,0"
-                                            Background="{DynamicResource BgHighlightBrush}">
-                                            <Panel>
-                                                <PathIcon Data="{StaticResource Icon.Account}"
-                                                    Width="36" Height="36"
-                                                    IsVisible="{Binding Owner.AccountAvatarUrl,
-                                                              Converter={x:Static StringConverters.IsNullOrEmpty}}" />
-                                                <Image
-                                                    ui:SmartImage.Source="{Binding Owner.AccountAvatarUrl}"
-                                                    ui:SmartImage.Quality="Low"
-                                                    Stretch="UniformToFill"
-                                                    IsVisible="{Binding Owner.AccountAvatarUrl,
-                                                           Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            </Panel>
-                                        </Border>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Owner.AccountName}"
-                                                FontWeight="Bold" FontSize="18" />
-                                            <TextBlock Text="{Binding Owner.AccountSubtitle}"
-                                                Foreground="{DynamicResource TextSecondaryBrush}"
-                                                Margin="0,4,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal"
-                                            Spacing="12">
-                                            <Button Classes="primary-btn accent-base"
-                                                Content="{Binding Owner.L[Auth_Login]}"
-                                                Command="{Binding Owner.LoginCommand}"
-                                                IsVisible="{Binding !Owner.IsAuthenticated}" />
-                                            <Button Content="{Binding Owner.L[Auth_Logout]}"
-                                                Command="{Binding Owner.LogoutCommand}"
-                                                IsVisible="{Binding Owner.IsAuthenticated}" />
-                                        </StackPanel>
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <TextBlock Classes="label"
-                                            Text="{Binding Owner.L[Settings_Language]}" />
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.Languages}"
-                                            SelectedItem="{Binding Owner.SelectedLanguage}"
-                                            MinWidth="200" />
-                                    </Grid>
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
-
-                    <!-- ══════════════════ NETWORK ══════════════════ -->
-                    <DataTemplate DataType="vm:NetworkSection" x:DataType="vm:NetworkSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:NetworkSidebarItem"
+                            x:DataType="vm:NetworkSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Network]}">
                                 <PathIcon Data="{StaticResource Icon.Web}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Network]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Network]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="20">
+                        </DataTemplate>
 
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_NetProfile]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_NetProfileDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            SelectedItem="{Binding Owner.SelectedInternetProfile}"
-                                            ItemsSource="{Binding Owner.InternetProfileOptions}"
-                                            MinWidth="200" />
-                                    </Grid>
-
-                                    <Expander Header="{Binding Owner.L[Settings_Proxy]}">
-                                        <StackPanel Spacing="12">
-                                            <CheckBox Content="{Binding Owner.L[Common_Enable]}"
-                                                IsChecked="{Binding Owner.ProxyEnabled}" />
-                                            <Grid ColumnDefinitions="3*, 16, 1*"
-                                                IsEnabled="{Binding Owner.ProxyEnabled}">
-                                                <TextBox Grid.Column="0"
-                                                    Text="{Binding Owner.ProxyHost}"
-                                                    PlaceholderText="127.0.0.1" />
-                                                <TextBox Grid.Column="2"
-                                                    Text="{Binding Owner.ProxyPort}"
-                                                    PlaceholderText="8080" />
-                                            </Grid>
-                                        </StackPanel>
-                                    </Expander>
-
-                                    <Border Background="{DynamicResource SystemWarnOrangeBrush}"
-                                        CornerRadius="4" Padding="12"
-                                        IsVisible="{Binding Owner.NetworkRestartRequired}">
-                                        <TextBlock Foreground="{DynamicResource TextDarkBrush}"
-                                            FontWeight="Bold"
-                                            Text="{Binding Owner.L[Settings_RestartRequired]}"
-                                            HorizontalAlignment="Center" />
-                                    </Border>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_Client]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_ClientDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.ClientOptions}"
-                                            SelectedItem="{Binding Owner.SelectedClient}"
-                                            MinWidth="200" />
-                                    </Grid>
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
-
-                    <!-- ══════════════════ STORAGE & CACHE ══════════════════ -->
-                    <DataTemplate DataType="vm:StorageCacheSection"
-                        x:DataType="vm:StorageCacheSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:StorageCacheSidebarItem"
+                            x:DataType="vm:StorageCacheSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Storage_Data]}">
                                 <PathIcon Data="{StaticResource Icon.Database}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Storage_Data]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Storage_Data]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="20">
+                        </DataTemplate>
 
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel Margin="0,0,20,0">
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Storage_Path]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.DownloadPath}"
-                                                TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                        <Button Grid.Column="1"
-                                            Content="{Binding Owner.L[Storage_Change]}"
-                                            Command="{Binding Owner.BrowseDownloadPathCommand}" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <Grid ColumnDefinitions="*, 140">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_DownloadedTracks]}" />
-                                            <ProgressBar
-                                                Value="{Binding Owner.DownloadsUsagePercent}"
-                                                Maximum="1"
-                                                Height="6" Margin="0,8,0,8"
-                                                Foreground="{DynamicResource SystemSuccessGreenBrush}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.DownloadsStats}" />
-                                        </StackPanel>
-                                        <Button Grid.Column="1"
-                                            Content="{Binding Owner.L[Common_Clear]}"
-                                            Command="{Binding Owner.ClearDownloadsCommand}"
-                                            VerticalAlignment="Center" HorizontalAlignment="Right" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, 140">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_ImageCache]}" />
-                                            <ProgressBar
-                                                Value="{Binding Owner.ImageCacheUsagePercent}"
-                                                Maximum="1"
-                                                Height="6" Margin="0,8,0,8"
-                                                Foreground="{DynamicResource AccentBrush}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.ImageCacheStats}" />
-                                        </StackPanel>
-                                        <Button Grid.Column="1"
-                                            Content="{Binding Owner.L[Common_Clear]}"
-                                            Command="{Binding Owner.ClearImageCacheCommand}"
-                                            VerticalAlignment="Center" HorizontalAlignment="Right" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, 140">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_AudioCache]}" />
-                                            <ProgressBar
-                                                Value="{Binding Owner.AudioCacheUsagePercent}"
-                                                Maximum="1"
-                                                Height="6" Margin="0,8,0,8"
-                                                Foreground="{DynamicResource SystemInfoBlueBrush}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.AudioCacheStats}" />
-                                        </StackPanel>
-                                        <Button Grid.Column="1"
-                                            Content="{Binding Owner.L[Common_Clear]}"
-                                            Command="{Binding Owner.ClearAudioCacheCommand}"
-                                            VerticalAlignment="Center" HorizontalAlignment="Right" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <StackPanel Spacing="12">
-                                        <Grid ColumnDefinitions="*, Auto">
-                                            <StackPanel>
-                                                <TextBlock Classes="label"
-                                                    Text="{Binding Owner.L[Settings_RamCache]}" />
-                                                <TextBlock Classes="desc"
-                                                    Text="{Binding Owner.L[Settings_RamCacheDesc]}" />
-                                            </StackPanel>
-                                            <ComboBox Grid.Column="1"
-                                                ItemsSource="{Binding Owner.ImageCachePresets}"
-                                                SelectedItem="{Binding Owner.SelectedImageCachePreset}"
-                                                PlaceholderText="{Binding Owner.L[Theme_Custom]}"
-                                                MinWidth="140" />
-                                        </Grid>
-                                        <Grid ColumnDefinitions="*, 60">
-                                            <Slider Minimum="10" Maximum="200" TickFrequency="10"
-                                                IsSnapToTickEnabled="True"
-                                                Value="{Binding Owner.MaxBitmapCacheItems}"
-                                                Margin="0,0,12,0" />
-                                            <TextBlock Grid.Column="1" Classes="value-label"
-                                                Text="{Binding Owner.MaxBitmapCacheItems}" />
-                                        </Grid>
-                                    </StackPanel>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_AutoSaveDownloads]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_AutoSaveDownloadsDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.AutoSaveToDownloads}" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <StackPanel Spacing="16">
-                                        <TextBlock Classes="label"
-                                            Text="{Binding Owner.L[Settings_Limits]}" />
-                                        <Grid ColumnDefinitions="120, *, 70">
-                                            <TextBlock
-                                                Text="{Binding Owner.L[Settings_DownloadsLimit]}"
-                                                VerticalAlignment="Center" />
-                                            <Slider Grid.Column="1" Minimum="500" Maximum="20000"
-                                                Value="{Binding Owner.DownloadedTracksLimitMb}"
-                                                Margin="12,0" />
-                                            <TextBlock Grid.Column="2" Classes="value-label"
-                                                Text="{Binding Owner.DownloadedTracksLimitMb,
-                                                           StringFormat='{}{0} MB'}" />
-                                        </Grid>
-                                        <Grid ColumnDefinitions="120, *, 70">
-                                            <TextBlock
-                                                Text="{Binding Owner.L[Settings_ImagesLimit]}"
-                                                VerticalAlignment="Center" />
-                                            <Slider Grid.Column="1" Minimum="100" Maximum="2000"
-                                                Value="{Binding Owner.ImageCacheLimitMb}"
-                                                Margin="12,0" />
-                                            <TextBlock Grid.Column="2" Classes="value-label"
-                                                Text="{Binding Owner.ImageCacheLimitMb,
-                                                           StringFormat='{}{0} MB'}" />
-                                        </Grid>
-                                        <Grid ColumnDefinitions="120, *, 70">
-                                            <TextBlock Text="{Binding Owner.L[Settings_AudioLimit]}"
-                                                VerticalAlignment="Center" />
-                                            <Slider Grid.Column="1" Minimum="500" Maximum="10000"
-                                                Value="{Binding Owner.AudioCacheLimitMb}"
-                                                Margin="12,0" />
-                                            <TextBlock Grid.Column="2" Classes="value-label"
-                                                Text="{Binding Owner.AudioCacheLimitMb,
-                                                           StringFormat='{}{0} MB'}" />
-                                        </Grid>
-                                    </StackPanel>
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
-
-                    <!-- ══════════════════ MEMORY MANAGEMENT ══════════════════ -->
-                    <DataTemplate DataType="vm:MemorySection" x:DataType="vm:MemorySection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:MemorySidebarItem"
+                            x:DataType="vm:MemorySidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Memory]}">
                                 <PathIcon Data="{StaticResource Icon.Memory}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Memory]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Memory]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="20">
+                        </DataTemplate>
 
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_GpuTextureCache]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_GpuTextureCacheDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.GpuCachePresets}"
-                                            SelectedItem="{Binding Owner.SelectedGpuCachePreset}"
-                                            MinWidth="180" />
-                                    </Grid>
-
-                                    <Border Background="{DynamicResource SystemWarnOrangeBrush}"
-                                        CornerRadius="4" Padding="10,6"
-                                        IsVisible="{Binding Owner.GpuCacheRestartRequired}">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <PathIcon Data="{StaticResource Icon.Refresh}"
-                                                Width="14" Height="14"
-                                                Foreground="{DynamicResource TextDarkBrush}" />
-                                            <TextBlock Foreground="{DynamicResource TextDarkBrush}"
-                                                FontWeight="SemiBold" FontSize="12"
-                                                Text="{Binding Owner.L[Settings_RestartRequired]}" />
-                                        </StackPanel>
-                                    </Border>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_AutoMemoryCleanup]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_AutoMemoryCleanupDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.AutoMemoryCleanupEnabled}" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, 200, 80"
-                                        IsEnabled="{Binding Owner.AutoMemoryCleanupEnabled}">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_MemoryCleanupInterval]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_MemoryCleanupIntervalDesc]}" />
-                                        </StackPanel>
-                                        <Slider Grid.Column="1" Minimum="5" Maximum="120"
-                                            TickFrequency="5" IsSnapToTickEnabled="True"
-                                            Value="{Binding Owner.MemoryCleanupIntervalMinutes}"
-                                            Margin="12,0" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.MemoryCleanupIntervalMinutes,
-                                                       StringFormat='{}{0} min'}" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, 200, 80">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_MemoryPressureThreshold]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_MemoryPressureThresholdDesc]}" />
-                                        </StackPanel>
-                                        <Slider Grid.Column="1" Minimum="200" Maximum="800"
-                                            TickFrequency="50" IsSnapToTickEnabled="True"
-                                            Value="{Binding Owner.MemoryPressureThresholdMb}"
-                                            Margin="12,0" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.MemoryPressureThresholdMb,
-                                                       StringFormat='{}{0} MB'}" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_ManualCleanup]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_ManualCleanupDesc]}" />
-                                        </StackPanel>
-                                        <Button Grid.Column="1"
-                                            Content="{Binding Owner.L[Settings_CleanupNow]}"
-                                            Command="{Binding Owner.CleanupMemoryNowCommand}" />
-                                    </Grid>
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
-
-                    <!-- ══════════════════ APPEARANCE ══════════════════ -->
-                    <DataTemplate DataType="vm:AppearanceSection" x:DataType="vm:AppearanceSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:AppearanceSidebarItem"
+                            x:DataType="vm:AppearanceSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Appearance]}">
                                 <PathIcon Data="{StaticResource Icon.Palette}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Appearance]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Appearance]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="20">
+                        </DataTemplate>
 
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Theme_Presets]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Theme_PresetsDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.ThemePresets}"
-                                            SelectedItem="{Binding Owner.SelectedPreset}"
-                                            PlaceholderText="{Binding Owner.L[Theme_SelectPreset]}"
-                                            MinWidth="200" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <Grid Classes="color-row" ColumnDefinitions="*, Auto">
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Classes="color-name"
-                                                Text="{Binding Owner.L[Theme_AccentColor]}" />
-                                            <TextBlock Classes="color-hint"
-                                                Text="{Binding Owner.L[Theme_AccentColorDesc]}" />
-                                        </StackPanel>
-                                        <controls:ColorPickerButton Grid.Column="1"
-                                            Color="{Binding Owner.AccentColor, Mode=TwoWay}" />
-                                    </Grid>
-
-                                    <Expander Header="{Binding Owner.L[Settings_AdvancedColors]}"
-                                        IsExpanded="False">
-                                        <StackPanel Spacing="0" Margin="0,16,0,0">
-                                            <Grid Classes="color-row" ColumnDefinitions="*, Auto">
-                                                <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Classes="color-name"
-                                                        Text="{Binding Owner.L[Theme_BgPrimary]}" />
-                                                    <TextBlock Classes="color-hint"
-                                                        Text="{Binding Owner.L[Theme_BgPrimaryDesc]}" />
-                                                </StackPanel>
-                                                <controls:ColorPickerButton Grid.Column="1"
-                                                    Color="{Binding Owner.BgPrimaryColor, Mode=TwoWay}" />
-                                            </Grid>
-                                            <Grid Classes="color-row" ColumnDefinitions="*, Auto">
-                                                <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Classes="color-name"
-                                                        Text="{Binding Owner.L[Theme_BgSecondary]}" />
-                                                    <TextBlock Classes="color-hint"
-                                                        Text="{Binding Owner.L[Theme_BgSecondaryDesc]}" />
-                                                </StackPanel>
-                                                <controls:ColorPickerButton Grid.Column="1"
-                                                    Color="{Binding Owner.BgSecondaryColor, Mode=TwoWay}" />
-                                            </Grid>
-                                            <Grid Classes="color-row" ColumnDefinitions="*, Auto">
-                                                <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Classes="color-name"
-                                                        Text="{Binding Owner.L[Theme_BgElevated]}" />
-                                                    <TextBlock Classes="color-hint"
-                                                        Text="{Binding Owner.L[Theme_BgElevatedDesc]}" />
-                                                </StackPanel>
-                                                <controls:ColorPickerButton Grid.Column="1"
-                                                    Color="{Binding Owner.BgElevatedColor, Mode=TwoWay}" />
-                                            </Grid>
-                                            <Separator
-                                                Background="{DynamicResource BgHighlightBrush}"
-                                                Height="1" Margin="0,8,0,16" />
-                                            <Grid Classes="color-row" ColumnDefinitions="*, Auto">
-                                                <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Classes="color-name"
-                                                        Text="{Binding Owner.L[Theme_TextPrimary]}" />
-                                                    <TextBlock Classes="color-hint"
-                                                        Text="{Binding Owner.L[Theme_TextPrimaryDesc]}" />
-                                                </StackPanel>
-                                                <controls:ColorPickerButton Grid.Column="1"
-                                                    Color="{Binding Owner.TextPrimaryColor, Mode=TwoWay}" />
-                                            </Grid>
-                                            <Grid Classes="color-row" ColumnDefinitions="*, Auto">
-                                                <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Classes="color-name"
-                                                        Text="{Binding Owner.L[Theme_TextSecondary]}" />
-                                                    <TextBlock Classes="color-hint"
-                                                        Text="{Binding Owner.L[Theme_TextSecondaryDesc]}" />
-                                                </StackPanel>
-                                                <controls:ColorPickerButton Grid.Column="1"
-                                                    Color="{Binding Owner.TextSecondaryColor, Mode=TwoWay}" />
-                                            </Grid>
-                                        </StackPanel>
-                                    </Expander>
-
-                                    <StackPanel Orientation="Horizontal" Spacing="16"
-                                        IsVisible="{Binding Owner.HasUnsavedThemeChanges}"
-                                        Margin="0,10,0,0">
-                                        <Button Classes="primary-btn accent-base"
-                                            Content="{Binding Owner.L[Common_Apply]}"
-                                            Command="{Binding Owner.ApplyThemeCommand}" />
-                                        <Button Content="{Binding Owner.L[Common_Reset]}"
-                                            Command="{Binding Owner.ResetThemeCommand}" />
-                                    </StackPanel>
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
-
-                    <!-- ══════════════════ AUDIO ══════════════════ -->
-                    <DataTemplate DataType="vm:AudioSection" x:DataType="vm:AudioSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:AudioSidebarItem"
+                            x:DataType="vm:AudioSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Audio]}">
                                 <PathIcon Data="{StaticResource Icon.VolumeHigh}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Audio]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Audio]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="20">
+                        </DataTemplate>
 
-                                    <TextBlock Text="{Binding Owner.L[Audio_VolumeSection]}"
-                                        FontWeight="SemiBold" FontSize="14"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-
-                                    <Grid ColumnDefinitions="*, 250, 70">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Audio_MaxVolume]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Audio_MaxVolumeDesc]}" />
-                                        </StackPanel>
-                                        <Slider Grid.Column="1" Minimum="100" Maximum="800"
-                                            Value="{Binding Owner.MaxVolumeLimit}"
-                                            Margin="0,0,10,0"
-                                            TickFrequency="100" IsSnapToTickEnabled="True" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.MaxVolumeLimit,
-                                                       StringFormat='{}{0}%'}" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Classes="label"
-                                                    Text="{Binding Owner.L[Settings_VolumeBoost]}" />
-                                                <Border Classes="feature-badge">
-                                                    <TextBlock Text="BOOST" />
-                                                </Border>
-                                            </StackPanel>
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_VolumeBoost_Tooltip]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.VolumeBoostEnabled}" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_VolumeCurve]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_VolumeCurve_Desc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.VolumeCurveOptions}"
-                                            SelectedItem="{Binding Owner.SelectedVolumeCurve}"
-                                            MinWidth="220" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, 250, 70">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Audio_Gain]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Audio_GainDesc]}" />
-                                        </StackPanel>
-                                        <Slider Grid.Column="1" Minimum="-10" Maximum="10"
-                                            Value="{Binding Owner.TargetGainDb}"
-                                            Margin="0,0,10,0" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.TargetGainDb,
-                                                       StringFormat='{}{0:F1} dB'}" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <TextBlock Text="{Binding Owner.L[Audio_ProcessingSection]}"
-                                        FontWeight="SemiBold" FontSize="14"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-
-                                    <Grid ColumnDefinitions="*, Auto, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_AudioNormalization]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_AudioNormalization_Tooltip]}" />
-                                        </StackPanel>
-                                        <Button Grid.Column="1" Classes="transparent-btn"
-                                            Command="{Binding Owner.ShowNormalizationInfoCommand}"
-                                            Margin="0,0,12,0" VerticalAlignment="Center"
-                                            ToolTip.Tip="{Binding Owner.L[Settings_NormalizationHowItWorks]}">
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <PathIcon Data="{StaticResource Icon.AlertCircle}"
-                                                    Width="16" Height="16"
-                                                    Foreground="{DynamicResource AccentBrush}" />
-                                                <TextBlock
-                                                    Text="{Binding Owner.L[Settings_NormalizationHowItWorks]}"
-                                                    Foreground="{DynamicResource AccentBrush}"
-                                                    FontSize="12" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                        </Button>
-                                        <ToggleSwitch Grid.Column="2"
-                                            IsChecked="{Binding Owner.AudioNormalizationEnabled}" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, Auto"
-                                        IsEnabled="{Binding Owner.AudioNormalizationEnabled}">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_NormalizationMode]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_NormalizationMode_Desc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.NormalizationModeOptions}"
-                                            SelectedItem="{Binding Owner.SelectedNormalizationMode}"
-                                            MinWidth="260" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, 220, 70"
-                                        IsEnabled="{Binding Owner.AudioNormalizationEnabled}">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_NormalizationTarget]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_NormalizationTarget_Desc]}" />
-                                        </StackPanel>
-                                        <Slider Grid.Column="1" Minimum="-24" Maximum="-6"
-                                            TickFrequency="1" IsSnapToTickEnabled="True"
-                                            Value="{Binding Owner.NormalizationTargetLufs}"
-                                            Margin="0,0,10,0" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.NormalizationTargetLufs,
-                                                       StringFormat='{}{0:F0} LUFS'}" />
-                                    </Grid>
-
-                                    <Border Background="{DynamicResource BgElevatedBrush}"
-                                        CornerRadius="6" Padding="12,10" Margin="0,0,0,4"
-                                        IsVisible="{Binding Owner.AudioNormalizationEnabled}">
-                                        <StackPanel Orientation="Horizontal" Spacing="10">
-                                            <PathIcon Data="{StaticResource Icon.Info}"
-                                                Width="16" Height="16"
-                                                Foreground="{DynamicResource TextSecondaryBrush}"
-                                                VerticalAlignment="Top" Margin="0,2,0,0" />
-                                            <TextBlock
-                                                Text="{Binding Owner.L[Settings_NormalizationTarget_Note]}"
-                                                Foreground="{DynamicResource TextSecondaryBrush}"
-                                                FontSize="12" TextWrapping="Wrap" MaxWidth="600" />
-                                        </StackPanel>
-                                    </Border>
-
-                                    <Grid ColumnDefinitions="*, 220, 70"
-                                        IsEnabled="{Binding Owner.AudioNormalizationEnabled}">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_NormalizationMaxGain]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_NormalizationMaxGain_Desc]}" />
-                                        </StackPanel>
-                                        <Slider Grid.Column="1" Minimum="1" Maximum="6"
-                                            TickFrequency="0.5" IsSnapToTickEnabled="True"
-                                            Value="{Binding Owner.NormalizationMaxGain}"
-                                            Margin="0,0,10,0" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.NormalizationMaxGain,
-                                                       StringFormat='{}{0:F1}x'}" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <TextBlock Text="{Binding Owner.L[Audio_QualitySection]}"
-                                        FontWeight="SemiBold" FontSize="14"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_AudioQuality]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_AudioQualityDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.QualityOptions}"
-                                            SelectedItem="{Binding Owner.SelectedQualityItem}"
-                                            MinWidth="200" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_RememberFormat]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_RememberFormatDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.RememberTrackFormat}" />
-                                    </Grid>
-
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <TextBlock Text="{Binding Owner.L[Audio_ErrorSection]}"
-                                        FontWeight="SemiBold" FontSize="14"
-                                        Foreground="{DynamicResource TextSecondaryBrush}" />
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_ErrorBehavior]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_ErrorBehaviorDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.ErrorBehaviorOptions}"
-                                            SelectedItem="{Binding Owner.SelectedErrorBehavior}"
-                                            MinWidth="240" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_PlayErrorSound]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_PlayErrorSoundDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.PlayErrorSound}" />
-                                    </Grid>
-
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_SkipNToken]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_SkipNTokenDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.SkipNTokenTracks}" />
-                                    </Grid>
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
-
-                    <!-- ══════════════════ PLAYBACK ══════════════════ -->
-                    <DataTemplate DataType="vm:PlaybackSection" x:DataType="vm:PlaybackSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:PlaybackSidebarItem"
+                            x:DataType="vm:PlaybackSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_Playback]}">
                                 <PathIcon Data="{StaticResource Icon.Play}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_Playback]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_Playback]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="16">
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[General_AutoPaste]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[General_AutoPasteDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.AutoPlayOnPaste}" />
-                                    </Grid>
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_SmoothLoading]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_SmoothLoadingDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.EnableSmoothLoading}" />
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
+                        </DataTemplate>
 
-                    <!-- ══════════════════ WINDOW BEHAVIOR ══════════════════ -->
-                    <DataTemplate DataType="vm:WindowBehaviorSection"
-                        x:DataType="vm:WindowBehaviorSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:WindowBehaviorSidebarItem"
+                            x:DataType="vm:WindowBehaviorSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_WindowBehavior]}">
                                 <PathIcon Data="{StaticResource Icon.WindowRestore}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_WindowBehavior]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_WindowBehavior]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="16">
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_CloseAction]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_CloseActionDesc]}" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1"
-                                            ItemsSource="{Binding Owner.CloseActionOptions}"
-                                            SelectedItem="{Binding Owner.SelectedCloseAction}"
-                                            MinWidth="240" />
-                                    </Grid>
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_MinimizeToTray]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_MinimizeToTrayDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.MinimizeToTray}" />
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </DataTemplate>
+                        </DataTemplate>
 
-                    <!-- ══════════════════ GENERAL ══════════════════ -->
-                    <DataTemplate DataType="vm:GeneralSection" x:DataType="vm:GeneralSection">
-                        <StackPanel Margin="32,0">
-                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,24,0,8">
+                        <DataTemplate DataType="vm:GeneralSidebarItem"
+                            x:DataType="vm:GeneralSidebarItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10"
+                                Margin="14,10"
+                                ToolTip.Tip="{Binding Owner.L[Settings_General]}">
                                 <PathIcon Data="{StaticResource Icon.Settings}"
-                                    Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}" />
-                                <TextBlock Classes="h2"
-                                    Text="{Binding Owner.L[Settings_General]}"
-                                    Margin="0" />
+                                    Width="18" Height="18"
+                                    VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Owner.L[Settings_General]}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
                             </StackPanel>
-                            <Border Classes="card">
-                                <StackPanel Spacing="16">
+                        </DataTemplate>
 
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <TextBlock Classes="label"
-                                                    Text="{Binding Owner.L[General_Discord]}" />
-                                                <Border Classes="feature-badge coming-soon">
-                                                    <TextBlock Text="СКОРО" />
-                                                </Border>
-                                            </StackPanel>
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[General_DiscordDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.DiscordRpcEnabled}"
-                                            IsEnabled="False" />
-                                    </Grid>
+                    </ListBox.DataTemplates>
+                </ListBox>
 
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
+                <Border Height="400"
+                    VerticalAlignment="Bottom"
+                    IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                            <GradientStop Offset="0"
+                                Color="{DynamicResource BgPrimaryTransparent}" />
+                            <GradientStop Offset="1"
+                                Color="{DynamicResource BgPrimary}" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+            </Panel>
+        </Border>
 
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <StackPanel>
-                                            <TextBlock Classes="label"
-                                                Text="{Binding Owner.L[Settings_SearchCache]}" />
-                                            <TextBlock Classes="desc"
-                                                Text="{Binding Owner.L[Settings_SearchCacheDesc]}" />
-                                        </StackPanel>
-                                        <ToggleSwitch Grid.Column="1"
-                                            IsChecked="{Binding Owner.EnableSearchCache}" />
-                                    </Grid>
+        <!--
+            GridSplitter
+            Ширина 4px. Ограничения ширины Col0 заданы в code-behind
+            через ColumnDefinition.MinWidth / MaxWidth — GridSplitter их уважает.
+        -->
+        <GridSplitter Grid.Column="1"
+            Name="SidebarSplitter"
+            Width="4"
+            ResizeDirection="Columns"
+            ResizeBehavior="PreviousAndNext"
+            Background="Transparent"
+            Cursor="SizeWestEast" />
 
-                                    <Grid ColumnDefinitions="*, 200, 70"
-                                        IsEnabled="{Binding Owner.EnableSearchCache}">
-                                        <TextBlock Classes="label"
-                                            Text="{Binding Owner.L[Settings_SearchCacheTtl]}" />
-                                        <Slider Grid.Column="1" Minimum="15" Maximum="480"
-                                            Value="{Binding Owner.SearchCacheTtlMinutes}"
-                                            Margin="12,0" />
-                                        <TextBlock Grid.Column="2" Classes="value-label"
-                                            Text="{Binding Owner.SearchCacheTtlMinutes,
-                                                       StringFormat='{}{0} min'}" />
-                                    </Grid>
+        <!--
+            Content
+            ScrollViewer сбрасывается в 0 при смене страницы (code-behind).
+        -->
+        <ScrollViewer Grid.Column="2"
+            Name="ContentScrollViewer"
+            HorizontalScrollBarVisibility="Disabled">
+            <ContentControl Content="{Binding SelectedSidebarItem}"
+                Margin="0,0,0,80">
+                <ContentControl.DataTemplates>
 
-                                    <Separator Background="{DynamicResource BgHighlightBrush}"
-                                        Height="1" />
-
-                                    <Button Content="{Binding Owner.L[Storage_ResetApp]}"
-                                        Command="{Binding Owner.ResetLibraryCommand}"
-                                        HorizontalAlignment="Left"
-                                        Foreground="{DynamicResource SystemErrorBrush}" />
-
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
+                    <DataTemplate DataType="vm:AccountLanguageSidebarItem">
+                        <pages:AccountLanguagePage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:NetworkSidebarItem">
+                        <pages:NetworkPage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:StorageCacheSidebarItem">
+                        <pages:StorageCachePage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:MemorySidebarItem">
+                        <pages:MemoryPage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:AppearanceSidebarItem">
+                        <pages:AppearancePage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:AudioSidebarItem">
+                        <pages:AudioPage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:PlaybackSidebarItem">
+                        <pages:PlaybackPage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:WindowBehaviorSidebarItem">
+                        <pages:WindowBehaviorPage DataContext="{Binding Owner}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:GeneralSidebarItem">
+                        <pages:GeneralPage DataContext="{Binding Owner}" />
                     </DataTemplate>
 
-                    <!-- ══════════════════ BOTTOM PADDING ══════════════════ -->
-                    <DataTemplate DataType="vm:BottomPaddingSection"
-                        x:DataType="vm:BottomPaddingSection">
-                        <Border Height="80" />
-                    </DataTemplate>
-
-                </ItemsControl.DataTemplates>
-            </ItemsControl>
+                </ContentControl.DataTemplates>
+            </ContentControl>
         </ScrollViewer>
 
     </Grid>

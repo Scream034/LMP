@@ -6,7 +6,6 @@ using LMP.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
-using System.Reactive.Disposables;
 
 using System.Reactive.Linq;
 

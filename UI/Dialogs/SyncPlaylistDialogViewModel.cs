@@ -1,5 +1,4 @@
 using System.Reactive;
-using System.Reactive.Disposables;
 using LMP.Core.Models;
 using LMP.Core.ViewModels;
 using ReactiveUI;

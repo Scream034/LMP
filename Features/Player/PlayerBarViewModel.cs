@@ -1193,6 +1193,17 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Возвращает текущую позицию воспроизведения в секундах напрямую из AudioEngine.
+    ///
+    /// <remarks>Предназначен для per-frame чтения из View (RAF callback).
+    /// Минует Rx pipeline (Throttle → DistinctUntilChanged → ObserveOn) —
+    /// возвращает актуальную позицию на момент вызова, а не throttled snapshot.
+    /// Thread-safe: TimeSpan — 8-byte struct, атомарное чтение на x64.
+    /// Zero allocation.</remarks>
+    /// </summary>
+    public double ReadCurrentPositionSeconds() => _audio.CurrentPosition.TotalSeconds;
+
     public void CancelSeek()
     {
         _isSeeking = false;

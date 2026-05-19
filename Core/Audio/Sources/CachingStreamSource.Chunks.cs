@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Net.Http.Headers;
 using LMP.Core.Audio.Http;
-using LMP.Core.Audio.Memory;
 using LMP.Core.Exceptions;
 using LMP.Core.Youtube.Utils;
 
@@ -304,8 +303,14 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Вычисляет HTTP Range, валидирует его и инициирует загрузку.
-    /// Возвращает результат вместо исключений для штатных ситуаций.
+    /// Удерживает download slot на всё время HTTP-операции для реального
+    /// ограничения параллелизма до <see cref="StreamingConfig.MaxConcurrentDownloads"/>.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Почему slot удерживается на весь download:</b></para>
+    /// <para>Без удержания — неограниченный параллелизм при seek + preload + on-demand read
+    /// → connection pool exhaustion → timeout → decoder starvation → underrun.</para>
+    /// </remarks>
     private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct)
     {
         if (_cacheEntry == null || _cacheEntry.IsChunkDownloaded(index))
@@ -327,16 +332,17 @@ public sealed partial class CachingStreamSource
             gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct);
             if (!gotSlot) return ChunkDownloadResult.SlotTimeout;
 
-            if (_cacheEntry.IsChunkDownloaded(index) || ct.IsCancellationRequested)
-            {
-                return _cacheEntry.IsChunkDownloaded(index)
-                    ? ChunkDownloadResult.Success
-                    : ChunkDownloadResult.Cancelled;
-            }
+            // Double-check после получения слота: пока ждали, другой поток мог загрузить
+            if (_cacheEntry.IsChunkDownloaded(index))
+                return ChunkDownloadResult.Success;
 
-            try { _downloadSlots.Release(); } catch { }
-            gotSlot = false;
+            if (ct.IsCancellationRequested)
+                return ChunkDownloadResult.Cancelled;
 
+            // ═══ FIX: слот удерживается на время HTTP-загрузки ═══
+            // Раньше слот отпускался ДО DownloadChunkHttpAsync,
+            // превращая семафор в no-op. Теперь download выполняется
+            // внутри критической секции, гарантируя MaxConcurrentDownloads.
             return await DownloadChunkHttpAsync(index, start, end, ct);
         }
         catch (ChunkDownloadFatalException) { throw; }
@@ -376,7 +382,7 @@ public sealed partial class CachingStreamSource
         try
         {
             response = await _httpClient.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+                request, HttpCompletionOption.ResponseHeadersRead, ct);
         }
         catch (TaskCanceledException) { return ChunkDownloadResult.NetworkError; }
         catch (HttpRequestException) { return ChunkDownloadResult.NetworkError; }
