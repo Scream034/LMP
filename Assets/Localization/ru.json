@@ -299,8 +299,8 @@
   "Seek_CancelHint": "ESC или правый клик для отмены",
   "Seek_Cancelled": "Перемотка отменена",
 
-  "Quality_BestAvailable": "Высокое (Opus)",
-  "Quality_Standard": "Стандартное (AAC)",
+  "AudioQuality_BestAvailable": "Высокое (Opus)",
+  "AudioQuality_Standard": "Стандартное (AAC)",
 
   "Stream_SelectQuality": "Выберите качество",
   "Stream_Format_Mb": "{0:F1} МБ",
@@ -402,12 +402,12 @@
   "VolumeCurve_Quadratic": "Квадратичная (Рекомендуется)",
   "VolumeCurve_Logarithmic": "Логарифмическая",
   "VolumeCurve_Cubic": "Кубическая",
-  "VolumeCurve_SpeedOfLight": "Скорость света ⚡",
+  "VolumeCurve_SpeedOfLight": "Скорость света",
 
-  "Audio_ErrorSection": "🔔 Уведомления об ошибках",
-  "Audio_VolumeSection": "🔊 Громкость",
-  "Audio_ProcessingSection": "⚙️ Обработка",
-  "Audio_QualitySection": "🎵 Качество",
+  "Audio_ErrorSection": "Уведомления об ошибках",
+  "Audio_VolumeSection": "Громкость",
+  "Audio_ProcessingSection": "Обработка",
+  "Audio_QualitySection": "Качество",
   "Audio_MaxVolume": "Лимит громкости",
   "Audio_MaxVolumeDesc": "Разрешить громкость выше 100% (Программное усиление).",
   "Audio_Gain": "Нормализация (dB)",

@@ -9,7 +9,6 @@
     <conv:VolumeToIconConverter x:Key="VolumeIcon" />
     <conv:BoolToSelectorConverter x:Key="BoolToSelector" />
     <conv:ToUpperConverter x:Key="ToUpper" />
-    <conv:AudioQualityToStringConverter x:Key="AudioQualityToString" />
     <conv:BitmapAssetValueConverter x:Key="BitmapAssetConverter" />
     <conv:StringStartsWithConverter x:Key="StringStartsWithConverter" />
     <conv:WebUrlConverter x:Key="WebUrlConverter" />

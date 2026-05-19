@@ -20,7 +20,8 @@
                             Background="#4CAF50" Foreground="White" Padding="10,6"
                             ToolTip.Tip="Run all tests">
                             <StackPanel Orientation="Horizontal" Spacing="4">
-                                <PathIcon Data="{StaticResource Icon.PlayCircle}" Width="14" Height="14" />
+                                <PathIcon Data="{StaticResource Icon.PlayCircle}" Width="14"
+                                    Height="14" />
                                 <TextBlock Text="Run All" FontSize="12" />
                             </StackPanel>
                         </Button>
@@ -43,18 +44,21 @@
                             <TextBlock Text="Benchmarks" />
                         </Button>
 
-                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,2" />
+                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}"
+                            Margin="2,2" />
 
                         <Button Command="{Binding RunFilteredCommand}"
                             Background="#00897B" Foreground="White" Padding="10,6"
                             ToolTip.Tip="Run only filtered tests (by current group/category/search)">
                             <StackPanel Orientation="Horizontal" Spacing="4">
-                                <PathIcon Data="{StaticResource Icon.FilterCheck}" Width="14" Height="14" />
+                                <PathIcon Data="{StaticResource Icon.FilterCheck}" Width="14"
+                                    Height="14" />
                                 <TextBlock Text="Run Filtered" FontSize="12" />
                             </StackPanel>
                         </Button>
 
-                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,2" />
+                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}"
+                            Margin="2,2" />
 
                         <Button Command="{Binding CancelCommand}"
                             Background="#F44336" Foreground="White" Padding="8,6"
@@ -70,19 +74,22 @@
                             <PathIcon Data="{StaticResource Icon.Refresh}" Width="14" Height="14" />
                         </Button>
 
-                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,2" />
+                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}"
+                            Margin="2,2" />
 
                         <TextBox Text="{Binding SearchFilter}" Width="180"
                             PlaceholderText="🔍 Filter tests..." VerticalAlignment="Center"
                             FontSize="12" />
 
-                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="2,2" />
+                        <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}"
+                            Margin="2,2" />
 
                         <Button Command="{Binding OpenConfigCommand}"
                             Padding="8,6" ToolTip.Tip="Open test-config.json in default editor"
                             Background="#607D8B" Foreground="White">
                             <StackPanel Orientation="Horizontal" Spacing="4">
-                                <PathIcon Data="{StaticResource Icon.FileEdit}" Width="14" Height="14" />
+                                <PathIcon Data="{StaticResource Icon.FileEdit}" Width="14"
+                                    Height="14" />
                                 <TextBlock Text="Config" FontSize="12" />
                             </StackPanel>
                         </Button>
@@ -115,8 +122,10 @@
                             ToolTip.Tip="Show all groups">
                             <Button.Styles>
                                 <Style Selector="Button">
-                                    <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-                                    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                                    <Setter Property="Background"
+                                        Value="{DynamicResource BgHighlightBrush}" />
+                                    <Setter Property="Foreground"
+                                        Value="{DynamicResource TextPrimaryBrush}" />
                                 </Style>
                             </Button.Styles>
                             <TextBlock Text="All" />
@@ -132,14 +141,16 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button
-                                        Command="{Binding $parent[ItemsControl].Tag.ToggleGroupFilterCommand}"
+                                        Command="{Binding $parent[ItemsControl].((vm:TestRunnerViewModel)Tag).ToggleGroupFilterCommand}"
                                         CommandParameter="{Binding Name}"
                                         Padding="8,4" CornerRadius="10" FontSize="11"
                                         ToolTip.Tip="{Binding Label}">
                                         <Button.Styles>
                                             <Style Selector="Button">
-                                                <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
-                                                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+                                                <Setter Property="Background"
+                                                    Value="{DynamicResource BgHighlightBrush}" />
+                                                <Setter Property="Foreground"
+                                                    Value="{DynamicResource TextSecondaryBrush}" />
                                             </Style>
                                         </Button.Styles>
                                         <TextBlock Text="{Binding Label}"
@@ -170,7 +181,7 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button
-                                            Command="{Binding $parent[ItemsControl].Tag.RunSingleCommand}"
+                                            Command="{Binding $parent[ItemsControl].((vm:TestRunnerViewModel)Tag).RunSingleCommand}"
                                             CommandParameter="{Binding}"
                                             HorizontalAlignment="Stretch"
                                             HorizontalContentAlignment="Stretch"
@@ -351,7 +362,8 @@
                             Background="#F44336" Foreground="White" Padding="12,8"
                             ToolTip.Tip="Clear all memory caches">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <PathIcon Data="{StaticResource Icon.DeleteSweep}" Width="16" Height="16" />
+                                <PathIcon Data="{StaticResource Icon.DeleteSweep}" Width="16"
+                                    Height="16" />
                                 <TextBlock Text="Clear All Caches" />
                             </StackPanel>
                         </Button>
@@ -359,7 +371,8 @@
                             Background="#E91E63" Foreground="White" Padding="12,8"
                             ToolTip.Tip="Check TrackVM cache for leaks">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <PathIcon Data="{StaticResource Icon.BugCheck}" Width="16" Height="16" />
+                                <PathIcon Data="{StaticResource Icon.BugCheck}" Width="16"
+                                    Height="16" />
                                 <TextBlock Text="Check VM Leaks" />
                             </StackPanel>
                         </Button>
@@ -402,7 +415,8 @@
                                 Background="#4CAF50" Foreground="White" Padding="12,8"
                                 IsEnabled="{Binding !IsAudioPlaying}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <PathIcon Data="{StaticResource Icon.Play}" Width="16" Height="16" />
+                                    <PathIcon Data="{StaticResource Icon.Play}" Width="16"
+                                        Height="16" />
                                     <TextBlock Text="Play (No Cache)" />
                                 </StackPanel>
                             </Button>
@@ -410,7 +424,8 @@
                                 Background="#2196F3" Foreground="White" Padding="12,8"
                                 IsEnabled="{Binding !IsAudioPlaying}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <PathIcon Data="{StaticResource Icon.PlayCircle}" Width="16" Height="16" />
+                                    <PathIcon Data="{StaticResource Icon.PlayCircle}" Width="16"
+                                        Height="16" />
                                     <TextBlock Text="Play (With Cache)" />
                                 </StackPanel>
                             </Button>
@@ -418,31 +433,36 @@
                                 Background="#f44336" Foreground="White" Padding="12,8"
                                 IsEnabled="{Binding IsAudioPlaying}">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <PathIcon Data="{StaticResource Icon.Stop}" Width="16" Height="16" />
+                                    <PathIcon Data="{StaticResource Icon.Stop}" Width="16"
+                                        Height="16" />
                                     <TextBlock Text="Stop" />
                                 </StackPanel>
                             </Button>
 
-                            <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}" Margin="4,0" />
+                            <Rectangle Width="1" Fill="{DynamicResource TextSecondaryBrush}"
+                                Margin="4,0" />
 
                             <Button Command="{Binding ShowCacheStatsCommand}"
                                 Background="#607D8B" Foreground="White" Padding="12,8">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <PathIcon Data="{StaticResource Icon.ChartBar}" Width="16" Height="16" />
+                                    <PathIcon Data="{StaticResource Icon.ChartBar}" Width="16"
+                                        Height="16" />
                                     <TextBlock Text="Cache Stats" />
                                 </StackPanel>
                             </Button>
                             <Button Command="{Binding ClearAudioCacheCommand}"
                                 Background="#795548" Foreground="White" Padding="12,8">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <PathIcon Data="{StaticResource Icon.FolderRemove}" Width="16" Height="16" />
+                                    <PathIcon Data="{StaticResource Icon.FolderRemove}" Width="16"
+                                        Height="16" />
                                     <TextBlock Text="Clear Cache" />
                                 </StackPanel>
                             </Button>
                             <Button Command="{Binding TestLocalFileCommand}"
                                 Background="#9E9E9E" Foreground="White" Padding="12,8">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <PathIcon Data="{StaticResource Icon.FileMusic}" Width="16" Height="16" />
+                                    <PathIcon Data="{StaticResource Icon.FileMusic}" Width="16"
+                                        Height="16" />
                                     <TextBlock Text="Test Local" />
                                 </StackPanel>
                             </Button>

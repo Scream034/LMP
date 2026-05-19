@@ -161,29 +161,6 @@ public sealed class ToUpperConverter : IValueConverter
     }
 }
 
-public sealed class AudioQualityToStringConverter : IValueConverter
-{
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is AudioQualityPreference preference)
-        {
-            var L = LocalizationService.Instance;
-            return preference switch
-            {
-                AudioQualityPreference.BestAvailable => L["Quality_BestAvailable"],
-                AudioQualityPreference.Standard => L["Quality_Standard"],
-                _ => preference.ToString()
-            };
-        }
-        return value?.ToString();
-    }
-
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        throw new NotImplementedException();
-    }
-}
-
 public sealed class BitmapAssetValueConverter : IValueConverter
 {
     public static readonly BitmapAssetValueConverter Instance = new();

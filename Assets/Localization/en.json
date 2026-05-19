@@ -301,8 +301,8 @@
   "Seek_CancelHint": "ESC or Right Click to cancel",
   "Seek_Cancelled": "Seek cancelled",
 
-  "Quality_BestAvailable": "High (Opus)",
-  "Quality_Standard": "Standard (AAC)",
+  "AudioQuality_BestAvailable": "High (Opus)",
+  "AudioQuality_Standard": "Standard (AAC)",
 
   "Stream_SelectQuality": "Select Quality",
   "Stream_Format_Mb": "{0:F1} MB",
@@ -404,12 +404,12 @@
   "VolumeCurve_Quadratic": "Quadratic (Recommended)",
   "VolumeCurve_Logarithmic": "Logarithmic",
   "VolumeCurve_Cubic": "Cubic",
-  "VolumeCurve_SpeedOfLight": "Speed of Light ⚡",
+  "VolumeCurve_SpeedOfLight": "Speed of Light",
 
-  "Audio_ErrorSection": "🔔 Error Notifications",
-  "Audio_VolumeSection": "🔊 Volume",
-  "Audio_ProcessingSection": "⚙️ Processing",
-  "Audio_QualitySection": "🎵 Quality",
+  "Audio_ErrorSection": "Error Notifications",
+  "Audio_VolumeSection": "Volume",
+  "Audio_ProcessingSection": "Processing",
+  "Audio_QualitySection": "Quality",
   "Audio_MaxVolume": "Volume Limit",
   "Audio_MaxVolumeDesc": "Allow volume above 100% (Software boost).",
   "Audio_Gain": "Normalization (dB)",
