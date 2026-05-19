@@ -38,6 +38,8 @@ public sealed class SettingsRepository(IDbContextFactory<LibraryDbContext> facto
         var json = JsonSerializer.Serialize(value, JsonOptions);
         var existing = await ctx.Settings.FirstOrDefaultAsync(s => s.Key == key, ct);
         
+        Log.Trace(json);
+
         if (existing != null)
         {
             existing.Value = json;

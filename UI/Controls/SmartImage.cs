@@ -146,7 +146,9 @@ public static class SmartImage
                 if (cts.IsCancellationRequested) return;
 
                 // Phase 2: фильтруем промежуточные рециклинги при быстром скролле.
-                await Task.Delay(debounceMs, cts.Token);
+                await Task.Delay(debounceMs);
+
+                if (cts.IsCancellationRequested) return;
             }
 
             if (cts.IsCancellationRequested) return;

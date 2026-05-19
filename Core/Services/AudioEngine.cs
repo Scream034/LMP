@@ -1,4 +1,5 @@
-﻿using System.Threading.Channels;
+﻿using System.Collections.Concurrent;
+using System.Threading.Channels;
 using LMP.Core.Audio;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Exceptions;
@@ -125,6 +126,32 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// </summary>
     private string? _sealedFailedTrackId;
 
+    /// <summary>
+    /// Трек, подготавливаемый к воспроизведению. Устанавливается синхронно
+    /// до вызова <see cref="AudioPlayer.PlayAsync"/>, гарантируя доступность
+    /// в <see cref="ConfigurePipelineBeforeStart"/> без гонки с UI-потоком.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Проблема:</b> <see cref="CurrentTrack"/> обновляется через
+    /// <see cref="Avalonia.Threading.Dispatcher.Post"/> (асинхронно на UI-поток).
+    /// При кэшированном треке pipeline создаётся за ~5ms — быстрее, чем UI-поток
+    /// обработает Post. <see cref="ConfigurePipelineBeforeStart"/> читает
+    /// <see cref="CurrentTrack"/> = null → gain не резолвится → ненужный pre-scan.</para>
+    /// <para><b>Решение:</b> синхронная запись до <see cref="AudioPlayer.PlayAsync"/>,
+    /// чтение из <see cref="ConfigurePipelineBeforeStart"/> на command thread AudioPlayer.
+    /// Visibility гарантирована volatile + happens-before семантикой Channel.</para>
+    /// </remarks>
+    private volatile TrackInfo? _preparingTrack;
+
+    /// <summary>
+    /// Очередь отложенных записей gain нормализации в БД.
+    /// Заполняется из fill thread (через <see cref="HandleGainLocked"/>)
+    /// и из command flow (<see cref="PlayTrackCoreAsync"/>).
+    /// Дренируется в <see cref="VolumeSaveLoopAsync"/> каждые 2 секунды
+    /// и при <see cref="Dispose"/> — защита от потери данных при kill.
+    /// </summary>
+    private readonly ConcurrentQueue<(string TrackId, float Gain)> _pendingGainWrites = new();
+
     #endregion
 
     #region Queue
@@ -132,6 +159,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private readonly List<TrackInfo> _queue = new(64);
     private IReadOnlyList<TrackInfo>? _queueSnapshot;
     private int _currentIndex = -1;
+
+    private bool _queueMutatedByNavigation;
 
     #endregion
 
@@ -241,6 +270,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// Использует <see cref="NormalizationGainResolver"/> как единственный источник истины
     /// для определения gain нормализации.
     /// </summary>
+    /// <remarks>
+    /// <para>Читает <see cref="_preparingTrack"/> вместо <see cref="CurrentTrack"/>,
+    /// поскольку CurrentTrack обновляется асинхронно через Dispatcher.Post
+    /// и может быть null/stale на момент вызова (race condition при кэшированных треках).</para>
+    /// </remarks>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline)
     {
         var settings = _library.Settings;
@@ -266,11 +300,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (!normConfig.Enabled) return;
 
-        float cachedGain = NormalizationGainResolver.Resolve(CurrentTrack);
+        var track = _preparingTrack ?? CurrentTrack;
+        float cachedGain = NormalizationGainResolver.Resolve(track);
         if (!float.IsNaN(cachedGain))
             pipeline.Analyzer.LockFromCachedGain(cachedGain);
-
-        // NaN → pre-scan (CanSeek) или real-time анализ обработает автоматически
     }
 
     private void SubscribeToPlayerEvents()
@@ -467,28 +500,21 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// (а не только <see cref="CurrentTrack"/>), гарантируя что gain виден
     /// при повторном воспроизведении через <see cref="TrackRegistry"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>Вызывается из fill thread — блокировка и await запрещены.
+    /// DB-персистенция откладывается в <see cref="_pendingGainWrites"/>
+    /// и дренируется в <see cref="VolumeSaveLoopAsync"/> (каждые 2 сек).</para>
+    /// </remarks>
     private void HandleGainLocked(string trackId, float gain)
     {
         var canonical = _library.GetTrack(trackId);
-        canonical?.SetGain(gain);  // не перезапишет если уже есть
+        canonical?.SetGain(gain);
 
         var current = CurrentTrack;
         if (current != null && current.Id == trackId && !ReferenceEquals(current, canonical))
             current.SetGain(gain);
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _library.SaveTrackNormalizationGainAsync(
-                    trackId, gain, _lifetimeCts.Token);
-                Log.Debug($"[AudioEngine] EBU R128 gain persisted: {trackId}, gain={gain:F3}x");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Log.Warn($"[AudioEngine] Failed to persist gain for {trackId}: {ex.Message}");
-            }
-        });
+        _pendingGainWrites.Enqueue((trackId, gain));
     }
 
     private bool TryMoveNextSkippingTrack(string? skippedTrackId)
@@ -542,9 +568,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             return;
 
         // ═══ CANONICAL IDENTITY ═══
-        // Загружаем canonical instance из registry/DB — гарантирует наличие
-        // CachedNormalizationGain и LoudnessDb из предыдущих сессий.
-        // GetTrackAsync → TryGet (pinned/cache) → fallback LoadFromDB.
         var canonical = await _library.GetTrackAsync(track.Id, ct);
         if (canonical != null)
         {
@@ -573,22 +596,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 return;
 
             // ═══ CACHE GAIN FROM YOUTUBE METADATA ═══
-            // YouTube loudnessDb → linear gain → CachedNormalizationGain.
-            // При следующем play (из кэша или стрима) resolver мгновенно вернёт gain.
-            // ComputeAndCacheFromLoudness не перезаписывает если gain уже есть.
             if (track.HasCachedNormalizationGain)
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _library.SaveTrackNormalizationGainAsync(
-                              track.Id, track.CachedNormalizationGain, _lifetimeCts.Token);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    { Log.Debug($"[AudioEngine] Gain persist: {ex.Message}"); }
-                }, ct);
-            }
+                _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
+
+            // ═══ PREPARING TRACK ═══
+            // Устанавливаем ДО PlayAsync — ConfigurePipelineBeforeStart прочитает
+            // актуальный трек вместо CurrentTrack (который ещё не обновлён на UI-потоке).
+            _preparingTrack = track;
 
             try
             {
@@ -597,6 +611,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             catch (OperationCanceledException) { return; }
             catch (Exception ex) when (IsSessionStale(session, ct) || IsCancellationLike(ex)) { return; }
             catch (Exception) { return; }
+            finally
+            {
+                _preparingTrack = null;
+            }
 
             ApplyGainToPipeline();
 
@@ -731,9 +749,16 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (Volatile.Read(ref _session) != session) return;
             lock (_queueLock)
             {
-                _queue.Clear(); _queue.AddRange(tracks);
+                _queue.Clear();
+                _queue.AddRange(tracks);
                 _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
                 if (_currentIndex == -1 && _queue.Count > 0) _currentIndex = 0;
+
+                // Если авто-shuffle включён — сразу перемешать,
+                // сохранив startTrack на позиции 0 (пользователь выбрал именно его).
+                if (ShuffleEnabled && _queue.Count > 1)
+                    ApplyShuffleInPlace(preserveCurrentAtStart: true);
+
                 InvalidateQueueSnapshot();
             }
             RaiseOnUI(() => OnQueueChanged?.Invoke());
@@ -786,23 +811,51 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         int session = BeginNewSession();
         bool canMove;
-        lock (_queueLock) { canMove = forward ? TryMoveNext(userInitiated) : TryMovePrevious(); }
+        bool queueMutated;
+
+        lock (_queueLock)
+        {
+            canMove = forward ? TryMoveNext(userInitiated) : TryMovePrevious();
+            queueMutated = _queueMutatedByNavigation;
+        }
+
+        // ПОСЛЕ снятия лока — QueueViewModel получит актуальный порядок
+        if (queueMutated)
+            RaiseOnUI(() => OnQueueChanged?.Invoke());
 
         if (canMove) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
-        else if (!forward && _player.State != PlaybackState.Stopped) await _player.SeekAsync(TimeSpan.Zero);
+        else if (!forward && _player.State != PlaybackState.Stopped)
+            await _player.SeekAsync(TimeSpan.Zero);
         else Stop();
     }
 
     private bool TryMoveNext(bool userInitiated)
     {
+        _queueMutatedByNavigation = false;
+
         if (_queue.Count == 0) return false;
         if (!userInitiated && RepeatMode == RepeatMode.One) return true;
-        if (_currentIndex + 1 < _queue.Count) { _currentIndex++; return true; }
+
+        if (_currentIndex + 1 < _queue.Count)
+        {
+            _currentIndex++;
+            return true;
+        }
+
         if (RepeatMode == RepeatMode.All)
         {
             if (!userInitiated && _queue.Count == 1) return false;
-            _currentIndex = 0; return true;
+
+            if (ShuffleEnabled && _queue.Count > 1)
+            {
+                ApplyShuffleInPlace(preserveCurrentAtStart: false);
+                _queueMutatedByNavigation = true; // ← сигнал наружу
+            }
+
+            _currentIndex = 0;
+            return true;
         }
+
         return false;
     }
 
@@ -813,6 +866,43 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (_currentIndex > 0) { _currentIndex--; return true; }
         if (RepeatMode == RepeatMode.All) { _currentIndex = _queue.Count - 1; return true; }
         return false;
+    }
+
+    /// <summary>
+    /// Fisher-Yates shuffle очереди на месте.
+    /// При preserveCurrentAtStart=true — текущий трек остаётся первым
+    /// (используется при включении shuffle во время воспроизведения).
+    /// При preserveCurrentAtStart=false — полное случайное перемешивание
+    /// (используется при RepeatAll-перезапуске).
+    /// </summary>
+    private void ApplyShuffleInPlace(bool preserveCurrentAtStart)
+    {
+        if (_queue.Count < 2) return;
+
+        if (preserveCurrentAtStart && _currentIndex >= 0 && _currentIndex < _queue.Count)
+        {
+            // Переносим текущий трек в начало, shuffle остальных
+            if (_currentIndex != 0)
+                (_queue[0], _queue[_currentIndex]) = (_queue[_currentIndex], _queue[0]);
+
+            for (int n = _queue.Count - 1; n > 1; n--)
+            {
+                int k = 1 + Random.Shared.Next(n);
+                (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
+            }
+
+            _currentIndex = 0;
+        }
+        else
+        {
+            for (int n = _queue.Count - 1; n > 0; n--)
+            {
+                int k = Random.Shared.Next(n + 1);
+                (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
+            }
+        }
+
+        InvalidateQueueSnapshot();
     }
 
     #endregion
@@ -839,7 +929,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _ = Task.Run(async () =>
         {
             bool canAdvance;
-            lock (_queueLock) { canAdvance = TryMoveNext(userInitiated: false); }
+            bool queueMutated;
+
+            lock (_queueLock)
+            {
+                canAdvance = TryMoveNext(userInitiated: false);
+                queueMutated = _queueMutatedByNavigation;
+            }
+
+            // После снятия лока
+            if (queueMutated)
+                RaiseOnUI(() => OnQueueChanged?.Invoke());
+
             if (canAdvance) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
             else Stop();
         });
@@ -1089,8 +1190,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Периодически сохраняет текущую громкость в настройки.
-    /// Предотвращает потерю значения при crash.
+    /// Периодически сохраняет текущую громкость и отложенные gain нормализации в БД.
+    /// Предотвращает потерю значений при crash / kill через Task Manager.
     /// </summary>
     private async Task VolumeSaveLoopAsync()
     {
@@ -1098,9 +1199,52 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         try
         {
             while (await timer.WaitForNextTickAsync(_lifetimeCts.Token))
-                _library.UpdateSettings(s => s.Volume = _volumePercent);
+            {
+                _library.UpdateSettings(s =>
+                {
+                    s.Volume = _volumePercent;
+                    s.RepeatMode = RepeatMode;
+                    s.ShuffleEnabled = ShuffleEnabled;
+                });
+
+                await FlushPendingGainWritesAsync(_lifetimeCts.Token);
+            }
         }
         catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// Дренирует очередь отложенных записей gain нормализации в БД.
+    /// Дедуплицирует по trackId — сохраняет только последний gain.
+    /// </summary>
+    private async Task FlushPendingGainWritesAsync(CancellationToken ct)
+    {
+        if (_pendingGainWrites.IsEmpty) return;
+
+        // Дедупликация: при быстром переключении треков
+        // один trackId может встретиться несколько раз — берём последний gain.
+        Dictionary<string, float>? batch = null;
+
+        while (_pendingGainWrites.TryDequeue(out var pending))
+        {
+            batch ??= new(StringComparer.Ordinal);
+            batch[pending.TrackId] = pending.Gain;
+        }
+
+        if (batch == null) return;
+
+        foreach (var (trackId, gain) in batch)
+        {
+            try
+            {
+                await _library.SaveTrackNormalizationGainAsync(trackId, gain, ct);
+                Log.Debug($"[AudioEngine] EBU R128 gain persisted: {trackId}, gain={gain:F3}x");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Warn($"[AudioEngine] Failed to persist gain for {trackId}: {ex.Message}");
+            }
+        }
     }
 
     #endregion
@@ -1170,10 +1314,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (IsSessionStale(session, ct) || IsSealedFailedTrack(track.Id)) return;
 
             track.TransientBitrate = info.Value.Bitrate;
-            await _player.PlayAsync(info.Value.Url, track.Id, info.Value.Bitrate, ct,
-                seekPosition: position.TotalSeconds > 1 ? position : null);
 
-            // Аналогично PlayTrackCoreAsync: нормализация уже применена через OnPipelineConfiguring.
+            _preparingTrack = track;
+            try
+            {
+                await _player.PlayAsync(info.Value.Url, track.Id, info.Value.Bitrate, ct,
+                    seekPosition: position.TotalSeconds > 1 ? position : null);
+            }
+            finally
+            {
+                _preparingTrack = null;
+            }
+
             ApplyGainToPipeline();
         }
         catch (Exception ex)
@@ -1229,18 +1381,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         lock (_queueLock)
         {
             if (_queue.Count < 2) return;
-            var current = _currentIndex >= 0 && _currentIndex < _queue.Count
-                ? _queue[_currentIndex] : null;
-            for (int n = _queue.Count - 1; n > 0; n--)
-            {
-                int k = Random.Shared.Next(n + 1);
-                (_queue[k], _queue[n]) = (_queue[n], _queue[k]);
-            }
-            if (current != null)
-                _currentIndex = Math.Max(0, _queue.IndexOf(current));
-            InvalidateQueueSnapshot();
+            ApplyShuffleInPlace(preserveCurrentAtStart: true);
         }
         RaiseOnUI(() => OnQueueChanged?.Invoke());
+        Log.Debug("[AudioEngine] Queue shuffled");
     }
 
     public void ClearQueue()
@@ -1365,6 +1509,26 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 _sessionCts?.Cancel();
                 _sessionCts?.Dispose();
             }
+
+            // Финальный flush всех настроек перед закрытием
+            _library.UpdateSettings(s =>
+            {
+                s.Volume = _volumePercent;
+                s.RepeatMode = RepeatMode;
+                s.ShuffleEnabled = ShuffleEnabled;
+            });
+
+            // Flush pending gain writes (bounded wait — Dispose контекст)
+            try
+            {
+                FlushPendingGainWritesAsync(CancellationToken.None)
+                    .Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[AudioEngine] Gain flush on dispose failed: {ex.Message}");
+            }
+
             _lifetimeCts.Cancel();
             _lifetimeCts.Dispose();
             _player.Dispose();

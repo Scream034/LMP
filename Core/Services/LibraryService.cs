@@ -60,7 +60,7 @@ public sealed class LibraryService : IAsyncDisposable
 
         // Throttled settings save
         _saveSubscription = _saveSettingsSignal
-            .Throttle(TimeSpan.FromSeconds(1))
+            .Throttle(TimeSpan.FromSeconds(2))
             .ObserveOn(RxSchedulers.TaskpoolScheduler)
             .Subscribe(async _ =>
             {
@@ -750,6 +750,8 @@ public sealed class LibraryService : IAsyncDisposable
         await _settings.SetAsync("AppSettings", Settings);
 
         GC.SuppressFinalize(this);
+
+        Log.Info("Disposed");
     }
 
     #endregion

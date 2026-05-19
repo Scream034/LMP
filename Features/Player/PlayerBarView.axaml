@@ -471,32 +471,20 @@
                         ToolTip.Placement="Top"
                         ToolTip.VerticalOffset="-6">
                         <Grid>
-                            <!-- None: обычный цвет, без затемнения -->
+                            <!-- None: обычный цвет -->
                             <PathIcon Width="18" Height="18"
                                 Data="{StaticResource Icon.Repeat}"
-                                IsVisible="{Binding RepeatMode,
-                                    Converter={StaticResource RepeatModeEquals},
-                                    ConverterParameter=None}" />
-                            <!-- Off: обычный цвет -->
-                            <PathIcon Width="18" Height="18"
-                                Data="{StaticResource Icon.Repeat}"
-                                IsVisible="{Binding RepeatMode,
-                                    Converter={StaticResource RepeatModeEquals},
-                                    ConverterParameter=Off}" />
-                            <!-- RepeatOne: акцентный -->
+                                IsVisible="{Binding IsRepeatNone}" />
+                            <!-- One: акцентный, RepeatOnce иконка -->
                             <PathIcon Width="18" Height="18"
                                 Data="{StaticResource Icon.RepeatOnce}"
                                 Foreground="{DynamicResource AccentBrush}"
-                                IsVisible="{Binding RepeatMode,
-                                    Converter={StaticResource RepeatModeEquals},
-                                    ConverterParameter=RepeatOne}" />
-                            <!-- RepeatAll: акцентный -->
+                                IsVisible="{Binding IsRepeatOne}" />
+                            <!-- All: акцентный, обычная Repeat иконка -->
                             <PathIcon Width="18" Height="18"
                                 Data="{StaticResource Icon.Repeat}"
                                 Foreground="{DynamicResource AccentBrush}"
-                                IsVisible="{Binding RepeatMode,
-                                    Converter={StaticResource RepeatModeEquals},
-                                    ConverterParameter=RepeatAll}" />
+                                IsVisible="{Binding IsRepeatAll}" />
                         </Grid>
                     </Button>
 

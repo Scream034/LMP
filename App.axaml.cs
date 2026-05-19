@@ -110,6 +110,18 @@ public partial class App : Application
             await Task.Run(async () => await library.InitializeAsync());
             _splash?.SetProgress(45);
 
+            // AudioEngine был создан до InitializeAsync с дефолтными Settings.
+            // Теперь Settings загружены из DB — перечитываем.
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var audio = Program.Services.GetRequiredService<AudioEngine>();
+                audio.ShuffleEnabled = library.Settings.ShuffleEnabled;
+                audio.RepeatMode = library.Settings.RepeatMode;
+
+                var playerControl = Program.Services.GetRequiredService<PlayerControlService>();
+                playerControl.ForceSync(); // уже существующий метод — синхронизирует все subjects из AudioEngine
+            });
+
             // ═══ СИНХРОНИЗАЦИЯ ЯЗЫКА ═══
             var savedLang = library.Settings.LanguageCode;
             var currentLang = L.CurrentLanguageCode;

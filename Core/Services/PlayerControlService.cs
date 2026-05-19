@@ -44,6 +44,15 @@ public sealed class PlayerControlService : IDisposable
     private readonly BehaviorSubject<int> _queueCountSubject;
 
     /// <summary>
+    /// ID плейлиста, из которого была запущена текущая очередь.
+    /// Null = источник не плейлист (Home, Search, одиночный трек).
+    ///
+    /// <para>Сбрасывается автоматически при полной остановке (IsPlaying=false, IsPaused=false).
+    /// Устанавливается только через <see cref="SetActivePlaylistId"/>.</para>
+    /// </summary>
+    private readonly BehaviorSubject<string?> _activePlaylistIdSubject = new(null);
+
+    /// <summary>
     /// Реактивный поток текущей громкости (0–MaxVolume).
     /// Публикуется при любом изменении: скролл трея, слайдер, программное.
     /// </summary>
@@ -131,6 +140,11 @@ public sealed class PlayerControlService : IDisposable
     /// </summary>
     public int CurrentVolume => _volumeSubject.Value;
 
+    /// <summary>
+    /// Текущий ID плейлиста-источника или null.
+    /// </summary>
+    public string? ActivePlaylistId => _activePlaylistIdSubject.Value;
+
     #endregion
 
     #region Observables
@@ -169,6 +183,14 @@ public sealed class PlayerControlService : IDisposable
     /// Сигнал запроса Resume. MainWindow подписывается и вызывает RestoreFromTray.
     /// </summary>
     public IObservable<Unit> ResumeRequestObservable => _resumeRequestSubject.AsObservable();
+
+    /// <summary>
+    /// Реактивный поток ID плейлиста-источника.
+    /// Публикует null при остановке или запуске вне плейлиста.
+    /// Используется PlaylistViewModel для IsPlayingThisPlaylist.
+    /// </summary>
+    public IObservable<string?> ActivePlaylistIdObservable =>
+        _activePlaylistIdSubject.AsObservable();
 
     /// <summary>
     /// Сигнал предупреждения о сложной расшифровке n-токена для текущего трека.
@@ -247,6 +269,13 @@ public sealed class PlayerControlService : IDisposable
     {
         bool newState = !_audio.ShuffleEnabled;
         _audio.ShuffleEnabled = newState;
+
+        // При включении shuffle — немедленно перемешать текущую очередь.
+        // Пользователь сразу видит случайный порядок в QueueView.
+        // При выключении — порядок остаётся как есть (уже перемешан).
+        if (newState)
+            _audio.ShuffleQueue();
+
         _library.UpdateSettings(s => s.ShuffleEnabled = newState);
         _shuffleEnabledSubject.OnNext(newState);
 
@@ -293,6 +322,18 @@ public sealed class PlayerControlService : IDisposable
 
         _audio.SetVolumeInstant(clamped);
         _volumeSubject.OnNext(clamped);
+    }
+
+    /// <summary>
+    /// Устанавливает ID плейлиста-источника текущей очереди.
+    /// Вызывается из PlaylistViewModel перед StartQueueAsync.
+    /// Null = очередь запущена не из плейлиста.
+    /// </summary>
+    public void SetActivePlaylistId(string? playlistId)
+    {
+        if (_activePlaylistIdSubject.Value == playlistId) return;
+        _activePlaylistIdSubject.OnNext(playlistId);
+        Log.Debug($"[PlayerControl] ActivePlaylistId = {playlistId ?? "null"}");
     }
 
     /// <summary>
@@ -432,6 +473,15 @@ public sealed class PlayerControlService : IDisposable
             return;
 
         _currentTrackSubject.OnNext(track);
+
+        // Сбрасываем источник только при реальной остановке (track → null).
+        // При переходе между треками (prev != null → new != null) источник сохраняется —
+        // это нормально: пользователь слушает тот же плейлист.
+        if (track == null && _activePlaylistIdSubject.Value != null)
+        {
+            _activePlaylistIdSubject.OnNext(null);
+            Log.Debug("[PlayerControl] ActivePlaylistId cleared (track → null)");
+        }
     }
 
     private void OnQueueChanged()
@@ -553,6 +603,7 @@ public sealed class PlayerControlService : IDisposable
         _shuffleEnabledSubject.Dispose();
         _queueCountSubject.Dispose();
         _volumeSubject.Dispose();
+        _activePlaylistIdSubject.Dispose();
         _forceSyncSubject.Dispose();
         _resumeRequestSubject.Dispose();
         _nTokenWarningSubject.Dispose();

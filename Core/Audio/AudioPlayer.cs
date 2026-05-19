@@ -431,11 +431,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         var oldPipeline = Interlocked.Exchange(ref _activePipeline, null);
         float previousLockedGain = oldPipeline?.GetLockedNormalizationGain() ?? 1.0f;
 
-        // ═══ BACKGROUND DISPOSAL ═══
-        // Диспозим старый pipeline в фоне — не блокируем создание нового.
-        // DisposeAsync включает StopDecoding + decoder dispose (~50-200мс).
-        // Shared backend переиспользуется без конкуренции с новым pipeline:
-        // новый pipeline вызывает Reinit/FastPath, а не пересоздаёт backend.
         if (oldPipeline != null)
             _ = Task.Run(async () =>
             {
@@ -470,14 +465,18 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             pipeline.SetInitialNormalizationGain(previousLockedGain);
             _options.OnPipelineConfiguring?.Invoke(pipeline);
 
-            await pipeline.PreScanNormalizationAsync(ct);
-
+            // Регистрируем callback фиксации gain ДО pre-scan.
+            // PreScanNormalizationAsync → LockGain → _onGainLocked?.Invoke(gain).
+            // Если callback не зарегистрирован — gain вычисляется, но НИКОГДА
+            // не персистируется в БД, и при следующем запуске pre-scan повторяется.
             var lockedTrackId = cmd.TrackId;
             if (lockedTrackId != null && _options.OnGainLocked != null)
             {
                 var gainCallback = _options.OnGainLocked;
                 pipeline.Analyzer.SetGainLockedCallback(g => gainCallback(lockedTrackId, g));
             }
+
+            await pipeline.PreScanNormalizationAsync(ct);
 
             ct.ThrowIfCancellationRequested();
 

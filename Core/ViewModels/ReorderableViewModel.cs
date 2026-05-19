@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using LMP.Core.Helpers;
+using System.Reactive.Linq;
 
 namespace LMP.Core.ViewModels;
 
@@ -41,14 +43,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     /// </summary>
     private List<TViewModel> _rebuildBuffer = [];
 
-    /// <summary>
-    /// Переиспользуемый Dictionary для SyncVisibleItems.
-    /// Избегает аллокации на каждый rebuild (горячий путь при скролле + фильтре).
-    /// Очищается через Clear() — capacity сохраняется для следующего вызова.
-    /// </summary>
-    private readonly Dictionary<TViewModel, int> _syncPositions =
-        new(ReferenceEqualityComparer.Instance);
-
     private CancellationTokenSource? _loadCts;
     private bool _isDisposed;
 
@@ -58,18 +52,27 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     [Reactive] public bool IsLoading { get; protected set; }
 
+    /// <summary>
+    /// Текущий запрос фильтра. Изменение дебаунсируется в конструкторе (150ms)
+    /// перед вызовом <see cref="RebuildVisibleItems"/> — защита UI-потока от перегрузки
+    /// при быстром наборе текста.
+    /// </summary>
     public string FilterQuery
     {
         get;
-        set
-        {
-            if (field == value) return;
-            this.RaiseAndSetIfChanged(ref field, value);
-            RebuildVisibleItems();
-        }
+        set => this.RaiseAndSetIfChanged(ref field, value);
     } = string.Empty;
 
-    public ObservableCollection<TViewModel> Items { get; } = [];
+    /// <summary>
+    /// Видимый список треков. BatchObservableCollection позволяет атомарно заменить
+    /// всё содержимое через <see cref="BatchObservableCollection{T}.ReplaceAll"/>
+    /// (1×Reset вместо N×Add/Remove), что критично при фильтрации больших списков.
+    ///
+    /// <para>Одиночные операции <c>Move</c> и <c>Remove</c> (drag-and-drop, удаление трека)
+    /// вызываются напрямую через унаследованные методы ObservableCollection — без батчинга,
+    /// с немедленной UI-реакцией.</para>
+    /// </summary>
+    public BatchObservableCollection<TViewModel> Items { get; } = [];
 
     protected int TotalCount => _masterIds.Count;
 
@@ -86,6 +89,16 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     protected ReorderableViewModel()
     {
         LibService = Program.Services.GetRequiredService<LibraryService>();
+
+        // Debounce фильтра: 150ms после последнего keystroke → rebuild на UI-потоке.
+        // ObserveOn(Main) обязателен: Throttle переключает на TaskpoolScheduler,
+        // а RebuildVisibleItems обращается к _masterIds/_sources/_vmCache (не thread-safe)
+        // и вызывает Items.ReplaceAll (UI-операция).
+        this.WhenAnyValue(static x => x.FilterQuery)
+            .Throttle(TimeSpan.FromMilliseconds(150))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => RebuildVisibleItems())
+            .DisposeWith(Disposables);
     }
 
     #endregion
@@ -197,60 +210,19 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     }
 
     /// <summary>
-    /// In-place синхронизация Items с новым списком без Replace-операций.
+    /// Атомарно заменяет видимый список через 1×Reset-событие.
+    /// Заменяет предыдущую in-place логику (N×Add/Remove/Move) — при фильтрации
+    /// пользователь ожидает полного обновления списка, а не точечных изменений.
     ///
-    /// <para><b>Критично для ItemsRepeater:</b> замена элемента по индексу
-    /// (<c>Items[i] = x</c>) эмитирует <c>Replace</c> в <c>ObservableCollection</c>,
-    /// что вызывает переработку anchor-элемента в <c>ScrollContentPresenter</c>
-    /// и приводит к фризам/прыжкам скролла (Avalonia issue #7593, PR #16347).</para>
+    /// <para><b>Почему Reset безопасен здесь:</b> в отличие от Replace-операции
+    /// (Avalonia issue #7593), Reset корректно обрабатывается ItemsRepeater —
+    /// полная ревиртуализация без anchor-артефактов.</para>
     ///
-    /// <para><b>Стратегия:</b> только Add/Remove/Move — никаких Replace.
-    /// Move не меняет anchor candidates, Remove/Add — изолированные операции.</para>
-    ///
-    /// <para><b>O(n) вместо O(n²):</b> используем Dictionary с ReferenceEquality
-    /// для поиска существующих элементов за O(1) вместо линейного сканирования.</para>
+    /// <para><b>Move и Remove не затронуты:</b> drag-and-drop (<see cref="MoveItemAsync"/>)
+    /// и удаление (<see cref="RemoveItemLocally"/>) вызывают одиночные операции
+    /// ObservableCollection напрямую — их батчить не нужно.</para>
     /// </summary>
-    private void SyncVisibleItems(List<TViewModel> newItems)
-    {
-        while (Items.Count > newItems.Count)
-            Items.RemoveAt(Items.Count - 1);
-
-        // Переиспользуем _syncPositions вместо new Dictionary на каждый вызов.
-        _syncPositions.Clear();
-        for (int i = 0; i < Items.Count; i++)
-            _syncPositions[Items[i]] = i;
-
-        for (int i = 0; i < newItems.Count; i++)
-        {
-            if (i < Items.Count)
-            {
-                if (ReferenceEquals(Items[i], newItems[i])) continue;
-
-                if (_syncPositions.TryGetValue(newItems[i], out int existingAt)
-                    && existingAt > i
-                    && existingAt < Items.Count
-                    && ReferenceEquals(Items[existingAt], newItems[i]))
-                {
-                    Items.Move(existingAt, i);
-                    _syncPositions[newItems[i]] = i;
-                    for (int k = i + 1; k <= existingAt && k < Items.Count; k++)
-                        _syncPositions[Items[k]] = k;
-                }
-                else
-                {
-                    Items.Insert(i, newItems[i]);
-                    _syncPositions[newItems[i]] = i;
-                    for (int k = i + 1; k < Items.Count; k++)
-                        _syncPositions[Items[k]] = k;
-                }
-            }
-            else
-            {
-                Items.Add(newItems[i]);
-                _syncPositions[newItems[i]] = i;
-            }
-        }
-    }
+    private void SyncVisibleItems(List<TViewModel> newItems) => Items.ReplaceAll(newItems);
 
     #endregion
 
@@ -412,7 +384,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             _sources.Clear();
             _masterIds.Clear();
             _rebuildBuffer = null!;
-            _syncPositions.Clear();
         }
 
         base.Dispose(disposing);

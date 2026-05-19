@@ -188,8 +188,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
 
-        IsShuffleActive = _playerControl.ShuffleEnabled;
-
         var savedHeight = Math.Clamp(
             LibService.Settings.PlaylistHeaderHeight,
             HeaderHeightMin,
@@ -286,6 +284,8 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
                 if (!string.IsNullOrEmpty(_currentPlaylistId))
                     await LoadPlaylistAsync(_currentPlaylistId);
             });
+
+        SubscribeToPlaybackSource();
     }
 
     #endregion
@@ -301,7 +301,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     {
         _isSuspended = false;
         InvalidateAllTracksCache();
-        UpdateIsPlayingThisPlaylist(Audio.CurrentTrack);
+        UpdateIsPlayingThisPlaylist();
         this.RaisePropertyChanged(nameof(FormattedTrackCount));
     }
 
@@ -433,23 +433,48 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         _ = LoadHeaderGradientAsync();
         _ = HydrateCacheStatusInBackgroundAsync();
 
-        UpdateIsPlayingThisPlaylist(Audio.CurrentTrack);
+        UpdateIsPlayingThisPlaylist();
     }
 
     #endregion
 
     #region Private Helpers
 
-    private void UpdateIsPlayingThisPlaylist(TrackInfo? currentTrack)
+    /// <summary>
+    /// Реактивная подписка: IsPlayingThisPlaylist обновляется при любом изменении
+    /// источника или состояния воспроизведения — без полного перезапуска LoadPlaylistAsync.
+    ///
+    /// <para><b>Условие:</b> плейлист считается "воспроизводящимся" если:
+    /// <list type="bullet">
+    ///   <item>Именно он является источником текущей очереди (ActivePlaylistId совпадает)</item>
+    ///   <item>И состояние — Playing ИЛИ Paused (не Stopped)</item>
+    /// </list></para>
+    ///
+    /// <para><b>IsPaused = true:</b> кнопка показывает Pause → клик возобновит.
+    /// Это корректное поведение — пользователь видит что этот плейлист активен.</para>
+    /// </summary>
+    private void SubscribeToPlaybackSource()
     {
-        if (currentTrack is null || !Audio.IsPlaying)
-        {
-            IsPlayingThisPlaylist = false;
-            return;
-        }
+        _playerControl.ActivePlaylistIdObservable
+            .CombineLatest(
+                _playerControl.PlaybackStateObservable,
+                (id, state) => id == _currentPlaylistId && (state.IsPlaying || state.IsPaused))
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(v => IsPlayingThisPlaylist = v)
+            .DisposeWith(Disposables);
+    }
 
-        // O(1): VM есть в кэше → трек точно в этом плейлисте
-        IsPlayingThisPlaylist = GetCachedVm(currentTrack.Id) is not null;
+    /// <summary>
+    /// Синхронное обновление IsPlayingThisPlaylist по текущему состоянию сервиса.
+    /// Вызывается после LoadPlaylistAsync когда _currentPlaylistId меняется,
+    /// т.к. подписка из конструктора использует замкнутое поле — не retriggers автоматически.
+    /// </summary>
+    private void UpdateIsPlayingThisPlaylist()
+    {
+        IsPlayingThisPlaylist =
+            _playerControl.ActivePlaylistId == _currentPlaylistId
+            && (_playerControl.IsPlaying || _playerControl.IsPaused);
     }
 
     private async Task<List<TrackInfo>> GetAllTracksAsync()
@@ -491,7 +516,8 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
         if (IsPlayingThisPlaylist)
         {
-            await Audio.SetPlaybackStateAsync(false);
+            // Toggle: пауза если играет, продолжение если на паузе
+            await _playerControl.PlayPauseAsync();
             return;
         }
 
@@ -499,6 +525,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         if (allTracks.Count == 0) return;
 
         _playerControl.SetShuffleEnabled(false);
+        _playerControl.SetActivePlaylistId(_currentPlaylistId);
         IsShuffleActive = false;
         await Audio.StartQueueAsync(allTracks, allTracks[0]);
     }
@@ -522,6 +549,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         }
 
         _playerControl.SetShuffleEnabled(false);
+        _playerControl.SetActivePlaylistId(_currentPlaylistId);
         await Audio.StartQueueAsync(shuffled, shuffled[0]);
 
         IsShuffleActive = true;
@@ -550,6 +578,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         try
         {
             _playerControl.SetShuffleEnabled(false);
+            _playerControl.SetActivePlaylistId(_currentPlaylistId);
             IsShuffleActive = false;
             var allTracks = await GetAllTracksAsync();
             await Audio.StartQueueAsync(allTracks, track);

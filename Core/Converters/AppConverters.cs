@@ -321,30 +321,6 @@ public sealed class GreaterThanConverter : IValueConverter
 }
 
 /// <summary>
-/// Конвертер для проверки конкретного режима повтора.
-/// </summary>
-public sealed class RepeatModeEqualsConverter : IValueConverter
-{
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is RepeatMode mode && parameter is string modeStr)
-        {
-            return modeStr switch
-            {
-                "RepeatAll" => mode == RepeatMode.All,
-                "RepeatOne" => mode == RepeatMode.One,
-                "None" => mode == RepeatMode.None,
-                _ => false
-            };
-        }
-        return false;
-    }
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => throw new NotSupportedException();
-}
-
-/// <summary>
 /// Сравнивает Enum значение с параметром. Возвращает true, если совпадают.
 /// Используется для RadioButton GroupBinding.
 /// </summary>

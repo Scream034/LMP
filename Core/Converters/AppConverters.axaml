@@ -15,7 +15,6 @@
     <conv:WebUrlConverter x:Key="WebUrlConverter" />
     <conv:ProgressToWidthConverter x:Key="ProgressToWidthConverter" />
     <conv:GreaterThanConverter x:Key="GreaterThanConverter" />
-    <conv:RepeatModeEqualsConverter x:Key="RepeatModeEquals" />
     <conv:EnumToBoolConverter x:Key="EnumToBool" />
     <conv:BoolToFontWeightConverter x:Key="BoolToFontWeight" />
     <conv:SeverityToColorConverter x:Key="SeverityToColor" />

@@ -271,6 +271,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool AutoShuffleEnabled { get; private set; }
     [Reactive] public RepeatMode RepeatMode { get; set; }
 
+    public bool IsRepeatNone => RepeatMode == RepeatMode.None;
+    public bool IsRepeatOne => RepeatMode == RepeatMode.One;
+    public bool IsRepeatAll => RepeatMode == RepeatMode.All;
+
     #endregion
 
     #region Properties - Hints (unified)
@@ -560,6 +564,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
             {
                 RepeatMode = mode;
                 this.RaisePropertyChanged(nameof(RepeatTooltip));
+                this.RaisePropertyChanged(nameof(IsRepeatNone));
+                this.RaisePropertyChanged(nameof(IsRepeatOne));
+                this.RaisePropertyChanged(nameof(IsRepeatAll));
             })
             .DisposeWith(Disposables);
 
@@ -1339,6 +1346,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(TrackNumberTooltip));
         this.RaisePropertyChanged(nameof(DurationTooltip));
         this.RaisePropertyChanged(nameof(L));
+        this.RaisePropertyChanged(nameof(IsRepeatNone));
+        this.RaisePropertyChanged(nameof(IsRepeatOne));
+        this.RaisePropertyChanged(nameof(IsRepeatAll));
     }
 
     #endregion

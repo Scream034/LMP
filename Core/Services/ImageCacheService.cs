@@ -114,7 +114,7 @@ public sealed class ImageCacheService : IDisposable
 
         try
         {
-            var bitmap = await lazyTask.Value;
+            var bitmap = await lazyTask.Value.ConfigureAwait(false);
             // ← убрать блок AddRef для вызывающего — кэш держит единственный ref
             return bitmap;
         }
@@ -143,7 +143,7 @@ public sealed class ImageCacheService : IDisposable
             .Take(8)
             .Select(u => EnsureDiskCachedAsync(u, ct));
 
-        try { await Task.WhenAll(candidates); }
+        try { await Task.WhenAll(candidates).ConfigureAwait(false); }
         catch { /* Ошибки prefetch тихо игнорируются — это фоновая оптимизация */ }
     }
 
@@ -159,7 +159,7 @@ public sealed class ImageCacheService : IDisposable
 
         try
         {
-            await _downloadSemaphore.WaitAsync(ct);
+            await _downloadSemaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 if (!File.Exists(diskPath))
@@ -178,11 +178,11 @@ public sealed class ImageCacheService : IDisposable
 
         if (!File.Exists(diskPath))
         {
-            await _downloadSemaphore.WaitAsync(ct);
+            await _downloadSemaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 if (!File.Exists(diskPath))
-                    await DownloadDirectToDiskAsync(url, diskPath, ct);
+                    await DownloadDirectToDiskAsync(url, diskPath, ct).ConfigureAwait(false);
             }
             catch { return null; }
             finally { _downloadSemaphore.Release(); }
@@ -207,7 +207,7 @@ public sealed class ImageCacheService : IDisposable
                 try { File.Delete(diskPath); } catch { }
                 return null;
             }
-        }, ct);
+        }, ct).ConfigureAwait(false);
 
         if (bitmap != null && !ct.IsCancellationRequested)
         {
@@ -228,13 +228,14 @@ public sealed class ImageCacheService : IDisposable
 
         try
         {
-            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return;
 
             await using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
-            await using (var net = await response.Content.ReadAsStreamAsync(ct))
+            await using (var net = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
             {
-                await net.CopyToAsync(fs, ct);
+                await net.CopyToAsync(fs, ct).ConfigureAwait(false);
             }
 
             File.Move(tmpPath, finalPath, true);
@@ -341,7 +342,7 @@ public sealed class ImageCacheService : IDisposable
 
         long limitBytes = (long)_library.Settings.Storage.ImageCacheLimitMb * 1024 * 1024;
         if (_currentDiskCacheBytes > limitBytes)
-            await CleanupDiskCacheAsync(limitBytes);
+            await CleanupDiskCacheAsync(limitBytes).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -382,7 +383,7 @@ public sealed class ImageCacheService : IDisposable
                     Interlocked.Add(ref _currentDiskCacheBytes, -deletedBytes);
             }
             catch { }
-        });
+        }).ConfigureAwait(false);
     }
 
     /// <summary>
