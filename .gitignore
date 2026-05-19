@@ -9,8 +9,6 @@ appsecrets.*.json
 # Артефакты публикации
 publish/
 publish-dev/
-packages.lock.json
-LMP.csproj.lscache
 
 ## --- [ Visual Studio ] ---
 .vs/
