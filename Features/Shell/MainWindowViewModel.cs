@@ -179,6 +179,12 @@ public class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // Принудительно разрываем ссылку TCC на старый контент.
+        // TransitioningContentControl хранит _lastPresenter с предыдущим визуальным
+        // деревом — если CrossFade не очистил его, старый View живёт вечно.
+        // null → newPage создаёт "пустой" переход, после которого _lastPresenter
+        // содержит null-контент, а не SettingsView с 200+ контролами.
+        CurrentPage = null;
         CurrentPage = newPage;
         CurrentPageName = pageName;
 
@@ -261,16 +267,17 @@ public class MainWindowViewModel : ViewModelBase
         var oldPageName = CurrentPageName;
 
         var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
+
+        // Разрыв ссылки _lastPresenter (см. комментарий в Navigate)
+        CurrentPage = null;
         CurrentPage = playlistVM;
         CurrentPageName = "Playlist";
 
-        // ═══ FIX: Dispose старой страницы независимо от загрузки новой ═══
         if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
         {
             _ = DisposePageDelayedAsync(disposable, oldPageName);
         }
 
-        // Загрузка данных плейлиста — отдельно, не блокирует dispose
         _ = Task.Run(async () =>
         {
             try

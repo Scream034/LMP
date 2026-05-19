@@ -125,26 +125,15 @@
     </Style>
 
     <Style Selector="ComboBoxItem">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-        <Setter Property="Padding" Value="12,8" />
-        <Setter Property="Margin" Value="4,2" />
-        <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <ControlTemplate TargetType="ComboBoxItem">
-                <Border
-                    Name="ItemBorder"
+                <Border Name="ItemBorder"
                     Background="{TemplateBinding Background}"
                     BorderBrush="{DynamicResource BgHighlightTransparentBrush}"
                     BorderThickness="1"
                     CornerRadius="4"
                     Padding="{TemplateBinding Padding}">
-                    <Border.Transitions>
-                        <Transitions>
-                            <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
-                            <BrushTransition Property="Background" Duration="0:0:0.15" />
-                        </Transitions>
-                    </Border.Transitions>
+                    <!-- Border.Transitions УБРАНЫ из Template -->
                     <ContentPresenter
                         Name="PART_ContentPresenter"
                         Content="{TemplateBinding Content}"
@@ -154,6 +143,19 @@
                         VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
                 </Border>
             </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!--
+        Transitions на Border внутри ComboBoxItem через /template/ селектор.
+        Создаётся через StyleInstance (один раз на тип) а не inline в каждом экземпляре.
+    -->
+    <Style Selector="ComboBoxItem /template/ Border#ItemBorder">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
         </Setter>
     </Style>
 

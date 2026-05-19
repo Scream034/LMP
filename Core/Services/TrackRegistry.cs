@@ -179,38 +179,67 @@ public sealed class TrackRegistry
         Log.Info("[TrackRegistry] Hydrating from database...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        // Три независимых запроса к БД параллельно вместо последовательных await.
-        // Суммарное время = max(t_liked, t_downloaded, t_recent) вместо t_liked + t_downloaded + t_recent.
         var likedTask = _repository.GetLikedAsync(1000, 0, ct);
         var downloadTask = _repository.GetDownloadedAsync(1000, 0, ct);
         var recentTask = _repository.GetRecentlyPlayedAsync(100, ct);
 
         await Task.WhenAll(likedTask, downloadTask, recentTask);
 
-        var allLoaded = new List<TrackInfo>(
-            likedTask.Result.Count + downloadTask.Result.Count + recentTask.Result.Count);
+        // Liked + Downloaded: сначала RegisterOrUpdate И pin.
+        // Recent: только RegisterOrUpdate в WeakReference-кэш.
+        // Recent-треки не нуждаются в strong pin — они не liked/downloaded/in-playlist.
+        // Strong pin на recent треках удерживал ~100 TrackInfo + всю ReactiveUI-обвязку
+        // (~15 объектов × 100 треков = ~1500 объектов) без реальной необходимости.
+        var pinnedCandidates = new List<TrackInfo>(
+            likedTask.Result.Count + downloadTask.Result.Count);
 
-        allLoaded.AddRange(likedTask.Result);
-        allLoaded.AddRange(downloadTask.Result);
-        allLoaded.AddRange(recentTask.Result);
+        pinnedCandidates.AddRange(likedTask.Result);
+        pinnedCandidates.AddRange(downloadTask.Result);
 
-        var allIds = new HashSet<string>(allLoaded.Count, StringComparer.Ordinal);
-        for (int i = 0; i < allLoaded.Count; i++)
-            allIds.Add(allLoaded[i].Id);
+        var allIds = new HashSet<string>(
+            pinnedCandidates.Count + recentTask.Result.Count,
+            StringComparer.Ordinal);
+
+        for (int i = 0; i < pinnedCandidates.Count; i++)
+            allIds.Add(pinnedCandidates[i].Id);
+
+        for (int i = 0; i < recentTask.Result.Count; i++)
+            allIds.Add(recentTask.Result[i].Id);
 
         Dictionary<string, HashSet<string>>? playlistsMap = null;
         if (_playlists != null && allIds.Count > 0)
             playlistsMap = await _playlists.GetPlaylistsForTracksAsync(allIds, ct);
 
-        for (int i = 0; i < allLoaded.Count; i++)
+        // Pinned candidates — полноценный register + pin
+        for (int i = 0; i < pinnedCandidates.Count; i++)
         {
-            var t = allLoaded[i];
+            var t = pinnedCandidates[i];
 
             if (playlistsMap != null && playlistsMap.TryGetValue(t.Id, out var pls))
                 t.InPlaylists = pls;
 
             var canonical = RegisterOrUpdate(t);
             UpdatePinStatusInternal(canonical);
+        }
+
+        // Recent-only треки — только слабый кэш, без pin.
+        // Если трек уже попал в pinned (liked/downloaded) — RegisterOrUpdate
+        // вернёт канонический pinned экземпляр, дублирования нет.
+        for (int i = 0; i < recentTask.Result.Count; i++)
+        {
+            var t = recentTask.Result[i];
+
+            if (playlistsMap != null && playlistsMap.TryGetValue(t.Id, out var pls))
+                t.InPlaylists = pls;
+
+            var canonical = RegisterOrUpdate(t);
+
+            // Если после обогащения плейлистами трек оказался worthy of pin — пинить
+            if (canonical.IsLiked || canonical.IsDownloaded ||
+                canonical.IsDisliked || canonical.InPlaylists.Count > 0)
+            {
+                UpdatePinStatusInternal(canonical);
+            }
         }
 
         var audioCache = GetAudioCache();

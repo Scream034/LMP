@@ -30,7 +30,7 @@
                      MaxHeight="150"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
-                     PlaceholderText="{Binding PlaceholderText}"
+                     PlaceholderText="{Binding Watermark}"
                      VerticalContentAlignment="Top"
                      Padding="12" />
 

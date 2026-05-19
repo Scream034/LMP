@@ -93,6 +93,8 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>Можно ли удалить (всё кроме Liked).</summary>
     public bool CanDelete => Playlist.Id != LibraryService.LikedPlaylistId;
 
+    public bool CanCopyLink => !string.IsNullOrEmpty(YoutubeUrl);
+
     /// <summary>
     /// Можно ли открыть диалог редактирования.
     /// Liked-плейлист редактируем — обложка, цвет и описание доступны для изменения.

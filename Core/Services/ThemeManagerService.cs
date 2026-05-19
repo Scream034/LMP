@@ -83,6 +83,8 @@ public sealed class ThemeSettings
 
     [JsonIgnore]
     public bool IsBuiltIn { get; init; }
+
+    public override string ToString() => Name;
 }
 
 /// <summary>

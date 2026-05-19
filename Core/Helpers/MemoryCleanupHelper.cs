@@ -210,8 +210,10 @@ public static class MemoryCleanupHelper
 
     /// <summary>
     /// Очищает все внутренние кэши приложения + Skia non-GPU кэши.
+    /// При aggressive=true также пытается очистить GPU texture cache
+    /// через Avalonia Compositor (только из UI потока).
     /// </summary>
-    private static void CleanupAppCaches()
+    private static void CleanupAppCaches(bool aggressive = false)
     {
         // ImageCache RAM
         try
@@ -244,8 +246,6 @@ public static class MemoryCleanupHelper
         }
 
         // Skia non-GPU кэши (шрифты, path effects, изображения)
-        // Безопасно из любого потока. GPU texture кэш (GRContext) —
-        // только внутри render pass, поэтому недоступен здесь.
         try
         {
             SKGraphics.PurgeAllCaches();
@@ -254,6 +254,51 @@ public static class MemoryCleanupHelper
         catch (Exception ex)
         {
             Log.Warn($"[Memory] Skia purge error: {ex.Message}");
+        }
+
+        // GPU texture cache — только при aggressive и только из UI потока.
+        // Compositor хранит текстуры обложек, ColorPicker градиентов, глифов —
+        // после навигации со страницы с большим количеством UI (Settings)
+        // эти текстуры остаются resident. PurgeResourceCaches освобождает
+        // неиспользуемые текстуры из GPU VRAM обратно в системную память.
+        if (aggressive)
+        {
+            try
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    try
+                    {
+                        var mainWindow = Avalonia.Application.Current?.ApplicationLifetime
+                            is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                                ? desktop.MainWindow : null;
+
+                        if (mainWindow != null)
+                        {
+                            // В Avalonia 12 Compositor извлекается через ElementComposition
+                            var visual = Avalonia.Rendering.Composition.ElementComposition.GetElementVisual(mainWindow);
+
+                            if (visual?.Compositor is Avalonia.Rendering.Composition.Compositor compositor)
+                            {
+                                // Метод RequestCompositionUpdate полностью доступен
+                                compositor.RequestCompositionUpdate(() =>
+                                {
+                                    // Очистка кэшей SkiaSharp внутри потока рендеринга
+                                    SkiaSharp.SKGraphics.PurgeAllCaches();
+                                });
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[Memory] GPU cache purge error: {ex.Message}");
+                    }
+                }, Avalonia.Threading.DispatcherPriority.Background);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[Memory] GPU purge dispatch error: {ex.Message}");
+            }
         }
     }
 

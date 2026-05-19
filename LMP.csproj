@@ -51,7 +51,7 @@
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
 
     <!-- Компилируемые биндинги по умолчанию: быстрее + ошибки на этапе компиляции -->
-    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
 
     <!-- Нужно для низкоуровневых аудио-операций (PCM-буферы, нативный interop) -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
