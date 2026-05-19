@@ -9,6 +9,8 @@ appsecrets.*.json
 # Артефакты публикации
 publish/
 publish-dev/
+packages.lock.json
+LMP.csproj.lscache
 
 ## --- [ Visual Studio ] ---
 .vs/
@@ -30,7 +32,6 @@ publish-dev/
 packages/
 
 ## --- [ Специфичное для твоего проекта (LMP) ] ---
-# Игнорируем скачанные треки (у тебя в YoutubeProvider.cs указано "Downloads")
 Downloads/
 
 # Игнорируем сторонние бинарники (yt-dlp и ffmpeg)
