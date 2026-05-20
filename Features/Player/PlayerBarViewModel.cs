@@ -675,7 +675,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private void SubscribeHeavy()
     {
         _heavySubscriptions?.Dispose();
-        _heavySubscriptions = new CompositeDisposable();
+        _heavySubscriptions = [];
 
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnPositionChanged += h,

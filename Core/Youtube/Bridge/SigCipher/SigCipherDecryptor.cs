@@ -54,27 +54,22 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
 
         try
         {
-            var preprocessedJs = YoutubeAstSolver.PreprocessPlayer(context.BaseJs);
+            var preparedScript = context.GetOrPrepareScript(() => YoutubeAstSolver.PreprocessPlayer(context.BaseJs));
 
-            var engine = CreateFullEngine();
-            engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
-            engine.Execute(BrowserStubs);
-            engine.Execute("var _result = {};");
-            engine.Execute(preprocessedJs);
+            using var testEngine = CreateFullEngine();
+            testEngine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
+            testEngine.Execute(preparedScript);
+            testEngine.Execute("globalThis.__decryptSig = _result.sig;");
 
-            engine.Execute("globalThis.__decryptorTransform = _result.sig;");
-
-            var testOutput = engine.Invoke("__decryptorTransform", TestSignature).AsString();
+            var testOutput = testEngine.Invoke("__decryptSig", TestSignature).AsString();
             if (!string.IsNullOrEmpty(testOutput) && testOutput != TestSignature)
             {
-                FullEngine = engine;
-                FullFuncName = "__decryptorTransform";
+                SetupEnginePool(preparedScript, "__decryptSig", "globalThis.__decryptSig = _result.sig;");
                 sw.Stop();
                 Log.Info($"[SigCipher] AST-based Decryptor successfully initialized in {sw.ElapsedMilliseconds}ms!");
                 return;
             }
 
-            engine.Dispose();
             throw new InvalidOperationException("AST solver verification returned unmodified signature.");
         }
         catch (Exception ex)
@@ -84,8 +79,15 @@ public sealed partial class SigCipherDecryptor(PlayerContextManager playerManage
         }
     }
 
+    public override void InvalidateCache()
+    {
+        _decryptedTokens.Clear();
+        base.InvalidateCache();
+    }
+
     public override void Dispose()
     {
+        _decryptedTokens.Clear();
         base.Dispose();
     }
 }

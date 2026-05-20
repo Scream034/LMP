@@ -1,6 +1,7 @@
 ﻿using System.Net.Http.Headers;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Bridge.Common;
+using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;
@@ -8,21 +9,9 @@ using LMP.Core.Youtube.Utils.Extensions;
 namespace LMP.Core.Youtube.Videos;
 
 /// <summary>
-/// Контроллер для получения данных о видео и PlayerResponse.
+/// Единый контроллер для взаимодействия с API YouTube (получение данных о видео, PlayerResponse, DASH/HLS манифестов).
 /// </summary>
-/// <remarks>
-/// <para><b>Принцип работы с ошибками:</b></para>
-/// <para>Этот класс НЕ знает о UI. Он только выбрасывает типизированные исключения:</para>
-/// <list type="bullet">
-///   <item><see cref="BotDetectionException"/> — rate limiting от YouTube</item>
-///   <item><see cref="LoginRequiredException"/> — требуется авторизация</item>
-///   <item><see cref="StreamUnavailableException"/> — стрим недоступен (403, geo-block)</item>
-///   <item><see cref="VideoUnplayableException"/> — видео невозможно воспроизвести</item>
-/// </list>
-/// <para>Решение о том, как показать ошибку пользователю, принимается на уровне выше
-/// (см. <see cref="Services.PlaybackErrorOrchestrator"/>).</para>
-/// </remarks>
-internal partial class VideoController(HttpClient http)
+internal partial class VideoController(HttpClient http, PlayerContextManager playerManager)
 {
     #region Bot Detection State
 
@@ -31,14 +20,8 @@ internal partial class VideoController(HttpClient http)
     private static readonly SemaphoreSlim _requestThrottle = new(1, 1);
     private static readonly Lock _stateLock = new();
 
-    /// <summary>
-    /// Длительность cooldown после обнаружения bot detection.
-    /// </summary>
     public static readonly TimeSpan CooldownDuration = TimeSpan.FromMinutes(2);
 
-    /// <summary>
-    /// Глобальная проверка — в cooldown ли мы сейчас?
-    /// </summary>
     public static bool IsInCooldown
     {
         get
@@ -52,9 +35,6 @@ internal partial class VideoController(HttpClient http)
         }
     }
 
-    /// <summary>
-    /// Получить оставшееся время cooldown.
-    /// </summary>
     public static TimeSpan GetRemainingCooldown()
     {
         lock (_stateLock)
@@ -67,9 +47,6 @@ internal partial class VideoController(HttpClient http)
         }
     }
 
-    /// <summary>
-    /// Сбросить состояние bot detection.
-    /// </summary>
     public static void ResetBotDetectionState()
     {
         lock (_stateLock)
@@ -80,10 +57,6 @@ internal partial class VideoController(HttpClient http)
         }
     }
 
-    /// <summary>
-    /// Выбрасывает <see cref="BotDetectionException"/> если в cooldown.
-    /// </summary>
-    /// <exception cref="BotDetectionException">Когда cooldown активен.</exception>
     public static void ThrowIfInCooldown()
     {
         if (IsInCooldown)
@@ -115,7 +88,10 @@ internal partial class VideoController(HttpClient http)
 
     #endregion
 
+    private readonly PlayerContextManager _playerManager = playerManager;
     private string? _visitorData;
+    private string? _signatureTimestamp;
+
     protected HttpClient Http { get; } = http;
 
     #region Visitor Data
@@ -192,12 +168,8 @@ internal partial class VideoController(HttpClient http)
         CancellationToken cancellationToken,
         string? signatureTimestamp = null)
     {
-        // ══════════════════════════════════════════════════════════════
-        // COOLDOWN CHECK — выбрасываем исключение вместо показа диалога
-        // ══════════════════════════════════════════════════════════════
         ThrowIfInCooldown();
 
-        // Throttle
         await _requestThrottle.WaitAsync(cancellationToken);
         try
         {
@@ -211,20 +183,16 @@ internal partial class VideoController(HttpClient http)
 
         var visitorData = await ResolveVisitorDataAsync(cancellationToken);
 
-        // SignatureTimestamp для веб-клиентов
         if (signatureTimestamp == null && clientName is "WEB" or "WEB_REMIX" or "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
         {
             signatureTimestamp = await ResolveSignatureTimestampAsync(cancellationToken);
         }
 
-        // Правильный URL
         var playerUrl = clientName == "WEB_REMIX"
             ? "https://music.youtube.com/youtubei/v1/player"
             : "https://www.youtube.com/youtubei/v1/player";
 
         using var request = new HttpRequestMessage(HttpMethod.Post, playerUrl);
-
-        // User-Agent
         request.Headers.Add("User-Agent", YoutubeClientUtils.GetUserAgentForClient(clientName));
 
         bool isMobileClient = clientName is "ANDROID_VR" or "ANDROID_MUSIC" or "IOS" or
@@ -282,48 +250,14 @@ internal partial class VideoController(HttpClient http)
         return playerResponse;
     }
 
-    private string? _signatureTimestamp;
-
-    /// <summary>
-    /// Извлекает signatureTimestamp из base.js.
-    /// Timestamp одинаков для всех локализаций одной версии плеера,
-    /// поэтому безопасно парсить из любого уже скачанного base.js.
-    /// </summary>
     private async ValueTask<string?> ResolveSignatureTimestampAsync(CancellationToken ct)
     {
         if (_signatureTimestamp != null) return _signatureTimestamp;
 
         try
         {
-            var iframe = await Http.GetStringAsync("https://www.youtube.com/iframe_api", ct);
-            var versionMatch = SignatureTimestampRegex().Match(iframe);
-            if (!versionMatch.Success) return null;
-
-            var version = versionMatch.Groups[1].Value;
-
-            // ═══ Try to get timestamp from cached player first ═══
-            var cached = PlayerContext.LoadFromCache(version);
-            string? playerJs;
-
-            if (cached is not null)
-            {
-                playerJs = cached.BaseJs;
-                Log.Debug($"[VideoController] Using cached base.js for STS: {version}");
-            }
-            else
-            {
-                // Fallback: download minimal — only need ~first 500KB for STS
-                playerJs = await Http.GetStringAsync(
-                    $"https://www.youtube.com/s/player/{version}/player_ias.vflset/ru_RU/base.js", ct);
-            }
-
-            var stsMatch = SignatureTimestampRegex2().Match(playerJs);
-            if (stsMatch.Success)
-            {
-                _signatureTimestamp = stsMatch.Groups[1].Value;
-                Log.Info($"[VideoController] SignatureTimestamp: {_signatureTimestamp}");
-            }
-
+            var context = await _playerManager.GetOrLoadAsync(ct).ConfigureAwait(false);
+            _signatureTimestamp = YoutubeAstSolver.ExtractSts(context.BaseJs);
             return _signatureTimestamp;
         }
         catch (Exception ex)
@@ -337,11 +271,6 @@ internal partial class VideoController(HttpClient http)
 
     #region Bot Detection Tracking
 
-    /// <summary>
-    /// Отслеживает bot detection по ответам PlayerResponse.
-    /// При обнаружении увеличивает счётчик failures.
-    /// НЕ показывает диалоги — это ответственность вышестоящего слоя.
-    /// </summary>
     private static void TrackBotDetection(PlayerResponse response, string videoId)
     {
         if (IsBotDetectionResponse(response))
@@ -390,14 +319,8 @@ internal partial class VideoController(HttpClient http)
 
     #endregion
 
-    #region Fallback Methods
+    #region Fallback & DASH Methods
 
-    /// <summary>
-    /// Получает PlayerResponse с fallback по списку клиентов.
-    /// </summary>
-    /// <exception cref="BotDetectionException">Все клиенты заблокированы bot detection.</exception>
-    /// <exception cref="LoginRequiredException">Все клиенты требуют авторизацию.</exception>
-    /// <exception cref="VideoUnplayableException">Видео недоступно через все клиенты.</exception>
     public async ValueTask<(PlayerResponse Response, string ClientName)> GetPlayerResponseWithFallbackAsync(
         VideoId videoId,
         CancellationToken cancellationToken,
@@ -449,7 +372,6 @@ internal partial class VideoController(HttpClient http)
             }
         }
 
-        // Все клиенты требуют логин
         if (hasLoginRequired && loginException != null)
         {
             Log.Error($"[VideoController] [{videoId}] All clients require login: {loginException.Reason}");
@@ -458,7 +380,6 @@ internal partial class VideoController(HttpClient http)
 
         var allErrors = string.Join("; ", errors);
 
-        // Все клиенты заблокированы bot detection
         if (allBotDetection && IsInCooldown)
         {
             throw new BotDetectionException(
@@ -470,10 +391,6 @@ internal partial class VideoController(HttpClient http)
             $"Video {videoId} is not available through any client. Errors: {allErrors}");
     }
 
-    /// <summary>
-    /// Получает HLS манифест URL через fallback клиенты.
-    /// </summary>
-    /// <exception cref="StreamUnavailableException">HLS недоступен (403).</exception>
     public async ValueTask<string?> GetHlsManifestUrlAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
@@ -495,7 +412,6 @@ internal partial class VideoController(HttpClient http)
             {
                 Log.Warn($"[VideoController] [{videoId}] HLS via {clientName} got 403");
 
-                // Пробрасываем с пометкой что это был HLS fallback
                 throw new StreamUnavailableException(
                     $"HLS stream returned 403 for video {videoId}",
                     videoId.Value,
@@ -524,10 +440,10 @@ internal partial class VideoController(HttpClient http)
             videoId, "TVHTML5_SIMPLY_EMBEDDED_PLAYER", cancellationToken, signatureTimestamp);
     }
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"player\\?/([0-9a-fA-F]{8})\\?/")]
-    private static partial System.Text.RegularExpressions.Regex SignatureTimestampRegex();
-    [System.Text.RegularExpressions.GeneratedRegex(@"signatureTimestamp[=:]\s*(\d+)")]
-    private static partial System.Text.RegularExpressions.Regex SignatureTimestampRegex2();
+    public async ValueTask<DashManifest> GetDashManifestAsync(
+        string url,
+        CancellationToken cancellationToken = default)
+        => DashManifest.Parse(await Http.GetStringAsync(url, cancellationToken));
 
     #endregion
 }

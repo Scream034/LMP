@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Jint;
 
@@ -9,13 +10,15 @@ public abstract class JsDecryptorBase<T>(
     int maxMemory,
     int maxDisk) : IYoutubeDecryptor, IDisposable
 {
-    protected readonly PlayerContextManager PlayerManager = playerManager;
+    /// <summary>Менеджер контекста плеера.</summary>
+    public PlayerContextManager PlayerManager { get; } = playerManager;
+
     protected readonly DecryptorCache<string, string> Cache = new(cacheFilePath, maxMemory, maxDisk);
 
     private readonly SemaphoreSlim _initSemaphore = new(1, 1);
     private readonly object _engineLock = new();
 
-    protected Engine? FullEngine;
+    protected EnginePool? DecryptorEnginePool;
     protected string? FullFuncName;
 
     protected string? CurrentPlayerVersion;
@@ -24,7 +27,7 @@ public abstract class JsDecryptorBase<T>(
     protected string DecryptorName => typeof(T).Name;
     protected string DiagFolder => Cache.CacheFolder;
 
-     public async ValueTask EnsureInitializedAsync(CancellationToken ct)
+    public async ValueTask EnsureInitializedAsync(CancellationToken ct)
     {
         if (IsInitialized) return;
 
@@ -41,8 +44,11 @@ public abstract class JsDecryptorBase<T>(
             {
                 InitializeCore(context);
                 IsInitialized = true;
+
+                // Немедленно освобождаем LOH-строки base.js и preprocessed.js
+                context.ReleaseRawScripts();
             }
-            catch (Jint.Runtime.JavaScriptException ex) // ПЕРЕХВАТЫВАЕМ JS ИСКЛЮЧЕНИЯ JINT С РАСШИРЕННЫМ ДАМПОМ ОШИБКИ
+            catch (Jint.Runtime.JavaScriptException ex)
             {
                 Log.Error($"[{DecryptorName}] Critical Jint JS Exception inside base.js: {ex.Message}");
                 Log.Error($"  └─ File Location: Line {ex.Location.Start.Line}, Col {ex.Location.Start.Column}");
@@ -68,12 +74,32 @@ public abstract class JsDecryptorBase<T>(
 
     protected static Engine CreateFullEngine() => CreateEngine(TimeSpan.FromSeconds(30), 10_000_000);
 
+    protected void SetupEnginePool(Jint.Prepared<Acornima.Ast.Script> preparedScript, string transformFunc, string bindingJs)
+    {
+        ForceDisposeEngines();
+
+        // Капим размер пула на 1 для полного устранения оверхеда дублирования движков в GUI-приложении.
+        // При редких параллельных запросах Jint создаст временный движок и утилизирует его через GC.
+        DecryptorEnginePool = new EnginePool(
+            factory: CreateFullEngine,
+            initializer: engine =>
+            {
+                engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
+                engine.Execute(preparedScript);
+                engine.Execute(bindingJs);
+            },
+            maxSize: 1
+        );
+
+        FullFuncName = transformFunc;
+    }
+
     protected void ForceDisposeEngines()
     {
         lock (_engineLock)
         {
-            FullEngine?.Dispose();
-            FullEngine = null;
+            DecryptorEnginePool?.Dispose();
+            DecryptorEnginePool = null;
             FullFuncName = null;
         }
     }
@@ -90,24 +116,26 @@ public abstract class JsDecryptorBase<T>(
 
     protected string? TryInvokeJs(string input, string logPrefix)
     {
-        if (FullEngine is not null && FullFuncName is not null)
+        if (DecryptorEnginePool is not null && FullFuncName is not null)
         {
-            lock (_engineLock)
+            var engine = DecryptorEnginePool.Rent();
+            try
             {
-                try
+                var result = engine.Invoke(FullFuncName, input).AsString();
+                if (!string.IsNullOrEmpty(result) && result != input)
                 {
-                    var result = FullEngine.Invoke(FullFuncName, input).AsString();
-                    if (!string.IsNullOrEmpty(result) && result != input)
-                    {
-                        Cache.Set(input, result);
-                        Log.Debug($"[{DecryptorName}] {logPrefix} Full: {Truncate(input)} -> {Truncate(result)}");
-                        return result;
-                    }
+                    Cache.Set(input, result);
+                    Log.Debug($"[{DecryptorName}] {logPrefix} Full: {Truncate(input)} -> {Truncate(result)}");
+                    return result;
                 }
-                catch (Exception ex)
-                {
-                    Log.Error($"[{DecryptorName}] {logPrefix} Full JS failed: {FormatJsException(ex)}");
-                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[{DecryptorName}] {logPrefix} Full JS failed: {FormatJsException(ex)}");
+            }
+            finally
+            {
+                DecryptorEnginePool.Return(engine);
             }
         }
         return null;
@@ -117,7 +145,7 @@ public abstract class JsDecryptorBase<T>(
 
     public void FlushCache() => Cache.SaveAsync().GetAwaiter().GetResult();
 
-    public void InvalidateCache()
+    public virtual void InvalidateCache()
     {
         Cache.Clear();
         ForceDisposeEngines();
@@ -133,10 +161,55 @@ public abstract class JsDecryptorBase<T>(
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>
-    /// Полный набор заглушек браузерного API с полифилом класса URL.
-    /// Исключает любые сбои песочницы из-за проверок типов.
-    /// </summary>
+    protected sealed class EnginePool(Func<Engine> factory, Action<Engine> initializer, int maxSize) : IDisposable
+    {
+        private readonly ConcurrentStack<Engine> _pool = new();
+        private readonly Func<Engine> _factory = factory;
+        private readonly Action<Engine> _initializer = initializer;
+        private readonly int _maxSize = maxSize;
+        private int _disposed;
+
+        public Engine Rent()
+        {
+            if (_pool.TryPop(out var engine))
+            {
+                return engine;
+            }
+
+            var newEngine = _factory();
+            _initializer(newEngine);
+            return newEngine;
+        }
+
+        public void Return(Engine engine)
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                engine.Dispose();
+                return;
+            }
+
+            if (_pool.Count < _maxSize)
+            {
+                _pool.Push(engine);
+            }
+            else
+            {
+                engine.Dispose();
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
+
+            while (_pool.TryPop(out var engine))
+            {
+                engine.Dispose();
+            }
+        }
+    }
+
     public const string BrowserStubs = """
         if (typeof globalThis.XMLHttpRequest === "undefined") {
             globalThis.XMLHttpRequest = { prototype: {} };

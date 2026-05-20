@@ -44,7 +44,7 @@ public sealed class PlaylistCoverPickerViewModel : ViewModelBase
     /// Key = ThumbnailUrl, Value = загруженный Bitmap.
     /// Защищён семафором для предотвращения параллельных загрузок одного URL.
     /// </summary>
-    private readonly Dictionary<string, Bitmap> _bitmapCache = new();
+    private readonly Dictionary<string, Bitmap> _bitmapCache = [];
 
     /// <summary>Семафор для ограничения параллельных HTTP-запросов.</summary>
     private readonly SemaphoreSlim _loadSemaphore = new(3, 3);

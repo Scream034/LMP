@@ -12,7 +12,7 @@ namespace LMP.Core.Models;
 /// </summary>
 public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 {
-    private static readonly ConditionalWeakTable<string, string> _idCache = new();
+    private static readonly ConditionalWeakTable<string, string> _idCache = [];
 
     #region Identity
 

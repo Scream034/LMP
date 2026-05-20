@@ -188,6 +188,11 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Инициализирует провайдер YouTube.
+    /// Прекомпиляция тяжелых движков Jint переведена на ленивый режим (on-demand),
+    /// чтобы разгрузить RAM и CPU во время запуска приложения.
+    /// </summary>
     public async Task InitializeAsync()
     {
         if (AuthService?.IsAuthenticated == true)
@@ -198,7 +203,7 @@ public partial class YoutubeProvider : IDisposable
             _youtube.Music.SetVisitorData(
                 !string.IsNullOrEmpty(visitorData)
                     ? visitorData
-                    : "CgtsZG1ySnZiQWtSbyiMjuGSBg%3D%3D");
+                    : "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D");
 
             if (!string.IsNullOrEmpty(visitorData))
                 Log.Info($"[YouTube] Visitor Data synchronized: {visitorData}");
@@ -206,22 +211,6 @@ public partial class YoutubeProvider : IDisposable
 
         IsReady = true;
         NotifyStatus("[YouTube] Initialized");
-
-        // Фоновая асинхронная компиляция и инициализация дешифраторов для исключения зависаний интерфейса
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                Log.Info("[YouTube] Background pre-initialization of bypass engines started...");
-                await _nTokenDecryptor.EnsureInitializedAsync(CancellationToken.None).ConfigureAwait(false);
-                await _sigCipherDecryptor.EnsureInitializedAsync(CancellationToken.None).ConfigureAwait(false);
-                Log.Info("[YouTube] Bypass engines are compiled and ready!");
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[YouTube] Bypass engine pre-initialization failed: {ex.Message}");
-            }
-        });
     }
 
     private async Task<string?> FetchVisitorDataAsync()
@@ -581,6 +570,27 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Выполняет аварийный сброс и очистку кэшей обходных движков при обнаружении фатальной ошибки 403 Forbidden.
+    /// Предотвращает циклические блокировки при ротации шифров YouTube.
+    /// </summary>
+    public void HandlePlayback403Fatal()
+    {
+        Log.Warn("[YouTube] Fatal 403 Forbidden detected. Triggering self-healing bypass reset...");
+        try
+        {
+            _nTokenDecryptor.InvalidateCache();
+            _sigCipherDecryptor.InvalidateCache();
+            _nTokenDecryptor.PlayerManager.Invalidate();
+            ClearCache();
+            Log.Info("[YouTube] Bypass engines successfully reset and ready for clean reload.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[YouTube] Self-healing reset failed: {ex.Message}");
+        }
+    }
+
     #endregion
 
     #region RefreshStreamUrlAsync
@@ -681,7 +691,7 @@ public partial class YoutubeProvider : IDisposable
                     var selectedStream = SelectBestStream(audioStreams, targetContainer, targetBitrate);
                     if (selectedStream != null)
                     {
-                        var url = selectedStream.Url; // Прямое использование (без двойного декодирования)
+                        var url = selectedStream.Url;
                         var size = selectedStream.Size.Bytes;
                         var bitrate = (int)Math.Round(selectedStream.Bitrate.KiloBitsPerSecond);
                         var container = selectedStream.Container.Name;
@@ -730,6 +740,7 @@ public partial class YoutubeProvider : IDisposable
             catch (StreamUnavailableException ex) when (ex.HttpStatusCode == 403)
             {
                 Log.Error($"[YouTube] [{videoId}] HTTP 403 Forbidden");
+                HandlePlayback403Fatal(); // Аварийное самовосстановление: сбрасываем кэши при 403
                 throw;
             }
             catch (Exception ex)
@@ -767,6 +778,7 @@ public partial class YoutubeProvider : IDisposable
             catch (StreamUnavailableException ex) when (ex.WasHlsFallback)
             {
                 Log.Error($"[YouTube] [{videoId}] HLS fallback also failed with 403");
+                HandlePlayback403Fatal(); // Сброс при ошибке HLS-манифеста
                 throw;
             }
             catch (BotDetectionException)
@@ -822,7 +834,7 @@ public partial class YoutubeProvider : IDisposable
         try
         {
             var vId = VideoId.Parse(videoId);
-            var controller = new VideoController(_currentHttpClient!);
+            var controller = new VideoController(_currentHttpClient!, _nTokenDecryptor.PlayerManager);
             return await controller.GetHlsManifestUrlAsync(vId, ct);
         }
         catch (OperationCanceledException)
@@ -1647,7 +1659,6 @@ public partial class YoutubeProvider : IDisposable
         result = after[..end].ToString();
         return result.Length > 0;
     }
-
 
     public async Task<List<TrackInfo>> GetRadioAsync(TrackInfo sourceTrack, int count = 25)
     {

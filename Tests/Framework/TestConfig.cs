@@ -232,7 +232,7 @@ public sealed class TestConfig
         /// Пары token→expected для каждой версии.
         /// </summary>
         [JsonPropertyName("nTokenTestCases")]
-        public Dictionary<string, NTokenTestCase[]> NTokenTestCases { get; init; } = new();
+        public Dictionary<string, NTokenTestCase[]> NTokenTestCases { get; init; } = [];
 
         /// <summary>
         /// Загружать ли base.js для старых версий из кэша.

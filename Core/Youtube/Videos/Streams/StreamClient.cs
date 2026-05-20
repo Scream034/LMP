@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 using LMP.Core.Youtube.Bridge;
-using LMP.Core.Youtube.Bridge.Cipher;
+using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
@@ -10,14 +10,18 @@ using LMP.Core.Youtube.Videos.ClosedCaptions;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 
+/// <summary>
+/// Обеспечивает высокопроизводительный доступ к медиа-потокам YouTube видео.
+/// </summary>
 public sealed class StreamClient
 {
-    private readonly StreamController _controller;
+    private readonly VideoController _controller;
     private readonly HttpClient _http;
     private readonly NTokenDecryptor _nTokenDecryptor;
     private readonly SigCipherDecryptor _sigCipherDecryptor;
-    private CipherManifest? _cipherManifest;
+    private readonly PlayerContextManager _playerContextManager;
     private readonly Func<bool>? _isAuthenticatedCheck;
+    private CipherManifest? _cipherManifest;
 
     public StreamClient(
         HttpClient http,
@@ -26,12 +30,17 @@ public sealed class StreamClient
         Func<bool>? isAuthenticatedCheck = null)
     {
         _http = http;
-        _controller = new StreamController(http);
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
         _isAuthenticatedCheck = isAuthenticatedCheck;
+        _playerContextManager = sigCipherDecryptor.PlayerManager;
+        _controller = new VideoController(http, _playerContextManager);
     }
 
+    /// <summary>
+    /// Извлекает временную метку (sts) из единого кэша PlayerContextManager.
+    /// Исключает дублирование сетевых запросов.
+    /// </summary>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
     {
         if (_cipherManifest is not null)
@@ -39,21 +48,16 @@ public sealed class StreamClient
 
         try
         {
-            var playerSource = await _controller.GetPlayerSourceAsync(cancellationToken);
-            _cipherManifest = playerSource.CipherManifest;
-
-            if (_cipherManifest is null)
-            {
-                Log.Debug("[StreamClient] CipherManifest not available (expected with new YouTube format)");
-                _cipherManifest = new CipherManifest("", []);
-            }
+            var context = await _playerContextManager.GetOrLoadAsync(cancellationToken).ConfigureAwait(false);
+            var sts = YoutubeAstSolver.ExtractSts(context.BaseJs);
+            _cipherManifest = new CipherManifest(sts);
 
             return _cipherManifest;
         }
         catch (Exception ex)
         {
             Log.Debug($"[StreamClient] CipherManifest resolution failed: {ex.Message}");
-            _cipherManifest = new CipherManifest("", []);
+            _cipherManifest = new CipherManifest("");
             return _cipherManifest;
         }
     }

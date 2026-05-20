@@ -1,96 +1,97 @@
 using LMP.Core.Youtube.Bridge.Common;
-using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Tests.Framework;
 
 namespace LMP.Tests.Unit;
 
 /// <summary>
-/// Unit-тесты для кэширования.
+/// Юнит-тесты для верификации работы подсистемы кэширования DecryptorCache.
 /// </summary>
 public static class CacheTests
 {
-    [TestMethod(TestCategory.Unit, "Cache: Memory Cache", Group = TestGroups.Cache, Order = 10)]
+    private const int MaxMemorySize = 100;
+    private const int MaxDiskSize = 50;
+    private const string TestVersion = "test_player_v1";
+
+    /// <summary>
+    /// Тестирует базовые операции кэша в оперативной памяти (Set, TryGet, Overwrite, Clear).
+    /// </summary>
+    [TestMethod(TestCategory.Unit, "Cache: Memory Cache Operations", Group = TestGroups.Cache, Order = 10)]
     public static Task TestMemoryCacheAsync()
     {
+        using var tempFile = new TempFileCookie();
         var cache = new DecryptorCache<string, string>(
-            Path.GetTempFileName(),
-            maxMemory: 100,
-            maxDisk: 50
+            tempFile.Path,
+            maxMemory: MaxMemorySize,
+            maxDisk: MaxDiskSize
         );
 
         cache.Set("key1", "value1");
-        Assert(cache.TryGet("key1", out var v1) && v1 == "value1", "Get failed");
+        Assert(cache.TryGet("key1", out var v1) && v1 == "value1", "Failed to retrieve key1 from memory cache");
 
-        Assert(!cache.TryGet("nonexistent", out _), "Found nonexistent key");
+        Assert(!cache.TryGet("nonexistent", out _), "Retrieved nonexistent key from cache");
 
         cache.Set("key1", "value2");
-        Assert(cache.TryGet("key1", out var v2) && v2 == "value2", "Overwrite failed");
+        Assert(cache.TryGet("key1", out var v2) && v2 == "value2", "Failed to overwrite key1 in memory cache");
 
         cache.Set("key2", "value2");
         cache.Set("key3", "value3");
-        Assert(cache.Count == 3, $"Count: {cache.Count}");
+        Assert(cache.Count == 3, $"Unexpected cache count. Expected: 3, Got: {cache.Count}");
 
         cache.Clear();
-        Assert(cache.Count == 0, "Clear failed");
+        Assert(cache.Count == 0, "Failed to clear cache");
 
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Тестирует полный цикл сериализации и десериализации кэша на диске.
+    /// </summary>
     [TestMethod(TestCategory.Unit, "Cache: Disk Roundtrip", Group = TestGroups.Cache, Order = 20)]
     public static async Task TestDiskRoundtripAsync()
     {
-        var tempFile = Path.GetTempFileName();
+        using var tempFile = new TempFileCookie();
 
-        try
+        var writeCache = new DecryptorCache<string, string>(tempFile.Path, MaxMemorySize, MaxDiskSize);
+        const int testEntriesCount = 10;
+
+        for (int i = 0; i < testEntriesCount; i++)
         {
-            var writeCache = new DecryptorCache<string, string>(tempFile, 100, 50);
-            for (int i = 0; i < 10; i++)
-                writeCache.Set($"key{i}", $"value{i}");
-
-            await writeCache.SaveAsync();
-
-            var readCache = new DecryptorCache<string, string>(tempFile, 100, 50);
-            await readCache.LoadAsync("test_version");
-
-            Log.Debug($"[Test] Cache roundtrip: wrote 10, read {readCache.Count}");
+            writeCache.Set($"key{i}", $"value{i}");
         }
-        finally
-        {
-            if (File.Exists(tempFile))
-                File.Delete(tempFile);
-        }
-    }
 
-    [TestMethod(TestCategory.Unit, "Cache: SigCipher Manifest Cache", Group = TestGroups.Cache, Order = 30)]
-    public static Task TestSigCipherManifestCacheAsync()
-    {
-        var ops = new List<SigCipherOperation>
-        {
-            new(SigCipherOpType.Swap, 51),
-            new(SigCipherOpType.Reverse, 0),
-            new(SigCipherOpType.Swap, 44),
-            new(SigCipherOpType.Splice, 2),
-        };
+        await writeCache.SaveAsync();
 
-        var manifest = new SigCipherManifest("player_v123", ops, "test");
+        var readCache = new DecryptorCache<string, string>(tempFile.Path, MaxMemorySize, MaxDiskSize);
+        await readCache.LoadAsync(TestVersion);
 
-        var serialized = manifest.Serialize();
-        var restored = SigCipherManifest.Deserialize(serialized);
-
-        Assert(restored is not null, "Deserialization failed");
-        Assert(restored!.PlayerVersion == manifest.PlayerVersion, "Version mismatch");
-
-        const string testSig = "Q=wwXNghQ_T04B8uJpMZ5sWyAJIXNs3cqJRjYS6AJrTK8CQIAA8761Wv9lwNxVV";
-        var result1 = manifest.Decipher(testSig);
-        var result2 = restored.Decipher(testSig);
-
-        Assert(result1 == result2, "Decipher mismatch after roundtrip");
-
-        return Task.CompletedTask;
+        Assert(readCache.Count == testEntriesCount, $"Disk roundtrip count mismatch. Expected: {testEntriesCount}, Got: {readCache.Count}");
+        Log.Debug($"[Test] Cache roundtrip successful: wrote {testEntriesCount}, read {readCache.Count}");
     }
 
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
+    }
+
+    /// <summary>
+    /// Реализует паттерн RAII для безопасного управления жизненным циклом 
+    /// временных файлов в тестах, предотвращая загрязнение накопителя.
+    /// </summary>
+    private sealed class TempFileCookie : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.GetTempFileName();
+
+        public void Dispose()
+        {
+            try
+            {
+                if (File.Exists(Path))
+                    File.Delete(Path);
+            }
+            catch
+            {
+                // Игнорируем ошибки удаления в тестах
+            }
+        }
     }
 }

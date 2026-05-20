@@ -341,25 +341,15 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (!_initialized || _parser == null)
             throw new InvalidOperationException("Source not initialized");
 
-        try
-        {
-            var frame = await _parser.ReadNextFrameAsync(ct);
-            if (frame == null)
-                return null;
+        // Убран рекурсивный catch (IOException), вызывавший бесконечный цикл при удалении или блокировке файлов.
+        // Ошибки ввода-вывода теперь безопасно обрабатываются пайплайном с ограничением попыток.
+        var frame = await _parser.ReadNextFrameAsync(ct);
+        if (frame == null)
+            return null;
 
-            Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
-            UpdateCurrentChunk();
-            return frame;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (IOException) when (!_disposed && !_isOfflineMode)
-        {
-            await EnsureChunkAsync(_currentChunk, ct);
-            return await ReadFrameAsync(ct);
-        }
+        Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
+        UpdateCurrentChunk();
+        return frame;
     }
 
     private void UpdateCurrentChunk()

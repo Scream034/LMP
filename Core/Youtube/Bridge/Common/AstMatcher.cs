@@ -2,7 +2,7 @@ using Acornima;
 using Acornima.Ast;
 using LMP.Core.Logger;
 
-namespace LMP.Core.Youtube.Bridge.SigCipher;
+namespace LMP.Core.Youtube.Bridge.Common;
 
 /// <summary>
 /// Обеспечивает высокопроизводительное сопоставление узлов AST Acornima с шаблонами MatchTemplate.

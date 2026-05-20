@@ -407,7 +407,7 @@ public sealed class LibraryViewModel : ViewModelBase
                         return new PlaylistSearchResult(pid, p.Name, null, thumbs);
                     })];
 
-                    trackCounts = new Dictionary<string, int>();
+                    trackCounts = [];
                     foreach (var p in filtered)
                     {
                         if (!string.IsNullOrEmpty(p.YoutubeId) && p.TrackCount > 0)

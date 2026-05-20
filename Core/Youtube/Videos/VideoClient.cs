@@ -7,12 +7,24 @@ using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Youtube.Videos;
 
-public class VideoClient(HttpClient http, NTokenDecryptor nTokenDecryptor, SigCipherDecryptor sigCipherDecryptor,
-    Func<bool>? isAuthenticatedCheck = null)
+/// <summary>
+/// Предоставляет методы для получения информации о видео YouTube.
+/// </summary>
+public sealed class VideoClient
 {
-    private readonly VideoController _controller = new(http);
+    private readonly VideoController _controller;
 
-    public StreamClient Streams { get; } = new(http, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
+    public StreamClient Streams { get; }
+
+    public VideoClient(
+        HttpClient http,
+        NTokenDecryptor nTokenDecryptor,
+        SigCipherDecryptor sigCipherDecryptor,
+        Func<bool>? isAuthenticatedCheck = null)
+    {
+        _controller = new VideoController(http, sigCipherDecryptor.PlayerManager);
+        Streams = new StreamClient(http, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
+    }
 
     public async ValueTask<TrackInfo> GetAsync(
         VideoId videoId,
@@ -50,7 +62,7 @@ public class VideoClient(HttpClient http, NTokenDecryptor nTokenDecryptor, SigCi
         VideoId videoId,
         CancellationToken cancellationToken = default)
     {
-        bool isAuth = isAuthenticatedCheck?.Invoke() ?? false;
+        bool isAuth = VideoController.IsInCooldown;
         var (response, _) = await _controller.GetPlayerResponseWithFallbackAsync(
             videoId, cancellationToken, isAuthenticated: isAuth);
         return response;

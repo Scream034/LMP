@@ -64,7 +64,7 @@ public sealed class AddToPlaylistDialogViewModel : ViewModelBase
 
         CancelCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            OnResult?.Invoke(new List<string>());
+            OnResult?.Invoke([]);
         }));
 
         ApplyFilter();

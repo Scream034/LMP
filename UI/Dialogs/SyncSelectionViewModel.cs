@@ -110,7 +110,7 @@ public sealed class SyncSelectionViewModel : ViewModelBase
 
         CancelCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            OnResult?.Invoke(new List<SyncDecision>());
+            OnResult?.Invoke([]);
         }));
 
         // ═══ Подписки на элементы: обновление статистики ═══

@@ -154,14 +154,14 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
             if (_memory.Count <= _maxMemory * 0.8) return;
             _cleanupInProgress = true;
 
-            var toRemove = _memory
-                .ToArray()
-                .OrderBy(static kvp => kvp.Value.Ticks)
-                .Take(_maxMemory / 2)
-                .Select(static kvp => kvp.Key);
+            var snapshot = _memory.ToArray();
+            Array.Sort(snapshot, static (a, b) => a.Value.Ticks.CompareTo(b.Value.Ticks));
 
-            foreach (var key in toRemove)
-                _memory.TryRemove(key, out _);
+            int removeCount = _maxMemory / 2;
+            for (int i = 0; i < Math.Min(removeCount, snapshot.Length); i++)
+            {
+                _memory.TryRemove(snapshot[i].Key, out _);
+            }
         }
         finally
         {

@@ -1,4 +1,4 @@
-namespace LMP.Core.Youtube.Bridge.SigCipher;
+namespace LMP.Core.Youtube.Bridge.Common;
 
 /// <summary>
 /// Представляет декларативный шаблон для сопоставления структуры узлов AST Esprima.

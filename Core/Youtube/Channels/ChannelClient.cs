@@ -83,7 +83,6 @@ public partial class ChannelClient(HttpClient http)
         CancellationToken cancellationToken = default
     ) => Get(await _controller.GetChannelPageAsync(channelHandle, cancellationToken));
 
-    // Исправлено: Возвращаем IAsyncEnumerable<TrackInfo>
     public IAsyncEnumerable<TrackInfo> GetUploadsAsync(
         ChannelId channelId,
         CancellationToken cancellationToken = default

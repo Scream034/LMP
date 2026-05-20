@@ -20,6 +20,8 @@ public sealed class BootstrapSettings
     /// </summary>
     public long GpuTextureCacheMb { get; set; } = 64;
 
+    public string? LastRunVersion { get; set; }
+
     public static BootstrapSettings Load()
     {
         try
@@ -30,10 +32,18 @@ public sealed class BootstrapSettings
                 var settings = JsonSerializer.Deserialize<BootstrapSettings>(json);
                 if (settings != null)
                 {
+                    // ═══ ОЧИСТКА КЭША ПРИ ОБНОВЛЕНИИ ВЕРСИИ ПЛЕЕРА ═══
+                    if (settings.LastRunVersion != G.Build.Version)
+                    {
+                        Log.Info($"[Bootstrap] App updated: {settings.LastRunVersion} -> {G.Build.Version}. Purging obsolete bypass caches...");
+                        PurgeBypassCaches();
+                        settings.LastRunVersion = G.Build.Version;
+                        settings.Save();
+                    }
+
                     // ═══ ПРОВЕРКА ПЕРВОГО ЗАПУСКА ═══
                     if (settings.IsFirstRun)
                     {
-                        // Автоопределение языка при первом запуске
                         settings.LanguageCode = G.SystemInfo.DetectSystemLanguage();
                         settings.IsFirstRun = false;
                         settings.Save();
@@ -52,17 +62,37 @@ public sealed class BootstrapSettings
             Log.Warn($"[Bootstrap] Failed to load: {ex.Message}");
         }
 
-        // ═══ ПЕРВЫЙ ЗАПУСК (файла нет) ═══
         var defaults = new BootstrapSettings
         {
             IsFirstRun = false,
-            LanguageCode = G.SystemInfo.DetectSystemLanguage()
+            LanguageCode = G.SystemInfo.DetectSystemLanguage(),
+            LastRunVersion = G.Build.Version
         };
 
         Log.Info($"[Bootstrap] First run (no file), detected language: {defaults.LanguageCode}");
         defaults.Save();
 
         return defaults;
+    }
+
+    /// <summary>
+    /// Принудительно удаляет кэшированные файлы обхода блокировок на диске.
+    /// </summary>
+    private static void PurgeBypassCaches()
+    {
+        try
+        {
+            if (Directory.Exists(G.Folder.NTokenCache))
+                Directory.Delete(G.Folder.NTokenCache, true);
+            if (Directory.Exists(G.Folder.SigCipherCache))
+                Directory.Delete(G.Folder.SigCipherCache, true);
+
+            G.Folder.Create(); // Пересоздаем пустые директории структуры папок
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Bootstrap] Failed to purge bypass caches: {ex.Message}");
+        }
     }
 
     public void Save()

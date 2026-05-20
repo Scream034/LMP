@@ -207,6 +207,17 @@ public partial class App : Application
 
             Log.Info($"Main window ready. Total splash time: {stopwatch.ElapsedMilliseconds}ms");
 
+            // ─── Post-Startup GC Compaction ───
+            // Сборка мусора с уплотнением кучи после завершения тяжелой фазы инициализации приложения.
+            // Возвращает неиспользуемую память (Gen 0/1/2) операционной системе.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2500); // Даем время Skia и UI-потоку полностью завершить отрисовку
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                Log.Info("[Memory] Post-startup GC compaction complete. Cold memory reclaimed.");
+            });
+
             // ─── Shutdown Handler ───
             desktop.ShutdownRequested += async (_, _) =>
             {

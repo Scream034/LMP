@@ -46,18 +46,16 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
             return _segmentStream;
 
         var url = GetSegmentUrl(streamInfo.Url, Position, Position + _segmentLength - 1);
-        var stream = await http.GetStreamAsync(url, cancellationToken);
+        var stream = await http.GetStreamAsync(url, cancellationToken).ConfigureAwait(false);
 
         return _segmentStream = stream;
     }
 
     public async ValueTask InitializeAsync(CancellationToken cancellationToken = default) =>
-        await ResolveSegmentAsync(cancellationToken);
+        await ResolveSegmentAsync(cancellationToken).ConfigureAwait(false);
 
     private async ValueTask<int> ReadSegmentAsync(
-        byte[] buffer,
-        int offset,
-        int count,
+        Memory<byte> buffer,
         CancellationToken cancellationToken = default
     )
     {
@@ -65,8 +63,8 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
         {
             try
             {
-                var stream = await ResolveSegmentAsync(cancellationToken);
-                return await stream.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
+                var stream = await ResolveSegmentAsync(cancellationToken).ConfigureAwait(false);
+                return await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             }
             // Retry on connectivity issues
             catch (Exception ex)
@@ -77,11 +75,16 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
         }
     }
 
-    public override async Task<int> ReadAsync(
+    public override Task<int> ReadAsync(
         byte[] buffer,
         int offset,
         int count,
         CancellationToken cancellationToken
+    ) => ReadAsync(new Memory<byte>(buffer, offset, count), cancellationToken).AsTask();
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default
     )
     {
         while (true)
@@ -97,7 +100,7 @@ internal partial class MediaStream(HttpClient http, IStreamInfo streamInfo) : St
             if (requestedPosition >= Length)
                 return 0;
 
-            var bytesRead = await ReadSegmentAsync(buffer, offset, count, cancellationToken);
+            var bytesRead = await ReadSegmentAsync(buffer, cancellationToken).ConfigureAwait(false);
             Position = _actualPosition = requestedPosition + bytesRead;
 
             if (bytesRead > 0)

@@ -16,7 +16,6 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
 
     private static readonly AsyncLocal<string?> CurrentDecryptionContext = new();
     
-    // Реестр уже расшифрованных токенов для предотвращения повторной расшифровки (Double-Decryption)
     private readonly ConcurrentDictionary<string, byte> _decryptedTokens = new(StringComparer.Ordinal);
 
     public event Action<string?>? OnComplexDecryptionStarted;
@@ -43,7 +42,6 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
     {
         if (string.IsNullOrWhiteSpace(nToken)) return nToken;
         
-        // Если токен уже расшифрован на предыдущем этапе (например, библиотекой), возвращаем его as-is
         if (_decryptedTokens.ContainsKey(nToken))
         {
             Log.Debug($"[NToken] Idempotency bypass: '{nToken}' is already decrypted.");
@@ -52,7 +50,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
 
         if (Cache.TryGet(nToken, out var cached))
         {
-            _decryptedTokens.TryAdd(cached, 0); // Регистрируем результат в реестре
+            _decryptedTokens.TryAdd(cached, 0);
             return cached;
         }
 
@@ -63,7 +61,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
         var result = TryInvokeJs(nToken, "NToken");
         if (!string.IsNullOrEmpty(result))
         {
-            _decryptedTokens.TryAdd(result, 0); // Регистрируем результат в реестре
+            _decryptedTokens.TryAdd(result, 0);
             return result;
         }
 
@@ -78,58 +76,30 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
         Log.Info("[NToken] Initializing via Unified AST Solver...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        string preprocessedJs = "";
         try
         {
-            preprocessedJs = YoutubeAstSolver.PreprocessPlayer(context.BaseJs);
+            var preparedScript = context.GetOrPrepareScript(() => YoutubeAstSolver.PreprocessPlayer(context.BaseJs));
 
-            var engine = CreateFullEngine();
-            engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
-            engine.Execute(BrowserStubs);
-            engine.Execute("var _result = {};");
-            engine.Execute(preprocessedJs);
+            using var testEngine = CreateFullEngine();
+            testEngine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
+            testEngine.Execute(preparedScript);
+            testEngine.Execute("globalThis.__decryptN = _result.n;");
 
-            engine.Execute("globalThis.__decryptorTransform = _result.n;");
-
-            var testOutput = engine.Invoke("__decryptorTransform", TestToken).AsString();
+            var testOutput = testEngine.Invoke("__decryptN", TestToken).AsString();
             if (ValidateNTokenResult(testOutput, TestToken))
             {
-                FullEngine = engine;
-                FullFuncName = "__decryptorTransform";
+                SetupEnginePool(preparedScript, "__decryptN", "globalThis.__decryptN = _result.n;");
                 IsInitialized = true;
                 sw.Stop();
                 Log.Info($"[NToken] AST-based Decryptor successfully initialized in {sw.ElapsedMilliseconds}ms!");
                 return;
             }
 
-            engine.Dispose();
             throw new InvalidOperationException("AST solver verification returned invalid token structure.");
         }
         catch (Exception ex)
         {
             Log.Error($"[NToken] AST-based Decryptor critical failure: {ex.Message}");
-            if (!string.IsNullOrEmpty(preprocessedJs) && ex.Message.Contains("<anonymous>:"))
-            {
-                try
-                {
-                    var match = System.Text.RegularExpressions.Regex.Match(ex.Message, @"<anonymous>:(\d+):(\d+)");
-                    if (match.Success)
-                    {
-                        int lineNum = int.Parse(match.Groups[1].Value);
-                        var lines = preprocessedJs.Split('\n');
-                        int startLine = Math.Max(0, lineNum - 10);
-                        int endLine = Math.Min(lines.Length - 1, lineNum + 10);
-                        Log.Error("--- CODE CONTEXT OF FAILURE ---");
-                        for (int li = startLine; li <= endLine; li++)
-                        {
-                            var prefix = (li + 1 == lineNum) ? ">>> " : "    ";
-                            Log.Error($"{prefix}{li + 1}: {lines[li].TrimEnd()}");
-                        }
-                        Log.Error("--------------------------------");
-                    }
-                }
-                catch { /* ignore diagnostics failure */ }
-            }
             throw;
         }
     }
@@ -164,5 +134,17 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
             if (b.IndexOf(sub) >= 0) return true;
         }
         return false;
+    }
+
+    public override void InvalidateCache()
+    {
+        _decryptedTokens.Clear();
+        base.InvalidateCache();
+    }
+
+    public override void Dispose()
+    {
+        _decryptedTokens.Clear();
+        base.Dispose();
     }
 }
