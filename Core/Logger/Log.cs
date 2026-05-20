@@ -108,9 +108,6 @@ public static class Log
     public static void Fatal(string message, Exception? ex = null) => Enqueue(LogLevel.Fatal, message, ex);
 
     // ═══ InterpolatedStringHandler overloads — zero-alloc при отключённом уровне ═══
-    // Компилятор выбирает этот overload когда аргумент — интерполированная строка $"...".
-    // Если IsLevelEnabled() = false, AppendFormatted/AppendLiteral не вызываются —
-    // аллокации нет вообще. Строка не строится даже частично.
 
     /// <summary>Trace с zero-alloc интерполяцией.</summary>
     public static void Trace(TraceInterpolatedStringHandler handler)
@@ -155,9 +152,6 @@ public static class Log
     public static void Debug(object? obj) => Debug(obj?.ToString() ?? "null");
 
     // ═══ InterpolatedStringHandler per level ═══
-    // Отдельный тип на каждый уровень — компилятор разрешает overload статически,
-    // без передачи LogLevel как runtime-аргумента.
-    // out bool isEnabled — сигнал компилятору: если false, тело $"..." не вычисляется.
 
     /// <inheritdoc cref="LogInterpolatedStringHandlerBase"/>
     [InterpolatedStringHandler]
@@ -317,20 +311,6 @@ public static class Log
 
     /// <summary>
     /// Общая реализация строителя интерполированной строки для всех уровней логов.
-    ///
-    /// <para><b>Механизм zero-alloc:</b> компилятор передаёт <c>out bool isEnabled</c>
-    /// в конструктор ДО вычисления аргументов интерполяции. Если <c>isEnabled = false</c>,
-    /// вся правая часть <c>$"..."</c> не вычисляется — аллокаций нет совсем.</para>
-    ///
-    /// <para><b>Почему ref struct:</b> <see cref="DefaultInterpolatedStringHandler"/>
-    /// — ref struct. Наш wrapper тоже обязан быть ref struct, чтобы хранить его
-    /// по значению без boxing.</para>
-    ///
-    /// <para><b>Alignment overloads:</b> компилятор генерирует вызовы
-    /// <c>AppendFormatted(value, int alignment)</c> и
-    /// <c>AppendFormatted(value, int alignment, string? format)</c>
-    /// при использовании форматирования с выравниванием: <c>{x,-45}</c>, <c>{x,15:F2}</c>.
-    /// Без этих перегрузок — CS1739.</para>
     /// </summary>
     public ref struct LogInterpolatedStringHandlerBase
     {

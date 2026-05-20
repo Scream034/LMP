@@ -12,7 +12,6 @@ public sealed partial class PlayerContext
     private const int MaxAgeDays = 14;
 
     private readonly Lock _prepLock = new();
-    private Jint.Prepared<Acornima.Ast.Script>? _preparedScript;
 
     /// <summary>Версия плеера (например, 6c5cb4f4).</summary>
     public string Version { get; }
@@ -40,49 +39,40 @@ public sealed partial class PlayerContext
     }
 
     /// <summary>
-    /// Получает или создает pre-compiled скрипт Jint в рамках жизненного цикла контекста плеера.
-    /// Исключает дублирование парсинга и компиляции между SigCipher и NToken.
+    /// Обеспечивает потокобезопасную подготовку препроцессированного скрипта.
+    /// Исправлено предупреждение CS8603 (гарантированный non-null возврат).
     /// </summary>
-    public Jint.Prepared<Acornima.Ast.Script> GetOrPrepareScript(Func<string> preprocessor)
+    public string GetOrPrepareScript(Func<string> preprocessor)
     {
-        if (_preparedScript.HasValue) return _preparedScript.Value;
+        if (!string.IsNullOrEmpty(PreprocessedJs)) return PreprocessedJs!;
 
         lock (_prepLock)
         {
-            if (_preparedScript.HasValue) return _preparedScript.Value;
+            if (!string.IsNullOrEmpty(PreprocessedJs)) return PreprocessedJs!;
 
-            var js = PreprocessedJs;
-            if (string.IsNullOrEmpty(js))
-            {
-                js = preprocessor();
-                PreprocessedJs = js;
-                _ = SavePreprocessedCacheAsync();
-            }
+            string js = preprocessor();
+            PreprocessedJs = js;
+            _ = SavePreprocessedCacheAsync();
 
-            _preparedScript = Jint.Engine.PrepareScript(js);
-            return _preparedScript.Value;
+            return js;
         }
     }
 
     /// <summary>
     /// Освобождает исходные строки скрипта из оперативной памяти для предотвращения фрагментации кучи больших объектов (LOH).
-    /// Вызывается дешифраторами после завершения инициализации компилированных ресурсов Jint.
     /// </summary>
     public void ReleaseRawScripts()
     {
         lock (_prepLock)
         {
-            if (_preparedScript.HasValue)
-            {
-                BaseJs = string.Empty;
-                PreprocessedJs = null;
-                Log.Debug($"[PlayerContext] Discarded raw JS source strings from LOH memory for player version: {Version}");
-            }
+            BaseJs = string.Empty;
+            PreprocessedJs = null;
+            Log.Debug($"[PlayerContext] Discarded raw JS source strings from LOH memory for player version: {Version}");
         }
-    }   
+    }
 
-    /// <summary>Проверяет, является ли кэш актуальным (не более 6 часов для соответствия циклу ротации YouTube).</summary>
-    public bool IsValid() => (DateTimeOffset.UtcNow - CachedAt).TotalHours < 6;
+    /// <summary>Проверяет, является ли кэш актуальным (не более 12 часов для соответствия циклу ротации YouTube).</summary>
+    public bool IsValid() => (DateTimeOffset.UtcNow - CachedAt).TotalHours < 12;
 
     /// <summary>Сохраняет препроцессированный JS на диск.</summary>
     public async Task SavePreprocessedCacheAsync()
@@ -239,7 +229,7 @@ public sealed partial class PlayerContext
                 try
                 {
                     var name = file.Name;
-                    var versionMatch = Regex.Match(name, @"player_([a-fA-F0-9]+)_basejs\.txt");
+                    var versionMatch = PlayerVersionRegex().Match(name);
                     if (versionMatch.Success)
                     {
                         var version = versionMatch.Groups[1].Value;
@@ -267,7 +257,7 @@ public sealed partial class PlayerContext
         try
         {
             var iframeApi = await http.GetStringAsync("https://www.youtube.com/iframe_api", ct).ConfigureAwait(false);
-            var match = PlayerVersionRegex().Match(iframeApi);
+            var match = PlayerVersionIframeRegex().Match(iframeApi);
             if (!match.Success) return null;
 
             var version = match.Groups[1].Value;
@@ -282,6 +272,32 @@ public sealed partial class PlayerContext
         }
     }
 
-    [GeneratedRegex(@"player\\?/([0-9a-fA-F]{8})\\?/")]
+    /// <summary>
+    /// Физически удаляет файлы кэша конкретной версии плеера с диска.
+    /// </summary>
+    public static void ClearDiskCache(string version)
+    {
+        try
+        {
+            var prepPath = GetPreprocessedCachePath(version);
+            var stsPath = GetStsCachePath(version);
+            var baseJsPath = GetCachePath(version);
+
+            if (File.Exists(prepPath)) File.Delete(prepPath);
+            if (File.Exists(stsPath)) File.Delete(stsPath);
+            if (File.Exists(baseJsPath)) File.Delete(baseJsPath);
+
+            Log.Info($"[PlayerContext] Cleared disk cache for version {version}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[PlayerContext] Failed to clear disk cache for {version}: {ex.Message}");
+        }
+    }
+
+    [GeneratedRegex(@"player_([a-fA-F0-9]+)_basejs\.txt")]
     private static partial Regex PlayerVersionRegex();
+
+    [GeneratedRegex(@"player\\?/([0-9a-fA-F]{8})\\?/")]
+    private static partial Regex PlayerVersionIframeRegex();
 }

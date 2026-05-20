@@ -574,6 +574,7 @@ public partial class YoutubeProvider : IDisposable
     /// Выполняет аварийный сброс и очистку кэшей обходных движков при обнаружении фатальной ошибки 403 Forbidden.
     /// Предотвращает циклические блокировки при ротации шифров YouTube.
     /// </summary>
+    [MethodImpl(MethodImplOptions.Synchronized)]
     public void HandlePlayback403Fatal()
     {
         Log.Warn("[YouTube] Fatal 403 Forbidden detected. Triggering self-healing bypass reset...");
@@ -596,9 +597,9 @@ public partial class YoutubeProvider : IDisposable
     #region RefreshStreamUrlAsync
 
     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
-        TrackInfo track,
-        bool forceRefresh = false,
-        CancellationToken ct = default)
+            TrackInfo track,
+            bool forceRefresh = false,
+            CancellationToken ct = default)
     {
         var videoId = track.GetRawIdSpan().ToString();
         if (string.IsNullOrEmpty(videoId))
@@ -608,6 +609,24 @@ public partial class YoutubeProvider : IDisposable
         }
 
         var sw = Stopwatch.StartNew();
+
+        // ═══ АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ ПРИ 403 ═══
+        if (forceRefresh)
+        {
+            Log.Warn($"[YouTube] [{videoId}] Force refresh requested (playback 403 recovery). Resetting bypass caches...");
+            try
+            {
+                _nTokenDecryptor.InvalidateCache();
+                _sigCipherDecryptor.InvalidateCache();
+                _nTokenDecryptor.PlayerManager.Invalidate();
+                ClearCache();
+                Log.Info($"[YouTube] [{videoId}] Cache purged, bypass engine ready for fresh compilation.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[YouTube] [{videoId}] Cache purge during force refresh failed: {ex.Message}");
+            }
+        }
 
         if (!forceRefresh)
         {

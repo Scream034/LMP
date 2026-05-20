@@ -3,45 +3,52 @@ namespace LMP.Core.Audio.Sources;
 public sealed partial class CachingStreamSource
 {
     /// <summary>
-    /// Stream-обёртка для парсеров контейнеров (WebM/MP4).
-    /// Seek отменяет текущие Read через <see cref="_readCts"/>.
+    /// Stream-обёртка над <see cref="CachingStreamSource"/> для парсеров контейнеров (WebM/MP4).
+    ///
+    /// <para><b>Почему отдельный CTS на каждый Read:</b> seek из парсера вызывает <see cref="Position"/> setter,
+    /// который немедленно отменяет текущий <see cref="ReadAsync"/> через <see cref="_readCts"/>,
+    /// не допуская блокировки decoder thread на устаревшем I/O.</para>
     /// </summary>
     private sealed class AsyncCachingReadStream : Stream
     {
-        private readonly CachingStreamSource? _source;
-        private readonly Stream? _fileStream;
+        private readonly CachingStreamSource _source;
         private long _position;
+
+        /// <summary>
+        /// CTS, привязанный к текущей логической позиции потока.
+        /// Заменяется при каждом <see cref="Position"/> setter — все pending ReadAsync немедленно отменяются.
+        /// </summary>
         private CancellationTokenSource _readCts = new();
 
+        /// <summary>
+        /// Создаёт Stream-обёртку над источником.
+        /// </summary>
+        /// <param name="source">Родительский <see cref="CachingStreamSource"/>.</param>
         public AsyncCachingReadStream(CachingStreamSource source)
         {
             _source = source;
         }
 
-        public AsyncCachingReadStream(CachingStreamSource source, Stream fileStream)
-        {
-            _source = source;
-            _fileStream = fileStream;
-        }
-
         #region Stream Properties
 
+        /// <inheritdoc/>
         public override bool CanRead => true;
-        public override bool CanSeek => true;
-        public override bool CanWrite => false;
-        public override long Length => _fileStream?.Length ?? _source?._contentLength ?? 0;
 
+        /// <inheritdoc/>
+        public override bool CanSeek => true;
+
+        /// <inheritdoc/>
+        public override bool CanWrite => false;
+
+        /// <inheritdoc/>
+        public override long Length => _source._contentLength;
+
+        /// <inheritdoc/>
         public override long Position
         {
-            get => _fileStream?.Position ?? Volatile.Read(ref _position);
+            get => Volatile.Read(ref _position);
             set
             {
-                if (_fileStream != null)
-                {
-                    _fileStream.Position = value;
-                    return;
-                }
-
                 var oldCts = Interlocked.Exchange(ref _readCts, new CancellationTokenSource());
 
                 try { oldCts.Cancel(); }
@@ -49,8 +56,8 @@ public sealed partial class CachingStreamSource
 
                 // Deferred Dispose: reader-поток может держать ссылку на oldCts
                 // между Volatile.Read(ref _readCts) и .Token — немедленный Dispose
-                // вызовет ObjectDisposedException в reader'е. Планируем Dispose
-                // через ThreadPool, давая reader'у время завершить доступ к .Token.
+                // вызовет ObjectDisposedException в reader'е.
+                // Планируем Dispose через ThreadPool, давая reader'у время завершить доступ.
                 ThreadPool.QueueUserWorkItem(static state =>
                 {
                     try { ((CancellationTokenSource)state!).Dispose(); }
@@ -67,9 +74,10 @@ public sealed partial class CachingStreamSource
 
         /// <summary>
         /// Безопасно извлекает <see cref="CancellationToken"/> из текущего <see cref="_readCts"/>.
-        /// Обрабатывает гонку с Position setter, который может задиспозить CTS
-        /// между Volatile.Read и обращением к .Token.
+        /// Обрабатывает гонку с <see cref="Position"/> setter, который может задиспозить CTS
+        /// между <see cref="Volatile.Read{T}"/> и обращением к <c>.Token</c>.
         /// </summary>
+        /// <returns>Актуальный токен или отменённый токен при гонке.</returns>
         private CancellationToken GetCurrentReadToken()
         {
             try
@@ -82,59 +90,50 @@ public sealed partial class CachingStreamSource
             }
         }
 
+        /// <inheritdoc/>
         public override int Read(byte[] buffer, int offset, int count)
         {
-            if (_fileStream != null)
-                return _fileStream.Read(buffer, offset, count);
-
-            // Sync-over-async: WebMParser вызывает ReadAsync, но на случай
-            // если парсер использует синхронный Read
+            // Sync-over-async: на случай если парсер использует синхронный Read.
+            // Основной путь — ReadAsync.
             try
             {
-                var token = GetCurrentReadToken();
-                return ReadAsyncCore(buffer.AsMemory(offset, count), token)
+                return ReadAsyncCore(buffer.AsMemory(offset, count), GetCurrentReadToken())
                     .AsTask()
                     .ConfigureAwait(false)
                     .GetAwaiter()
                     .GetResult();
             }
-            catch (OperationCanceledException)
-            {
-                return 0;
-            }
-            catch (AggregateException ex) when (ex.InnerException is OperationCanceledException)
-            {
-                return 0;
-            }
+            catch (OperationCanceledException) { return 0; }
+            catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { return 0; }
         }
 
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
-        {
-            return ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
-        }
+        /// <inheritdoc/>
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
 
-        public override async ValueTask<int> ReadAsync(
-            Memory<byte> buffer, CancellationToken ct = default)
+        /// <inheritdoc/>
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
         {
-            if (_fileStream != null)
-                return await _fileStream.ReadAsync(buffer, ct);
-
             var readToken = GetCurrentReadToken();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readToken);
-
             return await ReadAsyncCore(buffer, linkedCts.Token);
         }
 
+        /// <summary>
+        /// Ядро чтения: делегирует в <see cref="CachingStreamSource.ReadAtAsync"/> и
+        /// атомарно продвигает позицию только если seek не произошёл во время чтения.
+        /// </summary>
+        /// <param name="buffer">Целевой буфер.</param>
+        /// <param name="ct">Токен отмены (включает readToken текущей позиции).</param>
+        /// <returns>Количество прочитанных байт.</returns>
         private async ValueTask<int> ReadAsyncCore(Memory<byte> buffer, CancellationToken ct)
         {
-            if (_source == null) return 0;
-
             long posBefore = Volatile.Read(ref _position);
             int read = await _source.ReadAtAsync(posBefore, buffer, ct);
 
-            // Проверяем что позиция не сменилась (seek мог произойти)
-            long posAfter = Volatile.Read(ref _position);
-            if (posAfter != posBefore)
+            // Если seek произошёл во время I/O — позиция уже обновлена Position setter'ом.
+            // Возвращаем 0, чтобы парсер не продвинулся по устаревшим данным.
+            if (Volatile.Read(ref _position) != posBefore)
                 return 0;
 
             Interlocked.CompareExchange(ref _position, posBefore + read, posBefore);
@@ -145,22 +144,20 @@ public sealed partial class CachingStreamSource
 
         #region Seek
 
+        /// <inheritdoc/>
         public override long Seek(long offset, SeekOrigin origin)
         {
-            if (_fileStream != null)
-                return _fileStream.Seek(offset, origin);
-
-            long length = _source?._contentLength ?? 0;
+            long length = _source._contentLength;
             long newPos = origin switch
             {
-                SeekOrigin.Begin => offset,
+                SeekOrigin.Begin   => offset,
                 SeekOrigin.Current => Volatile.Read(ref _position) + offset,
-                SeekOrigin.End => length + offset,
-                _ => Volatile.Read(ref _position)
+                SeekOrigin.End     => length + offset,
+                _                  => Volatile.Read(ref _position)
             };
 
             newPos = Math.Clamp(newPos, 0, length);
-            Volatile.Write(ref _position, newPos);
+            Position = newPos;
             return newPos;
         }
 
@@ -168,8 +165,13 @@ public sealed partial class CachingStreamSource
 
         #region Not Supported
 
+        /// <inheritdoc/>
         public override void Flush() { }
+
+        /// <inheritdoc/>
         public override void SetLength(long value) => throw new NotSupportedException();
+
+        /// <inheritdoc/>
         public override void Write(byte[] buffer, int offset, int count) =>
             throw new NotSupportedException();
 
@@ -177,19 +179,16 @@ public sealed partial class CachingStreamSource
 
         #region Dispose
 
+        /// <inheritdoc/>
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
-                _fileStream?.Dispose();
-
                 var cts = Interlocked.Exchange(ref _readCts, null!);
                 if (cts != null)
                 {
-                    try { cts.Cancel(); }
-                    catch (ObjectDisposedException) { }
-                    try { cts.Dispose(); }
-                    catch (ObjectDisposedException) { }
+                    try { cts.Cancel(); } catch (ObjectDisposedException) { }
+                    try { cts.Dispose(); } catch (ObjectDisposedException) { }
                 }
             }
 

@@ -285,16 +285,11 @@ public sealed partial class CachingStreamSource
 
     /// <inheritdoc/>
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
-    {
-        if (_isOfflineMode)
-            return [(0.0, 1.0)];
-
-        if (_cacheEntry == null)
-            return [];
+    {   
+        if (_cacheEntry == null) return [];
 
         int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
-        if (total == 0)
-            return [];
+        if (total == 0) return [];
 
         var ranges = new List<(double, double)>();
         int? rangeStart = null;
