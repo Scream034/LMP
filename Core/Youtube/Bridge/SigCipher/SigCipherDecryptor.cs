@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Jint;
 using LMP.Core.Youtube.Bridge.Common;
@@ -5,418 +6,86 @@ using LMP.Core.Youtube.Bridge.Common;
 namespace LMP.Core.Youtube.Bridge.SigCipher;
 
 /// <summary>
-/// Дешифратор SigCipher (подписей) YouTube.
-/// <para>
-/// Стратегии (в порядке приоритета):
-/// 1. Manifest (native C#, zero JS) - максимально быстро.
-/// 2. Extractor - парсинг JS без исполнения (создает Manifest).
-/// 3. Solver - разовое исполнение JS для получения эталона, затем генерация Manifest.
-/// 4. Persistent JS engines - fallback, если всё остальное сломалось.
-/// </para>
+/// Высокопроизводительный дешифратор SigCipher (подписей) YouTube на основе AST-анализа.
 /// </summary>
 public sealed partial class SigCipherDecryptor(PlayerContextManager playerManager) 
     : JsDecryptorBase<SigCipherDecryptor>(playerManager, G.FilePath.SigCipherCache, 500, 100)
 {
-    private SigCipherManifest? _manifest;
-    private string? _manifestCachePath;
+    private readonly ConcurrentDictionary<string, byte> _decryptedTokens = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// Эталонная подпись для Solver'а и тестирования Jint движков.
-    /// Включает все символы английского алфавита и цифры для точного маппинга операций.
-    /// </summary>
     private const string TestSignature = 
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
-        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop" +
-        "qrstu";
-
-    // ═══════════════════════════════════════════════════════════════
-    // PUBLIC API
-    // ═══════════════════════════════════════════════════════════════
+        "AHEqNM4wRQIgUw3FiHA8Pht_xgtH0N_C7fQwvOMGHPW9KCHzFbzj_uECIQDPrmvV4I7V_V-uKiksYsVh1xBFwp_vFpXjjLL7T4pBxg==";
 
     /// <summary>
-    /// Расшифровывает подпись (signature) видео потока.
+    /// Выполняет дешифрацию подписи с использованием AST-солвера.
     /// </summary>
     public async ValueTask<string> DecipherAsync(string signature, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(signature)) return signature;
-        if (Cache.TryGet(signature, out var cached)) return cached;
+        
+        if (_decryptedTokens.ContainsKey(signature))
+        {
+            Log.Debug($"[SigCipher] Idempotency bypass: '{signature}' is already deciphered.");
+            return signature;
+        }
+
+        if (Cache.TryGet(signature, out var cached))
+        {
+            _decryptedTokens.TryAdd(cached, 0);
+            return cached;
+        }
 
         await EnsureInitializedAsync(ct).ConfigureAwait(false);
 
-        // Tier 1: Manifest (native C#, zero JS)
-        if (_manifest is not null)
-        {
-            try
-            {
-                var result = _manifest.Decipher(signature);
-                Cache.Set(signature, result);
-                Log.Debug($"[SigCipher] Manifest: {Truncate(signature)} -> {Truncate(result)}");
-                return result;
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[SigCipher] Manifest failed: {ex.Message}");
-            }
-        }
-
-        // Tier 2+3: JS (bundle → full)
         var jsResult = TryInvokeJs(signature, "Decipher");
         if (jsResult is not null)
         {
-            TrySolveInBackground(signature, jsResult);
+            _decryptedTokens.TryAdd(jsResult, 0);
             return jsResult;
         }
 
         return signature;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // INITIALIZATION
-    // ═══════════════════════════════════════════════════════════════
-
     protected override void InitializeCore(PlayerContext context)
     {
-        Log.Info("[SigCipher] Initializing...");
+        Log.Info("[SigCipher] Initializing via Unified AST Solver...");
         var sw = Stopwatch.StartNew();
 
-        _manifestCachePath = Path.Combine(DiagFolder, $"manifest_{context.Version}.txt");
-
-        // Stage 1: Cached manifest
-        _manifest = TryLoadCachedManifest(context.Version);
-        if (_manifest is not null)
-        {
-            sw.Stop();
-            Log.Info($"[SigCipher] Cached manifest loaded in {sw.ElapsedMilliseconds}ms: {_manifest}");
-            return;
-        }
-
-        // ═══ Find function name early — needed by multiple stages ═══
-        var funcName = SigCipherExtractor.FindDecipherFunctionName(context.BaseJs);
-
-        // Stage 2: Extract manifest (parse JS, no execution)
-        _manifest = SigCipherExtractor.ExtractManifest(context.BaseJs, context.Version);
-        if (_manifest is not null)
-        {
-            SaveManifest(_manifest);
-
-            // Save diagnostic bundle even though we don't need JS engine
-            if (funcName is not null)
-                SaveDiagBundle(context.BaseJs, funcName);
-
-            sw.Stop();
-            Log.Info($"[SigCipher] Extracted manifest in {sw.ElapsedMilliseconds}ms: {_manifest}");
-            return;
-        }
-
-        Log.Debug("[SigCipher] Extractor failed, trying Solver...");
-
-        // Stage 3: Solver (get one sample from JS, then discard JS)
-        if (TryInitWithSolver(context, funcName))
-        {
-            sw.Stop();
-            Log.Info($"[SigCipher] Solver manifest ready in {sw.ElapsedMilliseconds}ms: {_manifest}");
-            return;
-        }
-
-        // Stage 4: Persistent JS engines
-        if (funcName is not null)
-        {
-            var callNumber = FindCallNumber(context.BaseJs, funcName);
-            TryInitJsEngines(
-                context,
-                funcName,
-                fn => BuildSigWrapperScript(fn, callNumber),
-                TestSignature,
-                BuildSigBundle);
-        }
-
-        sw.Stop();
-        Log.Info($"[SigCipher] Initialized in {sw.ElapsedMilliseconds}ms");
-    }
-
-    /// <summary>
-    /// Сохраняет диагностический бандл для ручного анализа.
-    /// </summary>
-    private void SaveDiagBundle(string baseJs, string funcName)
-    {
         try
         {
-            var bundle = BuildSigBundle(baseJs, funcName);
-            if (bundle is not null)
-                SaveDiagScript("bundle", bundle, funcName);
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[SigCipher] Diag bundle save failed: {ex.Message}");
-        }
-    }
+            var preprocessedJs = YoutubeAstSolver.PreprocessPlayer(context.BaseJs);
 
-    /// <summary>
-    /// Локальная реализация сохранения диагностических скриптов.
-    /// Исправляет проблему CS0103.
-    /// </summary>
-    private void SaveDiagScript(string type, string code, string funcName)
-    {
-        try
-        {
-            if (CurrentPlayerVersion is null) return;
-            
-            Directory.CreateDirectory(DiagFolder);
-            var path = Path.Combine(DiagFolder, $"player_{CurrentPlayerVersion}_{type}.js");
-            
-            File.WriteAllText(path, $$"""
-                // ═══════════════════════════════════════════════════════════
-                // SIGCIPHER {{type.ToUpper()}} — AUTO-GENERATED
-                // Player version: {{CurrentPlayerVersion}}
-                // Entry function: {{funcName}}
-                // Generated: {{DateTime.UtcNow:O}}
-                // ═══════════════════════════════════════════════════════════
-                
-                {{code}}
-                """);
-        }
-        catch { /* ignore */ }
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // WRAPPER SCRIPT & BUNDLE
-    // ═══════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Генерирует JS-обертку для вызова функции дешифровки.
-    /// Безопасно переопределяет window.__decryptorTransform для Jint.
-    /// </summary>
-    private static string BuildSigWrapperScript(string funcName, int? callNumber) => $$"""
-        window.__decryptorTransform = function(s) {
-            try {
-                var f = window['{{funcName}}'];
-                if (typeof f !== 'function') return s;
-                var r;
-                {{(callNumber.HasValue
-                    ? $"r = f({callNumber.Value}, s);"
-                    : """
-                      var nums = [4, 26, 2, 8, 14];
-                      for (var i = 0; i < nums.length; i++) {
-                          try {
-                              r = f(nums[i], s);
-                              if (typeof r === 'string' && r !== s && r.length > 0) break;
-                              r = null;
-                          } catch(e2) { r = null; }
-                      }
-                      if (!r) {
-                          try { r = f(s); } catch(e3) { r = null; }
-                      }
-                      """)}}
-                return (typeof r === 'string' && r !== s && r.length > 0) ? r : s;
-            } catch(e) { return s; }
-        };
-        """;
-
-    /// <summary>
-    /// Ищет специфический числовой аргумент, с которым плеер вызывает функцию.
-    /// (Zero-allocation парсинг через Span).
-    /// </summary>
-    private static int? FindCallNumber(string baseJs, string funcName)
-    {
-        var span = baseJs.AsSpan();
-        var targetSpan = string.Concat(funcName, "(").AsSpan();
-
-        int searchFrom = 0;
-        while (searchFrom < span.Length)
-        {
-            int idx = span[searchFrom..].IndexOf(targetSpan, StringComparison.Ordinal);
-            if (idx < 0) break;
-            idx += searchFrom;
-            searchFrom = idx + targetSpan.Length;
-
-            if (idx > 0 && (char.IsLetterOrDigit(span[idx - 1]) || span[idx - 1] is '_' or '$'))
-                continue;
-
-            int pos = idx + targetSpan.Length;
-            while (pos < span.Length && span[pos] is ' ' or '\t') pos++;
-
-            int numStart = pos;
-            while (pos < span.Length && char.IsAsciiDigit(span[pos])) pos++;
-            if (pos == numStart) continue;
-
-            int afterNum = pos;
-            while (afterNum < span.Length && span[afterNum] is ' ' or '\t') afterNum++;
-            if (afterNum >= span.Length || span[afterNum] != ',') continue;
-
-            if (int.TryParse(span[numStart..pos], out int num))
-            {
-                Log.Debug($"[SigCipher] Found call number {num} for '{funcName}'");
-                return num;
-            }
-        }
-
-        return null;
-    }
-
-    private string? BuildSigBundle(string baseJs, string funcName) => BuildDefaultBundle(baseJs, funcName);
-
-    // ═══════════════════════════════════════════════════════════════
-    // MANIFEST
-    // ═══════════════════════════════════════════════════════════════
-
-    private SigCipherManifest? TryLoadCachedManifest(string playerVersion)
-    {
-        try
-        {
-            if (_manifestCachePath is null || !File.Exists(_manifestCachePath))
-                return null;
-
-            var data = File.ReadAllText(_manifestCachePath);
-            var manifest = SigCipherManifest.Deserialize(data);
-
-            if (manifest?.PlayerVersion != playerVersion)
-            {
-                File.Delete(_manifestCachePath);
-                return null;
-            }
-
-            return manifest;
-        }
-        catch { return null; }
-    }
-
-    private void SaveManifest(SigCipherManifest manifest)
-    {
-        try
-        {
-            if (_manifestCachePath is null) return;
-            var dir = Path.GetDirectoryName(_manifestCachePath);
-            if (dir is not null) Directory.CreateDirectory(dir);
-            
-            File.WriteAllText(_manifestCachePath, manifest.Serialize());
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"[SigCipher] Manifest save failed: {ex.Message}");
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // SOLVER
-    // ═══════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Пытается сгенерировать манифест, выполнив JS один раз с тестовой строкой,
-    /// а затем алгоритмически вычислив операции трансформации.
-    /// </summary>
-    private bool TryInitWithSolver(PlayerContext context, string? funcName)
-    {
-        if (funcName is null) return false;
-
-        var callNumber = FindCallNumber(context.BaseJs, funcName);
-        string? decrypted = null;
-
-        // Попытка через bundle
-        var bundle = BuildSigBundle(context.BaseJs, funcName);
-        if (bundle is not null)
-        {
-            decrypted = TryRunOnce(bundle, funcName, TestSignature, callNumber);
-            if (decrypted is not null)
-                SaveDiagScript("solver_bundle", bundle, funcName);
-        }
-
-        // Попытка через full JS
-        if (decrypted is null)
-        {
-            var modifiedJs = InjectWindowExport(context.BaseJs, funcName);
-            decrypted = TryRunOnce(modifiedJs, funcName, TestSignature, callNumber);
-        }
-
-        if (decrypted is null) return false;
-
-        var ops = SigCipherSolver.Solve(TestSignature, decrypted);
-        if (ops is null || ops.Count < 3) return false;
-
-        _manifest = new SigCipherManifest(context.Version, ops, "solver");
-        SaveManifest(_manifest);
-        return true;
-    }
-
-    /// <summary>
-    /// Изолированное, разовое выполнение JS-кода для Solver'а.
-    /// Движок сразу же утилизируется.
-    /// </summary>
-    private static string? TryRunOnce(string jsCode, string funcName, string testInput, int? callNumber)
-    {
-        Engine? engine = null;
-        try
-        {
-            engine = new Engine(opt => opt
-                .TimeoutInterval(TimeSpan.FromSeconds(10))
-                .LimitRecursion(100)
-                .MaxStatements(1_000_000));
-
+            var engine = CreateFullEngine();
+            engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
             engine.Execute(BrowserStubs);
-            engine.Execute(jsCode);
+            engine.Execute("var _result = {};");
+            engine.Execute(preprocessedJs);
 
-            var wrapperScript = BuildSigWrapperScript(funcName, callNumber);
-            engine.Execute(wrapperScript);
+            engine.Execute("globalThis.__decryptorTransform = _result.sig;");
 
-            var result = engine.Invoke("__decryptorTransform", testInput).AsString();
-            return !string.IsNullOrEmpty(result) && result != testInput ? result : null;
+            var testOutput = engine.Invoke("__decryptorTransform", TestSignature).AsString();
+            if (!string.IsNullOrEmpty(testOutput) && testOutput != TestSignature)
+            {
+                FullEngine = engine;
+                FullFuncName = "__decryptorTransform";
+                sw.Stop();
+                Log.Info($"[SigCipher] AST-based Decryptor successfully initialized in {sw.ElapsedMilliseconds}ms!");
+                return;
+            }
+
+            engine.Dispose();
+            throw new InvalidOperationException("AST solver verification returned unmodified signature.");
         }
         catch (Exception ex)
         {
-            Log.Debug($"[SigCipher] TryRunOnce failed: {ex.Message}");
-            return null;
+            Log.Error($"[SigCipher] AST-based Decryptor critical failure: {ex.Message}");
+            throw;
         }
-        finally
-        {
-            engine?.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Если работает запасной вариант (Jint), асинхронно пытаемся вычислить 
-    /// манифест в фоне, чтобы в будущем отказаться от движков и ускорить процесс.
-    /// </summary>
-    private void TrySolveInBackground(string encrypted, string decrypted)
-    {
-        if (_manifest is not null || CurrentPlayerVersion is null) return;
-
-        // Fire-and-Forget. Ловим все ошибки, чтобы не уронить процесс.
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                var ops = SigCipherSolver.Solve(encrypted, decrypted);
-                if (ops is null || ops.Count < 3) return;
-
-                var manifest = new SigCipherManifest(CurrentPlayerVersion, ops, "background_solver");
-
-                int verified = 0, total = 0;
-                foreach (var sig in Cache.Keys.Take(5))
-                {
-                    if (Cache.TryGet(sig, out var expected))
-                    {
-                        total++;
-                        if (manifest.Decipher(sig) == expected) verified++;
-                    }
-                }
-
-                if (verified >= 3 || (total > 0 && verified == total))
-                {
-                    _manifest = manifest;
-                    SaveManifest(manifest);
-
-                    // Очищаем Jint движки, они больше не нужны
-                    ForceDisposeEngines();
-
-                    Log.Info($"[SigCipher] Background solver succeeded: {manifest}");
-                }
-            }
-            catch { /* ignore */ }
-        });
     }
 
     public override void Dispose()
     {
-        _manifest = null;
         base.Dispose();
     }
 }

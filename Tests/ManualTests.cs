@@ -5,16 +5,11 @@ namespace LMP.Tests;
 
 /// <summary>
 /// Точка входа для запуска тестов из кода (F10 в Debug).
-/// <para>
-/// Теперь делегирует в <see cref="TestRunner"/> с автоматическим discovery.
-/// Сохраняет обратную совместимость: legacy-методы всё ещё работают.
-/// </para>
 /// </summary>
 public static class ManualTests
 {
     /// <summary>
-    /// Запускает ВСЕ обнаруженные тесты: Unit → Integration → Benchmark.
-    /// Заменяет старую ручную регистрацию.
+    /// Запускает ВСЕ обнаруженные активные тесты: Unit → Integration → Benchmark.
     /// </summary>
     public static async Task RunAllAsync()
     {
@@ -48,7 +43,6 @@ public static class ManualTests
             }
         };
 
-        // Группируем вывод по категории
         var grouped = TestDiscovery.GetGrouped();
 
         foreach (var (category, tests) in grouped)
@@ -88,10 +82,6 @@ public static class ManualTests
     /// <summary>Полный pipeline тест.</summary>
     public static Task TestSigCipherFullAsync(string videoId = "dQw4w9WgXcQ") =>
         Integration.StreamPipelineTests.TestFullPipelineInternalAsync(Program.Services, videoId);
-
-    /// <summary>Полный тест солвера.</summary>
-    public static Task TestSolverFullAsync() =>
-        Unit.SigCipherSolverTests.RunAllAsync();
 
     /// <summary>Benchmark N-Token.</summary>
     public static Task BenchmarkNTokenAsync() =>

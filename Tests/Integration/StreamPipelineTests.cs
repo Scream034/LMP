@@ -12,26 +12,10 @@ namespace LMP.Tests.Integration;
 
 /// <summary>
 /// End-to-end тесты полного pipeline: видео → стрим → дешифровка → воспроизведение.
-/// <para>
-/// Проверяют что вся цепочка работает корректно:
-/// <list type="bullet">
-///   <item>PlayerResponse возвращает playable видео</item>
-///   <item>Stream manifest содержит audio-стримы</item>
-///   <item>SigCipher дешифрует подписи</item>
-///   <item>NToken дешифрует throttle-токены</item>
-///   <item>URL'ы валидны и возвращают аудио-данные</item>
-/// </list>
-/// </para>
+/// Гарантированно выполняют частичное скачивание байт для верификации обхода шифрования.
 /// </summary>
-/// <remarks>
-/// Параметры тестов (videoId, itag и т.д.) берутся из <see cref="TestConfig"/>.
-/// Редактируй test-config.json чтобы изменить их без перекомпиляции.
-/// </remarks>
 public static class StreamPipelineTests
 {
-    /// <summary>
-    /// Список videoId для тестов из конфигурации.
-    /// </summary>
     private static string[] TestVideoIds => TestConfig.Get().Pipeline.TestVideoIds;
 
     // ══════════════════════════════════════════════════════════════════
@@ -39,7 +23,7 @@ public static class StreamPipelineTests
     // ══════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Тестирует получение stream manifest и проверку лучшего audio-стрима.
+    /// Тестирует получение manifest и скачивание первого килобайта данных для верификации обхода шифрования.
     /// </summary>
     [TestMethod(TestCategory.Integration, "Pipeline: Stream Resolution",
         Order = 10, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 60)]
@@ -62,16 +46,23 @@ public static class StreamPipelineTests
         Log.Info($"[Test] Resolved {audioStreams.Count} streams in {sw.ElapsedMilliseconds}ms");
         Log.Info($"[Test] Best: itag={best.Itag}, {best.AudioCodec}, {best.Bitrate.KiloBitsPerSecond:F0}kbps");
 
-        using var request = new HttpRequestMessage(HttpMethod.Head, best.Url);
-        using var response = await SharedHttpClient.Instance.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        // Выполняем GET-запрос с ограничением Range (GVS отдает HTTP 206) для проверки реального чтения данных
+        using var request = new HttpRequestMessage(HttpMethod.Get, best.Url);
+        request.Headers.Range = new RangeHeaderValue(0, 1023);
 
-        Assert(response.IsSuccessStatusCode,
+        using var response = await SharedHttpClient.Instance.SendAsync(
+            request, HttpCompletionOption.ResponseContentRead, cts.Token);
+
+        Assert(response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.PartialContent,
             $"Stream URL failed: HTTP {(int)response.StatusCode}");
+
+        var bytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
+        Assert(bytes.Length > 0, "Downloaded stream chunk is empty");
+        Log.Info($"[Test] Real download verified: received {bytes.Length} bytes from stream.");
     }
 
     /// <summary>
-    /// Тестирует параллельное получение manifest для нескольких видео.
+    /// Тестирует параллельное получение manifest и верификацию скачивания для нескольких видео.
     /// </summary>
     [TestMethod(TestCategory.Integration, "Pipeline: Multi-Video",
         Order = 20, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 90)]
@@ -93,20 +84,25 @@ public static class StreamPipelineTests
 
                 var stream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
 
-                using var request = new HttpRequestMessage(HttpMethod.Head, stream.Url);
-                using var response = await SharedHttpClient.Instance.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, ct);
+                using var request = new HttpRequestMessage(HttpMethod.Get, stream.Url);
+                request.Headers.Range = new RangeHeaderValue(0, 1023);
 
-                if (response.IsSuccessStatusCode)
+                using var response = await SharedHttpClient.Instance.SendAsync(
+                    request, HttpCompletionOption.ResponseContentRead, ct);
+
+                if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.PartialContent)
                 {
-                    Interlocked.Increment(ref success);
-                    Log.Info($"[Test] ✓ {videoId} (itag={stream.Itag})");
+                    var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+                    if (bytes.Length > 0)
+                    {
+                        Interlocked.Increment(ref success);
+                        Log.Info($"[Test] ✓ {videoId} (itag={stream.Itag}, received {bytes.Length} bytes)");
+                        return;
+                    }
                 }
-                else
-                {
-                    Interlocked.Increment(ref failed);
-                    Log.Warn($"[Test] ✗ {videoId}: HTTP {(int)response.StatusCode}");
-                }
+
+                Interlocked.Increment(ref failed);
+                Log.Warn($"[Test] ✗ {videoId}: HTTP {(int)response.StatusCode}");
             }
             catch (Exception ex)
             {
@@ -176,12 +172,6 @@ public static class StreamPipelineTests
         await TestFullPipelineInternalAsync(services, "dQw4w9WgXcQ");
     }
 
-    /// <summary>
-    /// Внутренний метод для запуска full pipeline с произвольным videoId.
-    /// Вынесен из атрибутного метода чтобы поддержать legacy вызовы с параметром.
-    /// </summary>
-    /// <param name="services">DI-контейнер.</param>
-    /// <param name="videoId">ID видео для тестирования.</param>
     public static async Task TestFullPipelineInternalAsync(
         IServiceProvider services, string videoId = "dQw4w9WgXcQ")
     {
@@ -204,15 +194,21 @@ public static class StreamPipelineTests
         int verified = 0;
         foreach (var stream in audioStreams.Take(5))
         {
-            using var request = new HttpRequestMessage(HttpMethod.Head, stream.Url);
-            using var response = await SharedHttpClient.Instance.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            using var request = new HttpRequestMessage(HttpMethod.Get, stream.Url);
+            request.Headers.Range = new RangeHeaderValue(0, 1023);
 
-            if (response.IsSuccessStatusCode)
+            using var response = await SharedHttpClient.Instance.SendAsync(
+                request, HttpCompletionOption.ResponseContentRead, cts.Token);
+
+            if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.PartialContent)
             {
-                verified++;
-                Log.Info($"[Test] ✓ itag={stream.Itag} ({stream.AudioCodec}, " +
-                        $"{stream.Bitrate.KiloBitsPerSecond:F0}kbps)");
+                var bytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
+                if (bytes.Length > 0)
+                {
+                    verified++;
+                    Log.Info($"[Test] ✓ itag={stream.Itag} ({stream.AudioCodec}, " +
+                            $"{stream.Bitrate.KiloBitsPerSecond:F0}kbps, received {bytes.Length} bytes)");
+                }
             }
             else
             {
@@ -224,32 +220,14 @@ public static class StreamPipelineTests
         Log.Info($"[Test] Pipeline OK: {verified}/{Math.Min(5, audioStreams.Count)} verified");
     }
 
-    /// <summary>
-    /// Детальная диагностика stream URL для конкретного видео и itag.
-    /// Показывает ВСЕ параметры URL и делает тестовый запрос.
-    /// </summary>
-    /// <remarks>
-    /// Параметры берутся из <see cref="TestConfig.PipelineConfig"/>:
-    /// <list type="bullet">
-    ///   <item><c>debugVideoId</c> — ID видео для диагностики</item>
-    ///   <item><c>debugTargetItag</c> — целевой itag (null = любой)</item>
-    ///   <item><c>debugTestDownload</c> — скачивать ли тестовый chunk</item>
-    /// </list>
-    /// </remarks>
     [TestMethod(TestCategory.Integration, "Pipeline: Debug Specific Stream",
         Order = 50, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 120)]
     public static async Task DebugSpecificStreamAsync(IServiceProvider services)
     {
-        // ═══════════════════════════════════════════════════════════════
-        // КОНФИГУРАЦИЯ ИЗ test-config.json
-        // ═══════════════════════════════════════════════════════════════
-
         var config = TestConfig.Get().Pipeline;
         var videoId = config.DebugVideoId;
         var targetItag = config.DebugTargetItag;
         var testDownload = config.DebugTestDownload;
-
-        // ═══════════════════════════════════════════════════════════════
 
         var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
 
@@ -260,7 +238,6 @@ public static class StreamPipelineTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
-        // ═══ STEP 1: Get manifest ═══
         Log.Info("[STEP 1] Fetching stream manifest...");
         var sw = Stopwatch.StartNew();
 
@@ -289,7 +266,6 @@ public static class StreamPipelineTests
                      $"{s.Size.MegaBytes:F1}MB{marker}");
         }
 
-        // ═══ STEP 3: Select stream ═══
         var stream = (targetItag is not null
             ? audioStreams.FirstOrDefault(s => s.Itag == targetItag)
             : audioStreams.FirstOrDefault()) ?? throw new Exception($"Stream itag={targetItag} not found");
@@ -300,11 +276,9 @@ public static class StreamPipelineTests
         Log.Info($"  Bitrate: {stream.Bitrate.KiloBitsPerSecond:F0} kbps");
         Log.Info($"  Size: {stream.Size.MegaBytes:F2} MB");
 
-        // ═══ STEP 4: Analyze URL ═══
         Log.Info("\n[STEP 4] URL Analysis:");
         AnalyzeStreamUrl(stream.Url);
 
-        // ═══ STEP 5: Test download ═══
         if (testDownload)
         {
             Log.Info("\n[STEP 5] Testing download (first 1KB)...");
@@ -316,10 +290,6 @@ public static class StreamPipelineTests
         Log.Info("═══════════════════════════════════════════════════════════════");
     }
 
-    /// <summary>
-    /// Кросс-тест: сравнивает RAW URL из PlayerResponse с обработанным URL.
-    /// Помогает диагностировать проблемы с n-token и sig decryption.
-    /// </summary>
     [TestMethod(TestCategory.Integration, "Pipeline: Phase 3 - Raw URL from PlayerResponse",
     Order = 62, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 120)]
     public static async Task CrossTestPhase3Async(IServiceProvider services)
@@ -332,7 +302,6 @@ public static class StreamPipelineTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
-        // ═══ Получаем PlayerResponse напрямую ═══
         Log.Info("[1] Getting PlayerResponse...");
         var playerResponse = await youtube.Videos.GetPlayerResponseAsync(
             VideoId.Parse(videoId), cts.Token);
@@ -345,7 +314,6 @@ public static class StreamPipelineTests
 
         Log.Info("  ✓ PlayerResponse is playable");
 
-        // ═══ Извлекаем RAW URL из JSON (до любой обработки) ═══
         var streams = playerResponse.Streams.ToList();
         Log.Info($"  Found {streams.Count} streams");
 
@@ -372,7 +340,6 @@ public static class StreamPipelineTests
             Log.Info($"  Signature (first 40): {targetStream.Signature![..Math.Min(40, targetStream.Signature!.Length)]}...");
         }
 
-        // ═══ RAW URL Analysis ═══
         Log.Info($"\n[2] RAW URL from PlayerResponse:");
         Log.Info($"  Length: {rawUrl?.Length ?? 0}");
         if (rawUrl != null && rawUrl.Length > 0)
@@ -387,7 +354,6 @@ public static class StreamPipelineTests
             throw new Exception("Empty URL");
         }
 
-        // ═══ Тест RAW URL (без обработки n-token) ═══
         Log.Info("\n[3] Testing RAW URL (no n-token decryption)...");
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         client.DefaultRequestHeaders.Add("Origin", "https://music.youtube.com");
@@ -395,16 +361,13 @@ public static class StreamPipelineTests
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
-        // Тест A: RAW URL + range (без N-token decryption)
         var testUrlA = Core.Youtube.Utils.UrlEx.SetQueryParameter(rawUrl, "range", "0-1023");
         testUrlA = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "rn", "1");
         await RunTestWithDetails(client, "A. RAW URL (encrypted n)", testUrlA);
 
-        // Тест B: RAW URL без n (вообще удалим)
         var testUrlB = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlA, "n");
         await RunTestWithDetails(client, "B. RAW URL (n removed)", testUrlB);
 
-        // ═══ Теперь расшифровываем n-token ═══
         Log.Info("\n[4] Decrypting n-token...");
         var nToken = Core.Youtube.Utils.UrlEx.TryGetQueryParameterValue(rawUrl, "n");
         Log.Info($"  Encrypted n: {nToken}");
@@ -418,11 +381,9 @@ public static class StreamPipelineTests
                 var decryptedN = await decryptor.DecryptAsync(nToken, cts.Token);
                 Log.Info($"  Decrypted n: {decryptedN}");
 
-                // Тест C: с расшифрованным n
                 var testUrlC = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "n", decryptedN);
                 await RunTestWithDetails(client, "C. RAW URL (n decrypted)", testUrlC);
 
-                // Тест D: с расшифрованным n + убираем мусорные параметры
                 var testUrlD = testUrlC;
                 testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "ump");
                 testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "alr");
@@ -436,7 +397,6 @@ public static class StreamPipelineTests
             }
         }
 
-        // ═══ Тест E: получаем URL через нормальный StreamClient pipeline ═══
         Log.Info("\n[5] Full StreamClient pipeline...");
         try
         {
@@ -452,7 +412,6 @@ public static class StreamPipelineTests
                 pipelineUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(pipelineUrl, "rn", "1");
                 await RunTestWithDetails(client, "E. StreamClient pipeline URL", pipelineUrl);
 
-                // Сравниваем что изменилось
                 Log.Info("\n[6] Diff: RAW vs Pipeline URL:");
                 CompareUrls(rawUrl, stream.Url);
             }
@@ -463,43 +422,6 @@ public static class StreamPipelineTests
         }
 
         Log.Info("\n═══ PHASE 3 ЗАВЕРШЕНА ═══");
-        Log.Info("A=403, C=200 → N-token был проблемой");
-        Log.Info("A=403, C=403 → Проблема в самом PlayerResponse");
-        Log.Info("A=200 → N-token throttle (скорость, не доступ)");
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // HELPERS
-    // ══════════════════════════════════════════════════════════════════
-
-    private static async Task RunTestWithDetails(HttpClient client, string name, string url)
-    {
-        try
-        {
-            using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            using var res = await client.SendAsync(req);
-
-            var code = (int)res.StatusCode;
-            string status = (code is 200 or 206) ? "✅ OK" : $"❌ {code}";
-
-            Log.Info($"  {name,-45} -> {status}");
-
-            if (code == 403)
-            {
-                var body = await res.Content.ReadAsStringAsync();
-                if (body.Length > 0)
-                    Log.Info($"    Response: {body[..Math.Min(100, body.Length)]}");
-            }
-            else if (code is 200 or 206)
-            {
-                var bytes = await res.Content.ReadAsByteArrayAsync();
-                Log.Info($"    Got {bytes.Length} bytes, magic: {BitConverter.ToString(bytes.Take(8).ToArray())}");
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"  {name,-45} -> ERROR: {ex.Message}");
-        }
     }
 
     private static void CompareUrls(string rawUrl, string processedUrl)
@@ -526,9 +448,6 @@ public static class StreamPipelineTests
         if (diffCount == 0) Log.Info("    No differences (only n-token should differ)");
     }
 
-    /// <summary>
-    /// Детальный анализ URL стрима.
-    /// </summary>
     private static void AnalyzeStreamUrl(string url)
     {
         var uri = new Uri(url);
@@ -540,7 +459,6 @@ public static class StreamPipelineTests
 
         Log.Info($"\n  Query parameters ({queryParams.Count}):");
 
-        // Critical params
         var critical = new[] { "n", "sig", "lsig", "c", "expire", "itag", "ip" };
 
         foreach (var param in queryParams.OrderBy(p => p.Key))
@@ -554,20 +472,17 @@ public static class StreamPipelineTests
 
             Log.Info($"{prefix}{param.Key} = {value}");
 
-            // Detailed analysis for signatures
             if (param.Key is "sig" or "lsig")
             {
                 AnalyzeSignatureParam(param.Key, param.Value);
             }
 
-            // Detailed analysis for n-token
             if (param.Key == "n")
             {
                 AnalyzeNTokenParam(param.Value);
             }
         }
 
-        // Check missing params
         var missing = critical.Where(p => !queryParams.ContainsKey(p)).ToList();
         if (missing.Count > 0)
         {
@@ -607,9 +522,6 @@ public static class StreamPipelineTests
         Log.Info($"         Value: {value}");
     }
 
-    /// <summary>
-    /// Тестирует скачивание первого KB стрима.
-    /// </summary>
     private static async Task TestStreamDownloadAsync(string url, CancellationToken ct)
     {
         var testUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(url, "range", "0-1023");
@@ -624,7 +536,6 @@ public static class StreamPipelineTests
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
         using var request = new HttpRequestMessage(HttpMethod.Get, testUrl);
 
-        // Browser-like headers
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
         request.Headers.Add("Origin", "https://music.youtube.com");
         request.Headers.Add("Referer", "https://music.youtube.com/");
@@ -655,7 +566,6 @@ public static class StreamPipelineTests
             Log.Info($"  ✓ Downloaded {content.Length} bytes");
             Log.Info($"  ✓ Magic bytes: {BitConverter.ToString(content.Take(16).ToArray())}");
 
-            // Check format
             bool isWebM = content.Length >= 4 &&
                 content[0] == 0x1A && content[1] == 0x45 &&
                 content[2] == 0xDF && content[3] == 0xA3;
@@ -673,12 +583,6 @@ public static class StreamPipelineTests
             if (response.StatusCode == HttpStatusCode.Forbidden)
             {
                 Log.Error("\n  ═══ 403 FORBIDDEN ANALYSIS ═══");
-                Log.Error("  Possible causes:");
-                Log.Error("    1. n-token NOT decrypted (still encrypted)");
-                Log.Error("    2. sig/lsig missing Base64 padding (== or =)");
-                Log.Error("    3. URL expired (check 'expire' timestamp)");
-                Log.Error("    4. Wrong 'c' client parameter");
-                Log.Error("    5. IP mismatch or geo-blocking");
             }
         }
     }
@@ -686,5 +590,35 @@ public static class StreamPipelineTests
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
+    }
+
+    private static async Task RunTestWithDetails(HttpClient client, string name, string url)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            using var res = await client.SendAsync(req);
+
+            var code = (int)res.StatusCode;
+            string status = (code is 200 or 206) ? "✅ OK" : $"❌ {code}";
+
+            Log.Info($"  {name,-45} -> {status}");
+
+            if (code == 403)
+            {
+                var body = await res.Content.ReadAsStringAsync();
+                if (body.Length > 0)
+                    Log.Info($"    Response: {body[..Math.Min(100, body.Length)]}");
+            }
+            else if (code is 200 or 206)
+            {
+                var bytes = await res.Content.ReadAsByteArrayAsync();
+                Log.Info($"    Got {bytes.Length} bytes, magic: {BitConverter.ToString(bytes.Take(8).ToArray())}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"  {name,-45} -> ERROR: {ex.Message}");
+        }
     }
 }

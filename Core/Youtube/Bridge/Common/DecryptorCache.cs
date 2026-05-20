@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Threading;
 
 namespace LMP.Core.Youtube.Bridge.Common;
 
@@ -10,7 +11,7 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
     private readonly int _maxDisk;
     private readonly Lock _cleanupLock = new();
     private volatile bool _cleanupInProgress;
-    private volatile bool _isDirty;
+    private int _isDirty; // Атомарный флаг изменений (0 - чистый, 1 - грязный)
     private long _lastSaveTicks;
     private string? _playerVersion;
 
@@ -45,14 +46,11 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
     {
         var ticks = Environment.TickCount64;
         _memory[key] = (value, ticks);
-        _isDirty = true;
+        Interlocked.Exchange(ref _isDirty, 1);
 
         if (_memory.Count > _maxMemory * 0.8 && !_cleanupInProgress)
             TriggerCleanup();
 
-        // ═══ Interlocked compare to prevent multiple concurrent SaveAsync calls ═══
-        // Original code: every Set() past interval spawns a fire-and-forget Task.Run,
-        // leading to multiple concurrent enumerations of _memory.
         var lastSave = Volatile.Read(ref _lastSaveTicks);
         if (ticks - lastSave > SaveIntervalMs &&
             Interlocked.CompareExchange(ref _lastSaveTicks, ticks, lastSave) == lastSave)
@@ -97,21 +95,14 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
 
     public async Task SaveAsync()
     {
-        if (!_isDirty) return;
+        if (Interlocked.CompareExchange(ref _isDirty, 0, 1) == 0) return;
 
         _lastSaveTicks = Environment.TickCount64;
-        _isDirty = false;
 
         try
         {
             Directory.CreateDirectory(CacheFolder);
 
-            // ═══ Take a snapshot of the ConcurrentDictionary before LINQ iteration ═══
-            // ConcurrentDictionary.GetEnumerator() is thread-safe for reads, but
-            // OrderByDescending → ToDictionary internally calls CopyTo on an array
-            // whose size was computed from .Count — if Set() adds entries between
-            // the Count read and CopyTo, ArgumentException is thrown.
-            // Solution: materialize to array first (single atomic-ish enumeration).
             KeyValuePair<TKey, (TValue Value, long Ticks)>[] snapshot;
             try
             {
@@ -119,8 +110,6 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
             }
             catch (ArgumentException)
             {
-                // Extremely rare: concurrent resize during ToArray.
-                // Retry once — the dictionary will have settled.
                 snapshot = [.. _memory];
             }
 
@@ -143,13 +132,14 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
         catch (Exception ex)
         {
             Log.Debug($"[Cache] Save failed: {ex.Message}");
+            Interlocked.Exchange(ref _isDirty, 1); // Возвращаем статус "грязного" кэша в случае ошибки записи
         }
     }
 
     public void Clear()
     {
         _memory.Clear();
-        _isDirty = true;
+        Interlocked.Exchange(ref _isDirty, 1);
     }
 
     public int Count => _memory.Count;
@@ -164,9 +154,8 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
             if (_memory.Count <= _maxMemory * 0.8) return;
             _cleanupInProgress = true;
 
-            // ═══ Snapshot before LINQ to avoid race with concurrent Set() ═══
             var toRemove = _memory
-                .ToArray() // snapshot — ConcurrentDictionary.ToArray() is safer than lazy enumeration
+                .ToArray()
                 .OrderBy(static kvp => kvp.Value.Ticks)
                 .Take(_maxMemory / 2)
                 .Select(static kvp => kvp.Key);

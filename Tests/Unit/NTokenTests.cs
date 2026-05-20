@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using Jint;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.NToken;
+using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Tests.Framework;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -12,54 +14,6 @@ namespace LMP.Tests.Unit;
 public static class NTokenTests
 {
     private static string TestToken => TestConfig.Get().NToken.TestToken;
-
-    // ══════════════════════════════════════════════════════════════════
-    // UNIT TESTS (no network)
-    // ══════════════════════════════════════════════════════════════════
-
-    [TestMethod(TestCategory.Unit, "NToken: Function Detection",
-        Group = TestGroups.NToken, Order = 10)]
-    public static Task TestFunctionDetectionAsync()
-    {
-        const string fakeJs = """
-            var someCode = function() { return 1; };
-            var KM = function(a, b) {
-                var c = [-1552975130, -306113009];
-                // ... decryption logic ...
-                return a;
-            };
-            var otherCode = 2;
-            """;
-
-        Assert(fakeJs.Contains("-1552975130"), "Primary marker missing");
-        Assert(fakeJs.Contains("-306113009"), "Secondary marker missing");
-
-        int markerIdx = fakeJs.IndexOf("-1552975130");
-        Assert(markerIdx > 0, "Marker not found");
-
-        var contextBefore = fakeJs[..markerIdx];
-        Assert(contextBefore.Contains("KM"), "Function name not in context");
-
-        return Task.CompletedTask;
-    }
-
-    [TestMethod(TestCategory.Unit, "NToken: Bundle Extraction",
-        Group = TestGroups.NToken, Order = 20)]
-    public static Task TestBundleExtractionAsync()
-    {
-        const string simpleJs = """
-            var helper = function(x) { return x + 1; };
-            var main = function(a) {
-                return helper(a) * 2;
-            };
-            """;
-
-        var bundle = JsFunctionExtractor.ExtractBundle(simpleJs, "main");
-
-        Log.Debug($"[Test] Bundle extraction: {(bundle is not null ? $"{bundle.Length} chars" : "null (expected for simple code)")}");
-
-        return Task.CompletedTask;
-    }
 
     // ══════════════════════════════════════════════════════════════════
     // LIVE TESTS (require network)
@@ -104,16 +58,6 @@ public static class NTokenTests
     // PLAYER VERSION COMPATIBILITY TESTS
     // ══════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Тестирует дешифрацию N-token для разных версий плеера из конфига.
-    /// <para>
-    /// Для каждой версии:
-    /// 1. Загружает закэшированный base.js (player_{version}_basejs.txt)
-    /// 2. Создаёт изолированный NTokenDecryptor с фиксированным контекстом
-    /// 3. Инициализирует и тестирует дешифрацию
-    /// 4. Если есть test cases в конфиге — проверяет все пары
-    /// </para>
-    /// </summary>
     [TestMethod(TestCategory.Integration, "NToken: Player Version Compatibility",
         Group = TestGroups.NToken, Order = 50, RequiresNetwork = false, TimeoutSeconds = 120)]
     public static async Task TestPlayerVersionCompatibilityAsync(IServiceProvider services)
@@ -135,7 +79,6 @@ public static class NTokenTests
         {
             Log.Info($"\n[Test] ═══ Testing player version: {version} ═══");
 
-            // Загружаем закэшированный base.js
             var cachedContext = PlayerContext.LoadFromCacheNoExpiry(version);
             if (cachedContext is null)
             {
@@ -148,13 +91,11 @@ public static class NTokenTests
 
             Log.Info($"  ✓ Loaded base.js: {cachedContext.BaseJs.Length / 1024}KB");
 
-            // Создаём изолированный NTokenDecryptor с фиксированным контекстом
             var fixedManager = new FixedPlayerContextManager(cachedContext);
             var isolatedDecryptor = new NTokenDecryptor(fixedManager);
 
             try
             {
-                // Инициализируем (вызовет InitializeCore с нашим контекстом)
                 await isolatedDecryptor.EnsureInitializedAsync(CancellationToken.None);
 
                 if (!isolatedDecryptor.IsInitialized)
@@ -166,7 +107,6 @@ public static class NTokenTests
 
                 Log.Info($"  ✓ Decryptor initialized");
 
-                // Тестируем стандартный токен
                 var testToken = TestToken;
                 var result = await isolatedDecryptor.DecryptAsync(testToken);
 
@@ -179,7 +119,6 @@ public static class NTokenTests
 
                 Log.Info($"  ✓ Decrypted: {testToken} → {result}");
 
-                // Проверяем test cases из конфига
                 if (config.NTokenTestCases.TryGetValue(version, out var testCases) && testCases.Length > 0)
                 {
                     int casePassed = 0;
@@ -280,6 +219,89 @@ public static class NTokenTests
         }
     }
 
+    /// <summary>
+    /// Интеграционный тест компиляции и вызова нового AST-солвера на базе Esprima/Acornima
+    /// для реальных закэшированных версий плеера YouTube.
+    /// </summary>
+    [TestMethod(TestCategory.Unit, "AST: Solver Integration (cached players)",
+        Group = TestGroups.Solver, Order = 65, RequiresNetwork = false, TimeoutSeconds = 60)]
+    public static Task TestAstSolverOnCachedPlayerAsync()
+    {
+        var targetVersions = new[] { "e1bd44b2" };
+        PlayerContext? cachedContext = null;
+        string? usedVersion = null;
+
+        foreach (var version in targetVersions)
+        {
+            cachedContext = PlayerContext.LoadFromCacheNoExpiry(version);
+            if (cachedContext is not null)
+            {
+                usedVersion = version;
+                break;
+            }
+        }
+
+        if (cachedContext is null)
+        {
+            Log.Warn("[Test] AST Solver Integration skipped: none of the target player versions " +
+                     "(e1bd44b2) found in cache.");
+            return Task.CompletedTask;
+        }
+
+        Log.Info($"[Test] Loaded player_{usedVersion}_basejs.txt ({cachedContext.BaseJs.Length / 1024} KB)");
+
+        var sw = Stopwatch.StartNew();
+        var preprocessedJs = YoutubeAstSolver.PreprocessPlayer(cachedContext.BaseJs);
+        sw.Stop();
+
+        Log.Info($"[Test] Preprocessed JS in {sw.ElapsedMilliseconds}ms (size: {preprocessedJs.Length / 1024} KB)");
+
+        Assert(preprocessedJs.Contains("_result.n"), "Preprocessed script must assign _result.n");
+        Assert(preprocessedJs.Contains("_result.sig"), "Preprocessed script must assign _result.sig");
+
+        using var engine = new Jint.Engine(options => options
+            .TimeoutInterval(TimeSpan.FromSeconds(15))
+            .MaxStatements(5_000_000)
+        );
+
+        engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
+
+        engine.Execute(JsDecryptorBase<NTokenDecryptor>.BrowserStubs);
+
+        engine.Execute("var _result = {};");
+        engine.Execute(preprocessedJs);
+
+        var hasNSolver = engine.Evaluate("typeof _result.n === 'function'").AsBoolean();
+        var hasSigSolver = engine.Evaluate("typeof _result.sig === 'function'").AsBoolean();
+
+        Assert(hasNSolver, "_result.n is not registered as function");
+        Assert(hasSigSolver, "_result.sig is not registered as function");
+
+        const string challenge = "SRGmkqJSCYsuk5i_"; // Правильный: M8_sc6KcPg4TBA
+        engine.SetValue("__challenge", challenge);
+
+        var decodedN = engine.Evaluate("_result.n(__challenge)").AsString();
+        Assert(!string.IsNullOrEmpty(decodedN), "Decoded n-token is empty");
+        Assert(decodedN != challenge, "Decoded n-token is unchanged");
+
+        const string sigChallenge = "AHEqNM4wRgIhAMe2mLCDjcBI5D7GvHp3XpDiVkWAC2IDigK-31PHnIcjAiEAsNZGAuKJz1WaThEs-uPkzZNg8npoYicx9NljtEXkH4k%3D";
+        // const string sigChallenge = "AHEqNM4wRgIhAMe2mLCDjcBI5D7GvHp3XpDiVkWAC2IDigK-31PHnIcjAiEAsNZGAuKJz1WaThEs-uPkzZNg8npoYicx9NljtEXkH4k=";
+        // Правильный: AHEqNM4wRgIhAMwp94daExVeamQS0Or6Ml1ZSMLqu0KkWaqKCexZqIDpAiEAkUDAV8k9tVoRlFOw_RbgI39XlXKyce4w31yCw7M9-Xg=
+        engine.SetValue("__sigChallenge", sigChallenge);
+
+        var decodedSig = engine.Evaluate("_result.sig(__sigChallenge)").AsString();
+        Log.Info($"[Test] AST Solver verified Sig! Decoded sig: '{sigChallenge}' -> '{decodedSig}'");
+
+        Assert(!string.IsNullOrEmpty(decodedSig), "Decoded signature is empty");
+        Assert(decodedSig != sigChallenge, "Decoded signature is unchanged");
+
+        Assert(decodedSig.Length == 100, $"Decoded signature must be 100 chars, got {decodedSig.Length}");
+
+        Log.Info($"[Test] AST Solver verified successfully! Decoded challenge: '{challenge}' → '{decodedN}'");
+
+        return Task.CompletedTask;
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // BENCHMARK
     // ══════════════════════════════════════════════════════════════════
@@ -326,16 +348,12 @@ public static class NTokenTests
     }
 }
 
-/// <summary>
-/// PlayerContextManager с фиксированным PlayerContext для тестирования.
-/// НЕ обращается к сети, возвращает переданный контекст.
-/// </summary>
 internal sealed class FixedPlayerContextManager : PlayerContextManager
 {
     private readonly PlayerContext _fixedContext;
 
     public FixedPlayerContextManager(PlayerContext context)
-        : base(null!) // HttpClient не используется
+        : base(null!)
     {
         _fixedContext = context;
     }

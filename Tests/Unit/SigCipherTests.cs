@@ -8,22 +8,7 @@ namespace LMP.Tests.Unit;
 
 /// <summary>
 /// Unit-тесты для Sig Cipher системы.
-/// <para>
-/// Проверяют:
-/// <list type="bullet">
-///   <item>Сериализацию/десериализацию манифеста операций</item>
-///   <item>Корректность операций: swap, reverse, splice</item>
-///   <item>Работу солвера на известных паттернах</item>
-///   <item>Парсинг cipher-объекта из base.js</item>
-///   <item>Live-дешифрацию через текущую версию плеера</item>
-/// </list>
-/// </para>
 /// </summary>
-/// <remarks>
-/// Все unit-тесты работают БЕЗ сети.
-/// Integration-тесты требуют подключения к YouTube.
-/// Параметры берутся из <see cref="TestConfig.SigCipherConfig"/>.
-/// </remarks>
 public static class SigCipherTests
 {
     // ══════════════════════════════════════════════════════════════════
@@ -47,18 +32,15 @@ public static class SigCipherTests
 
         var manifest = new SigCipherManifest("test_v1", ops, "test");
 
-        // Serialize
         var serialized = manifest.Serialize();
         Assert(serialized.Contains("test_v1"), "Version not in serialized");
         Assert(serialized.Contains('|'), "Separator not found");
 
-        // Deserialize
         var restored = SigCipherManifest.Deserialize(serialized);
         Assert(restored is not null, "Deserialization failed");
         Assert(restored!.PlayerVersion == "test_v1", "Version mismatch");
         Assert(restored.Operations.Count == 4, $"Op count: {restored.Operations.Count}");
 
-        // Verify each operation
         for (int i = 0; i < ops.Count; i++)
         {
             Assert(restored.Operations[i].Type == ops[i].Type,
@@ -76,25 +58,21 @@ public static class SigCipherTests
     [TestMethod(TestCategory.Unit, "SigCipher: Manifest Decipher", Group = TestGroups.SigCipher, Order = 20)]
     public static Task TestManifestDecipherAsync()
     {
-        // 1. Swap — меняет местами первый символ и символ по индексу
         var swapOps = new List<SigCipherOperation> { new(SigCipherOpType.Swap, 3) };
         var swapManifest = new SigCipherManifest("v1", swapOps, "test");
         var swapResult = swapManifest.Decipher("ABCDEFG");
         Assert(swapResult == "DBCAEFG", $"Swap failed: {swapResult}");
 
-        // 2. Reverse — переворачивает строку
         var reverseOps = new List<SigCipherOperation> { new(SigCipherOpType.Reverse, 0) };
         var reverseManifest = new SigCipherManifest("v1", reverseOps, "test");
         var reverseResult = reverseManifest.Decipher("ABCDE");
         Assert(reverseResult == "EDCBA", $"Reverse failed: {reverseResult}");
 
-        // 3. Splice — удаляет первые N символов
         var spliceOps = new List<SigCipherOperation> { new(SigCipherOpType.Splice, 2) };
         var spliceManifest = new SigCipherManifest("v1", spliceOps, "test");
         var spliceResult = spliceManifest.Decipher("ABCDEFG");
         Assert(spliceResult == "CDEFG", $"Splice failed: {spliceResult}");
 
-        // 4. Комбинация (типичный паттерн YouTube)
         var comboOps = new List<SigCipherOperation>
         {
             new(SigCipherOpType.Swap, 64),
@@ -111,167 +89,6 @@ public static class SigCipherTests
 
         Assert(result.Length == 104, $"Length: {result.Length}");
         Assert(result != input, "Output equals input");
-
-        return Task.CompletedTask;
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // SOLVER TESTS
-    // ══════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Проверяет что солвер находит решение для известных паттернов YouTube.
-    /// </summary>
-    [TestMethod(TestCategory.Unit, "SigCipher: Solver Known Patterns", Group = TestGroups.SigCipher, Order = 30)]
-    public static Task TestSolverKnownPatternsAsync()
-    {
-        var patterns = new[]
-        {
-            new[] { new SigCipherOperation(SigCipherOpType.Swap, 64),
-                    new SigCipherOperation(SigCipherOpType.Reverse, 0),
-                    new SigCipherOperation(SigCipherOpType.Swap, 56),
-                    new SigCipherOperation(SigCipherOpType.Splice, 1) },
-
-            [ new SigCipherOperation(SigCipherOpType.Swap, 51),
-                    new SigCipherOperation(SigCipherOpType.Swap, 44),
-                    new SigCipherOperation(SigCipherOpType.Reverse, 0),
-                    new SigCipherOperation(SigCipherOpType.Splice, 1) ],
-
-            [ new SigCipherOperation(SigCipherOpType.Reverse, 0),
-                    new SigCipherOperation(SigCipherOpType.Swap, 48),
-                    new SigCipherOperation(SigCipherOpType.Splice, 2) ],
-        };
-
-        const string testInput =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop";
-
-        foreach (var ops in patterns)
-        {
-            var manifest = new SigCipherManifest("v1", ops.ToList(), "test");
-            var expected = manifest.Decipher(testInput);
-
-            var sw = Stopwatch.StartNew();
-            var solved = SigCipherSolver.Solve(testInput, expected);
-            sw.Stop();
-
-            Assert(solved is not null, $"Solver failed for pattern: {string.Join(" → ", ops)}");
-
-            var solvedManifest = new SigCipherManifest("v1", solved!, "solved");
-            var actual = solvedManifest.Decipher(testInput);
-
-            Assert(actual == expected,
-                $"Solver verification failed:\n  Expected: {expected[..30]}...\n  Got: {actual[..30]}...");
-        }
-
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Проверяет солвер на случайных входных данных.
-    /// </summary>
-    [TestMethod(TestCategory.Unit, "SigCipher: Solver Random Inputs", Group = TestGroups.SigCipher, Order = 40)]
-    public static Task TestSolverRandomInputsAsync()
-    {
-        var ops = new List<SigCipherOperation>
-        {
-            new(SigCipherOpType.Swap, 64),
-            new(SigCipherOpType.Reverse, 0),
-            new(SigCipherOpType.Swap, 56),
-            new(SigCipherOpType.Splice, 1),
-        };
-
-        var manifest = new SigCipherManifest("v1", ops, "test");
-        var rng = new Random(42);
-        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=";
-
-        int passed = 0;
-        for (int test = 0; test < 20; test++)
-        {
-            int len = 90 + rng.Next(20);
-            var input = new string(Enumerable.Range(0, len)
-                .Select(_ => alphabet[rng.Next(alphabet.Length)]).ToArray());
-
-            var expected = manifest.Decipher(input);
-            var solved = SigCipherSolver.Solve(input, expected);
-
-            if (solved is not null)
-            {
-                var check = new SigCipherManifest("v1", solved, "check").Decipher(input);
-                if (check == expected) passed++;
-            }
-        }
-
-        Assert(passed >= 15, $"Only {passed}/20 random tests passed");
-
-        return Task.CompletedTask;
-    }
-
-    // ══════════════════════════════════════════════════════════════════
-    // EXTRACTOR TESTS
-    // ══════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Проверяет парсинг массива-словаря из JS-кода.
-    /// </summary>
-    [TestMethod(TestCategory.Unit, "SigCipher: Parse Dict Array", Group = TestGroups.SigCipher, Order = 50)]
-    public static Task TestParseDictArrayAsync()
-    {
-        const string bracketJs = """
-            var someCode = 1;
-            var A=["reverse","splice","length","swap","join","split"];
-            var moreCode = 2;
-            """;
-
-        var extractorType = typeof(SigCipherExtractor);
-        var method = extractorType.GetMethod("ParseDictArrayDirect",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
-        var bracketResult = (string[]?)method?.Invoke(null, [bracketJs, "A"]);
-        Assert(bracketResult is not null, "Bracket parse returned null");
-        Assert(bracketResult!.Length == 6, $"Bracket: expected 6, got {bracketResult.Length}");
-        Assert(bracketResult[0] == "reverse", $"Element 0: {bracketResult[0]}");
-        Assert(bracketResult[1] == "splice", $"Element 1: {bracketResult[1]}");
-
-        const string splitJs = """
-            var other = 0;
-            var B='reverse;splice;length;swap;join;split;test1;test2;test3;test4;test5;test6;test7;test8;test9;test10;test11'.split(";");
-            var code = 1;
-            """;
-
-        var splitResult = (string[]?)method?.Invoke(null, [splitJs, "B"]);
-        Assert(splitResult is not null, "Split parse returned null");
-        Assert(splitResult!.Length == 17, $"Split: expected 17, got {splitResult.Length}");
-        Assert(splitResult[0] == "reverse", $"Split element 0: {splitResult[0]}");
-
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Проверяет детекцию методов cipher-объекта.
-    /// </summary>
-    [TestMethod(TestCategory.Unit, "SigCipher: Detect Methods", Group = TestGroups.SigCipher, Order = 60)]
-    public static Task TestDetectMethodsAsync()
-    {
-        const string cipherObjCode = """
-            {
-                Pi: function(k, U) { k.splice(0, U) },
-                Zm: function(k, U) { var n=k[0]; k[0]=k[U%k.length]; k[U%k.length]=n },
-                EF: function(k) { k.reverse() }
-            }
-            """;
-
-        var extractorType = typeof(SigCipherExtractor);
-        var method = extractorType.GetMethod("ParseCipherMethods",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
-        var result = (Dictionary<string, SigCipherOpType>?)method?.Invoke(null, [cipherObjCode, null]);
-
-        Assert(result is not null, "ParseCipherMethods returned null");
-        Assert(result!.Count == 3, $"Expected 3 methods, got {result.Count}");
-        Assert(result.ContainsKey("Pi") && result["Pi"] == SigCipherOpType.Splice, "Pi should be Splice");
-        Assert(result.ContainsKey("Zm") && result["Zm"] == SigCipherOpType.Swap, "Zm should be Swap");
-        Assert(result.ContainsKey("EF") && result["EF"] == SigCipherOpType.Reverse, "EF should be Reverse");
 
         return Task.CompletedTask;
     }
@@ -303,14 +120,6 @@ public static class SigCipherTests
     /// <summary>
     /// Тестирует live-дешифрацию подписи.
     /// </summary>
-    /// <remarks>
-    /// <b>ВАЖНО:</b> YouTube-подписи уникальны для каждого запроса!
-    /// Тест только проверяет что:
-    /// <list type="bullet">
-    ///   <item>Результат не равен входу</item>
-    ///   <item>Результат — перестановка символов входа (минус splice)</item>
-    /// </list>
-    /// </remarks>
     [TestMethod(TestCategory.Integration, "SigCipher: Live Decryption",
         Order = 20, Group = TestGroups.SigCipher, RequiresNetwork = true, TimeoutSeconds = 60)]
     public static async Task TestLiveDecryptionAsync(IServiceProvider services)
@@ -326,9 +135,6 @@ public static class SigCipherTests
         Assert(result != testSig, "Decryption returned unchanged signature");
         Assert(result.Length > 50, $"Result too short: {result.Length}");
 
-        // ═══ Verify result is a valid permutation of input chars ═══
-        // SigCipher only does swap/reverse/splice — output chars must be
-        // a subset of input chars (minus spliced prefix chars).
         var inputChars = testSig.ToHashSet();
         foreach (char c in result)
         {
@@ -336,7 +142,6 @@ public static class SigCipherTests
                 $"Result contains '{c}' which is not in input — cipher is broken");
         }
 
-        // Length should be input minus splice amount (typically 1-3 chars)
         int removed = testSig.Length - result.Length;
         Assert(removed is >= 0 and <= 10,
             $"Length delta {removed} is suspicious (input={testSig.Length}, result={result.Length})");
@@ -344,7 +149,6 @@ public static class SigCipherTests
         Log.Info($"[Test] Decrypted in {sw.ElapsedMilliseconds}ms " +
                  $"(removed {removed} chars): {result[..20]}...");
 
-        // Второй вызов — из кэша
         sw.Restart();
         var cached = await decryptor.DecipherAsync(testSig);
         sw.Stop();

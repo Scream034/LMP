@@ -12,6 +12,7 @@ namespace LMP.Core.Youtube.Bridge.SigCipher;
 /// какие значения параметра дают правильный символ на ключевых позициях.
 /// Это сужает пространство поиска с O(99^N) до O(K^N) где K ≈ 1-5.
 /// </summary>
+[Obsolete("Это будет вырезано в будущих обновлениях, не использовать!")]
 public static class SigCipherSolver
 {
     private static readonly OpKind[][] KnownPatterns =
