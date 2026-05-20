@@ -28,7 +28,7 @@ public sealed class NotificationPanelViewModel : ViewModelBase
     /// </summary>
     private int _openGeneration;
 
-    private ObservableCollection<Notification> Notifications
+    public ObservableCollection<Notification> Notifications
         => _notificationService.Notifications;
 
     /// <summary>
