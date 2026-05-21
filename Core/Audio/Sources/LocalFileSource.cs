@@ -245,6 +245,9 @@ public sealed class LocalFileSource : IAudioSource
     /// <remarks>No-op — нет фоновых операций для локальных файлов.</remarks>
     public void CancelPendingOperations() { }
 
+    /// <inheritdoc/>
+    public void SetPlaybackActive(bool active) { }
+
     #endregion
 
     #region Dispose

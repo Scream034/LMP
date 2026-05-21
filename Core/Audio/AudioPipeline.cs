@@ -665,16 +665,24 @@ public sealed class AudioPipeline : IAsyncDisposable
         return _backend.WaitForWarmup(timeoutMs);
     }
 
+    /// <summary>
+    /// Запускает воспроизведение и возобновляет сетевой буфер источника.
+    /// </summary>
     public void Start()
     {
         if (_disposed) return;
+        _source.SetPlaybackActive(true); // Открываем сетевой затвор
         _backend.Start();
         Log.Debug("[AudioPipeline] Backend started");
     }
 
+    /// <summary>
+    /// Приостанавливает воспроизведение и замораживает сетевой буфер источника.
+    /// </summary>
     public void Stop()
     {
         if (_disposed) return;
+        _source.SetPlaybackActive(false); // Закрываем сетевой затвор на паузе
         _backend.Stop();
     }
 

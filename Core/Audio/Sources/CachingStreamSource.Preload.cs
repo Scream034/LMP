@@ -58,6 +58,19 @@ public sealed partial class CachingStreamSource
             try
             {
                 bool isSuspended = !_suspendGate.IsSet;
+                bool isPaused = !_playbackGate.IsSet;
+
+                // ═══ PAUSE DETECT ═══
+                if (isPaused)
+                {
+                    // Если плеер поставлен на паузу, засыпаем до нажатия Resume или отмены, используя константу
+                    try
+                    {
+                        _playbackGate.Wait(PlaybackGateTimeoutMs, ct);
+                    }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
 
                 if (isSuspended)
                 {
@@ -108,13 +121,12 @@ public sealed partial class CachingStreamSource
                         }
                     }
 
-                    // ═══ _suspendGate.Wait вместо Task.Delay ═══
                     // Мгновенный resume вместо ожидания до 200ms.
                     // При Resume() _suspendGate.Set() немедленно разблокирует Wait.
                     // Timeout 500ms — периодическая проверка critical chunks.
                     try
                     {
-                        _suspendGate.Wait(500, ct);
+                        _suspendGate.Wait(PlaybackGateCriticalTimeoutMs, ct);
                     }
                     catch (OperationCanceledException) { break; }
 

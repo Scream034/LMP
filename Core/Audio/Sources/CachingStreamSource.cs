@@ -29,6 +29,22 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed partial class CachingStreamSource : IAudioSource
 {
+    /// <summary>
+    /// Короткая задержка в миллисекундах перед окончательной утилизацией ресурсов.
+    /// Даёт фоновым fire-and-forget задачам завершить свои проверки на отмену.
+    /// </summary>
+    private const int DisposalDelayMs = 32;
+
+    /// <summary>
+    /// Интервал времени (в миллисекундах) для ожидания открытия затвора активности воспроизведения.
+    /// </summary>
+    private const int PlaybackGateTimeoutMs = 128;
+
+    /// <summary>
+    /// Критический таймаут для затвора активности воспроизведения, после которого источник начинает агрессивно проверять
+    /// </summary>
+    private const int PlaybackGateCriticalTimeoutMs = 512;
+
     #region Fields
 
     // ── Configuration ──
@@ -79,6 +95,13 @@ public sealed partial class CachingStreamSource : IAudioSource
     private long _downloadEpoch;
     private CancellationTokenSource? _downloadCts;
     private readonly Lock _epochLock = new();
+
+    /// <summary>
+    /// Легковесный затвор для управления фоновым циклом предзагрузки.
+    /// Set = воспроизведение активно, Reset = плеер на паузе.
+    /// Начинается в состоянии Set (true), чтобы разрешить первичную буферизацию при старте.
+    /// </summary>
+    private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
 
     // ── Lifetime ──
     private CancellationTokenSource? _lifetimeCts;
@@ -466,6 +489,19 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <inheritdoc/>
     public void CancelPendingOperations() => _lifetimeCts?.Cancel();
 
+    /// <inheritdoc/>
+    public void SetPlaybackActive(bool active)
+    {
+        if (_disposed) return;
+
+        if (active)
+            _playbackGate.Set();
+        else
+            _playbackGate.Reset();
+
+        Log.Debug($"[CachingSource] Playback active state updated: {active}");
+    }
+
     #endregion
 
     #region Dispose
@@ -483,16 +519,14 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
     }
 
-    /// <inheritdoc/>
+       /// <inheritdoc/>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
         _suspendGate.Set();
-
-        // Отписываемся от глобального события очистки кэша
-        _cacheManager.OnCacheCleared -= HandleGlobalCacheCleared;
+        _playbackGate.Set(); // Освобождаем блокировку Wait внутри PreloadLoopAsync
 
         lock (_epochLock)
         {
@@ -505,7 +539,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         if (_preloadTask is { IsCompleted: false })
         {
-            try { _preloadTask.Wait(TimeSpan.FromMilliseconds(250)); }
+            try { _preloadTask.Wait(TimeSpan.FromMilliseconds(PlaybackGateTimeoutMs)); }
             catch { }
         }
 
@@ -517,7 +551,9 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
         try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
+        
         _suspendGate.Dispose();
+        _playbackGate.Dispose();
     }
 
     /// <inheritdoc/>
@@ -527,9 +563,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         _disposed = true;
 
         _suspendGate.Set();
-
-        // Отписываемся от глобального события очистки кэша
-        _cacheManager.OnCacheCleared -= HandleGlobalCacheCleared;
+        _playbackGate.Set(); // Освобождаем блокировку Wait внутри PreloadLoopAsync
 
         lock (_epochLock)
         {
@@ -542,22 +576,25 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         if (_preloadTask != null)
         {
-            try { await _preloadTask.WaitAsync(TimeSpan.FromSeconds(1)); }
+            try { await _preloadTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
             catch { }
         }
 
-        await Task.Delay(32);
+        // Даём фоновым потокам завершить свои проверки на отмену, используя константу
+        await Task.Delay(DisposalDelayMs).ConfigureAwait(false);
 
         try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
 
-        if (_parser != null) await _parser.DisposeAsync();
+        if (_parser != null) await _parser.DisposeAsync().ConfigureAwait(false);
 
         _readStream?.Dispose();
         DisposeAllRamChunks();
 
         try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
         try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
+        
         _suspendGate.Dispose();
+        _playbackGate.Dispose();
     }
 
     #endregion
