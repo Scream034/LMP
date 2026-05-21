@@ -208,23 +208,40 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _bitrate,
                 chunkSize: _chunkSize);
 
-            // Примиряем ChunkSize: если в кэше уже есть чанки с другим размером,
-            // используем сохранённый размер, чтобы не сломать побайтовую адресацию.
-            if (_cacheEntry.DownloadedChunks > 0
-                && _cacheEntry.TotalChunks > 0
-                && _cacheEntry.TotalChunks != _totalChunks)
+            // Сверяем ChunkSize с уже существующей записью кэша во избежание рассинхронизации побайтовой адресации на диске.
+            if (_cacheEntry.DownloadedChunks > 0)
             {
-                int reconciledChunkSize = _contentLength > 0 && _cacheEntry.TotalChunks > 0
-                    ? (int)Math.Ceiling((double)_contentLength / _cacheEntry.TotalChunks)
-                    : _chunkSize;
+                if (_cacheEntry.ChunkSize > 0 && _cacheEntry.ChunkSize != _chunkSize)
+                {
+                    Log.Info($"[CachingSource] Locking chunk size to cached entry: " +
+                             $"requested={_chunkSize}B → locked={_cacheEntry.ChunkSize}B " +
+                             $"(totalChunks: {_totalChunks}→{_cacheEntry.TotalChunks})");
 
-                Log.Info($"[CachingSource] ChunkSize reconciled: " +
-                         $"config={_chunkSize}B → cached={reconciledChunkSize}B " +
-                         $"(totalChunks: {_totalChunks}→{_cacheEntry.TotalChunks})");
-
-                _chunkSize = reconciledChunkSize;
-                _totalChunks = _cacheEntry.TotalChunks;
+                    _chunkSize = _cacheEntry.ChunkSize;
+                    _totalChunks = _cacheEntry.TotalChunks;
+                }
             }
+            else
+            {
+                bool sizeChanged = _cacheEntry.TotalSize != _contentLength;
+                bool chunkSizeChanged = _cacheEntry.ChunkSize != _chunkSize;
+
+                if (sizeChanged || chunkSizeChanged)
+                {
+                    Log.Info($"[CachingSource] Updating empty cache entry schema: " +
+                             $"size={_cacheEntry.TotalSize}B→{_contentLength}B, " +
+                             $"chunkSize={_cacheEntry.ChunkSize}B→{_chunkSize}B, " +
+                             $"totalChunks={_cacheEntry.TotalChunks}→{_totalChunks}");
+
+                    _cacheEntry.TotalSize = _contentLength;
+                    _cacheEntry.ChunkSize = _chunkSize;
+                    _cacheEntry.TotalChunks = _totalChunks;
+                    _cacheEntry.ResetChunkMask();
+                }
+            }
+
+            // Подписываемся на событие очистки глобального кэша для динамического сброса маски чанков
+            _cacheManager.OnCacheCleared += HandleGlobalCacheCleared;
 
             if (_cacheEntry.DownloadedChunks > 0)
             {
@@ -235,10 +252,6 @@ public sealed partial class CachingStreamSource : IAudioSource
             _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             InitializeFirstEpoch();
 
-            // ПАРАЛЛЕЛЬНАЯ ИНИЦИАЛИЗАЦИЯ
-            // Chunk 0 нужен для ParseHeaders (EBML + Segment + Tracks ≤ 128KB).
-            // Пока парсятся заголовки, остальные initial chunks загружаются параллельно.
-            // Экономия: InitialChunksToLoad × RTT (было sequential, стало parallel с parsing).
             await EnsureChunkAsync(0, _lifetimeCts.Token);
 
             _readStream = new AsyncCachingReadStream(this);
@@ -262,7 +275,6 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             _initialized = true;
 
-            // Preload loop стартует в пуле потоков — не блокирует вызывающий (UI) поток.
             _preloadTask = Task.Run(
                 () => PreloadLoopAsync(_lifetimeCts.Token), _lifetimeCts.Token);
 
@@ -276,6 +288,34 @@ public sealed partial class CachingStreamSource : IAudioSource
             Log.Error($"[CachingSource] Init failed: {ex.Message}", ex);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Обрабатывает событие полной очистки глобального дискового кэша.
+    /// Сбрасывает маску дисковых сегментов и безопасно освобождает RAM-буферы (кроме воспроизводимого в данный момент),
+    /// переводя источник в режим чистого сетевого стриминга без прерывания звука.
+    /// </summary>
+    private void HandleGlobalCacheCleared()
+    {
+        if (_disposed || _cacheEntry == null) return;
+
+        Log.Info($"[CachingSource] Cache cleared event received. Invalidating cache state for: {_cacheKey}");
+
+        _cacheEntry.IsComplete = false;
+        _cacheEntry.ResetChunkMask();
+
+        // Очищаем RAM-буферы, кроме текущего воспроизводимого чанка, чтобы избежать заикания декодера
+        int current = Volatile.Read(ref _currentChunk);
+        foreach (var key in _ramChunks.Keys)
+        {
+            if (key != current && _ramChunks.TryRemove(key, out var chunk))
+            {
+                chunk.Dispose();
+            }
+        }
+
+        // Сбрасываем эпохи для отмены зависших или выполняющихся дисковых операций
+        ResetDownloadEpoch();
     }
 
     /// <summary>
@@ -451,6 +491,9 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         _suspendGate.Set();
 
+        // Отписываемся от глобального события очистки кэша
+        _cacheManager.OnCacheCleared -= HandleGlobalCacheCleared;
+
         lock (_epochLock)
         {
             try { _downloadCts?.Cancel(); } catch (ObjectDisposedException) { }
@@ -460,9 +503,6 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         try { _lifetimeCts?.Cancel(); } catch (ObjectDisposedException) { }
 
-        // Даём фоновым задачам время увидеть отмену
-        // Без паузы: Cancel() → немедленный Dispose семафоров → ObjectDisposedException.
-        // SpinWait дешевле Thread.Sleep и не блокирует ThreadPool worker.
         if (_preloadTask is { IsCompleted: false })
         {
             try { _preloadTask.Wait(TimeSpan.FromMilliseconds(250)); }
@@ -475,7 +515,6 @@ public sealed partial class CachingStreamSource : IAudioSource
         _readStream?.Dispose();
         DisposeAllRamChunks();
 
-        // _refreshLock добавлен — был пропущен в sync Dispose
         try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
         try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
         _suspendGate.Dispose();
@@ -488,6 +527,9 @@ public sealed partial class CachingStreamSource : IAudioSource
         _disposed = true;
 
         _suspendGate.Set();
+
+        // Отписываемся от глобального события очистки кэша
+        _cacheManager.OnCacheCleared -= HandleGlobalCacheCleared;
 
         lock (_epochLock)
         {
@@ -504,9 +546,6 @@ public sealed partial class CachingStreamSource : IAudioSource
             catch { }
         }
 
-        // Дополнительная пауза для orphaned fire-and-forget задач
-        // PreloadChunksForSeekFireAndForgetAsync и SafeEnsureChunkAsync не отслеживаются
-        // в _preloadTask — им нужно время увидеть отмену и выйти до dispose семафоров.
         await Task.Delay(32);
 
         try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }

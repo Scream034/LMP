@@ -640,11 +640,21 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         var cacheManager = AudioSourceFactory.GlobalCache
             ?? throw new NullReferenceException("AudioSourceFactory.GlobalCache is not initialized");
+
+        // Подписка на событие кэширования конкретных форматов
         Observable.FromEvent<Action<string, string, int, bool>, (string TrackId, string Container, int Bitrate, bool Downloaded)>(
                 h => (t, c, b, d) => h((t, c, b, d)),
                 h => cacheManager.OnFormatCached += h,
                 h => cacheManager.OnFormatCached -= h)
             .Subscribe(x => OnFormatCached(x.TrackId, x.Container, x.Bitrate, x.Downloaded))
+            .DisposeWith(Disposables);
+
+        // Подписка на глобальную очистку кэша — мгновенно сбрасывает полоску буферизации на UI
+        Observable.FromEvent(
+                h => cacheManager.OnCacheCleared += h,
+                h => cacheManager.OnCacheCleared -= h)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => SyncBufferState())
             .DisposeWith(Disposables);
 
         this.WhenAnyValue(x => x.CurrentTrackIndex, x => x.TotalTracksInQueue)

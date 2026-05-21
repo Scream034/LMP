@@ -161,21 +161,40 @@ public sealed partial class CachingStreamSource
     /// </summary>
     /// <param name="chunkIndex">Индекс чанка.</param>
     /// <param name="ct">Токен отмены.</param>
-    /// <returns>RAM-запись чанка или null если чанк на диске отсутствует.</returns>
+    /// <returns>RAM-запись чанка или null, если чанк на диске отсутствует.</returns>
+    /// <exception cref="FileNotFoundException">
+    /// Выбрасывается, если метаданные считают чанк скачанным, но физический файл кэша отсутствует на диске
+    /// или был удалён пользователем через настройки во время активного воспроизведения.
+    /// </exception>
     private async Task<ChunkData?> TryLoadChunkFromDiskAsync(int chunkIndex, CancellationToken ct)
     {
-        var diskResult = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct);
-        if (!diskResult.HasValue) return null;
+        var diskResult = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct).ConfigureAwait(false);
+        if (diskResult.HasValue)
+        {
+            var (owner, length) = diskResult.Value;
+            var chunkData = new ChunkData(owner, length);
 
-        var (owner, length) = diskResult.Value;
-        var chunkData = new ChunkData(owner, length);
+            if (_ramChunks.TryAdd(chunkIndex, chunkData))
+                return chunkData;
 
-        if (_ramChunks.TryAdd(chunkIndex, chunkData))
-            return chunkData;
+            // Гонка: другой поток уже добавил этот чанк — возвращаем буфер и читаем из существующего.
+            chunkData.Dispose();
+            return _ramChunks.TryGetValue(chunkIndex, out var existing) ? existing : null;
+        }
 
-        // Гонка: другой поток уже добавил этот чанк — возвращаем буфер и читаем из существующего.
-        chunkData.Dispose();
-        return _ramChunks.TryGetValue(chunkIndex, out var existing) ? existing : null;
+        // Если ReadChunkAsync вернул null, но при этом наш _cacheEntry считает этот чанк скачанным,
+        // значит произошла принудительная инвалидация/очистка всего кэша пользователем прямо во время воспроизведения.
+        if (_cacheEntry != null && _cacheEntry.IsChunkDownloaded(chunkIndex))
+        {
+            var filePath = _cacheManager.GetCachePath(_cacheKey);
+            if (!File.Exists(filePath) || _cacheManager.GetCacheInfo(_cacheKey) == null)
+            {
+                throw new FileNotFoundException(
+                    $"Cache for track {_trackId} was invalidated or deleted on disk during active playback.", filePath);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

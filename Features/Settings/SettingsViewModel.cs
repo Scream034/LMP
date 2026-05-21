@@ -371,8 +371,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             () => MemoryCleanupHelper.PerformCleanup(aggressive: true)));
         ShowNormalizationInfoCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShowNormalizationInfoAsync));
 
-        // Sidebar: порядок = порядок в UI.
-        // В каждый момент рендерится только одна страница — виртуализация бесплатная архитектурно.
         SidebarItems =
         [
             new AccountLanguageSidebarItem(this),
@@ -386,7 +384,26 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             new GeneralSidebarItem(this),
         ];
 
-        // Подписки, которые не зависят от загрузки настроек — можно в конструкторе.
+        // Подписка на изменение кэша для живого обновления статистики на странице настроек
+        var cache = AudioSourceFactory.GlobalCache;
+        if (cache != null)
+        {
+            Observable.FromEvent<Action<string, string, int, bool>, (string TrackId, string Container, int Bitrate, bool Downloaded)>(
+                    h => (t, c, b, d) => h((t, c, b, d)),
+                    h => cache.OnFormatCached += h,
+                    h => cache.OnFormatCached -= h)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => UpdateCacheStats())
+                .DisposeWith(Disposables);
+
+            Observable.FromEvent(
+                    h => cache.OnCacheCleared += h,
+                    h => cache.OnCacheCleared -= h)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => UpdateCacheStats())
+                .DisposeWith(Disposables);
+        }
+
         this.WhenAnyValue(x => x.SelectedClient)
             .Skip(1).WhereNotNull()
             .Where(_ => !_isLoadingSettings)

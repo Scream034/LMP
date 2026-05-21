@@ -946,37 +946,80 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     #endregion
 }
-
+/// <summary>
+/// Представляет запись метаданных кэша для конкретного аудиопотока.
+/// </summary>
 public sealed class CacheEntry
 {
+    /// <summary>Уникальный ключ кэша (trackId + format + normalized_bitrate).</summary>
     public string CacheKey { get; init; } = "";
+
+    /// <summary>Идентификатор трека.</summary>
     public string TrackId { get; init; } = "";
+
+    /// <summary>Исходный URL, с которого производилось скачивание.</summary>
     public string OriginalUrl { get; set; } = "";
-    public long TotalSize { get; init; }
+
+    /// <summary>
+    /// Полный размер контента в байтах.
+    /// <para>Допускает изменение, если на диске ещё нет скачанных чанков.</para>
+    /// </summary>
+    public long TotalSize { get; set; }
+
+    /// <summary>Формат аудио-контейнера.</summary>
     public AudioFormat Format { get; init; }
+
+    /// <summary>Аудио-кодек.</summary>
     public AudioCodec Codec { get; set; }
+
+    /// <summary>Реальный битрейт в kbps.</summary>
     public int Bitrate { get; set; }
+
+    /// <summary>Длительность трека в миллисекундах.</summary>
     public long DurationMs { get; set; } = -1;
-    public int ChunkSize { get; init; }
-    public int TotalChunks { get; init; }
+
+    /// <summary>
+    /// Размер одного чанка в байтах.
+    /// <para>Допускает изменение для пустых записей кэша при смене интернет-профиля.</para>
+    /// </summary>
+    public int ChunkSize { get; set; }
+
+    /// <summary>
+    /// Общее количество чанков в контенте.
+    /// <para>Допускает изменение при перерасчёте сетки чанков пустого файла.</para>
+    /// </summary>
+    public int TotalChunks { get; set; }
 
     private int _downloadedChunks;
 
+    /// <summary>Количество успешно скачанных и записанных на диск чанков.</summary>
     public int DownloadedChunks
     {
         get => Volatile.Read(ref _downloadedChunks);
         set => Volatile.Write(ref _downloadedChunks, value);
     }
 
+    /// <summary>Дата и время создания записи.</summary>
     public DateTime CreatedAt { get; init; }
+
+    /// <summary>Дата и время последнего обращения к записи.</summary>
     public DateTime LastAccessedAt { get; set; }
+
+    /// <summary>Дата и время полного завершения кэширования.</summary>
     public DateTime? CompletedAt { get; set; }
+
+    /// <summary>Флаг полной готовности локального кэша.</summary>
     public bool IsComplete { get; set; }
+
+    /// <summary>Фактический размер файла кэша на диске.</summary>
     public long ActualFileSize { get; set; }
+
+    /// <summary>Строковое представление битовой маски чанков в формате Base64.</summary>
     public string? ChunkMaskData { get; set; }
 
     [JsonIgnore] private int[]? _chunkBits;
 
+    /// <summary>Прогресс загрузки в процентах (0.0 - 100.0).</summary>
     [JsonIgnore]
     public double DownloadProgress =>
         TotalChunks == 0 ? 0 : (double)DownloadedChunks / TotalChunks * 100;
@@ -1052,6 +1095,17 @@ public sealed class CacheEntry
             Volatile.Write(ref _downloadedChunks, count);
         }
         catch { }
+    }
+
+    /// <summary>
+    /// Сбрасывает маску чанков и обнуляет прогресс загрузки.
+    /// <para>Необходим при изменении размера чанков для пустого элемента кэша во избежание рассинхронизации битовых индексов.</para>
+    /// </summary>
+    public void ResetChunkMask()
+    {
+        _chunkBits = null;
+        Volatile.Write(ref _downloadedChunks, 0);
+        ChunkMaskData = null;
     }
 
     private void EnsureChunkBits()
