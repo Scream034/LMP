@@ -122,9 +122,14 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <summary>
     /// Каждые N итераций fill loop проверяется состояние waveOut.
-    /// ~100 итераций × 5ms = ~0.5s между проверками.
     /// </summary>
-    private const int DeviceHealthCheckInterval = 100;
+    /// <remarks>
+    /// <para><b>Было 100 (~500мс), стало 50 (~250мс).</b></para>
+    /// <para>BT disconnect детектируется на ~250мс раньше. При 5мс per iteration
+    /// overhead проверки — единственный <c>waveOut.PlaybackState</c> getter +
+    /// опциональный <c>waveOut.Volume</c> probe — пренебрежимо мал (~0.02% CPU).</para>
+    /// </remarks>
+    private const int DeviceHealthCheckInterval = 50;
 
     /// <summary>
     /// Размер chunk для чтения из callback (доля от секунды).
@@ -137,6 +142,28 @@ public sealed class NAudioBackend : IPlaybackBackend
     /// 200 × 5ms = 1 секунда непрерывной тишины при открытом gate.
     /// </summary>
     private const int StarvationThreshold = 200;
+
+    /// <summary>
+    /// Задержка перед пересозданием waveOut после потери устройства (мс).
+    /// </summary>
+    /// <remarks>
+    /// <para>Даёт Windows Audio Service время финализировать endpoint handshake
+    /// после BT reconnect. Без задержки <c>WaveOutEvent.Init()</c> может получить
+    /// stale sample rate или broken device handle → заикания.</para>
+    /// <para>300мс — эмпирический минимум для Bluetooth A2DP endpoint stabilization
+    /// на Windows 10/11. На USB DAC достаточно 50–100мс, но 300мс безопасно для обоих.</para>
+    /// </remarks>
+    private const int DeviceRecoveryDelayMs = 300;
+
+    /// <summary>
+    /// Максимальное количество попыток пересоздания waveOut после потери устройства.
+    /// </summary>
+    /// <remarks>
+    /// <para>BT reconnect может занять несколько секунд; каждая попытка ждёт
+    /// <c>DeviceRecoveryDelayMs × attempt</c> перед повтором (линейный backoff).
+    /// 3 попытки × avg 600мс = ~1.8с максимальная задержка восстановления.</para>
+    /// </remarks>
+    private const int DeviceRecoveryMaxRetries = 3;
 
     #endregion
 
@@ -256,6 +283,13 @@ public sealed class NAudioBackend : IPlaybackBackend
     #region Initialize / Reinitialize
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <para> Если <see cref="_deviceLost"/> = true (предыдущее устройство пропало),
+    /// перед созданием нового <see cref="WaveOutEvent"/> выполняется задержка
+    /// <see cref="DeviceRecoveryDelayMs"/> мс — даём Windows стабилизировать endpoint.
+    /// При неудаче — до <see cref="DeviceRecoveryMaxRetries"/> попыток с увеличивающейся задержкой
+    /// (линейный backoff: <c>DeviceRecoveryDelayMs × attempt</c>).</para>
+    /// </remarks>
     public void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -264,16 +298,40 @@ public sealed class NAudioBackend : IPlaybackBackend
         _channels = channels;
         _sampleRate = sampleRate;
 
-        try
+        bool wasDeviceLost = _deviceLost;
+        int maxAttempts = wasDeviceLost ? DeviceRecoveryMaxRetries : 0;
+        for (int attempt = 0; attempt <= maxAttempts; attempt++)
         {
-            CreateWaveOut(sampleRate, channels);
-        }
-        catch (Exception ex)
-        {
-            _deviceLost = true;
+            // attempt 0 при wasDeviceLost — первая задержка (DeviceRecoveryDelayMs).
+            // attempt > 0 — нарастающая задержка. Даёт Windows время
+            // завершить endpoint handshake после BT reconnect.
+            if (wasDeviceLost)
+            {
+                int delay = DeviceRecoveryDelayMs * (attempt + 1);
+                Log.Info($"[NAudioBackend] Device recovery attempt {attempt + 1}/{maxAttempts + 1}, " +
+                         $"waiting {delay}ms for endpoint stabilization");
+                Thread.Sleep(delay);
+            }
+
             DisposeWaveOutSafe();
-            Log.Error($"[NAudioBackend] Failed to open audio device: {ex.Message}");
-            throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
+
+            try
+            {
+                CreateWaveOut(sampleRate, channels);
+                break;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[NAudioBackend] CreateWaveOut attempt {attempt + 1} failed: {ex.Message}");
+
+                if (attempt >= maxAttempts)
+                {
+                    _deviceLost = true;
+                    DisposeWaveOutSafe();
+                    Log.Error($"[NAudioBackend] Failed to open audio device after {attempt + 1} attempts: {ex.Message}");
+                    throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
+                }
+            }
         }
 
         AllocateBuffers(sampleRate, channels);
@@ -293,7 +351,8 @@ public sealed class NAudioBackend : IPlaybackBackend
         }
 
         _deviceLost = false;
-        Log.Info($"[NAudioBackend] Initialized (never-stop): {sampleRate}Hz, {channels}ch");
+        Log.Info($"[NAudioBackend] Initialized (never-stop){(wasDeviceLost ? " [recovered]" : "")}: " +
+                 $"{sampleRate}Hz, {channels}ch");
     }
 
     /// <inheritdoc/>
@@ -673,10 +732,17 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <summary>
     /// Проверяет состояние waveOut во время воспроизведения.
-    /// Если waveOut неожиданно остановился — устанавливает <c>_deviceLost</c>
-    /// и вызывает <c>_onDeviceLost</c> callback на отдельном потоке.
-    /// Вызывается только из fill loop (нет конкурентного доступа).
     /// </summary>
+    /// <remarks>
+    /// <para>Если waveOut неожиданно остановился — устанавливает <c>_deviceLost</c>
+    /// и вызывает <c>_onDeviceLost</c> callback на отдельном потоке.
+    /// Вызывается только из fill loop (нет конкурентного доступа).</para>
+    /// <para><b>BT Recovery:</b> Помимо проверки <c>PlaybackState</c>,
+    /// выполняется Volume probe — попытка прочитать <c>waveOut.Volume</c>.
+    /// При BT disconnect Volume getter бросает <see cref="MmException"/>
+    /// даже если <c>PlaybackState</c> ещё не обновился (WaveOutEvent lag до ~200мс).
+    /// Это позволяет обнаружить device loss на ~200мс раньше стандартной проверки.</para>
+    /// </remarks>
     private void CheckDeviceHealth()
     {
         if (_waveOut == null || _disposed) return;
@@ -684,6 +750,20 @@ public sealed class NAudioBackend : IPlaybackBackend
         try
         {
             var state = _waveOut.PlaybackState;
+
+            // MmException при чтении Volume — надёжный индикатор device loss,
+            // срабатывающий раньше чем PlaybackState переключится в Stopped.
+            // Проверяем только при активном gate — в паузе device loss не критичен.
+            if (state != NAudio.Wave.PlaybackState.Stopped && _gateOpen)
+            {
+                try { _ = _waveOut.Volume; }
+                catch (MmException)
+                {
+                    Log.Warn("[NAudioBackend] Volume probe failed — device likely disconnected");
+                    state = NAudio.Wave.PlaybackState.Stopped;
+                }
+            }
+
             if (state == NAudio.Wave.PlaybackState.Stopped && _gateOpen && !_fadingOut)
             {
                 _deviceLost = true;

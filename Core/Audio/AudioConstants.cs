@@ -52,10 +52,21 @@ public static class AudioConstants
     public const int PreloadAheadChunks = 4;
 
     /// <summary>Чанков загружать при seek (instant seek UX).</summary>
-    public const int SeekPreloadChunks = 2;
+    /// <remarks>
+    /// <para>При seek на незагруженный участок параллельно подгружаются 4 чанка.
+    /// На 128KB/чанк при 155kbps Opus это ~26 сек буфер.
+    /// Decoder начинает читать первый чанк немедленно (critical path),
+    /// остальные 3 готовы к моменту когда потребуются — zero-stall seek.</para>
+    /// </remarks>
+    public const int SeekPreloadChunks = 4;
 
     /// <summary>Интервал проверки preload loop (мс).</summary>
-    public const int PreloadIntervalMs = 1000;
+    /// <remarks>
+    /// <para><b>Было 1000, стало 500.</b> Синхронизировано с Medium профилем.</para>
+    /// <para>Preload loop проверяет чаще — чанки вокруг текущей позиции подгружаются
+    /// быстрее. 500ms × 4 ReadAheadChunks ≈ 2с полное покрытие read-ahead зоны.</para>
+    /// </remarks>
+    public const int PreloadIntervalMs = 500;
 
     /// <summary>Максимум параллельных загрузок чанков (баланс скорость/RAM).</summary>
     public const int MaxConcurrentDownloads = 3;
@@ -67,8 +78,13 @@ public static class AudioConstants
     /// <summary>Таймаут загрузки одного чанка (15s = mobile-friendly).</summary>
     public const int DownloadTimeoutMs = 15_000;
 
-    /// <summary>Таймаут ожидания слота загрузки (500ms = non-blocking).</summary>
-    public const int DownloadSlotTimeoutMs = 500;
+    /// <summary>Таймаут ожидания слота загрузки (мс).</summary>
+    /// <remarks>
+    /// <para>Критические чанки (isCritical) не ждут слот вовсе;
+    /// preload-чанки быстрее fail'ят и освобождают слоты при конкуренции
+    /// с critical path seek-загрузки.</para>
+    /// </remarks>
+    public const int DownloadSlotTimeoutMs = 300;
 
     // ═══════════════════════════════════════════════════════
     // BACKGROUND DOWNLOAD LIMITS — Экономия сети
@@ -119,10 +135,23 @@ public static class AudioConstants
     public const int BufferSizeSeconds = 2;
 
     /// <summary>Минимальный буфер для старта воспроизведения (мс).</summary>
-    public const int MinBufferMs = 100;
+    /// <remarks>
+    /// <para>При 48kHz stereo: 80мс = 7680 float samples ≈ 30KB PCM.
+    /// Opus decoder гарантированно выдаёт первый фрейм (960 samples = 20мс)
+    /// за 5–10мс из RAM/диска. 80мс = 4 фрейма — достаточный запас
+    /// для бесшовного старта без увеличения perceived latency.</para>
+    /// </remarks>
+    public const int MinBufferMs = 80;
 
     /// <summary>Минимальный буфер для возобновления после seek (мс).</summary>
-    public const int MinSeekResumeBufferMs = 80;
+    /// <remarks>
+    /// <para>Streaming path: 48k×2×50/1000 = 4800 samples ≈ 19KB.
+    /// Fast-source (cached/local): <c>Math.Max(50/4, 12)</c> = 12мс = 1152 samples.
+    /// Opus decoder выдаёт 960 samples за один ReadFrame — порог достигается
+    /// за 1–2 вызова (≤10мс). Экономит 30–60мс perceived silence
+    /// при seek на закэшированных чанках.</para>
+    /// </remarks>
+    public const int MinSeekResumeBufferMs = 50;
 
     // ═══════════════════════════════════════════════════════
     // POSITION REPORTING — UI обновления

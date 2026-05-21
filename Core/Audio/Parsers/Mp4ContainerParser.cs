@@ -38,6 +38,13 @@ public sealed class Mp4ContainerParser : IContainerParser
 
     private bool _disposed;
 
+    /// <summary>
+    /// Владелец арендованного буфера текущего фрейма.
+    /// Возвращается в <see cref="MemoryPool{T}.Shared"/> при чтении следующего фрейма.
+    /// Аналог паттерна из <see cref="WebMContainerParser"/>.
+    /// </summary>
+    private IMemoryOwner<byte>? _currentFrameOwner;
+
     #endregion
 
     #region Properties
@@ -151,11 +158,22 @@ public sealed class Mp4ContainerParser : IContainerParser
 
     #region Frame Reading
 
+    /// <summary>
+    /// Читает следующий AAC-фрейм из контейнера.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Zero-alloc per frame.</b> Буфер арендуется из <see cref="MemoryPool{T}.Shared"/>
+    /// и возвращается при следующем вызове (аналогично <see cref="WebMContainerParser"/>).
+    /// Устраняет ~43 heap-аллокации/сек при воспроизведении AAC.</para>
+    /// </remarks>
     public async ValueTask<AudioFrame?> ReadNextFrameAsync(CancellationToken ct = default)
     {
+        // Возвращаем ПРЕДЫДУЩИЙ буфер в пул
+        ReleaseCurrentFrame();
+
         return _isFragmented
-            ? await ReadNextFragmentedFrameAsync(ct)
-            : await ReadNextRegularFrameAsync(ct);
+            ? await ReadNextFragmentedFrameAsync(ct).ConfigureAwait(false)
+            : await ReadNextRegularFrameAsync(ct).ConfigureAwait(false);
     }
 
     private async ValueTask<AudioFrame?> ReadNextRegularFrameAsync(CancellationToken ct)
@@ -212,34 +230,41 @@ public sealed class Mp4ContainerParser : IContainerParser
     /// <summary>
     /// Читает данные sample из stream и возвращает AudioFrame.
     /// </summary>
+    /// <remarks>
+    /// <para> Использует <see cref="MemoryPool{T}.Shared"/> вместо <c>new byte[]</c>.
+    /// Буфер возвращается в пул при следующем <see cref="ReadNextFrameAsync"/>.</para>
+    /// </remarks>
     private async ValueTask<AudioFrame?> ReadSampleAsFrameAsync(SampleInfo sample, CancellationToken ct)
     {
         try
         {
             _stream.Position = sample.Offset;
 
-            var frameData = new byte[sample.Size];
+            var owner = MemoryPool<byte>.Shared.Rent(sample.Size);
+            var memory = owner.Memory[..sample.Size];
             int totalRead = 0;
 
             while (totalRead < sample.Size)
             {
-                int read = await _stream.ReadAsync(
-                    frameData.AsMemory(totalRead, sample.Size - totalRead), ct);
+                int read = await _stream.ReadAsync(memory[totalRead..], ct).ConfigureAwait(false);
 
                 if (read == 0)
                 {
-                    // Неожиданный конец потока
                     Log.Warn($"[Mp4Parser] Unexpected EOF at offset {sample.Offset + totalRead}, " +
                             $"expected {sample.Size} bytes, got {totalRead}");
+                    owner.Dispose();
                     return null;
                 }
 
                 totalRead += read;
             }
 
+            // Передаём владение: буфер будет возвращён в пул при следующем ReadNextFrameAsync.
+            _currentFrameOwner = owner;
+
             return new AudioFrame
             {
-                Data = frameData,
+                Data = memory,
                 TimestampMs = sample.TimestampMs,
                 DurationMs = sample.DurationMs,
                 IsKeyFrame = sample.IsKeyFrame
@@ -442,7 +467,7 @@ public sealed class Mp4ContainerParser : IContainerParser
     {
         _currentSampleIndex = 0;
         _fragmentSamples.Clear();
-        // Сбрасываем данные о последнем mdat — после seek они невалидны
+        ReleaseCurrentFrame();
         _lastMdatDataStart = 0;
         _lastMdatDataEnd = 0;
     }
@@ -1304,6 +1329,16 @@ public sealed class Mp4ContainerParser : IContainerParser
 
     #region Helper Methods
 
+    /// <summary>
+    /// Возвращает буфер предыдущего фрейма в пул.
+    /// Декодер уже обработал данные в предыдущей итерации DecoderLoop.
+    /// </summary>
+    private void ReleaseCurrentFrame()
+    {
+        _currentFrameOwner?.Dispose();
+        _currentFrameOwner = null;
+    }
+
     private async Task ScanToFirstMoofAsync(CancellationToken ct)
     {
         while (_stream.Position < _stream.Length)
@@ -1632,6 +1667,7 @@ public sealed class Mp4ContainerParser : IContainerParser
     {
         if (_disposed) return;
         _disposed = true;
+        ReleaseCurrentFrame();
     }
 
     public ValueTask DisposeAsync()

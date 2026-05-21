@@ -5,9 +5,18 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Stream-обёртка над <see cref="CachingStreamSource"/> для парсеров контейнеров (WebM/MP4).
     ///
-    /// <para><b>Почему отдельный CTS на каждый Read:</b> seek из парсера вызывает <see cref="Position"/> setter,
-    /// который немедленно отменяет текущий <see cref="ReadAsync"/> через <see cref="_readCts"/>,
-    /// не допуская блокировки decoder thread на устаревшем I/O.</para>
+    /// <para>Предыдущая реализация создавала новый CTS в <c>Position</c> setter —
+    /// каждый вызов <c>_stream.Position += N</c> из Mp4Parser (SkipBytesAsync)
+    /// аллоцировал CTS + Cancel + ThreadPool.QueueUserWorkItem (~десятки раз per fragment).
+    /// Теперь:</para>
+    /// <list type="bullet">
+    ///   <item><c>Position setter</c> — лёгкий <c>Volatile.Write</c>, без CTS</item>
+    ///   <item><see cref="SeekAndCancelPendingReads"/> — явный cancel для внешнего seek
+    ///     (вызывается только из <see cref="CachingStreamSource.SeekAsync"/>)</item>
+    /// </list>
+    /// <para>Безопасность: парсер однопоточен (read → skip → read), во время skip
+    /// нет pending ReadAsync. Внешний seek использует <see cref="SeekAndCancelPendingReads"/>,
+    /// который корректно отменяет in-flight ReadAsync через CTS.</para>
     /// </summary>
     private sealed class AsyncCachingReadStream : Stream
     {
@@ -16,7 +25,8 @@ public sealed partial class CachingStreamSource
 
         /// <summary>
         /// CTS, привязанный к текущей логической позиции потока.
-        /// Заменяется при каждом <see cref="Position"/> setter — все pending ReadAsync немедленно отменяются.
+        /// Заменяется только через <see cref="SeekAndCancelPendingReads"/> — при внешнем seek.
+        /// Все pending ReadAsync немедленно отменяются.
         /// </summary>
         private CancellationTokenSource _readCts = new();
 
@@ -44,28 +54,42 @@ public sealed partial class CachingStreamSource
         public override long Length => _source._contentLength;
 
         /// <inheritdoc/>
+        /// <remarks>
+        /// <para>Вызывается из парсера (SkipBytesAsync) десятки раз per fragment.
+        /// Прежняя реализация аллоцировала CTS + Cancel + QueueUserWorkItem на каждый вызов.
+        /// Теперь cancel CTS выполняется только через <see cref="SeekAndCancelPendingReads"/>.</para>
+        /// </remarks>
         public override long Position
         {
             get => Volatile.Read(ref _position);
-            set
+            set => Volatile.Write(ref _position, value);
+        }
+
+        /// <summary>
+        /// Устанавливает позицию потока И отменяет все pending ReadAsync.
+        /// Вызывается ТОЛЬКО из <see cref="CachingStreamSource.SeekAsync"/>
+        /// при внешнем seek — не из парсера.
+        /// </summary>
+        /// <remarks>
+        /// <para>Создаёт новый CTS, cancel'ит старый. Deferred dispose через ThreadPool
+        /// предотвращает ObjectDisposedException в reader-потоке, который может держать
+        /// ссылку на старый CTS между <see cref="Volatile.Read{T}"/> и <c>.Token</c>.</para>
+        /// </remarks>
+        /// <param name="position">Новая абсолютная позиция в байтах.</param>
+        internal void SeekAndCancelPendingReads(long position)
+        {
+            var oldCts = Interlocked.Exchange(ref _readCts, new CancellationTokenSource());
+
+            try { oldCts.Cancel(); }
+            catch (ObjectDisposedException) { }
+
+            ThreadPool.QueueUserWorkItem(static state =>
             {
-                var oldCts = Interlocked.Exchange(ref _readCts, new CancellationTokenSource());
-
-                try { oldCts.Cancel(); }
+                try { ((CancellationTokenSource)state!).Dispose(); }
                 catch (ObjectDisposedException) { }
+            }, oldCts);
 
-                // Deferred Dispose: reader-поток может держать ссылку на oldCts
-                // между Volatile.Read(ref _readCts) и .Token — немедленный Dispose
-                // вызовет ObjectDisposedException в reader'е.
-                // Планируем Dispose через ThreadPool, давая reader'у время завершить доступ.
-                ThreadPool.QueueUserWorkItem(static state =>
-                {
-                    try { ((CancellationTokenSource)state!).Dispose(); }
-                    catch (ObjectDisposedException) { }
-                }, oldCts);
-
-                Volatile.Write(ref _position, value);
-            }
+            Volatile.Write(ref _position, position);
         }
 
         #endregion
@@ -74,7 +98,7 @@ public sealed partial class CachingStreamSource
 
         /// <summary>
         /// Безопасно извлекает <see cref="CancellationToken"/> из текущего <see cref="_readCts"/>.
-        /// Обрабатывает гонку с <see cref="Position"/> setter, который может задиспозить CTS
+        /// Обрабатывает гонку с <see cref="SeekAndCancelPendingReads"/>, который может задиспозить CTS
         /// между <see cref="Volatile.Read{T}"/> и обращением к <c>.Token</c>.
         /// </summary>
         /// <returns>Актуальный токен или отменённый токен при гонке.</returns>
@@ -91,10 +115,13 @@ public sealed partial class CachingStreamSource
         }
 
         /// <inheritdoc/>
+        /// <remarks>
+        /// <para>Sync-over-async fallback для парсеров,
+        /// использующих синхронный <c>Stream.Read()</c>.
+        /// Основной путь — <see cref="ReadAsync(Memory{byte}, CancellationToken)"/>.</para>
+        /// </remarks>
         public override int Read(byte[] buffer, int offset, int count)
         {
-            // Sync-over-async: на случай если парсер использует синхронный Read.
-            // Основной путь — ReadAsync.
             try
             {
                 return ReadAsyncCore(buffer.AsMemory(offset, count), GetCurrentReadToken())
@@ -116,7 +143,7 @@ public sealed partial class CachingStreamSource
         {
             var readToken = GetCurrentReadToken();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readToken);
-            return await ReadAsyncCore(buffer, linkedCts.Token);
+            return await ReadAsyncCore(buffer, linkedCts.Token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -129,9 +156,9 @@ public sealed partial class CachingStreamSource
         private async ValueTask<int> ReadAsyncCore(Memory<byte> buffer, CancellationToken ct)
         {
             long posBefore = Volatile.Read(ref _position);
-            int read = await _source.ReadAtAsync(posBefore, buffer, ct);
+            int read = await _source.ReadAtAsync(posBefore, buffer, ct).ConfigureAwait(false);
 
-            // Если seek произошёл во время I/O — позиция уже обновлена Position setter'ом.
+            // Если seek произошёл во время I/O — позиция уже обновлена.
             // Возвращаем 0, чтобы парсер не продвинулся по устаревшим данным.
             if (Volatile.Read(ref _position) != posBefore)
                 return 0;

@@ -605,50 +605,6 @@ public sealed class AudioPipeline : IAsyncDisposable
 
     #region Playback Control
 
-    /// <summary>
-    /// Выполняет pre-scan через <see cref="EbuR128Analyzer.PreScanAsync"/>.
-    /// Фиксирует gain и возвращает source в начало для playback.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Условия пропуска:</b></para>
-    /// <list type="bullet">
-    ///   <item>Нормализация отключена</item>
-    ///   <item>Source не поддерживает seek (стриминг без кэша)</item>
-    ///   <item>Gain уже зафиксирован (YouTube metadata или DB cache)</item>
-    /// </list>
-    /// <para><b>Fallback:</b> при ошибке gain не фиксируется,
-    /// real-time анализ в <see cref="EbuR128Analyzer.ProcessSamples"/> работает как fallback.</para>
-    /// </remarks>
-    public async Task PreScanNormalizationAsync(CancellationToken ct)
-    {
-        if (!_analyzer.IsEnabled || !_source.CanSeek)
-            return;
-
-        if (_analyzer.IsGainLocked)
-        {
-            Log.Debug("[AudioPipeline] Pre-scan skipped: gain already locked");
-            return;
-        }
-
-        try
-        {
-            float rawGain = await _analyzer.PreScanAsync(_source, _decoder, _decodeBuffer, ct);
-
-            _analyzer.LockGain(rawGain);
-
-            await _source.SeekAsync(0, ct);
-
-            int skipFrames = _source.Codec == AudioCodec.Opus ? SkipFramesAfterSeekOpus : 0;
-            Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
-            Volatile.Write(ref _seekTargetMs, -1L);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioPipeline] Pre-scan failed (fallback to real-time): {ex.Message}");
-        }
-    }
-
     public void ActivateFillLoop()
     {
         if (_disposed) return;
@@ -736,13 +692,68 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Подготавливает pipeline к seek-операции: устанавливает skip frames,
     /// target timestamp и сбрасывает анализ нормализации (если gain не зафиксирован).
     /// </summary>
+    /// <remarks>
+    /// <para>До исправления AAC всегда получал 0 skip frames — первые ~116мс после seek
+    /// декодировались из «грязного» состояния (encoder delay не компенсировался)
+    /// → слышимые артефакты в начале воспроизведения после перемотки.
+    /// Теперь: Opus = 2 skip, AAC = 5 skip, прочие = 0.</para>
+    /// </remarks>
     public void PrepareForSeek(long targetMs = -1)
     {
-        int skipFrames = _source.Codec == AudioCodec.Opus ? SkipFramesAfterSeekOpus : 0;
+        //  Учитываем encoder delay для каждого кодека
+        int skipFrames = _source.Codec switch
+        {
+            AudioCodec.Opus => SkipFramesAfterSeekOpus,
+            AudioCodec.Aac => SkipFramesAfterSeekAac,
+            _ => 0
+        };
+
         Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
         Volatile.Write(ref _seekTargetMs, targetMs);
 
         _analyzer.PrepareForSeek();
+    }
+
+    /// <summary>
+    /// Выполняет pre-scan через <see cref="EbuR128Analyzer.PreScanAsync"/>.
+    /// Фиксирует gain и возвращает source в начало для playback.
+    /// </summary>
+    public async Task PreScanNormalizationAsync(CancellationToken ct)
+    {
+        if (!_analyzer.IsEnabled || !_source.CanSeek)
+            return;
+
+        if (_analyzer.IsGainLocked)
+        {
+            Log.Debug("[AudioPipeline] Pre-scan skipped: gain already locked");
+            return;
+        }
+
+        try
+        {
+            float rawGain = await _analyzer.PreScanAsync(_source, _decoder, _decodeBuffer, ct)
+                .ConfigureAwait(false);
+
+            _analyzer.LockGain(rawGain);
+
+            await _source.SeekAsync(0, ct).ConfigureAwait(false);
+
+            //  Аналогично PrepareForSeek — учитываем кодек
+            int skipFrames = _source.Codec switch
+            {
+                AudioCodec.Opus => SkipFramesAfterSeekOpus,
+                AudioCodec.Aac => SkipFramesAfterSeekAac,
+                _ => 0
+            };
+
+            Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
+            Volatile.Write(ref _seekTargetMs, -1L);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioPipeline] Pre-scan failed (fallback to real-time): {ex.Message}");
+        }
     }
 
     public void SetDecodedSamplesPosition(long samples)
@@ -861,7 +872,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         int length = samples.Length;
         ref float samplesRef = ref MemoryMarshal.GetReference(samples);
 
-        // ═══ Pass 1: Peak scan ═══
+        // Pass 1: Peak scan
         float peak = 0f;
         int i = 0;
 
@@ -893,7 +904,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (peak > 0f && peak * gain > ceiling)
             safeGain = ceiling / peak;
 
-        // ═══ Pass 2: Apply gain ═══
+        // Pass 2: Apply gain
         i = 0;
 
         if (Vector.IsHardwareAccelerated && length >= Vector<float>.Count)

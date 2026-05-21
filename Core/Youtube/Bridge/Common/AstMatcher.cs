@@ -215,25 +215,6 @@ internal static class AstMatcher
         return true;
     }
 
-    private static bool MatchAnyKey(IReadOnlyList<Node> collection, MatchTemplate[] templates)
-    {
-        for (int i = 0; i < templates.Length; i++)
-        {
-            var t = templates[i];
-            bool matchedAny = false;
-            for (int j = 0; j < collection.Count; j++)
-            {
-                if (Matches(collection[j], t))
-                {
-                    matchedAny = true;
-                    break;
-                }
-            }
-            if (!matchedAny) return false;
-        }
-        return true;
-    }
-
     private static bool MatchAnyKey(ChildNodes collection, MatchTemplate[] templates)
     {
         for (int i = 0; i < templates.Length; i++)

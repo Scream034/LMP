@@ -21,12 +21,11 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Экономия трафика. Маленькие чанки, минимальный буфер (~10 сек).
-    /// Для мобильного интернета и лимитированных тарифов.
+    /// Экономия трафика.
     /// </summary>
     public static StreamingConfig Low { get; } = new()
     {
-        ChunkSizeBytes = 32 * 1024,          // 32 KB
+        ChunkSizeBytes = 32 * 1024,
         ReadAheadChunks = 2,
         MaxRamChunks = 128,
         RamEvictionDistance = 8,
@@ -35,7 +34,7 @@ public static class StreamingProfiles
         DownloadTimeoutMs = 30_000,
         DownloadSlotTimeoutMs = 800,
 
-        MaxNetworkRetries = 4,               // Больше retry для нестабильной сети
+        MaxNetworkRetries = 4,
         NetworkRetryBaseDelayMs = 800,
         UseExponentialBackoff = true,
         Max403BeforeCircuitBreak = 3,
@@ -43,14 +42,14 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 800,
 
         InitialChunksToLoad = 2,
-        SeekPreloadChunks = 2,
+        SeekPreloadChunks = 3,
 
         BackgroundFillIdleCycles = 8,
         BackgroundFillIntervalMs = 5000,
         MaxBackgroundChunksPerSession = 30,
         MinBufferAheadForBackgroundFill = 2,
 
-        PreloadIntervalMs = 1200
+        PreloadIntervalMs = 800
     };
 
     /// <summary>
@@ -59,14 +58,15 @@ public static class StreamingProfiles
     /// </summary>
     public static StreamingConfig Medium { get; } = new()
     {
-        ChunkSizeBytes = 128 * 1024,         // 128 KB
+        ChunkSizeBytes = 128 * 1024,
         ReadAheadChunks = 4,
         MaxRamChunks = 64,
         RamEvictionDistance = 10,
 
         MaxConcurrentDownloads = 3,
         DownloadTimeoutMs = 15_000,
-        DownloadSlotTimeoutMs = 500,
+        DownloadSlotTimeoutMs = 300,        // критический чанк не ждёт слот (isCritical),
+                                            // но preload-чанки быстрее fail'ят и не держат слоты
 
         MaxNetworkRetries = 3,
         NetworkRetryBaseDelayMs = 500,
@@ -76,23 +76,28 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 500,
 
         InitialChunksToLoad = 3,
-        SeekPreloadChunks = 2,
+        SeekPreloadChunks = 4,              //  при seek на незагруженный участок
+                                            // параллельно подгружаются 4 чанка вместо 2.
+                                            // На 128KB/чанк при 155kbps это ~26 сек буфер.
+                                            // Decoder начинает читать первый чанк немедленно,
+                                            // остальные 3 готовы к моменту когда они понадобятся.
 
         BackgroundFillIdleCycles = 5,
         BackgroundFillIntervalMs = 3000,
         MaxBackgroundChunksPerSession = 0,
         MinBufferAheadForBackgroundFill = 3,
 
-        PreloadIntervalMs = 800
+        PreloadIntervalMs = 500             // preload loop проверяет чаще,
+                                            // чанки вокруг текущей позиции подгружаются быстрее.
+                                            // 500ms × 4 ReadAheadChunks = ~2с полное покрытие.
     };
 
     /// <summary>
-    /// Высокое качество. ~1.5 мин буфер.
-    /// Для стабильного быстрого интернета.
+    /// Высокое качество.
     /// </summary>
     public static StreamingConfig High { get; } = new()
     {
-        ChunkSizeBytes = 256 * 1024,         // 256 KB
+        ChunkSizeBytes = 256 * 1024,
         ReadAheadChunks = 6,
         MaxRamChunks = 48,
         RamEvictionDistance = 12,
@@ -109,23 +114,22 @@ public static class StreamingProfiles
         PostRefreshDelayMs = 300,
 
         InitialChunksToLoad = 3,
-        SeekPreloadChunks = 3,
+        SeekPreloadChunks = 5,
 
         BackgroundFillIdleCycles = 3,
         BackgroundFillIntervalMs = 1500,
         MaxBackgroundChunksPerSession = 0,
         MinBufferAheadForBackgroundFill = 4,
 
-        PreloadIntervalMs = 500
+        PreloadIntervalMs = 350
     };
 
     /// <summary>
-    /// Максимальное кэширование. ~5 мин буфер.
-    /// Для локальной сети или гигабитного интернета.
+    /// Максимальное кэширование.
     /// </summary>
     public static StreamingConfig Ultra { get; } = new()
     {
-        ChunkSizeBytes = 512 * 1024,         // 512 KB
+        ChunkSizeBytes = 512 * 1024,
         ReadAheadChunks = 10,
         MaxRamChunks = 40,
         RamEvictionDistance = 15,
@@ -136,20 +140,20 @@ public static class StreamingProfiles
 
         MaxNetworkRetries = 2,
         NetworkRetryBaseDelayMs = 300,
-        UseExponentialBackoff = false,       // Быстрый retry, сеть надёжная
+        UseExponentialBackoff = false,
         Max403BeforeCircuitBreak = 3,
         RefreshCooldownMs = 1500,
         PostRefreshDelayMs = 200,
 
         InitialChunksToLoad = 4,
-        SeekPreloadChunks = 4,
+        SeekPreloadChunks = 6,
 
         BackgroundFillIdleCycles = 2,
         BackgroundFillIntervalMs = 500,
         MaxBackgroundChunksPerSession = 0,
         MinBufferAheadForBackgroundFill = 6,
 
-        PreloadIntervalMs = 300
+        PreloadIntervalMs = 200
     };
 
     #region Helpers

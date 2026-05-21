@@ -296,14 +296,18 @@ public sealed partial class CachingStreamSource
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// <para>Pre-sized list с начальной ёмкостью 8 (типичное количество
+    /// непрерывных диапазонов). Устраняет повторные resize List при каждом timer tick.</para>
+    /// </remarks>
     public IReadOnlyList<(double Start, double End)> GetBufferedRanges()
-    {   
+    {
         if (_cacheEntry == null) return [];
 
         int total = Math.Min(_cacheEntry.TotalChunks, _totalChunks);
         if (total == 0) return [];
 
-        var ranges = new List<(double, double)>();
+        var ranges = new List<(double, double)>(8);
         int? rangeStart = null;
 
         for (int i = 0; i < total; i++)
@@ -320,7 +324,7 @@ public sealed partial class CachingStreamSource
         }
 
         if (rangeStart.HasValue)
-            ranges.Add(((double)rangeStart.Value / total, 1.0));
+            ranges.Add(((double)rangeStart.Value / total, BufferedRangeEnd));
 
         return ranges;
     }

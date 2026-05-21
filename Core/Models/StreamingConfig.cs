@@ -105,7 +105,7 @@ public sealed record StreamingConfig
         // Download
         public const int MaxConcurrentDownloads = 3;
         public const int DownloadTimeoutMs = 15_000;
-        public const int DownloadSlotTimeoutMs = 500;
+        public const int DownloadSlotTimeoutMs = 300;
 
         // Retry
         public const int MaxNetworkRetries = 3;
@@ -117,7 +117,7 @@ public sealed record StreamingConfig
 
         // Pre-buffer
         public const int InitialChunksToLoad = 3;
-        public const int SeekPreloadChunks = 2;
+        public const int SeekPreloadChunks = 4;
 
         // Background fill
         public const int BackgroundFillIdleCycles = 5;
@@ -133,13 +133,10 @@ public sealed record StreamingConfig
         /// максимум = ReadAheadChunks + 1 итераций. При значении > ReadAheadChunks
         /// условие <c>chunksAhead >= MinBufferAheadForBackgroundFill</c>
         /// НИКОГДА не выполняется → background fill заблокирован навсегда.</para>
-        ///
-        /// <para><b>Было:</b> 6 (при ReadAheadChunks=4 → max chunksAhead=5 → 5≥6 = false → dead).</para>
-        /// <para><b>Стало:</b> 3 — background fill стартует когда ≥3 чанков впереди доступны.</para>
         /// </remarks>
         public const int MinBufferAheadForBackgroundFill = 3;
 
         // Preload loop
-        public const int PreloadIntervalMs = 800;
+        public const int PreloadIntervalMs = 500;
     }
 }

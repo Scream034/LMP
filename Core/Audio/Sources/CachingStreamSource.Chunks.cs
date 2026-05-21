@@ -834,20 +834,31 @@ public sealed partial class CachingStreamSource
     /// Эвикция удалённых чанков из RAM с корректным возвратом буферов в пул.
     /// Удаляет до <c>MaxRamChunks / 4</c> самых далёких от текущей позиции чанков.
     /// </summary>
+    /// <remarks>
+    /// <para><b>FIX 7:</b> Manual loop вместо LINQ (Where → OrderByDescending → Take → ToList).
+    /// Устраняет аллокации замыканий, итераторов и промежуточного List на каждый вызов.
+    /// Вызывается из preload loop и ReleaseRamBuffers — hot path при воспроизведении.</para>
+    /// </remarks>
     private void EvictDistantRamChunks()
     {
         int current = Volatile.Read(ref _currentChunk);
+        int evictionDistance = _config.RamEvictionDistance;
+        int maxEvict = _config.MaxRamChunks / 4;
+        int evicted = 0;
 
-        var toEvict = _ramChunks.Keys
-            .Where(i => Math.Abs(i - current) > _config.RamEvictionDistance)
-            .OrderByDescending(i => Math.Abs(i - current))
-            .Take(_config.MaxRamChunks / 4)
-            .ToList();
-
-        foreach (int idx in toEvict)
+        // Один проход по snapshot ключей — O(n) вместо O(n log n) сортировки.
+        // Эвикция по расстоянию: все чанки дальше evictionDistance удаляются,
+        // с ограничением maxEvict за вызов для предотвращения spike'ов.
+        foreach (var kvp in _ramChunks)
         {
-            if (_ramChunks.TryRemove(idx, out var chunk))
+            if (evicted >= maxEvict) break;
+
+            if (Math.Abs(kvp.Key - current) > evictionDistance
+                && _ramChunks.TryRemove(kvp.Key, out var chunk))
+            {
                 chunk.Dispose();
+                evicted++;
+            }
         }
     }
 

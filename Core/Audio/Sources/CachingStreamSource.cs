@@ -39,61 +39,19 @@ public sealed partial class CachingStreamSource : IAudioSource
     private const int PlaybackGateCriticalTimeoutMs = 512;
 
     /// <summary>Количество повторов чтения при смене эпохи.</summary>
-    private const int ReadAtMaxEpochRetries = 5;
+    private const int ReadAtMaxEpochRetries = 3;
 
     /// <summary>Задержка между retry чтения при смене эпохи (мс).</summary>
-    private const int ReadAtEpochRetryDelayMs = 50;
-
-    /// <summary>Задержка перед повтором после race/cancel (мс).</summary>
-    private const int RetryAfterTransientFailureDelayMs = 50;
-
-    /// <summary>Задержка после исчерпания слота загрузки (мс).</summary>
-    private const int RetryAfterSlotTimeoutDelayMs = 200;
-
-    /// <summary>Максимальная задержка экспоненциального backoff (мс).</summary>
-    private const int MaxRetryBackoffDelayMs = 10_000;
+    private const int ReadAtEpochRetryDelayMs = 30;
 
     /// <summary>Количество последовательных 403 перед открытием circuit breaker.</summary>
     private const int MaxRefreshFailuresBeforeCircuitBreak = 2;
-
-    /// <summary>Количество чанков critical read-ahead в suspend mode.</summary>
-    private const int CriticalReadAheadChunkCount = 5;
-
-    /// <summary>Инкремент для расчёта critical read-ahead.</summary>
-    private const int CriticalReadAheadExtraChunk = 1;
-
-    /// <summary>Размер batch для resumed partial cache.</summary>
-    private const int ResumedPartialCacheFillBatchSize = 3;
-
-    /// <summary>Порог прогресса для эвристик диагностики n-token.</summary>
-    private const int NTokenLikelyEncryptedMinLength = 15;
-
-    /// <summary>Порог прогресса для эвристик диагностики n-token.</summary>
-    private const int NTokenLikelyEncryptedMaxLength = 25;
-
-    /// <summary>Максимальная длина UA в диагностическом логе.</summary>
-    private const int DiagnosticUserAgentMaxLength = 50;
-
-    /// <summary>Максимальная длина тела ответа в диагностическом логе.</summary>
-    private const int DiagnosticResponseBodyMaxLength = 200;
-
-    /// <summary>Максимальная длина URL в диагностическом логе.</summary>
-    private const int DiagnosticUrlMaxLength = 300;
-
-    /// <summary>Максимальная длина n-token в диагностическом логе.</summary>
-    private const int DiagnosticTokenPreviewLength = 15;
-
-    /// <summary>Задержка очистки старого CTS после смены позиции (мс).</summary>
-    private const int DeferredReadCtsDisposeDelayMs = 0;
 
     /// <summary>Минимальная граница seek clamp.</summary>
     private const long SeekLowerBound = 0;
 
     /// <summary>Смещение для последнего байта контента.</summary>
     private const long SeekEndOffset = 1;
-
-    /// <summary>Начало диапазона буферизации.</summary>
-    private const double BufferedRangeStart = 0.0;
 
     /// <summary>Конец диапазона буферизации.</summary>
     private const double BufferedRangeEnd = 1.0;
@@ -361,34 +319,6 @@ public sealed partial class CachingStreamSource : IAudioSource
     }
 
     /// <summary>
-    /// Обрабатывает событие полной очистки глобального дискового кэша.
-    /// Сбрасывает маску дисковых сегментов и безопасно освобождает RAM-буферы (кроме воспроизводимого в данный момент),
-    /// переводя источник в режим чистого сетевого стриминга без прерывания звука.
-    /// </summary>
-    private void HandleGlobalCacheCleared()
-    {
-        if (_disposed || _cacheEntry == null) return;
-
-        Log.Info($"[CachingSource] Cache cleared event received. Invalidating cache state for: {_cacheKey}");
-
-        _cacheEntry.IsComplete = false;
-        _cacheEntry.ResetChunkMask();
-
-        // Очищаем RAM-буферы, кроме текущего воспроизводимого чанка, чтобы избежать заикания декодера
-        int current = Volatile.Read(ref _currentChunk);
-        foreach (var key in _ramChunks.Keys)
-        {
-            if (key != current && _ramChunks.TryRemove(key, out var chunk))
-            {
-                chunk.Dispose();
-            }
-        }
-
-        // Сбрасываем эпохи для отмены зависших или выполняющихся дисковых операций
-        ResetDownloadEpoch();
-    }
-
-     /// <summary>
     /// Загружает диапазон чанков [<paramref name="from"/>, <paramref name="count"/>) параллельно.
     /// </summary>
     /// <param name="from">Первый индекс чанка включительно.</param>
@@ -569,14 +499,14 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
     }
 
-       /// <inheritdoc/>
-    public void Dispose()
+    /// <summary>
+    /// Общая преамбула dispose: снимает блокировки gates, отменяет epoch CTS и lifetime CTS.
+    /// Единый источник истины для обоих путей Dispose / DisposeAsync.
+    /// </summary>
+    private void BeginDispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-
         _suspendGate.Set();
-        _playbackGate.Set(); // Освобождаем блокировку Wait внутри PreloadLoopAsync
+        _playbackGate.Set();
 
         lock (_epochLock)
         {
@@ -586,6 +516,33 @@ public sealed partial class CachingStreamSource : IAudioSource
         }
 
         try { _lifetimeCts?.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Общий эпилог dispose: освобождает lifetime CTS, read stream, RAM-чанки, семафоры, gates.
+    /// Вызывается после ожидания preload task и dispose парсера.
+    /// </summary>
+    private void DisposeSharedResources()
+    {
+        try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
+
+        _readStream?.Dispose();
+        DisposeAllRamChunks();
+
+        try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
+        try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
+
+        _suspendGate.Dispose();
+        _playbackGate.Dispose();
+    }
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        BeginDispose();
 
         if (_preloadTask is { IsCompleted: false })
         {
@@ -593,17 +550,8 @@ public sealed partial class CachingStreamSource : IAudioSource
             catch { }
         }
 
-        try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
-
         _parser?.Dispose();
-        _readStream?.Dispose();
-        DisposeAllRamChunks();
-
-        try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
-        try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
-        
-        _suspendGate.Dispose();
-        _playbackGate.Dispose();
+        DisposeSharedResources();
     }
 
     /// <inheritdoc/>
@@ -612,39 +560,26 @@ public sealed partial class CachingStreamSource : IAudioSource
         if (_disposed) return;
         _disposed = true;
 
-        _suspendGate.Set();
-        _playbackGate.Set(); // Освобождаем блокировку Wait внутри PreloadLoopAsync
-
-        lock (_epochLock)
-        {
-            try { _downloadCts?.Cancel(); } catch (ObjectDisposedException) { }
-            try { _downloadCts?.Dispose(); } catch (ObjectDisposedException) { }
-            _downloadCts = null;
-        }
-
-        try { _lifetimeCts?.Cancel(); } catch (ObjectDisposedException) { }
+        BeginDispose();
 
         if (_preloadTask != null)
         {
-            try { await _preloadTask.WaitAsync(TimeSpan.FromMilliseconds(PreloadTaskDisposeWaitTimeoutMs)).ConfigureAwait(false); }
+            try
+            {
+                await _preloadTask
+                    .WaitAsync(TimeSpan.FromMilliseconds(PreloadTaskDisposeWaitTimeoutMs))
+                    .ConfigureAwait(false);
+            }
             catch { }
         }
 
-        // Даём фоновым потокам завершить свои проверки на отмену, используя константу
+        // Даём фоновым потокам завершить свои проверки на отмену.
         await Task.Delay(DisposalDelayMs).ConfigureAwait(false);
 
-        try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
+        if (_parser != null)
+            await _parser.DisposeAsync().ConfigureAwait(false);
 
-        if (_parser != null) await _parser.DisposeAsync().ConfigureAwait(false);
-
-        _readStream?.Dispose();
-        DisposeAllRamChunks();
-
-        try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
-        try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
-        
-        _suspendGate.Dispose();
-        _playbackGate.Dispose();
+        DisposeSharedResources();
     }
 
     #endregion
