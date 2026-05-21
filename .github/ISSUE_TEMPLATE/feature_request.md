@@ -1,7 +1,7 @@
 ---
 name: Предложение фичи (Feature Request)
 about: Предложить новую идею или улучшение для LMP
-title: '[FEATURE] Название фичи'
+title: 'Название фичи'
 labels: ['type: feature']
 assignees: ''
 ---
