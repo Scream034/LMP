@@ -512,6 +512,23 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     #region Statistics
 
+    /// <summary>
+    /// Возвращает компактную статистику кэша (кол-во файлов, размер в МБ).
+    /// <para>Учитывает как полностью скачанные треки, так и находящиеся в процессе загрузки (частичный кэш).</para>
+    /// </summary>
+    public (int FileCount, int SizeMb) GetStatsCompact()
+    {
+        var stats = GetStats();
+        // Суммируем завершенные и частичные файлы на диске, чтобы пользователь видел реальный счетчик
+        int totalFiles = stats.CompleteEntries + stats.PartialEntries;
+        return (totalFiles, (int)(stats.TotalSizeBytes / 1024 / 1024));
+    }
+
+    /// <summary>
+    /// Собирает полную статистику использования дискового пространства кэша.
+    /// <para>Опрашивает размеры частично скачанных файлов на диске на холодном пути (при вызове метода),
+    /// гарантируя точные показатели в UI и корректное поведение алгоритмов очистки диска.</para>
+    /// </summary>
     public CacheStats GetStats()
     {
         long totalSize = 0;
@@ -521,10 +538,31 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         foreach (var entry in _entries.Values)
         {
-            totalCount++;
-            totalSize += entry.ActualFileSize;
-            if (entry.IsComplete) completeCount++;
-            else if (entry.DownloadedChunks > 0) partialCount++;
+            // Обновляем размер неполных файлов на диске прямо перед подсчетом статистики
+            if (!entry.IsComplete)
+            {
+                UpdateFileSizeCache(entry);
+            }
+            else if (entry.ActualFileSize == 0)
+            {
+                // На всякий случай проверяем и завершенные файлы (если пользователь стёр их вручную)
+                UpdateFileSizeCache(entry);
+            }
+
+            // Учитываем в статистике только реально существующие файлы на диске
+            if (entry.ActualFileSize > 0)
+            {
+                totalCount++;
+                if (entry.IsComplete)
+                {
+                    completeCount++;
+                }
+                else if (entry.DownloadedChunks > 0)
+                {
+                    partialCount++;
+                }
+                totalSize += entry.ActualFileSize;
+            }
         }
 
         return new CacheStats
@@ -535,12 +573,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             TotalSizeBytes = totalSize,
             MaxSizeBytes = _maxCacheSize
         };
-    }
-
-    public (int FileCount, int SizeMb) GetStatsCompact()
-    {
-        var stats = GetStats();
-        return (stats.CompleteEntries, (int)(stats.TotalSizeBytes / 1024 / 1024));
     }
 
     public static (int FileCount, int SizeMb) GetDownloadsStats()
@@ -834,13 +866,23 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         if (keys.IsEmpty) _trackIndex.TryRemove(trackId, out _);
     }
 
+    /// <summary>
+    /// Считывает физический размер файла кэша на диске и обновляет свойство ActualFileSize записи.
+    /// </summary>
     private void UpdateFileSizeCache(CacheEntry entry)
     {
         try
         {
             var filePath = GetCachePath(entry.CacheKey);
             if (File.Exists(filePath))
+            {
                 entry.ActualFileSize = new FileInfo(filePath).Length;
+            }
+            else
+            {
+                // Защита: сбрасываем в 0, если файл был удалён вручную во время сессии
+                entry.ActualFileSize = 0;
+            }
         }
         catch { }
     }
