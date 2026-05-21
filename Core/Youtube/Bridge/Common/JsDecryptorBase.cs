@@ -1,9 +1,11 @@
-using System.Collections.Concurrent;
-using System.Text;
-using Jint;
+using System.Diagnostics;
 
 namespace LMP.Core.Youtube.Bridge.Common;
 
+/// <summary>
+/// Базовый класс для дешифраторов с общей логикой инициализации и валидации.
+/// Обеспечивает асинхронную загрузку контекста плеера вне UI-потока.
+/// </summary>
 public abstract class JsDecryptorBase<T>(
     PlayerContextManager playerManager,
     string cacheFilePath,
@@ -13,13 +15,9 @@ public abstract class JsDecryptorBase<T>(
     /// <summary>Менеджер контекста плеера.</summary>
     public PlayerContextManager PlayerManager { get; } = playerManager;
 
-    protected readonly DecryptorCache<string, string> Cache = new(cacheFilePath, maxMemory, maxDisk);
+    protected readonly DecryptorCache Cache = new(cacheFilePath, maxMemory, maxDisk);
 
     private readonly SemaphoreSlim _initSemaphore = new(1, 1);
-    private readonly object _engineLock = new();
-
-    protected EnginePool? DecryptorEnginePool;
-    protected string? FullFuncName;
 
     protected string? CurrentPlayerVersion;
     internal volatile bool IsInitialized;
@@ -27,6 +25,14 @@ public abstract class JsDecryptorBase<T>(
     protected string DecryptorName => typeof(T).Name;
     protected string DiagFolder => Cache.CacheFolder;
 
+    protected abstract string FunctionName { get; }
+    protected abstract string TestInput { get; }
+    protected abstract bool ValidateResult(string? result, string input);
+
+    /// <summary>
+    /// Асинхронно гарантирует, что движок дешифрации инициализирован.
+    /// Тяжелые задачи (парсинг AST) выполняются внутри на ThreadPool пуле.
+    /// </summary>
     public async ValueTask EnsureInitializedAsync(CancellationToken ct)
     {
         if (IsInitialized) return;
@@ -42,18 +48,11 @@ public abstract class JsDecryptorBase<T>(
 
             try
             {
-                InitializeCore(context);
-                IsInitialized = true;
+                // Выполняем инициализацию (парсинг AST) в фоновом пуле потоков, чтобы не фризить UI
+                await Task.Run(() => InitializeCore(context), ct).ConfigureAwait(false);
 
-                // Немедленно освобождаем LOH-строки base.js и preprocessed.js
+                IsInitialized = true;
                 context.ReleaseRawScripts();
-            }
-            catch (Jint.Runtime.JavaScriptException ex)
-            {
-                Log.Error($"[{DecryptorName}] Critical Jint JS Exception inside base.js: {ex.Message}");
-                Log.Error($"  └─ File Location: Line {ex.Location.Start.Line}, Col {ex.Location.Start.Column}");
-                Log.Error($"  └─ Call Stack:\n{ex.JavaScriptStackTrace}");
-                throw;
             }
             catch (Exception ex)
             {
@@ -67,78 +66,68 @@ public abstract class JsDecryptorBase<T>(
         }
     }
 
-    protected abstract void InitializeCore(PlayerContext context);
-
-    protected static Engine CreateEngine(TimeSpan timeout, int maxStatements) =>
-        new(opt => opt.TimeoutInterval(timeout).LimitRecursion(200).MaxStatements(maxStatements));
-
-    protected static Engine CreateFullEngine() => CreateEngine(TimeSpan.FromSeconds(30), 10_000_000);
-
-    protected void SetupEnginePool(Jint.Prepared<Acornima.Ast.Script> preparedScript, string transformFunc, string bindingJs)
+    /// <summary>
+    /// Общая логика инициализации (DRY): препроцессинг скрипта и тестовая валидация.
+    /// </summary>
+    private void InitializeCore(PlayerContext context)
     {
-        ForceDisposeEngines();
+        Log.Info($"[{DecryptorName}] Initializing via Unified AST Solver + QuickJS...");
+        var sw = Stopwatch.StartNew();
 
-        // Капим размер пула на 1 для полного устранения оверхеда дублирования движков в GUI-приложении.
-        // При редких параллельных запросах Jint создаст временный движок и утилизирует его через GC.
-        DecryptorEnginePool = new EnginePool(
-            factory: CreateFullEngine,
-            initializer: engine =>
-            {
-                engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
-                engine.Execute(preparedScript);
-                engine.Execute(bindingJs);
-            },
-            maxSize: 1
-        );
+        string preprocessedJs = context.GetOrPrepareScript(() => YoutubeAstSolver.PreprocessPlayer(context.BaseJs));
 
-        FullFuncName = transformFunc;
-    }
-
-    protected void ForceDisposeEngines()
-    {
-        lock (_engineLock)
+        var testOutput = QuickJsDecryptor.Decrypt(preprocessedJs, FunctionName, TestInput);
+        if (ValidateResult(testOutput, TestInput))
         {
-            DecryptorEnginePool?.Dispose();
-            DecryptorEnginePool = null;
-            FullFuncName = null;
+            sw.Stop();
+            Log.Info($"[{DecryptorName}] QuickJS-NG Decryptor successfully initialized in {sw.ElapsedMilliseconds}ms!");
+            return;
         }
+
+        throw new InvalidOperationException($"[{DecryptorName}] QuickJS AST solver verification failed on test token.");
     }
 
-    protected static string FormatJsException(Exception ex)
+    /// <summary>
+    /// Полностью асинхронный вызов нативного QuickJS-дешифратора.
+    /// Исключает блокирующий GetAwaiter().GetResult().
+    /// </summary>
+    protected async ValueTask<string?> TryInvokeJsAsync(string input, string logPrefix, CancellationToken ct)
     {
-        if (ex is not Jint.Runtime.JavaScriptException jsEx) return ex.Message;
-        var sb = new StringBuilder(256).Append(jsEx.Message);
-        try { var errorObj = jsEx.Error; if (errorObj is not null && !errorObj.IsUndefined() && !errorObj.IsNull()) sb.Append($" [JSError: {Truncate(errorObj.ToString(), 100)}]"); } catch { /* ignore */ }
-        try { var jsStack = jsEx.JavaScriptStackTrace; if (!string.IsNullOrEmpty(jsStack)) sb.Append($" [JSStack: {Truncate(jsStack, 150)}]"); } catch { /* ignore */ }
-        try { var loc = jsEx.Location; if (loc.Start.Line > 0) sb.Append($" [Line:{loc.Start.Line}:{loc.Start.Column}]"); } catch { /* ignore */ }
-        return sb.ToString();
-    }
+        var context = await PlayerManager.GetOrLoadAsync(ct).ConfigureAwait(false);
+        string? preprocessedJs = context.PreprocessedJs;
 
-    protected string? TryInvokeJs(string input, string logPrefix)
-    {
-        if (DecryptorEnginePool is not null && FullFuncName is not null)
+        if (string.IsNullOrEmpty(preprocessedJs))
         {
-            var engine = DecryptorEnginePool.Rent();
-            try
-            {
-                var result = engine.Invoke(FullFuncName, input).AsString();
-                if (!string.IsNullOrEmpty(result) && result != input)
-                {
-                    Cache.Set(input, result);
-                    Log.Debug($"[{DecryptorName}] {logPrefix} Full: {Truncate(input)} -> {Truncate(result)}");
-                    return result;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[{DecryptorName}] {logPrefix} Full JS failed: {FormatJsException(ex)}");
-            }
-            finally
-            {
-                DecryptorEnginePool.Return(engine);
-            }
+            preprocessedJs = await Task.Run(() => {
+                var cached = PlayerContext.LoadFromCache(context.Version);
+                return cached?.PreprocessedJs ?? YoutubeAstSolver.PreprocessPlayer(context.BaseJs);
+            }, ct).ConfigureAwait(false);
         }
+
+        if (string.IsNullOrEmpty(preprocessedJs))
+        {
+            Log.Error($"[{DecryptorName}] Cannot invoke JS: preprocessed script is unavailable.");
+            return null;
+        }
+
+        var sw = Stopwatch.StartNew();
+        var result = QuickJsDecryptor.Decrypt(preprocessedJs, FunctionName, input);
+        sw.Stop();
+
+        if (!string.IsNullOrEmpty(result) && result != input)
+        {
+            Cache.Set(input, result);
+            Log.Debug($"[{DecryptorName}] {logPrefix} (QuickJS-NG in {sw.ElapsedTicks / 10000.0:F3}ms): {Truncate(input)} -> {Truncate(result)}");
+            return result;
+        }
+
         return null;
+    }
+
+    public void InvalidateValue(string value)
+    {
+        Cache.RemoveByValue(value);
+        Log.Info($"[{DecryptorName}] Invalidated cache entry for decrypted value: {Truncate(value)}");
     }
 
     protected static string Truncate(string s, int len = 20) => s.Length <= len ? s : string.Concat(s.AsSpan(0, len), "...");
@@ -148,7 +137,6 @@ public abstract class JsDecryptorBase<T>(
     public virtual void InvalidateCache()
     {
         Cache.Clear();
-        ForceDisposeEngines();
         IsInitialized = false;
         Log.Info($"[{DecryptorName}] Cache invalidated");
     }
@@ -156,117 +144,7 @@ public abstract class JsDecryptorBase<T>(
     public virtual void Dispose()
     {
         FlushCache();
-        ForceDisposeEngines();
         _initSemaphore.Dispose();
         GC.SuppressFinalize(this);
     }
-
-    protected sealed class EnginePool(Func<Engine> factory, Action<Engine> initializer, int maxSize) : IDisposable
-    {
-        private readonly ConcurrentStack<Engine> _pool = new();
-        private readonly Func<Engine> _factory = factory;
-        private readonly Action<Engine> _initializer = initializer;
-        private readonly int _maxSize = maxSize;
-        private int _disposed;
-
-        public Engine Rent()
-        {
-            if (_pool.TryPop(out var engine))
-            {
-                return engine;
-            }
-
-            var newEngine = _factory();
-            _initializer(newEngine);
-            return newEngine;
-        }
-
-        public void Return(Engine engine)
-        {
-            if (Volatile.Read(ref _disposed) == 1)
-            {
-                engine.Dispose();
-                return;
-            }
-
-            if (_pool.Count < _maxSize)
-            {
-                _pool.Push(engine);
-            }
-            else
-            {
-                engine.Dispose();
-            }
-        }
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
-
-            while (_pool.TryPop(out var engine))
-            {
-                engine.Dispose();
-            }
-        }
-    }
-
-    public const string BrowserStubs = """
-        if (typeof globalThis.XMLHttpRequest === "undefined") {
-            globalThis.XMLHttpRequest = { prototype: {} };
-        }
-        
-        (function() {
-            var URLPolyfill = function(url, base) {
-                var absoluteUrl = url;
-                if (base) {
-                    if (url.startsWith("/")) {
-                        var originMatch = base.match(/^https?:\/\/[^\/]+/);
-                        absoluteUrl = (originMatch ? originMatch[0] : "") + url;
-                    } else if (!url.startsWith("http")) {
-                        absoluteUrl = base.replace(/\/?[^\/]*$/, "/") + url;
-                    }
-                }
-                
-                var match = absoluteUrl.match(/^(https?:)\/\/([^\/?#]+)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/);
-                if (!match) throw new Error("Invalid URL: " + url);
-                
-                this.protocol = match[1];
-                this.host = match[2];
-                this.hostname = match[2].split(":")[0];
-                this.pathname = match[3] || "/";
-                this.search = match[4] ? "?" + match[4] : "";
-                this.hash = match[5] ? "#" + match[5] : "";
-                this.href = absoluteUrl;
-                this.origin = this.protocol + "//" + this.host;
-            };
-            URLPolyfill.prototype.toString = function() { return this.href; };
-
-            function defineGlobal(name, val) {
-                try {
-                    Object.defineProperty(globalThis, name, {
-                        value: val,
-                        writable: true,
-                        configurable: true,
-                        enumerable: true
-                    });
-                } catch(e) {
-                    globalThis[name] = val;
-                }
-            }
-
-            defineGlobal('URL', URLPolyfill);
-            defineGlobal('location', new URLPolyfill("https://www.youtube.com/watch?v=bMD38TVNUF8"));
-            defineGlobal('self', globalThis);
-            defineGlobal('window', globalThis);
-            defineGlobal('document', Object.create(null));
-            defineGlobal('navigator', Object.create(null));
-        })();
-
-        if (typeof BigInt === 'undefined') { 
-            var BigInt = function(v) { return Number(v); }; 
-            BigInt.asIntN = function(bits, n) { return Number(n); }; 
-            BigInt.asUintN = function(bits, n) { return Number(n); }; 
-            globalThis.BigInt = BigInt; 
-        }
-        """;
 }

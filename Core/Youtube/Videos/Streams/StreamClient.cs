@@ -23,6 +23,13 @@ public sealed class StreamClient
     private readonly Func<bool>? _isAuthenticatedCheck;
     private CipherManifest? _cipherManifest;
 
+    /// <summary>
+    /// Создает экземпляр StreamClient с внедрением необходимых зависимостей.
+    /// </summary>
+    /// <param name="http">Экземпляр HTTP-клиента.</param>
+    /// <param name="nTokenDecryptor">Провайдер расшифровки N-Token.</param>
+    /// <param name="sigCipherDecryptor">Провайдер расшифровки подписи.</param>
+    /// <param name="isAuthenticatedCheck">Callback проверки авторизации.</param>
     public StreamClient(
         HttpClient http,
         NTokenDecryptor nTokenDecryptor,
@@ -38,9 +45,16 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Извлекает временную метку (sts) из единого кэша PlayerContextManager.
-    /// Исключает дублирование сетевых запросов.
+    /// Извлекает signatureTimestamp из единого кэша <see cref="PlayerContextManager"/>.
     /// </summary>
+    /// <remarks>
+    /// <para><b>FIX:</b> Использует <see cref="PlayerContext.Sts"/> как приоритетный источник
+    /// вместо <c>YoutubeAstSolver.ExtractSts(context.BaseJs)</c>. Причина аналогична
+    /// <c>VideoController.ResolveSignatureTimestampAsync</c>: <c>BaseJs</c> может быть пустым
+    /// после <see cref="PlayerContext.ReleaseRawScripts"/> или при загрузке из препроцессированного кэша.</para>
+    /// </remarks>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Вычисленный манифест шифрования плеера.</returns>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
     {
         if (_cipherManifest is not null)
@@ -49,9 +63,15 @@ public sealed class StreamClient
         try
         {
             var context = await _playerContextManager.GetOrLoadAsync(cancellationToken).ConfigureAwait(false);
-            var sts = YoutubeAstSolver.ExtractSts(context.BaseJs);
-            _cipherManifest = new CipherManifest(sts);
 
+            // ═══ FIX: context.Sts — единственный надёжный источник STS ═══
+            // Идентичная причина что и в VideoController.ResolveSignatureTimestampAsync.
+            var sts = context.Sts;
+
+            if (string.IsNullOrEmpty(sts) && !string.IsNullOrEmpty(context.BaseJs))
+                sts = YoutubeAstSolver.ExtractSts(context.BaseJs);
+
+            _cipherManifest = new CipherManifest(sts ?? "");
             return _cipherManifest;
         }
         catch (Exception ex)
@@ -62,6 +82,13 @@ public sealed class StreamClient
         }
     }
 
+    /// <summary>
+    /// Асинхронно генерирует последовательность доступных аудиопотоков для трека.
+    /// </summary>
+    /// <param name="videoId">ID видео на YouTube.</param>
+    /// <param name="streamDatas">Коллекция сырых данных о потоках.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Асинхронный итератор элементов потоков.</returns>
     private async IAsyncEnumerable<IStreamInfo> GetAudioStreamInfosAsync(
       VideoId videoId,
       IEnumerable<IStreamData> streamDatas,
@@ -98,7 +125,7 @@ public sealed class StreamClient
                 {
                     var decryptedSig = await _sigCipherDecryptor.DecipherAsync(
                         streamData.Signature,
-                        cancellationToken);
+                        cancellationToken).ConfigureAwait(false);
 
                     var sigParam = streamData.SignatureParameter ?? "sig";
                     url = UrlEx.SetQueryParameter(url, sigParam, decryptedSig);
@@ -125,7 +152,7 @@ public sealed class StreamClient
                 {
                     try
                     {
-                        using var headResponse = await _http.HeadAsync(url, cancellationToken);
+                        using var headResponse = await _http.HeadAsync(url, cancellationToken).ConfigureAwait(false);
                         if (headResponse.IsSuccessStatusCode)
                         {
                             isNTokenDecryptionRequired = false;
@@ -155,7 +182,7 @@ public sealed class StreamClient
                         var decryptedN = await _nTokenDecryptor.DecryptAsync(
                             nToken,
                             contextId: videoId.Value,
-                            ct: cancellationToken);
+                            ct: cancellationToken).ConfigureAwait(false);
 
                         hasEncryptedNToken = string.Equals(decryptedN, nToken, StringComparison.Ordinal);
                         url = UrlEx.SetQueryParameter(url, "n", decryptedN);
@@ -215,6 +242,12 @@ public sealed class StreamClient
         }
     }
 
+    /// <summary>
+    /// Асинхронно получает манифест доступных потоков для указанного видео-идентификатора.
+    /// </summary>
+    /// <param name="videoId">Уникальный ID видео.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Результат манифеста воспроизводимых аудио-потоков.</returns>
     public async ValueTask<StreamManifest> GetManifestAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
@@ -225,16 +258,16 @@ public sealed class StreamClient
         try
         {
             (playerResponse, _) = await _controller.GetPlayerResponseWithFallbackAsync(
-                videoId, cancellationToken, isAuthenticated: isAuth);
+                videoId, cancellationToken, isAuthenticated: isAuth).ConfigureAwait(false);
         }
         catch (VideoUnplayableException)
         {
-            var cipherManifest = await ResolveCipherManifestAsync(cancellationToken);
+            var cipherManifest = await ResolveCipherManifestAsync(cancellationToken).ConfigureAwait(false);
             playerResponse = await _controller.GetPlayerResponseAsync(
                 videoId,
                 cipherManifest.SignatureTimestamp,
                 cancellationToken
-            );
+            ).ConfigureAwait(false);
         }
 
         if (!playerResponse.IsPlayable)
@@ -242,7 +275,7 @@ public sealed class StreamClient
                 $"Video {videoId} is not playable: {playerResponse.PlayabilityError}");
 
         var streams = new List<IStreamInfo>();
-        await foreach (var stream in GetAudioStreamInfosAsync(videoId, playerResponse.Streams, cancellationToken))
+        await foreach (var stream in GetAudioStreamInfosAsync(videoId, playerResponse.Streams, cancellationToken).ConfigureAwait(false))
         {
             streams.Add(stream);
         }
@@ -253,6 +286,14 @@ public sealed class StreamClient
         return new StreamManifest(streams);
     }
 
+    /// <summary>
+    /// Выполняет непосредственную загрузку аудио-потока в указанный локальный путь на диске.
+    /// </summary>
+    /// <param name="streamInfo">Метаданные потока.</param>
+    /// <param name="filePath">Выходной путь записи файла.</param>
+    /// <param name="progress">Callback отображения прогресса.</param>
+    /// <param name="cancellationToken">Токен отмены операции.</param>
+    /// <returns>Асинхронная задача.</returns>
     public async ValueTask DownloadAsync(
         IStreamInfo streamInfo,
         string filePath,
@@ -262,7 +303,24 @@ public sealed class StreamClient
         using var destination = File.Create(filePath);
         using var input = new MediaStream(_http, streamInfo);
 
-        await input.InitializeAsync(cancellationToken);
-        await input.CopyToAsync(destination, progress, cancellationToken);
+        await input.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await input.CopyToAsync(destination, progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Инвалидирует закэшированный CipherManifest и signatureTimestamp контроллера.
+    /// </summary>
+    /// <remarks>
+    /// Единая точка сброса всех stale STS-данных при 403-recovery.
+    /// Вызывается из <see cref="YoutubeProvider.RefreshStreamUrlAsync"/> при <c>forceRefresh=true</c>.
+    /// Без этого вызова <see cref="ResolveCipherManifestAsync"/> и
+    /// <see cref="VideoController.ResolveSignatureTimestampAsync"/> вернут stale пустой STS,
+    /// приводя к бесконечному 403-циклу.
+    /// </remarks>
+    public void InvalidateCipherManifest()
+    {
+        _cipherManifest = null;
+        _controller.InvalidateSignatureTimestamp();
+        Log.Debug("[StreamClient] CipherManifest and STS invalidated");
     }
 }

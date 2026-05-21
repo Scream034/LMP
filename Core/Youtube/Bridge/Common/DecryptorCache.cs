@@ -4,14 +4,18 @@ using System.Threading;
 
 namespace LMP.Core.Youtube.Bridge.Common;
 
-public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
+/// <summary>
+/// Обеспечивает высокопроизводительное и потокобезопасное кэширование дешифрованных значений (string -> string)
+/// с автоматическим сохранением и фоновой очисткой устаревших записей на диске.
+/// </summary>
+public sealed class DecryptorCache
 {
-    private readonly ConcurrentDictionary<TKey, (TValue Value, long Ticks)> _memory = new();
+    private readonly ConcurrentDictionary<string, (string Value, long Ticks)> _memory = new(StringComparer.Ordinal);
     private readonly int _maxMemory;
     private readonly int _maxDisk;
     private readonly Lock _cleanupLock = new();
     private volatile bool _cleanupInProgress;
-    private int _isDirty; // Атомарный флаг изменений (0 - чистый, 1 - грязный)
+    private int _isDirty;
     private long _lastSaveTicks;
     private string? _playerVersion;
 
@@ -30,7 +34,7 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
         _maxDisk = maxDisk;
     }
 
-    public bool TryGet(TKey key, out TValue value)
+    public bool TryGet(string key, out string value)
     {
         if (_memory.TryGetValue(key, out var cached))
         {
@@ -38,11 +42,11 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
             return true;
         }
 
-        value = default!;
+        value = null!;
         return false;
     }
 
-    public void Set(TKey key, TValue value)
+    public void Set(string key, string value)
     {
         var ticks = Environment.TickCount64;
         _memory[key] = (value, ticks);
@@ -55,6 +59,50 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
         if (ticks - lastSave > SaveIntervalMs &&
             Interlocked.CompareExchange(ref _lastSaveTicks, ticks, lastSave) == lastSave)
         {
+            _ = Task.Run(SaveAsync);
+        }
+    }
+
+    /// <summary>
+    /// Точечно удаляет запись по ключу.
+    /// </summary>
+    public bool Remove(string key)
+    {
+        if (_memory.TryRemove(key, out _))
+        {
+            Interlocked.Exchange(ref _isDirty, 1);
+            _ = Task.Run(SaveAsync);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Точечно удаляет все записи с указанным расшифрованным значением.
+    /// </summary>
+    public void RemoveByValue(string value)
+    {
+        var keysToRemove = new List<string>();
+        foreach (var kvp in _memory)
+        {
+            if (string.Equals(kvp.Value.Value, value, StringComparison.Ordinal))
+            {
+                keysToRemove.Add(kvp.Key);
+            }
+        }
+
+        bool removedAny = false;
+        for (int i = 0; i < keysToRemove.Count; i++)
+        {
+            if (_memory.TryRemove(keysToRemove[i], out _))
+            {
+                removedAny = true;
+            }
+        }
+
+        if (removedAny)
+        {
+            Interlocked.Exchange(ref _isDirty, 1);
             _ = Task.Run(SaveAsync);
         }
     }
@@ -79,10 +127,8 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
             var ticks = Environment.TickCount64;
             foreach (var kvp in data.Entries)
             {
-                var key = JsonSerializer.Deserialize<TKey>(kvp.Key);
-                var value = JsonSerializer.Deserialize<TValue>(kvp.Value);
-                if (key is not null && value is not null)
-                    _memory[key] = (value, ticks);
+                if (kvp.Key is not null && kvp.Value is not null)
+                    _memory[kvp.Key] = (kvp.Value, ticks);
             }
 
             Log.Debug($"[Cache] Loaded {_memory.Count} entries from {Path.GetFileName(DiskPath)}");
@@ -103,22 +149,14 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
         {
             Directory.CreateDirectory(CacheFolder);
 
-            KeyValuePair<TKey, (TValue Value, long Ticks)>[] snapshot;
-            try
-            {
-                snapshot = [.. _memory];
-            }
-            catch (ArgumentException)
-            {
-                snapshot = [.. _memory];
-            }
+            var snapshot = _memory.ToArray();
 
             var entries = snapshot
                 .OrderByDescending(static kvp => kvp.Value.Ticks)
                 .Take(_maxDisk)
                 .ToDictionary(
-                    static kvp => JsonSerializer.Serialize(kvp.Key),
-                    static kvp => JsonSerializer.Serialize(kvp.Value.Value));
+                    static kvp => kvp.Key,
+                    static kvp => kvp.Value.Value);
 
             var data = new CacheData
             {
@@ -132,19 +170,31 @@ public sealed class DecryptorCache<TKey, TValue> where TKey : notnull
         catch (Exception ex)
         {
             Log.Debug($"[Cache] Save failed: {ex.Message}");
-            Interlocked.Exchange(ref _isDirty, 1); // Возвращаем статус "грязного" кэша в случае ошибки записи
+            Interlocked.Exchange(ref _isDirty, 1);
         }
     }
 
     public void Clear()
     {
         _memory.Clear();
-        Interlocked.Exchange(ref _isDirty, 1);
+        Interlocked.Exchange(ref _isDirty, 0);
+        try
+        {
+            if (File.Exists(DiskPath))
+            {
+                File.Delete(DiskPath);
+                Log.Info($"[Cache] Deleted cache file on disk: {Path.GetFileName(DiskPath)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Cache] Failed to delete cache file {Path.GetFileName(DiskPath)}: {ex.Message}");
+        }
     }
 
     public int Count => _memory.Count;
 
-    public IEnumerable<TKey> Keys => _memory.Keys;
+    public IEnumerable<string> Keys => _memory.Keys;
 
     private void TriggerCleanup()
     {

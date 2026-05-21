@@ -15,11 +15,12 @@ public static class CacheTests
     /// <summary>
     /// Тестирует базовые операции кэша в оперативной памяти (Set, TryGet, Overwrite, Clear).
     /// </summary>
+    /// <returns>Асинхронная задача.</returns>
     [TestMethod(TestCategory.Unit, "Cache: Memory Cache Operations", Group = TestGroups.Cache, Order = 10)]
     public static Task TestMemoryCacheAsync()
     {
         using var tempFile = new TempFileCookie();
-        var cache = new DecryptorCache<string, string>(
+        var cache = new DecryptorCache(
             tempFile.Path,
             maxMemory: MaxMemorySize,
             maxDisk: MaxDiskSize
@@ -46,12 +47,13 @@ public static class CacheTests
     /// <summary>
     /// Тестирует полный цикл сериализации и десериализации кэша на диске.
     /// </summary>
+    /// <returns>Асинхронная задача.</returns>
     [TestMethod(TestCategory.Unit, "Cache: Disk Roundtrip", Group = TestGroups.Cache, Order = 20)]
     public static async Task TestDiskRoundtripAsync()
     {
         using var tempFile = new TempFileCookie();
 
-        var writeCache = new DecryptorCache<string, string>(tempFile.Path, MaxMemorySize, MaxDiskSize);
+        var writeCache = new DecryptorCache(tempFile.Path, MaxMemorySize, MaxDiskSize);
         const int testEntriesCount = 10;
 
         for (int i = 0; i < testEntriesCount; i++)
@@ -61,13 +63,19 @@ public static class CacheTests
 
         await writeCache.SaveAsync();
 
-        var readCache = new DecryptorCache<string, string>(tempFile.Path, MaxMemorySize, MaxDiskSize);
+        var readCache = new DecryptorCache(tempFile.Path, MaxMemorySize, MaxDiskSize);
         await readCache.LoadAsync(TestVersion);
 
         Assert(readCache.Count == testEntriesCount, $"Disk roundtrip count mismatch. Expected: {testEntriesCount}, Got: {readCache.Count}");
         Log.Debug($"[Test] Cache roundtrip successful: wrote {testEntriesCount}, read {readCache.Count}");
     }
 
+    /// <summary>
+    /// Выполняет верификацию переданного логического условия и бросает исключение в случае провала.
+    /// </summary>
+    /// <param name="condition">Проверяемое логическое условие.</param>
+    /// <param name="message">Сообщение об ошибке.</param>
+    /// <exception cref="Exception">Генерируется в случае ложности условия.</exception>
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
@@ -79,8 +87,14 @@ public static class CacheTests
     /// </summary>
     private sealed class TempFileCookie : IDisposable
     {
+        /// <summary>
+        /// Путь к временному файлу на диске.
+        /// </summary>
         public string Path { get; } = System.IO.Path.GetTempFileName();
 
+        /// <summary>
+        /// Выполняет деструкцию временного файла.
+        /// </summary>
         public void Dispose()
         {
             try

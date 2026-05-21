@@ -147,7 +147,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// Очередь отложенных записей gain нормализации в БД.
     /// Заполняется из fill thread (через <see cref="HandleGainLocked"/>)
     /// и из command flow (<see cref="PlayTrackCoreAsync"/>).
-    /// Дренируется в <see cref="VolumeSaveLoopAsync"/> каждые 2 секунды
+    /// Дренируется in-place в <see cref="VolumeSaveLoopAsync"/> каждые 2 секунды
     /// и при <see cref="Dispose"/> — защита от потери данных при kill.
     /// </summary>
     private readonly ConcurrentQueue<(string TrackId, float Gain)> _pendingGainWrites = new();
@@ -259,8 +259,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             FullMode = BoundedChannelFullMode.DropOldest
         });
 
-        _ = ProcessCommandsAsync();
-        _ = VolumeSaveLoopAsync();
+        _ = Task.Run(ProcessCommandsAsync);
+        _ = Task.Run(() => VolumeSaveLoopAsync());
 
         Log.Info($"[AudioEngine] Ready. Volume={_volumePercent}%");
     }
@@ -485,7 +485,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             using var request = new HttpRequestMessage(HttpMethod.Head, "https://redirector.googlevideo.com/");
             request.Version = System.Net.HttpVersion.Version11;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await Audio.Http.SharedHttpClient.Instance.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            await Audio.Http.SharedHttpClient.Instance.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         }
         catch { }
     }
@@ -496,9 +496,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>
     /// Вызывается при фиксации gain нормализации.
-    /// Обновляет canonical instance через <see cref="LibraryService.GetTrack"/>
-    /// (а не только <see cref="CurrentTrack"/>), гарантируя что gain виден
-    /// при повторном воспроизведении через <see cref="TrackRegistry"/>.
     /// </summary>
     /// <remarks>
     /// <para>Вызывается из fill thread — блокировка и await запрещены.
@@ -567,8 +564,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         if (Volatile.Read(ref _session) != session || IsSealedFailedTrack(track.Id))
             return;
 
-        // ═══ CANONICAL IDENTITY ═══
-        var canonical = await _library.GetTrackAsync(track.Id, ct);
+        var canonical = await _library.GetTrackAsync(track.Id, ct).ConfigureAwait(false);
         if (canonical != null)
         {
             canonical.UpdateMetadata(track);
@@ -590,23 +586,19 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             Interlocked.Exchange(ref _nTokenWarnedTrackId, null);
 
-            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track, ct);
+            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track, ct).ConfigureAwait(false);
 
             if (IsSessionStale(session, ct) || IsSealedFailedTrack(track.Id))
                 return;
 
-            // ═══ CACHE GAIN FROM YOUTUBE METADATA ═══
             if (track.HasCachedNormalizationGain)
                 _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
 
-            // ═══ PREPARING TRACK ═══
-            // Устанавливаем ДО PlayAsync — ConfigurePipelineBeforeStart прочитает
-            // актуальный трек вместо CurrentTrack (который ещё не обновлён на UI-потоке).
             _preparingTrack = track;
 
             try
             {
-                await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct);
+                await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) when (IsSessionStale(session, ct) || IsCancellationLike(ex)) { return; }
@@ -654,7 +646,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         if (string.IsNullOrEmpty(track.StreamUrl))
         {
-            var info = await _youtube.RefreshStreamUrlAsync(track, false, ct)
+            var info = await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false)
                 ?? throw new InvalidOperationException($"Failed to resolve stream URL for {track.Id}");
 
             track.TransientBitrate = info.Bitrate;
@@ -735,7 +727,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 InvalidateQueueSnapshot();
             }
             RaiseOnUI(() => OnQueueChanged?.Invoke());
-            await PlayCurrentIndexAsync(session);
+            await PlayCurrentIndexAsync(session).ConfigureAwait(false);
         });
     }
 
@@ -754,15 +746,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 _currentIndex = _queue.FindIndex(t => t.Id == startTrack.Id);
                 if (_currentIndex == -1 && _queue.Count > 0) _currentIndex = 0;
 
-                // Если авто-shuffle включён — сразу перемешать,
-                // сохранив startTrack на позиции 0 (пользователь выбрал именно его).
                 if (ShuffleEnabled && _queue.Count > 1)
                     ApplyShuffleInPlace(preserveCurrentAtStart: true);
 
                 InvalidateQueueSnapshot();
             }
             RaiseOnUI(() => OnQueueChanged?.Invoke());
-            await PlayCurrentIndexAsync(session);
+            await PlayCurrentIndexAsync(session).ConfigureAwait(false);
         });
     }
 
@@ -779,7 +769,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             {
                 ResetSealedFailedTrack();
                 int session = BeginNewSession();
-                await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+                await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session)).ConfigureAwait(false);
             }
         }
         else
@@ -819,13 +809,12 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             queueMutated = _queueMutatedByNavigation;
         }
 
-        // ПОСЛЕ снятия лока — QueueViewModel получит актуальный порядок
         if (queueMutated)
             RaiseOnUI(() => OnQueueChanged?.Invoke());
 
-        if (canMove) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+        if (canMove) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session)).ConfigureAwait(false);
         else if (!forward && _player.State != PlaybackState.Stopped)
-            await _player.SeekAsync(TimeSpan.Zero);
+            await _player.SeekAsync(TimeSpan.Zero).ConfigureAwait(false);
         else Stop();
     }
 
@@ -849,7 +838,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             if (ShuffleEnabled && _queue.Count > 1)
             {
                 ApplyShuffleInPlace(preserveCurrentAtStart: false);
-                _queueMutatedByNavigation = true; // ← сигнал наружу
+                _queueMutatedByNavigation = true;
             }
 
             _currentIndex = 0;
@@ -868,20 +857,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         return false;
     }
 
-    /// <summary>
-    /// Fisher-Yates shuffle очереди на месте.
-    /// При preserveCurrentAtStart=true — текущий трек остаётся первым
-    /// (используется при включении shuffle во время воспроизведения).
-    /// При preserveCurrentAtStart=false — полное случайное перемешивание
-    /// (используется при RepeatAll-перезапуске).
-    /// </summary>
+    /// <summary> Fisher-Yates shuffle очереди на месте. </summary>
     private void ApplyShuffleInPlace(bool preserveCurrentAtStart)
     {
         if (_queue.Count < 2) return;
 
         if (preserveCurrentAtStart && _currentIndex >= 0 && _currentIndex < _queue.Count)
         {
-            // Переносим текущий трек в начало, shuffle остальных
             if (_currentIndex != 0)
                 (_queue[0], _queue[_currentIndex]) = (_queue[_currentIndex], _queue[0]);
 
@@ -937,11 +919,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 queueMutated = _queueMutatedByNavigation;
             }
 
-            // После снятия лока
             if (queueMutated)
                 RaiseOnUI(() => OnQueueChanged?.Invoke());
 
-            if (canAdvance) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session));
+            if (canAdvance) await EnqueueCommandAsync(() => PlayCurrentIndexAsync(session)).ConfigureAwait(false);
             else Stop();
         });
     }
@@ -954,14 +935,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     private async ValueTask<string?> RefreshUrlCallbackAsync(string trackId, CancellationToken ct)
     {
         if (IsSealedFailedTrack(trackId)) return null;
-        var track = await _library.GetTrackAsync(trackId, ct);
+        var track = await _library.GetTrackAsync(trackId, ct).ConfigureAwait(false);
         if (track == null || IsSealedFailedTrack(trackId)) return null;
 
         var sessionToken = GetSessionToken();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, sessionToken);
         try
         {
-            var info = await _youtube.RefreshStreamUrlAsync(track, true, linked.Token);
+            var info = await _youtube.RefreshStreamUrlAsync(track, true, linked.Token).ConfigureAwait(false);
             return info?.Url;
         }
         catch (Exception ex) when (linked.IsCancellationRequested || sessionToken.IsCancellationRequested || IsCancellationLike(ex) || !string.Equals(CurrentTrack?.Id, trackId, StringComparison.Ordinal))
@@ -1003,10 +984,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         try
         {
-            await Task.Delay(SeekDebounceMs, ct);
+            await Task.Delay(SeekDebounceMs, ct).ConfigureAwait(false);
             TimeSpan pos;
             lock (_seekLock) { pos = _pendingSeekPosition; _hasScheduledSeek = false; }
-            await _player.SeekAsync(pos, ct);
+            await _player.SeekAsync(pos, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { lock (_seekLock) _hasScheduledSeek = false; }
         catch (Exception ex) { lock (_seekLock) _hasScheduledSeek = false; Log.Warn($"[AudioEngine] Seek error: {ex.Message}"); }
@@ -1016,15 +997,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Volume
 
-    /// <summary>
-    /// Возвращает текущее значение громкости в процентах (0–MaxVolume).
-    /// </summary>
+    /// <summary> Возвращает текущее значение громкости в процентах (0–MaxVolume). </summary>
     public float GetVolume() => _volumePercent;
 
-    /// <summary>
-    /// Устанавливает громкость мгновенно.
-    /// Используется при scroll, drag, hotkeys.
-    /// </summary>
+    /// <summary> Устанавливает громкость мгновенно. </summary>
     public void SetVolumeInstant(float value)
     {
         lock (_volumeLock)
@@ -1036,14 +1012,10 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ApplyGainToPipeline();
     }
 
-    /// <summary>
-    /// Сохраняет текущую громкость в настройки немедленно.
-    /// </summary>
+    /// <summary> Сохраняет текущую громкость в настройки немедленно. </summary>
     public void SaveVolumeNow() => _library.UpdateSettings(s => s.Volume = _volumePercent);
 
-    /// <summary>
-    /// Обрабатывает изменение максимального лимита громкости из настроек.
-    /// </summary>
+    /// <summary> Обрабатывает изменение максимального лимита громкости из настроек. </summary>
     public void OnMaxVolumeLimitChanged(int newMaxVolume)
     {
         lock (_volumeLock)
@@ -1055,10 +1027,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         RaiseOnUI(() => OnMaxVolumeChanged?.Invoke(newMaxVolume));
     }
 
-    /// <summary>
-    /// Пересчитывает и применяет gain после изменения аудио-настроек
-    /// (volume curve, boost, target gain dB, normalization).
-    /// </summary>
+    /// <summary> Пересчитывает и применяет gain после изменения аудио-настроек ... </summary>
     public void UpdateAudioSettings()
     {
         ApplyGainToPipeline();
@@ -1066,9 +1035,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         RaiseOnUI(() => OnMaxVolumeChanged?.Invoke(_library.Settings.MaxVolumeLimit));
     }
 
-    /// <summary>
-    /// Инициализирует громкость из сохранённых настроек при первом запуске.
-    /// </summary>
+    /// <summary> Инициализирует громкость из сохранённых настроек при первом запуске. </summary>
     public void InitializeVolumeFromSettings()
     {
         if (_volumeInitialized) return;
@@ -1087,14 +1054,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ApplyGainToPipeline();
     }
 
-    /// <summary>
-    /// Вычисляет финальный gain и передаёт его в активный pipeline.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Формула:</b> gain = VolumeCurve(percent) × 10^(targetGainDb/20)</para>
-    /// <para>Gain применяется программно к PCM сэмплам внутри pipeline.AudioCallback.
-    /// Плавность обеспечивается архитектурно — provider buffer (~500ms) в NAudioBackend.</para>
-    /// </remarks>
+    /// <summary> Вычисляет финальный gain и передаёт его в активный pipeline. </summary>
     private void ApplyGainToPipeline()
     {
         var settings = _library.Settings;
@@ -1114,11 +1074,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _player.GetActivePipeline()?.SetGain(gain);
     }
 
-    /// <summary>
-    /// Пробрасывает настройки нормализации в активный pipeline.
-    /// Использует <see cref="NormalizationGainResolver"/> для единообразного
-    /// определения gain — устраняет дублирование if/else chains.
-    /// </summary>
+    /// <summary> Пробрасывает настройки нормализации в активный pipeline. </summary>
     private void ApplyNormalizationToPipeline()
     {
         var pipeline = _player.GetActivePipeline();
@@ -1141,17 +1097,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             pipeline.Analyzer.LockFromCachedGain(cachedGain);
     }
 
-    /// <summary>
-    /// Вычисляет raw gain из процента громкости с применением volume curve.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Режим Boost (VolumeBoostEnabled=true):</b></para>
-    /// <para>0..VolumeNormalRange (200) → curve applied, 0.0..1.0 gain</para>
-    /// <para>VolumeNormalRange..MaxVolume → линейный рост выше 1.0</para>
-    ///
-    /// <para><b>Режим без Boost:</b></para>
-    /// <para>0..MaxVolume → curve applied, 0.0..1.0 gain</para>
-    /// </remarks>
+    /// <summary> Вычисляет raw gain из процента громкости с применением volume curve. </summary>
     private static float ComputeGain(int volumePercent, int maxVolume, AudioSettings audioSettings)
     {
         if (volumePercent <= 0) return 0f;
@@ -1171,10 +1117,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         return ApplyVolumeCurve(normalized, audioSettings.VolumeCurve);
     }
 
-    /// <summary>
-    /// Применяет кривую громкости к нормализованному значению t ∈ [0, 1].
-    /// Каждая кривая: f(0) = 0, f(1) = 1.
-    /// </summary>
+    /// <summary> Применяет кривую громкости к нормализованному значению t ∈ [0, 1]. </summary>
     private static float ApplyVolumeCurve(float t, VolumeCurveType curve)
     {
         t = Math.Clamp(t, 0f, 1f);
@@ -1189,16 +1132,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         };
     }
 
-    /// <summary>
-    /// Периодически сохраняет текущую громкость и отложенные gain нормализации в БД.
-    /// Предотвращает потерю значений при crash / kill через Task Manager.
-    /// </summary>
+    /// <summary> Периодически сохраняет текущую громкость и отложенные gain нормализации в БД. </summary>
     private async Task VolumeSaveLoopAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(VolumeSaveIntervalMs));
         try
         {
-            while (await timer.WaitForNextTickAsync(_lifetimeCts.Token))
+            while (await timer.WaitForNextTickAsync(_lifetimeCts.Token).ConfigureAwait(false))
             {
                 _library.UpdateSettings(s =>
                 {
@@ -1207,22 +1147,17 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                     s.ShuffleEnabled = ShuffleEnabled;
                 });
 
-                await FlushPendingGainWritesAsync(_lifetimeCts.Token);
+                await FlushPendingGainWritesAsync(_lifetimeCts.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) { }
     }
 
-    /// <summary>
-    /// Дренирует очередь отложенных записей gain нормализации в БД.
-    /// Дедуплицирует по trackId — сохраняет только последний gain.
-    /// </summary>
+    /// <summary> Дренирует очередь отложенных записей gain нормализации в БД. </summary>
     private async Task FlushPendingGainWritesAsync(CancellationToken ct)
     {
         if (_pendingGainWrites.IsEmpty) return;
 
-        // Дедупликация: при быстром переключении треков
-        // один trackId может встретиться несколько раз — берём последний gain.
         Dictionary<string, float>? batch = null;
 
         while (_pendingGainWrites.TryDequeue(out var pending))
@@ -1237,7 +1172,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             try
             {
-                await _library.SaveTrackNormalizationGainAsync(trackId, gain, ct);
+                await _library.SaveTrackNormalizationGainAsync(trackId, gain, ct).ConfigureAwait(false);
                 Log.Debug($"[AudioEngine] EBU R128 gain persisted: {trackId}, gain={gain:F3}x");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1262,7 +1197,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         {
             var elapsed = (DateTime.UtcNow - _lastQualitySwitchTime).TotalMilliseconds;
             if (elapsed < QualitySwitchCooldownMs)
-                await Task.Delay(QualitySwitchCooldownMs - (int)elapsed, ct);
+                await Task.Delay(QualitySwitchCooldownMs - (int)elapsed, ct).ConfigureAwait(false);
             _lastQualitySwitchTime = DateTime.UtcNow;
 
             var pos = CurrentPosition;
@@ -1282,7 +1217,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 if (Volatile.Read(ref _session) == session)
                     StartQualitySwitchTransition(session, track, pos);
                 return Task.CompletedTask;
-            });
+            }).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
     }
@@ -1302,8 +1237,8 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             ct.ThrowIfCancellationRequested();
 
-            var info = await _youtube.RefreshStreamUrlAsync(track, false, ct)
-                    ?? await _youtube.RefreshStreamUrlAsync(track, true, ct);
+            var info = await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false)
+                    ?? await _youtube.RefreshStreamUrlAsync(track, true, ct).ConfigureAwait(false);
             if (info == null)
             {
                 if (!IsSessionStale(session, ct))
@@ -1319,7 +1254,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             try
             {
                 await _player.PlayAsync(info.Value.Url, track.Id, info.Value.Bitrate, ct,
-                    seekPosition: position.TotalSeconds > 1 ? position : null);
+                    seekPosition: position.TotalSeconds > 1 ? position : null).ConfigureAwait(false);
             }
             finally
             {
@@ -1464,9 +1399,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     {
         try
         {
-            await foreach (var cmd in _commandQueue.Reader.ReadAllAsync(_lifetimeCts.Token))
+            await foreach (var cmd in _commandQueue.Reader.ReadAllAsync(_lifetimeCts.Token).ConfigureAwait(false))
             {
-                try { await cmd(); }
+                try { await cmd().ConfigureAwait(false); }
                 catch { }
             }
         }
@@ -1510,7 +1445,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 _sessionCts?.Dispose();
             }
 
-            // Финальный flush всех настроек перед закрытием
             _library.UpdateSettings(s =>
             {
                 s.Volume = _volumePercent;
@@ -1518,7 +1452,6 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 s.ShuffleEnabled = ShuffleEnabled;
             });
 
-            // Flush pending gain writes (bounded wait — Dispose контекст)
             try
             {
                 FlushPendingGainWritesAsync(CancellationToken.None)

@@ -1,8 +1,6 @@
 using System.Diagnostics;
-using Jint;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.Core.Youtube.Bridge.NToken;
-using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Tests.Framework;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -220,14 +218,15 @@ public static class NTokenTests
     }
 
     /// <summary>
-    /// Интеграционный тест компиляции и вызова нового AST-солвера на базе Esprima/Acornima
+    /// Интеграционный тест компиляции и вызова AST-солвера
     /// для реальных закэшированных версий плеера YouTube.
+    /// Переведён с Jint на нативный движок QuickJS.
     /// </summary>
     [TestMethod(TestCategory.Unit, "AST: Solver Integration (cached players)",
         Group = TestGroups.Solver, Order = 65, RequiresNetwork = false, TimeoutSeconds = 60)]
     public static Task TestAstSolverOnCachedPlayerAsync()
     {
-        var targetVersions = new[] { "e1bd44b2" }; // Верия не верная, sig врёт
+        var targetVersions = new[] { "e1bd44b2" }; // Пример версии
         PlayerContext? cachedContext = null;
         string? usedVersion = null;
 
@@ -259,43 +258,21 @@ public static class NTokenTests
         Assert(preprocessedJs.Contains("_result.n"), "Preprocessed script must assign _result.n");
         Assert(preprocessedJs.Contains("_result.sig"), "Preprocessed script must assign _result.sig");
 
-        using var engine = new Jint.Engine(options => options
-            .TimeoutInterval(TimeSpan.FromSeconds(15))
-            .MaxStatements(5_000_000)
-        );
-
-        engine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
-
-        engine.Execute(JsDecryptorBase<NTokenDecryptor>.BrowserStubs);
-
-        engine.Execute("var _result = {};");
-        engine.Execute(preprocessedJs);
-
-        var hasNSolver = engine.Evaluate("typeof _result.n === 'function'").AsBoolean();
-        var hasSigSolver = engine.Evaluate("typeof _result.sig === 'function'").AsBoolean();
-
-        Assert(hasNSolver, "_result.n is not registered as function");
-        Assert(hasSigSolver, "_result.sig is not registered as function");
-
-        const string challenge = "SRGmkqJSCYsuk5i_"; // Правильный: M8_sc6KcPg4TBA
-        engine.SetValue("__challenge", challenge);
-
-        var decodedN = engine.Evaluate("_result.n(__challenge)").AsString();
+        // Тестируем N-Token через QuickJS
+        const string challenge = "SRGmkqJSCYsuk5i_"; 
+        var decodedN = QuickJsDecryptor.Decrypt(preprocessedJs, "n", challenge);
+        
         Assert(!string.IsNullOrEmpty(decodedN), "Decoded n-token is empty");
         Assert(decodedN != challenge, "Decoded n-token is unchanged");
 
+        // Тестируем SigCipher через QuickJS
         const string sigChallenge = "AHEqNM4wRgIhAMe2mLCDjcBI5D7GvHp3XpDiVkWAC2IDigK-31PHnIcjAiEAsNZGAuKJz1WaThEs-uPkzZNg8npoYicx9NljtEXkH4k%3D";
-        // const string sigChallenge = "AHEqNM4wRgIhAMe2mLCDjcBI5D7GvHp3XpDiVkWAC2IDigK-31PHnIcjAiEAsNZGAuKJz1WaThEs-uPkzZNg8npoYicx9NljtEXkH4k=";
-        // Правильный: AHEqNM4wRgIhAMwp94daExVeamQS0Or6Ml1ZSMLqu0KkWaqKCexZqIDpAiEAkUDAV8k9tVoRlFOw_RbgI39XlXKyce4w31yCw7M9-Xg=
-        engine.SetValue("__sigChallenge", sigChallenge);
-
-        var decodedSig = engine.Evaluate("_result.sig(__sigChallenge)").AsString();
+        var decodedSig = QuickJsDecryptor.Decrypt(preprocessedJs, "sig", sigChallenge);
+        
         Log.Info($"[Test] AST Solver verified Sig! Decoded sig: '{sigChallenge}' -> '{decodedSig}'");
 
         Assert(!string.IsNullOrEmpty(decodedSig), "Decoded signature is empty");
         Assert(decodedSig != sigChallenge, "Decoded signature is unchanged");
-
-        // Assert(decodedSig.Length == 100, $"Decoded signature must be 100 chars, got {decodedSig.Length}");
 
         Log.Info($"[Test] AST Solver verified successfully! Decoded challenge: '{challenge}' → '{decodedN}'");
 

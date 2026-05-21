@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using System.Threading.Channels;
 
@@ -35,40 +36,33 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
     /// </param>
     public AsyncLogProcessor(string? logDirectory = null)
     {
-        // Используем переданную папку или fallback
         _logDirectory = logDirectory 
             ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
         
-        // Создаём папку если не существует
         if (!Directory.Exists(_logDirectory))
         {
             Directory.CreateDirectory(_logDirectory);
         }
 
-        // Имя файла с датой-временем запуска для уникальности
         string fileName = $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt";
         _currentLogFile = Path.Combine(_logDirectory, fileName);
 
         var options = new BoundedChannelOptions(MAX_BUFFER_SIZE)
         {
-            // При переполнении отбрасываем старые — новые важнее
             FullMode = BoundedChannelFullMode.DropOldest,
-            // Один reader (worker thread) — оптимизация
             SingleReader = true,
-            // Много writer'ов (разные потоки пишут логи)
             SingleWriter = false
         };
         _channel = Channel.CreateBounded<LogMessage>(options);
 
         _cts = new CancellationTokenSource();
         
-        // LongRunning — выделяет отдельный поток, не занимает ThreadPool
         _workerTask = Task.Factory.StartNew(
             ProcessQueueAsync, 
             _cts.Token,
             TaskCreationOptions.LongRunning, 
             TaskScheduler.Default
-        ).Unwrap(); // Unwrap т.к. ProcessQueueAsync возвращает Task
+        ).Unwrap();
     }
 
     /// <summary>
@@ -77,7 +71,6 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
     /// </summary>
     public void Enqueue(LogMessage message)
     {
-        // TryWrite никогда не блокирует — либо добавит, либо отбросит старое
         _channel.Writer.TryWrite(message);
     }
 
@@ -86,58 +79,56 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
     /// </summary>
     private async Task ProcessQueueAsync()
     {
-        // FileStream с async I/O для неблокирующей записи
         await using var fs = new FileStream(
             _currentLogFile, 
             FileMode.Append, 
             FileAccess.Write, 
-            FileShare.Read,  // Позволяет читать лог другим процессам
+            FileShare.Read,
             bufferSize: 4096, 
             useAsync: true
         );
         await using var sw = new StreamWriter(fs, Encoding.UTF8);
 
-        // Переиспользуемый буфер для batch'ей — zero-alloc в steady state
         var buffer = new List<LogMessage>(BATCH_SIZE);
+        
+        // Единственный переиспользуемый StringBuilder для сборки всей строки лога (Zero-Alloc в steady state)
+        var sb = new StringBuilder(512);
 
         while (!_cts.Token.IsCancellationRequested)
         {
             try
             {
-                // Асинхронно ждём появления данных
                 if (await _channel.Reader.WaitToReadAsync(_cts.Token).ConfigureAwait(false))
                 {
-                    // Собираем batch
                     while (buffer.Count < BATCH_SIZE && _channel.Reader.TryRead(out var msg))
                     {
                         buffer.Add(msg);
                     }
 
-                    // Пишем весь batch
-                    foreach (var log in buffer)
+                    for (int i = 0; i < buffer.Count; i++)
                     {
-                        var line = FormatLog(log);
+                        var log = buffer[i];
+                        sb.Clear();
+                        FormatLog(sb, log);
 
 #if DEBUG
                         // В Debug выводим в консоль с цветами
-                        WriteToConsole(log, line);
+                        WriteToConsole(log, sb.ToString());
 #endif
-                        await sw.WriteAsync(line).ConfigureAwait(false);
+                        // Запись StringBuilder напрямую в StreamWriter без промежуточной аллокации ToString()
+                        await sw.WriteAsync(sb).ConfigureAwait(false);
                     }
 
-                    // Flush после batch'а, не после каждой строки
                     await sw.FlushAsync().ConfigureAwait(false);
                     buffer.Clear();
                 }
             }
             catch (OperationCanceledException)
             {
-                // Нормальное завершение по CancellationToken
                 break;
             }
             catch (Exception ex)
             {
-                // Если сломался файл лога — пишем в stderr как fallback
                 Console.Error.WriteLine($"LOGGER FAILURE: {ex.Message}");
             }
         }
@@ -145,11 +136,12 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
         // Финальный drain — записываем всё что осталось в очереди
         while (_channel.Reader.TryRead(out var msg))
         {
-            var line = FormatLog(msg);
+            sb.Clear();
+            FormatLog(sb, msg);
 #if DEBUG
-            WriteToConsole(msg, line);
+            WriteToConsole(msg, sb.ToString());
 #endif
-            await sw.WriteLineAsync(line).ConfigureAwait(false);
+            await sw.WriteAsync(sb).ConfigureAwait(false);
         }
         
         await sw.FlushAsync().ConfigureAwait(false);
@@ -180,17 +172,24 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
 #endif
 
     /// <summary>
-    /// Форматирует лог-сообщение в строку.
-    /// Использует StringBuilder для минимизации аллокаций.
+    /// Форматирует лог-сообщение в StringBuilder без аллокаций.
     /// </summary>
-    private static string FormatLog(LogMessage log)
+    private static void FormatLog(StringBuilder sb, LogMessage log)
     {
-        // Capacity hint: timestamp(12) + level(5) + brackets(6) + message(~100) + newline
-        var sb = new StringBuilder(128);
+        sb.Append('[');
         
-        sb.Append('[')
-          .Append(log.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"))
-          .Append("] [")
+        // Zero-alloc форматирование даты на стеке
+        Span<char> timeBuffer = stackalloc char[12];
+        if (log.Timestamp.ToLocalTime().TryFormat(timeBuffer, out int charsWritten, "HH:mm:ss.fff"))
+        {
+            sb.Append(timeBuffer[..charsWritten]);
+        }
+        else
+        {
+            sb.Append(log.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff"));
+        }
+
+        sb.Append("] [")
           .Append(GetLevelString(log.Level))
           .Append("] ")
           .Append(log.Message);
@@ -203,7 +202,6 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
         }
 
         sb.AppendLine();
-        return sb.ToString();
     }
 
     /// <summary>
@@ -225,15 +223,11 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        // Сигнализируем что больше сообщений не будет
         _channel.Writer.Complete();
-        
-        // Даём время worker'у завершить запись
-        await _cts.CancelAsync().ConfigureAwait(false);
+        _cts.Cancel();
         
         try 
         { 
-            // Ждём завершения worker task
             await _workerTask.ConfigureAwait(false); 
         } 
         catch (OperationCanceledException) 
@@ -245,10 +239,22 @@ public sealed class AsyncLogProcessor : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Синхронное освобождение. Блокирует до завершения записи.
+    /// Синхронное освобождение. Блокирует до завершения записи без риска взаимной блокировки.
     /// </summary>
     public void Dispose()
     {
-        DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _channel.Writer.Complete();
+        _cts.Cancel();
+
+        try
+        {
+            _workerTask.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            // Ожидаемо
+        }
+
+        _cts.Dispose();
     }
 }

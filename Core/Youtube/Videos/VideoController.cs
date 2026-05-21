@@ -250,14 +250,46 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
         return playerResponse;
     }
 
+    /// <summary>
+    /// Асинхронно извлекает signatureTimestamp из единого кэша PlayerContextManager.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>FIX:</b> Приоритет отдаётся <see cref="PlayerContext.Sts"/>, а не парсингу
+    /// <see cref="PlayerContext.BaseJs"/>. <c>BaseJs</c> гарантированно пуст после
+    /// <see cref="PlayerContext.ReleaseRawScripts"/> (вызывается из <see cref="JsDecryptorBase{T}.EnsureInitializedAsync"/>)
+    /// и при загрузке контекста из препроцессированного кэша.
+    /// <c>context.Sts</c> напротив всегда корректен — извлекается при создании
+    /// <see cref="PlayerContext"/> и сохраняется в отдельный файл на диске.</para>
+    /// </remarks>
+    /// <param name="ct">Токен отмены.</param>
+    /// <returns>Строка signatureTimestamp или <c>null</c> при ошибке.</returns>
     private async ValueTask<string?> ResolveSignatureTimestampAsync(CancellationToken ct)
     {
-        if (_signatureTimestamp != null) return _signatureTimestamp;
+        if (!string.IsNullOrEmpty(_signatureTimestamp)) return _signatureTimestamp;
 
         try
         {
             var context = await _playerManager.GetOrLoadAsync(ct).ConfigureAwait(false);
-            _signatureTimestamp = YoutubeAstSolver.ExtractSts(context.BaseJs);
+
+            // ═══ FIX: context.Sts — единственный надёжный источник STS ═══
+            // context.BaseJs пустой в двух случаях:
+            //   1. После ReleaseRawScripts() (вызывается NTokenDecryptor/SigCipherDecryptor
+            //      в EnsureInitializedAsync после препроцессинга)
+            //   2. При загрузке контекста из препроцессированного кэша (LoadFromCache
+            //      намеренно передаёт string.Empty как BaseJs)
+            // context.Sts извлекается ДО ReleaseRawScripts и сохраняется на диск,
+            // поэтому он корректен в обоих сценариях.
+            var sts = context.Sts;
+
+            // Fallback: если Sts по какой-то причине не был извлечён при создании контекста,
+            // но BaseJs ещё доступен (например, свежая загрузка до первой инициализации дешифратора)
+            if (string.IsNullOrEmpty(sts) && !string.IsNullOrEmpty(context.BaseJs))
+            {
+                sts = YoutubeAstSolver.ExtractSts(context.BaseJs);
+                Log.Debug($"[VideoController] STS resolved via BaseJs fallback: {sts}");
+            }
+
+            _signatureTimestamp = sts;
             return _signatureTimestamp;
         }
         catch (Exception ex)
@@ -444,6 +476,21 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
         string url,
         CancellationToken cancellationToken = default)
         => DashManifest.Parse(await Http.GetStringAsync(url, cancellationToken));
+
+    /// <summary>
+    /// Сбрасывает закэшированный signatureTimestamp.
+    /// </summary>
+    /// <remarks>
+    /// Обязательно вызывать при 403-recovery через <see cref="StreamClient.InvalidateCipherManifest"/>.
+    /// Без этого <see cref="ResolveSignatureTimestampAsync"/> вернёт stale значение (возможно пустую строку),
+    /// полученное от предыдущего контекста, у которого <see cref="PlayerContext.BaseJs"/> уже был пустым
+    /// после <see cref="PlayerContext.ReleaseRawScripts"/>.
+    /// </remarks>
+    internal void InvalidateSignatureTimestamp()
+    {
+        _signatureTimestamp = null;
+        Log.Debug("[VideoController] SignatureTimestamp cache invalidated");
+    }
 
     #endregion
 }

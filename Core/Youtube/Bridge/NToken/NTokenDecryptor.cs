@@ -1,24 +1,24 @@
 using System.Collections.Concurrent;
-using Jint;
 using LMP.Core.Youtube.Bridge.Common;
-using LMP.Core.Youtube.Bridge.SigCipher;
 
 namespace LMP.Core.Youtube.Bridge.NToken;
 
 /// <summary>
-/// Высокопроизводительный дешифратор N-Token YouTube на основе AST-анализа.
+/// Высокопроизводительный дешифратор N-Token YouTube на основе QuickJS-NG.
+/// Наследует общую логику из JsDecryptorBase для устранения дублирования.
 /// </summary>
 public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
     : JsDecryptorBase<NTokenDecryptor>(playerManager, G.FilePath.NTokenCache, 2000, 500)
 {
-    private const string TestToken = "Siib9I-K-KF0GqS-";
     private const int MaxNTokenLength = 60;
 
     private static readonly AsyncLocal<string?> CurrentDecryptionContext = new();
-    
     private readonly ConcurrentDictionary<string, byte> _decryptedTokens = new(StringComparer.Ordinal);
 
     public event Action<string?>? OnComplexDecryptionStarted;
+
+    protected override string FunctionName => "n";
+    protected override string TestInput => "Siib9I-K-KF0GqS-";
 
     public DecryptionContextCookie PushDecryptionContext(string? contextId)
     {
@@ -35,13 +35,10 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
         }
     }
 
-    /// <summary>
-    /// Выполняет идемпотентную дешифрацию N-Token.
-    /// </summary>
     public async ValueTask<string> DecryptAsync(string nToken, string? contextId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(nToken)) return nToken;
-        
+
         if (_decryptedTokens.ContainsKey(nToken))
         {
             Log.Debug($"[NToken] Idempotency bypass: '{nToken}' is already decrypted.");
@@ -58,7 +55,8 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
 
         await EnsureInitializedAsync(ct).ConfigureAwait(false);
 
-        var result = TryInvokeJs(nToken, "NToken");
+        // Используем полностью асинхронный вызов для защиты UI-потока
+        var result = await TryInvokeJsAsync(nToken, "NToken", ct).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(result))
         {
             _decryptedTokens.TryAdd(result, 0);
@@ -71,40 +69,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
     public ValueTask<string> DecryptAsync(string nToken, CancellationToken ct = default) =>
         DecryptAsync(nToken, contextId: null, ct);
 
-    protected override void InitializeCore(PlayerContext context)
-    {
-        Log.Info("[NToken] Initializing via Unified AST Solver...");
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            var preparedScript = context.GetOrPrepareScript(() => YoutubeAstSolver.PreprocessPlayer(context.BaseJs));
-
-            using var testEngine = CreateFullEngine();
-            testEngine.SetValue("__log", new Action<string>(msg => Log.Debug(msg)));
-            testEngine.Execute(preparedScript);
-            testEngine.Execute("globalThis.__decryptN = _result.n;");
-
-            var testOutput = testEngine.Invoke("__decryptN", TestToken).AsString();
-            if (ValidateNTokenResult(testOutput, TestToken))
-            {
-                SetupEnginePool(preparedScript, "__decryptN", "globalThis.__decryptN = _result.n;");
-                IsInitialized = true;
-                sw.Stop();
-                Log.Info($"[NToken] AST-based Decryptor successfully initialized in {sw.ElapsedMilliseconds}ms!");
-                return;
-            }
-
-            throw new InvalidOperationException("AST solver verification returned invalid token structure.");
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[NToken] AST-based Decryptor critical failure: {ex.Message}");
-            throw;
-        }
-    }
-
-    private static bool ValidateNTokenResult(string? result, string input)
+    protected override bool ValidateResult(string? result, string input)
     {
         if (string.IsNullOrEmpty(result) || result == input) return false;
         if (result.Length < 5 || result.Length > MaxNTokenLength) return false;

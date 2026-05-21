@@ -1,6 +1,5 @@
 using Acornima;
 using Acornima.Ast;
-using LMP.Core.Logger;
 
 namespace LMP.Core.Youtube.Bridge.Common;
 
@@ -17,11 +16,8 @@ internal static class AstMatcher
         if (template is null) return true;
         if (node is null) return false;
 
-        Log.Trace($"[AstMatcher] Checking Match - Node: {node.GetType().Name}, Template: {template.NodeType?.Name}");
-
-        if (template.NodeType is not null && !template.NodeType.IsAssignableFrom(node.GetType()))
+        if (template.NodeType is not null && !template.NodeType.IsInstanceOfType(node))
         {
-            Log.Trace($"  └─ Type mismatch: Node is {node.GetType().Name}, expected assignable to {template.NodeType.Name}");
             return false;
         }
 
@@ -29,7 +25,6 @@ internal static class AstMatcher
         {
             if (node is not Identifier id || id.Name != template.Name)
             {
-                Log.Trace($"  └─ Name mismatch: Node is Identifier with name '{(node as Identifier)?.Name ?? "N/A"}', expected '{template.Name}'");
                 return false;
             }
         }
@@ -38,7 +33,6 @@ internal static class AstMatcher
         {
             if (node is not Literal lit || !Equals(lit.Value, template.Value))
             {
-                Log.Trace($"  └─ Value mismatch: Node is Literal with value '{(node as Literal)?.Value ?? "N/A"}', expected '{template.Value}'");
                 return false;
             }
         }
@@ -54,9 +48,8 @@ internal static class AstMatcher
                 _ => null
             };
 
-            if (opStr is null || opStr != template.Operator)
+            if (opStr != template.Operator)
             {
-                Log.Trace($"  └─ Operator mismatch: Node operator is '{opStr ?? "N/A"}', expected '{template.Operator}'");
                 return false;
             }
         }
@@ -72,7 +65,6 @@ internal static class AstMatcher
             };
             if (isAsync != template.Async.Value)
             {
-                Log.Trace($"  └─ Async flag mismatch: Node is Async={isAsync}, expected={template.Async.Value}");
                 return false;
             }
         }
@@ -81,7 +73,6 @@ internal static class AstMatcher
         {
             if (node is not MemberExpression me || me.Computed != template.Computed.Value)
             {
-                Log.Trace($"  └─ Computed flag mismatch: Node is Computed={(node as MemberExpression)?.Computed}, expected={template.Computed.Value}");
                 return false;
             }
         }
@@ -96,7 +87,6 @@ internal static class AstMatcher
             };
             if (opt != template.Optional.Value)
             {
-                Log.Trace($"  └─ Optional flag mismatch: Node is Optional={opt}, expected={template.Optional.Value}");
                 return false;
             }
         }
@@ -171,11 +161,7 @@ internal static class AstMatcher
                     break;
                 }
             }
-            if (!matchedAny)
-            {
-                Log.Trace("  └─ Or-condition failure: None of the sub-templates matched.");
-                return false;
-            }
+            if (!matchedAny) return false;
         }
 
         if (template.AnyKey is not null)
@@ -189,20 +175,12 @@ internal static class AstMatcher
                 _ => MatchAnyKey(node.ChildNodes, template.AnyKey)
             };
 
-            if (!anyKeyMatched)
-            {
-                Log.Trace("  └─ AnyKey failure: Not all nested criteria were matched.");
-                return false;
-            }
+            if (!anyKeyMatched) return false;
         }
 
         if (template.Arguments is not null)
         {
-            if (node is not CallExpression ce || ce.Arguments.Count != template.Arguments.Length)
-            {
-                Log.Trace($"  └─ Arguments count mismatch: Node has {((node as CallExpression)?.Arguments.Count) ?? 0}, expected {template.Arguments.Length}");
-                return false;
-            }
+            if (node is not CallExpression ce || ce.Arguments.Count != template.Arguments.Length) return false;
 
             for (int i = 0; i < template.Arguments.Length; i++)
             {
@@ -212,11 +190,7 @@ internal static class AstMatcher
 
         if (template.ExpectedArgumentsCount.HasValue)
         {
-            if (node is not CallExpression ce || ce.Arguments.Count != template.ExpectedArgumentsCount.Value)
-            {
-                Log.Trace($"  └─ ExpectedArgumentsCount mismatch: Node has {((node as CallExpression)?.Arguments.Count) ?? 0}, expected {template.ExpectedArgumentsCount.Value}");
-                return false;
-            }
+            if (node is not CallExpression ce || ce.Arguments.Count != template.ExpectedArgumentsCount.Value) return false;
         }
 
         return true;
@@ -266,22 +240,14 @@ internal static class AstMatcher
         {
             var t = templates[i];
             bool matchedAny = false;
-            
-            var enumerator = collection.GetEnumerator();
-            try
+
+            foreach (var child in collection)
             {
-                while (enumerator.MoveNext())
+                if (Matches(child, t))
                 {
-                    if (Matches(enumerator.Current, t))
-                    {
-                        matchedAny = true;
-                        break;
-                    }
+                    matchedAny = true;
+                    break;
                 }
-            }
-            finally
-            {
-                enumerator.Dispose();
             }
 
             if (!matchedAny) return false;

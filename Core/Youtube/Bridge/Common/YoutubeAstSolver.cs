@@ -187,6 +187,8 @@ public static partial class YoutubeAstSolver
     /// Парсит и препроцессит JS плеер, вырезая все неиспользуемые компоненты с помощью Scope-Aware Tree Shaking.
     /// Снижает результирующий размер кода с 2.5 МБ до ~10-15 КБ.
     /// </summary>
+    /// <param name="baseJs">Полный исходный код base.js.</param>
+    /// <returns>Препроцессированный и оптимизированный код JS.</returns>
     public static string PreprocessPlayer(string baseJs)
     {
         Log.Debug($"[AstSolver] Preprocessing player script. Length: {baseJs.Length / 1024} KB");
@@ -195,15 +197,13 @@ public static partial class YoutubeAstSolver
         string sts = stsMatch.Success ? stsMatch.Groups[1].Value : "1337";
         Log.Debug($"[AstSolver] Extracted Signature Timestamp (STS): {sts}");
 
-#pragma warning disable CS0618 // RegExpParseMode is deprecated in favor of OnRegExp in Acornima 1.1+
-        // Отключаем парсинг регулярных выражений внутри Acornima во время
-        // препроцессинга. Это исключает аллокации в SOH и ускоряет парсинг в два раза.
+        // В Acornima 1.1+ и 1.6.2+ тяжелая компиляция регулярных выражений .NET по умолчанию
+        // отключена, если не задан колбэк OnRegExp. Это исключает лишние аллокации в SOH,
+        // ускоряет парсинг в два раза и избавляет от предупреждений компилятора CS0618.
         var parser = new Parser(new ParserOptions
         {
-            RegExpParseMode = RegExpParseMode.Skip,
             Tolerant = false
         });
-#pragma warning restore CS0618 // RegExpParseMode is deprecated in favor of OnRegExp in Acornima 1.1+
         var program = parser.ParseScript(baseJs);
 
         var body = program.Body;
@@ -709,7 +709,7 @@ public static partial class YoutubeAstSolver
             {
                 int start = targetName.Start;
                 int end = targetName.End;
-                var expressionCode = baseJs.Substring(start, end - start);
+                var expressionCode = baseJs[start..end];
                 return CreateSolver(expressionCode);
             }
         }
@@ -717,102 +717,56 @@ public static partial class YoutubeAstSolver
         return null;
     }
 
+    /// <summary>
+    /// Создает анонимную JS-функцию обхода обфускации.
+    /// Метод гарантирует немедленный выход (break) при первой успешной дешифрации, 
+    /// что предотвращает повторное искажение раскодированных токенов.
+    /// </summary>
+    /// <param name="expressionCode">Сигнатура извлеченного метода.</param>
+    /// <returns>JS-код солвера.</returns>
     private static string CreateSolver(string expressionCode)
     {
         return $$"""
         ({sig, n}) => {
-          const safeStringify = (obj) => {
-            var cache = [];
-            var res = JSON.stringify(obj, function(key, value) {
-              if (typeof value === 'object' && value !== null) {
-                if (cache.indexOf(value) !== -1) return '[Circular]';
-                cache.push(value);
-              }
-              return value;
-            }, 2);
-            cache = null;
-            return res;
-          };
-
-          console.log('[AstSolver JS] ================== DEBUG RAW VALUES ==================');
-          console.log('[AstSolver JS] globalThis.__sts (STS):', globalThis.__sts);
-          console.log('[AstSolver JS] globalThis.g Proxy settings:', safeStringify(globalThis.g));
-          console.log('[AstSolver JS] Input sig:', JSON.stringify(sig));
-          console.log('[AstSolver JS] Input n:', JSON.stringify(n));
-          
           const decodedSig = sig ? (sig.indexOf('%') >= 0 ? decodeURIComponent(sig) : sig) : undefined;
-          console.log('[AstSolver JS] Decoded sig value for initialization:', JSON.stringify(decodedSig));
-          
           const url = ({{expressionCode}})("https://www.youtube.com/watch?v=bMD38TVNUF8", "s", decodedSig);
           if (n) {
             url.set("n", n);
           }
           
-          var keys = [];
-          var curr = url;
+          let keys = [];
+          let curr = url;
           while (curr && curr !== Object.prototype) {
               keys = keys.concat(Object.getOwnPropertyNames(curr));
               curr = Object.getPrototypeOf(curr);
           }
-          keys = [...new Set(keys)];
           
-          console.log('[AstSolver JS] Prototype & Instance keys detected on url:', JSON.stringify(keys));
-          console.log('[AstSolver JS] URL object dump right after construction:', safeStringify(url));
+          const prevS = url.get("s");
+          const prevN = url.get("n");
           
-          const sBefore = url.get("s");
-          const nBefore = url.get("n");
-          
-          console.log('[AstSolver JS] url.get("s") right after init:', JSON.stringify(sBefore));
-          console.log('[AstSolver JS] url.get("n") right after init:', JSON.stringify(nBefore));
-          
-          var calledKey = null;
-          var decrypted = false;
-          
-          if (decodedSig !== undefined && sBefore !== decodedSig) {
-              decrypted = true;
-              console.log('[AstSolver JS] Constructor auto-decrypted s! Before:', JSON.stringify(decodedSig), 'After:', JSON.stringify(sBefore));
-          }
-          if (n !== undefined && nBefore !== n) {
-              decrypted = true;
-              console.log('[AstSolver JS] Constructor auto-decrypted n! Before:', JSON.stringify(n), 'After:', JSON.stringify(nBefore));
-          }
-          
-          if (!decrypted) {
+          if ((decodedSig !== undefined && prevS !== decodedSig) || (n !== undefined && prevN !== n)) {
+              // Constructor already decrypted the parameters
+          } else {
               for (const key of keys) {
-                if (["constructor", "set", "get", "clone", "toString", "toJSON"].includes(key)) {
-                  continue;
-                }
+                if (["constructor", "set", "get", "clone", "toString", "toJSON"].includes(key)) continue;
                 if (typeof url[key] === "function") {
-                  try {
-                      console.log('[AstSolver JS] Attempting to invoke method:', key);
-                      url[key]();
-                      
-                      const sAfter = url.get("s");
-                      const nAfter = url.get("n");
-                      console.log('[AstSolver JS] Method ' + key + ' completed. Intermediate s:', JSON.stringify(sAfter), 'n:', JSON.stringify(nAfter));
-                      
-                      if ((decodedSig !== undefined && sAfter !== decodedSig) || 
-                          (n !== undefined && nAfter !== n)) {
-                          calledKey = key;
-                          decrypted = true;
-                          console.log('[AstSolver JS] Decryption success via method:', key);
-                          break;
-                      }
-                  } catch (e) {
-                      console.log('[AstSolver JS] Method ' + key + ' failed: ' + String(e));
-                  }
+                  try { 
+                    url[key](); 
+                    
+                    const sAfter = url.get("s");
+                    const nAfter = url.get("n");
+                    if ((decodedSig !== undefined && sAfter !== decodedSig) || (n !== undefined && nAfter !== n)) {
+                        break; // CRITICAL: Stop calling subsequent functions to avoid re-scrambling!
+                    }
+                  } catch (e) {}
                 }
               }
           }
           
           const s = url.get("s");
-          const decodedN = url.get("n");
-          console.log('[AstSolver JS] Decryption loop completed. Called method:', calledKey, 'Result n:', JSON.stringify(decodedN), 'Result s:', JSON.stringify(s));
-          console.log('[AstSolver JS] ======================================================');
-          
           return {
             sig: s ? (s.indexOf('%') >= 0 ? decodeURIComponent(s) : s) : null,
-            n: decodedN ?? null,
+            n: url.get("n") ?? null
           };
         }
         """;

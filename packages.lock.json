@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net11.0": {
+      "Acornima": {
+        "type": "Direct",
+        "requested": "[1.6.2, )",
+        "resolved": "1.6.2",
+        "contentHash": "laakpDHzMwHr5C8+q5RlRf0XJJshUvghNeo4xDerICrYR3iEuGvwfpauCmXuU3RE437XDaQO5ZxieWDpADuD+w=="
+      },
       "AsyncImageLoader.Avalonia": {
         "type": "Direct",
         "requested": "[3.8.0, )",
@@ -94,15 +100,6 @@
           "HotAvalonia.Core": "3.1.0",
           "HotAvalonia.Extensions": "3.1.0",
           "HotAvalonia.Fody": "3.1.0"
-        }
-      },
-      "Jint": {
-        "type": "Direct",
-        "requested": "[4.9.0, )",
-        "resolved": "4.9.0",
-        "contentHash": "H+ciBCec+A+reVrEEF+UQI15bp/cHzqT3uYWL9Ex6LX65WmPFUwe9ryKAv7yDtXPB1J+IxtL4x/vrPtJC72u+A==",
-        "dependencies": {
-          "Acornima": "1.6.1"
         }
       },
       "Microsoft.EntityFrameworkCore": {
@@ -211,11 +208,6 @@
           "Xaml.Behaviors.Interactions.Responsive": "12.0.0",
           "Xaml.Behaviors.Interactivity": "12.0.0"
         }
-      },
-      "Acornima": {
-        "type": "Transitive",
-        "resolved": "1.6.1",
-        "contentHash": "EB2vFgpNar8DrC+KLJv8MG6YIU2xqNyrq8GpL69vectPCXoaq6XyZGb/VHbfPVYul7dscO1Mw30eblrxs05RHg=="
       },
       "Avalonia.Angle.Windows.Natives": {
         "type": "Transitive",

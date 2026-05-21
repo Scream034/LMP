@@ -122,12 +122,6 @@
     <DebugType>none</DebugType>
     <Optimize>true</Optimize>
 
-    <!--
-      Trim отключён: рефлексия в EF Core, Jint и Fody-weavers несовместима с тримом.
-      При необходимости можно включить TrimmerRootDescriptor для частичного трима.
-    -->
-    <PublishTrimmed>false</PublishTrimmed>
-
     <DefaultItemExcludes>$(DefaultItemExcludes);Features\Debug\**;Tests\**;Tools\**</DefaultItemExcludes>
   </PropertyGroup>
 
@@ -165,8 +159,7 @@
     <PackageReference Include="ReactiveUI.Avalonia" Version="$(ReactiveUIAvaloniaVersion)" />
 
     <!-- Dev-only: визуальное дерево + инспектор свойств -->
-    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1"
-      Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
   <!-- Avalonia Hot Reload -->
@@ -230,9 +223,8 @@
   </ItemGroup>
 
   <!-- Скриптование / YT-байпас -->
-  <!-- Jint: JS-движок на C# для дешифровки sig/n-token YouTube без нативного V8 -->
   <ItemGroup Label="Scripting">
-    <PackageReference Include="Jint" Version="4.9.0" />
+    <PackageReference Include="Acornima" Version="1.6.2" />
   </ItemGroup>
 
   <!-- Linux D-Bus (системные уведомления, MPRIS) -->

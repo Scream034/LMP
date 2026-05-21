@@ -5,12 +5,10 @@ public sealed partial class CachingStreamSource
     /// <inheritdoc/>
     public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct = default)
     {
-        if (_parser == null)
-            return false;
+        if (_parser == null) return false;
 
         var seekInfo = _parser.FindSeekPosition(positionMs);
-        if (seekInfo == null)
-            return false;
+        if (seekInfo == null) return false;
 
         long targetBytePos = seekInfo.Value.BytePosition;
         long segmentStartMs = seekInfo.Value.TimestampMs;
@@ -21,11 +19,9 @@ public sealed partial class CachingStreamSource
             targetBytePos = Math.Max(0, _contentLength - 1);
         }
 
-        int targetChunk = (int)(targetBytePos / _chunkSize);
-        targetChunk = Math.Clamp(targetChunk, 0, _totalChunks - 1);
+        int targetChunk = Math.Clamp((int)(targetBytePos / _chunkSize), 0, _totalChunks - 1);
 
-        Log.Debug($"[CachingSource] Seek: {positionMs}ms → " +
-                  $"byte {targetBytePos}, chunk {targetChunk}/{_totalChunks}");
+        Log.Debug($"[CachingSource] Seek: {positionMs}ms → byte {targetBytePos}, chunk {targetChunk}/{_totalChunks}");
 
         ResetDownloadEpoch();
 
@@ -34,7 +30,7 @@ public sealed partial class CachingStreamSource
         _parser.Reset();
         Volatile.Write(ref _positionMs, segmentStartMs);
 
-        if (!_isOfflineMode && _cacheEntry != null && !IsChunkAvailable(targetChunk))
+        if (_cacheEntry != null && !IsChunkAvailable(targetChunk))
         {
             try
             {
@@ -51,7 +47,7 @@ public sealed partial class CachingStreamSource
             }
         }
 
-        if (!_isOfflineMode && _cacheEntry != null)
+        if (_cacheEntry != null)
             _ = PreloadChunksForSeekFireAndForgetAsync(targetChunk);
 
         return true;
@@ -63,7 +59,7 @@ public sealed partial class CachingStreamSource
     /// до вызова <see cref="SeekAsync"/>.
     ///
     /// <para><b>Логика overlap:</b> Decoder останавливается за 1–50мс.
-    /// За это время prefetch успевает загрузить чанк с SSD (~0.5мс) или по сети (~50-200мс).
+    /// За это время prefetch успевает загрузить чанк с SSD (~0.5мс) или по сети (~50–200мс).
     /// Если чанк окажется в <c>_ramChunks</c> до того как <see cref="SeekAsync"/>
     /// вызовет <see cref="ResetDownloadEpoch"/> — <see cref="IsChunkAvailable"/> вернёт
     /// true и SeekAsync не будет ждать сеть.</para>
@@ -75,7 +71,7 @@ public sealed partial class CachingStreamSource
     /// <param name="ct">Токен отмены lifetime.</param>
     internal async Task TryPrefetchChunkForSeekAsync(long positionMs, CancellationToken ct)
     {
-        if (_isOfflineMode || _cacheEntry == null || _parser == null) return;
+        if (_cacheEntry == null || _parser == null) return;
 
         var seekInfo = _parser.FindSeekPosition(positionMs);
         if (seekInfo == null) return;
@@ -107,6 +103,7 @@ public sealed partial class CachingStreamSource
     /// Если до завершения загрузки произойдёт новый seek (epoch change),
     /// все запросы будут отменены автоматически через <see cref="CurrentDownloadToken"/>.
     /// </remarks>
+    /// <param name="targetChunk">Индекс чанка целевой позиции seek.</param>
     private async Task PreloadChunksForSeekFireAndForgetAsync(int targetChunk)
     {
         try
