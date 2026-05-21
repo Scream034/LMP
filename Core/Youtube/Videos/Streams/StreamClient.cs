@@ -45,9 +45,14 @@ public sealed class StreamClient
     }
 
     /// <summary>
-    /// Извлекает временную метку (sts) из единого кэша PlayerContextManager.
-    /// Исключает дублирование сетевых запросов.
+    /// Извлекает signatureTimestamp из единого кэша <see cref="PlayerContextManager"/>.
     /// </summary>
+    /// <remarks>
+    /// <para><b>FIX:</b> Использует <see cref="PlayerContext.Sts"/> как приоритетный источник
+    /// вместо <c>YoutubeAstSolver.ExtractSts(context.BaseJs)</c>. Причина аналогична
+    /// <c>VideoController.ResolveSignatureTimestampAsync</c>: <c>BaseJs</c> может быть пустым
+    /// после <see cref="PlayerContext.ReleaseRawScripts"/> или при загрузке из препроцессированного кэша.</para>
+    /// </remarks>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Вычисленный манифест шифрования плеера.</returns>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
@@ -58,9 +63,15 @@ public sealed class StreamClient
         try
         {
             var context = await _playerContextManager.GetOrLoadAsync(cancellationToken).ConfigureAwait(false);
-            var sts = YoutubeAstSolver.ExtractSts(context.BaseJs);
-            _cipherManifest = new CipherManifest(sts);
 
+            // ═══ FIX: context.Sts — единственный надёжный источник STS ═══
+            // Идентичная причина что и в VideoController.ResolveSignatureTimestampAsync.
+            var sts = context.Sts;
+
+            if (string.IsNullOrEmpty(sts) && !string.IsNullOrEmpty(context.BaseJs))
+                sts = YoutubeAstSolver.ExtractSts(context.BaseJs);
+
+            _cipherManifest = new CipherManifest(sts ?? "");
             return _cipherManifest;
         }
         catch (Exception ex)
@@ -294,5 +305,22 @@ public sealed class StreamClient
 
         await input.InitializeAsync(cancellationToken).ConfigureAwait(false);
         await input.CopyToAsync(destination, progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Инвалидирует закэшированный CipherManifest и signatureTimestamp контроллера.
+    /// </summary>
+    /// <remarks>
+    /// Единая точка сброса всех stale STS-данных при 403-recovery.
+    /// Вызывается из <see cref="YoutubeProvider.RefreshStreamUrlAsync"/> при <c>forceRefresh=true</c>.
+    /// Без этого вызова <see cref="ResolveCipherManifestAsync"/> и
+    /// <see cref="VideoController.ResolveSignatureTimestampAsync"/> вернут stale пустой STS,
+    /// приводя к бесконечному 403-циклу.
+    /// </remarks>
+    public void InvalidateCipherManifest()
+    {
+        _cipherManifest = null;
+        _controller.InvalidateSignatureTimestamp();
+        Log.Debug("[StreamClient] CipherManifest and STS invalidated");
     }
 }

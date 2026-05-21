@@ -39,8 +39,8 @@ public sealed partial class PlayerContext
     }
 
     /// <summary>
-    /// Обеспечивает потокобезопасную подготовку препроцессированного скрипта.
-    /// Исправлено предупреждение CS8603 (гарантированный non-null возврат).
+    /// Обеспечивает подготовку препроцессированного скрипта.
+    /// Jint.Prepared полностью удален.
     /// </summary>
     public string GetOrPrepareScript(Func<string> preprocessor)
     {
@@ -59,15 +59,15 @@ public sealed partial class PlayerContext
     }
 
     /// <summary>
-    /// Освобождает исходные строки скрипта из оперативной памяти для предотвращения фрагментации кучи больших объектов (LOH).
+    /// Освобождает исходную гигантскую строку base.js из оперативной памяти для предотвращения фрагментации кучи больших объектов (LOH).
+    /// Препроцессированный скрипт (PreprocessedJs) строго сохраняется, так как он необходим для работы обоих дешифраторов.
     /// </summary>
     public void ReleaseRawScripts()
     {
         lock (_prepLock)
         {
             BaseJs = string.Empty;
-            PreprocessedJs = null;
-            Log.Debug($"[PlayerContext] Discarded raw JS source strings from LOH memory for player version: {Version}");
+            Log.Debug($"[PlayerContext] Discarded raw base.js from memory for player version: {Version}. Preprocessed script retained.");
         }
     }
 

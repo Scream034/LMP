@@ -583,6 +583,10 @@ public partial class YoutubeProvider : IDisposable
             _nTokenDecryptor.InvalidateCache();
             _sigCipherDecryptor.InvalidateCache();
             _nTokenDecryptor.PlayerManager.Invalidate();
+
+            // FIX: Сброс stale STS (аналогично forceRefresh в RefreshStreamUrlAsync) ═══
+            _youtube.Videos.Streams.InvalidateCipherManifest();
+
             ClearCache();
             Log.Info("[YouTube] Bypass engines successfully reset and ready for clean reload.");
         }
@@ -610,7 +614,7 @@ public partial class YoutubeProvider : IDisposable
 
         var sw = Stopwatch.StartNew();
 
-        // ═══ АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ ПРИ 403 ═══
+        // АВАРИЙНОЕ САМОВОССТАНОВЛЕНИЕ ПРИ 403 ═══
         if (forceRefresh)
         {
             Log.Warn($"[YouTube] [{videoId}] Force refresh requested (playback 403 recovery). Resetting bypass caches...");
@@ -619,6 +623,15 @@ public partial class YoutubeProvider : IDisposable
                 _nTokenDecryptor.InvalidateCache();
                 _sigCipherDecryptor.InvalidateCache();
                 _nTokenDecryptor.PlayerManager.Invalidate();
+
+                // FIX: Сброс stale STS при 403-recovery ═══
+                // _signatureTimestamp в VideoController и _cipherManifest в StreamClient
+                // кэшируются на уровне экземпляра и НЕ инвалидировались ранее.
+                // После PlayerManager.Invalidate() контекст будет загружен заново,
+                // но оба поля вернут старый (потенциально пустой) STS из field-кэша.
+                // InvalidateCipherManifest() сбрасывает оба поля через единую точку входа.
+                _youtube.Videos.Streams.InvalidateCipherManifest();
+
                 ClearCache();
                 Log.Info($"[YouTube] [{videoId}] Cache purged, bypass engine ready for fresh compilation.");
             }
