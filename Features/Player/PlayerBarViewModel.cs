@@ -439,18 +439,26 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void SetupCommands()
     {
+        // Условие для навигации (Next/Prev) — трек есть, нет другой навигации и нет загрузки/сброса
         var canNavigate = this.WhenAnyValue(
-            x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading,
-            (hasTrack, isNav, loading) => hasTrack && !isNav && !loading);
+            x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading, x => x.IsTrackResetting,
+            (hasTrack, isNav, loading, resetting) => hasTrack && !isNav && !loading && !resetting);
 
+        // Условие для перемешивания
         var canShuffle = this.WhenAnyValue(
-            x => x.HasQueueToShuffle, x => x.IsLoading,
-            (hasTracks, loading) => hasTracks && !loading);
+            x => x.HasQueueToShuffle, x => x.IsLoading, x => x.IsTrackResetting,
+            (hasTracks, loading, resetting) => hasTracks && !loading && !resetting);
+
+        // Условие для Play/Pause — трек есть и он не находится в стадии загрузки
+        var canPlayPause = this.WhenAnyValue(
+            x => x.HasTrack, x => x.IsLoading, x => x.IsTrackResetting,
+            (hasTrack, loading, resetting) => hasTrack && !loading && !resetting);
 
         var hasTrackObs = this.WhenAnyValue(x => x.HasTrack);
 
+        // ИСПРАВЛЕНИЕ: Передаем canPlayPause вместо hasTrackObs
         PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(
-            _playerControl.PlayPauseAsync, hasTrackObs));
+            _playerControl.PlayPauseAsync, canPlayPause));
 
         NextCommand = CreateCommand(ReactiveCommand.Create(() =>
         {

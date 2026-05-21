@@ -1,34 +1,15 @@
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- PLAYER BAR STYLES — ДОПОЛНЕНИЯ к глобальным стилям                 -->
-    <!-- ПОРЯДОК ЗАГРУЗКИ ВАЖЕН: этот файл должен быть ПОСЛЕ                -->
-    <!-- AppComponents.axaml в Theme.axaml                                  -->
-    <!--                                                                     -->
-    <!-- Кнопки PlayerBar используют глобальные классы:                     -->
-    <!--   playback-btn, playback-btn-main, icon-btn, sidebar-btn           -->
-    <!--                                                                     -->
-    <!-- Этот файл содержит ТОЛЬКО:                                         -->
-    <!-- 1. Специфичные состояния (.popup-open, heart-icon)                 -->
-    <!-- 2. Seek slider стили (полностью уникальные)                        -->
-    <!-- 3. Volume slider стили (переопределяют AppComponents Duration)     -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- ═══ POPUP-OPEN STATE ═══ -->
-    <!-- Применяется к icon-btn когда открыт popup (volume, format) -->
     <Style Selector="Button.icon-btn.popup-open">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- Format button popup state (sidebar-btn вариант) -->
     <Style Selector="Button.format-btn.popup-open">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- ═══ HEART ICON ANIMATION ═══ -->
     <Style Selector="Button.icon-btn PathIcon.heart-icon">
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
@@ -42,14 +23,6 @@
         <Setter Property="RenderTransform" Value="scale(1.25)" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- SEEK SLIDER                                                         -->
-    <!-- Полностью уникальные стили для seek bar.                           -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- RenderTransformOrigin задан в разметке как "0.5,1.0" (bottom-center).
-     Scale растёт вверх от нижнего края — thumb не выходит за SeekContainer,
-     нижний край дорожки остаётся зафиксированным. -->
     <Style Selector="Grid.track-container">
         <Setter Property="RenderTransform" Value="scaleY(1)" />
         <Setter Property="Transitions">
@@ -65,14 +38,7 @@
     <Style Selector="Grid.seek-container.dragging Grid.track-container">
         <Setter Property="RenderTransform" Value="scaleY(2.0)" />
     </Style>
-    <Style Selector="Grid.seek-container:pointerover Grid.track-container">
-        <Setter Property="RenderTransform" Value="scaleY(1.5)" />
-    </Style>
-    <Style Selector="Grid.seek-container.dragging Grid.track-container">
-        <Setter Property="RenderTransform" Value="scaleY(1.5)" />
-    </Style>
 
-    <!-- Seek thumb: скрыт по умолчанию, виден при hover/drag -->
     <Style Selector="Grid.seek-container Ellipse.slider-thumb">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
@@ -88,15 +54,11 @@
     <Style Selector="Grid.seek-container.dragging Ellipse.slider-thumb">
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <!-- Мгновенное скрытие при сбросе трека -->
     <Style Selector="Ellipse.slider-thumb.hidden">
         <Setter Property="Opacity" Value="0" />
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
-    <!-- Seek cursor (вертикальная линия при наведении) -->
     <Style Selector="Border.seek-cursor">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="Transitions">
@@ -110,9 +72,7 @@
     </Style>
     <Style Selector="Border.seek-cursor.hidden">
         <Setter Property="Opacity" Value="0" />
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
     <Style Selector="Border.seek-preview-cursor">
@@ -127,43 +87,21 @@
         <Setter Property="Opacity" Value="0.7" />
     </Style>
 
-    <!--
-    DoubleTransition на Width убирается из progress-bar и playing-glow.
-    Интерполяция теперь на стороне RAF-loop в code-behind (ApplySeekFrame),
-    который обновляет Width каждый кадр по clock-anchor схеме.
-    Transition здесь создавал рассинхрон: progress двигался плавно,
-    thumb/cursor — дискретно, потому что Canvas.SetLeft не имеет transition.
-    При RAF-подходе все три элемента обновляются в одном кадре — рассинхрон исключён.
--->
+    <!-- ИСПРАВЛЕНИЕ XAMLX CRASH: Заменяем <Transitions /> на Value="{x:Null}" -->
     <Style Selector="Border.progress-bar">
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
-
     <Style Selector="Grid.dragging Border.progress-bar">
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
-
     <Style Selector="Border.progress-bar.hidden">
-        <Setter Property="Width" Value="0" />
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
-
     <Style Selector="Border.playing-glow">
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
-
     <Style Selector="Grid.dragging Border.playing-glow">
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
     <Style Selector="Border.playing-glow.active">
@@ -231,7 +169,6 @@
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- ═══ AUTO-SHUFFLE INDICATOR ═══ -->
     <Style Selector="Button.playback-btn.auto-enabled">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
@@ -239,16 +176,13 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- ═══ SHUFFLE ANIMATION (active = IsShuffleAnimating) ═══ -->
     <Style Selector="Button.playback-btn.active PathIcon">
         <Setter Property="RenderTransformOrigin" Value="50%, 50%" />
-        <!-- Обязательно задаём тип трансформации ДО анимации -->
         <Setter Property="RenderTransform">
             <RotateTransform />
         </Setter>
         <Style.Animations>
             <Animation Duration="0:0:0.4" Easing="CubicEaseOut">
-                <!-- Анимируем конкретно свойство Angle -->
                 <KeyFrame Cue="0%">
                     <Setter Property="RotateTransform.Angle" Value="-20" />
                 </KeyFrame>
@@ -264,7 +198,6 @@
             </Animation>
         </Style.Animations>
     </Style>
-
 
     <Style Selector="Border.mode-hint">
         <Setter Property="Background" Value="{DynamicResource BgSkeletonBrush}" />

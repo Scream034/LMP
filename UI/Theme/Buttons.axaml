@@ -1,24 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- BASE BUTTON TEMPLATE                                                -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!--                                                                     -->
-    <!-- ПРАВИЛО АНИМАЦИИ ЦВЕТОВ (ANTI-FLASH):                             -->
-    <!-- Никогда не анимируем от/к Transparent (#00FFFFFF)!                  -->
-    <!-- Вместо этого используем *TransparentBrush — тот же RGB, альфа=0.   -->
-    <!--                                                                     -->
-    <!-- ВАЖНО: TransparentBrush должен совпадать по RGB с ЦЕЛЕВЫМ цветом,  -->
-    <!-- а не с каким-то другим. Иначе при интерполяции на 50% появится     -->
-    <!-- видимый цвет-гибрид (мерцание).                                    -->
-    <!--                                                                     -->
-    <!-- Пример:                                                             -->
-    <!--   ✗ AccentTransparent → BgHighlight = мерцание фиолетовым          -->
-    <!--   ✓ BgHighlightTransparent → BgHighlight = плавное появление       -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
     <Style Selector="Button">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -71,12 +53,9 @@
     </Style>
 
     <Style Selector="RepeatButton">
-        <Setter Property="Transitions">
-            <Transitions />
-        </Setter>
+        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
-    <!-- ═══ FLUENT OVERRIDE ═══ -->
     <Style Selector="Button /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
@@ -94,10 +73,6 @@
     <Style Selector="Button:disabled PathIcon">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- WINDOW CONTROL BUTTONS                                              -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.window-btn">
         <Setter Property="Background" Value="{DynamicResource BgHoverTransparentBrush}" />
@@ -156,7 +131,6 @@
         <Setter Property="Stroke" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
 
-    <!-- ═══ CLOSE BUTTON ═══ -->
     <Style Selector="Button.window-btn-close">
         <Setter Property="Background" Value="{DynamicResource SystemErrorTransparentBrush}" />
         <Setter Property="Transitions">
@@ -175,26 +149,10 @@
         <Setter Property="Background" Value="{DynamicResource SystemErrorBgBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- ACCENT-BASE: ОБЩИЙ Fluent override для accent-кнопок               -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!--                                                                     -->
-    <!-- Применяется к: Button.accent, Button.primary-btn, Button.play-circle -->
-    <!-- Гарантирует что Foreground остаётся AccentButtonTextBrush           -->
-    <!-- во всех состояниях, несмотря на Fluent перехват.                    -->
-    <!--                                                                     -->
-    <!-- ИСПОЛЬЗОВАНИЕ: добавьте класс accent-base к кнопке:               -->
-    <!--   <Button Classes="accent accent-base" .../>                        -->
-    <!--   <Button Classes="primary-btn accent-base" .../>                   -->
-    <!--   <Button Classes="play-circle accent-base" .../>                   -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
     <Style Selector="Button.accent-base /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-    <Style
-        Selector="Button.accent-base:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.accent-base:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
     <Style Selector="Button.accent-base:pressed /template/ ContentPresenter#PART_ContentPresenter">
@@ -210,10 +168,6 @@
     <Style Selector="Button.accent-base PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- ACCENT BUTTON                                                       -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.accent">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -240,10 +194,6 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- PRIMARY BUTTON                                                      -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
     <Style Selector="Button.primary-btn">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
@@ -269,10 +219,6 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- SIDEBAR BUTTON                                                      -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.sidebar-btn">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
@@ -312,10 +258,6 @@
     <Style Selector="Button.sidebar-btn ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- ICON BUTTON                                                         -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.icon-btn">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
@@ -398,16 +340,18 @@
     <Style Selector="Button.playback-btn:pressed">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
-    <Style Selector="Button.playback-btn.disabled">
+
+    <!-- ИСПРАВЛЕНИЕ: Используем :disabled псевдокласс -->
+    <Style Selector="Button.playback-btn:disabled">
         <Setter Property="Opacity" Value="0.4" />
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
-    <Style
-        Selector="Button.playback-btn.disabled PathIcon,
-                     Button.playback-btn:disabled PathIcon">
+    <Style Selector="Button.playback-btn:disabled PathIcon">
         <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
     </Style>
 
+    <!-- PLAYBACK MAIN BUTTON -->
     <Style Selector="Button.playback-btn-main">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -432,18 +376,23 @@
     <Style Selector="Button.playback-btn-main:pressed">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
-    <!-- Иконка: AccentButtonTextBrush + белый эффект для тёмных акцентов -->
+    
+    <!-- ИСПРАВЛЕНИЕ: Добавлен :disabled стиль для главной кнопки -->
+    <Style Selector="Button.playback-btn-main:disabled">
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="Button.playback-btn-main:disabled PathIcon">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+    
     <Style Selector="Button.playback-btn-main PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
-    <!-- Template override: убираем дефолтный hover фон Avalonia -->
     <Style Selector="Button.playback-btn-main /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- PLAY CIRCLE                                                         -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.play-circle">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
@@ -469,10 +418,6 @@
         <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- DELETE BUTTON                                                       -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
     <Style Selector="Button.delete-btn">
         <Setter Property="Background" Value="{DynamicResource SystemErrorBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -493,10 +438,6 @@
     <Style Selector="Button.delete-btn:pointerover">
         <Setter Property="Background" Value="{DynamicResource SystemErrorBgBrush}" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- FILTER TYPE BUTTON                                                  -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.filter-type-btn">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
@@ -522,10 +463,6 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- GHOST BUTTON                                                        -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.ghost-btn">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
@@ -576,11 +513,6 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- SEARCH CHIP — история поиска с кнопкой удаления                    -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- Контейнер чипа -->
     <Style Selector="Border.search-chip">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
@@ -598,7 +530,6 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
-    <!-- Текст чипа (кликабельный) -->
     <Style Selector="Button.search-chip-text">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
@@ -620,12 +551,10 @@
     <Style Selector="Button.search-chip-text /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style
-        Selector="Button.search-chip-text:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.search-chip-text:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <!-- Крестик удаления -->
     <Style Selector="Button.search-chip-close">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
@@ -651,8 +580,7 @@
     <Style Selector="Button.search-chip-close /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style
-        Selector="Button.search-chip-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.search-chip-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="Button.search-chip-close PathIcon">
@@ -666,10 +594,6 @@
     <Style Selector="Button.search-chip-close:pointerover PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource SystemErrorBrush}" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- NAV TAB — Навигационные вкладки в TitleBar (браузерный стиль)      -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.nav-tab">
         <Setter Property="Background" Value="Transparent" />
@@ -689,8 +613,6 @@
             </Transitions>
         </Setter>
     </Style>
-
-    <!-- Hover: border из того же RGB семейства — без мигания -->
     <Style Selector="Button.nav-tab:pointerover">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
@@ -701,8 +623,6 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHoverBrush}" />
     </Style>
-
-    <!-- Active: акцентный нижний border, некликабельна -->
     <Style Selector="Button.nav-tab.active">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -710,8 +630,6 @@
         <Setter Property="Cursor" Value="Arrow" />
         <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
-
-    <!-- Текст: 11px для компактности -->
     <Style Selector="Button.nav-tab TextBlock">
         <Setter Property="FontSize" Value="11" />
         <Setter Property="FontWeight" Value="Medium" />
@@ -720,8 +638,6 @@
     <Style Selector="Button.nav-tab ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-
-    <!-- Иконка: 20px -->
     <Style Selector="Button.nav-tab PathIcon">
         <Setter Property="Width" Value="20" />
         <Setter Property="Height" Value="20" />
@@ -738,8 +654,6 @@
     <Style Selector="Button.nav-tab.active PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
-
-    <!-- Fluent override -->
     <Style Selector="Button.nav-tab /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
@@ -754,16 +668,6 @@
         <Setter Property="Opacity" Value="0.4" />
         <Setter Property="Cursor" Value="Arrow" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- SYNC TOGGLE — Toggle-кнопки фильтрации в диалоге синхронизации    -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!--                                                                     -->
-    <!-- Chip-style toggle: скруглённые, с иконкой.                         -->
-    <!-- Unchecked: ghost-стиль (прозрачный фон, мягкая обводка).           -->
-    <!-- Checked: акцентный фон.                                            -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="ToggleButton.sync-toggle">
         <Setter Property="Background" Value="{DynamicResource BgHighlightTransparentBrush}" />
@@ -799,14 +703,10 @@
             </ControlTemplate>
         </Setter>
     </Style>
-
-    <!-- Hover (unchecked) -->
     <Style Selector="ToggleButton.sync-toggle:pointerover">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
-
-    <!-- Checked: акцентный стиль -->
     <Style Selector="ToggleButton.sync-toggle:checked">
         <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
@@ -816,8 +716,6 @@
         <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
-
-    <!-- Checked: иконка и текст наследуют AccentButtonTextBrush -->
     <Style Selector="ToggleButton.sync-toggle:checked PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
@@ -825,38 +723,23 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
         <Setter Property="Background" Value="Transparent" />
     </Style>
-
-    <!-- Fluent override для ToggleButton -->
     <Style Selector="ToggleButton.sync-toggle /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style
-        Selector="ToggleButton.sync-toggle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="ToggleButton.sync-toggle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style
-        Selector="ToggleButton.sync-toggle:checked /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="ToggleButton.sync-toggle:checked /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-    <Style
-        Selector="ToggleButton.sync-toggle:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="ToggleButton.sync-toggle:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
     <Style Selector="ToggleButton.sync-toggle TextBlock">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- CTRL BUTTON — кнопки управления окном и панели уведомлений         -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!--                                                                     -->
-    <!-- Inline BorderBrush на Button — local value, блокирует :pointerover -->
-    <!-- из глобальных стилей. Класс решает проблему: style setter имеет    -->
-    <!-- правильный приоритет и анимация работает корректно.                -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
 
     <Style Selector="Button.ctrl-btn">
         <Setter Property="Background" Value="Transparent" />
@@ -889,7 +772,6 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <!-- Вариант для кнопки закрытия: SystemError вместо Accent -->
     <Style Selector="Button.ctrl-btn-close">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorTransparentBrush}" />
@@ -914,31 +796,16 @@
     <Style Selector="Button.ctrl-btn-close /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style
-        Selector="Button.ctrl-btn-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style Selector="Button.ctrl-btn-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- NAV SIDEBAR — Вертикальный аналог nav-tab для боковых панелей     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!--                                                                     -->
-    <!-- Зеркалирует визуальный язык nav-tab: те же цвета, те же переходы, -->
-    <!-- но с левым border-индикатором вместо нижнего.                      -->
-    <!-- Без Opacity-манипуляций — только цветовые переходы (как nav-tab).  -->
-    <!--                                                                     -->
-    <!-- ИСПОЛЬЗОВАНИЕ: <ListBox Classes="nav-sidebar" ... />               -->
-    <!--                                                                     -->
-    <!-- ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- Сброс дефолтного фона ListBox -->
     <Style Selector="ListBox.nav-sidebar">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
 
-    <!-- Base: идентично nav-tab — прозрачный фон, TextMuted, тонкий border -->
     <Style Selector="ListBox.nav-sidebar ListBoxItem">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
@@ -971,7 +838,6 @@
         </Setter>
     </Style>
 
-    <!-- Иконка и текст в base-состоянии -->
     <Style Selector="ListBox.nav-sidebar ListBoxItem PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
         <Setter Property="Transitions">
@@ -992,7 +858,6 @@
         </Setter>
     </Style>
 
-    <!-- Hover: TextSecondary + BgHighlight border (идентично nav-tab:pointerover) -->
     <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
@@ -1005,7 +870,6 @@
         <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     </Style>
 
-    <!-- Selected: TextPrimary + AccentBrush border (идентично nav-tab.active) -->
     <Style Selector="ListBox.nav-sidebar ListBoxItem:selected">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
@@ -1019,7 +883,6 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
 
-    <!-- Selected + Hover: держим accent (аналог nav-tab.active — IsHitTestVisible=False там) -->
     <Style Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -1031,7 +894,6 @@
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
 
-    <!-- Fluent override: сброс дефолтного фона selection -->
     <Style Selector="ListBox.nav-sidebar ListBoxItem /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
@@ -1041,8 +903,7 @@
     <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style
-        Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover /template/ ContentPresenter">
+    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 </Styles>

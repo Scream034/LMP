@@ -109,10 +109,6 @@
                     </Canvas>
 
                     <!--  Layer 4: Progress bar — full-width, slides via TranslateTransform.X  -->
-                    <!--  HorizontalAlignment="Stretch" даёт Width = parent width.
-                        TranslateTransform.X = -(width * (1 - ratio)) сдвигает влево.
-                        ClipToBounds на TrackContainer скрывает выступ.
-                        Не трогает layout, не масштабирует CornerRadius. -->
                     <Border
                         Name="ProgressBar"
                         HorizontalAlignment="Stretch"
@@ -120,11 +116,11 @@
                         Classes="progress-bar"
                         CornerRadius="2">
                         <Border.RenderTransform>
-                            <TranslateTransform X="-10000" />
+                            <TranslateTransform X="0" />
                         </Border.RenderTransform>
                     </Border>
 
-                    <!--  Layer 5: Playing glow — full-width, slides alongside ProgressBar  -->
+                    <!--  Layer 5: Playing glow — slides alongside ProgressBar  -->
                     <Border
                         Name="PlayingGlow"
                         Height="4"
@@ -135,7 +131,7 @@
                         CornerRadius="2"
                         IsHitTestVisible="False">
                         <Border.RenderTransform>
-                            <TranslateTransform X="-10000" />
+                            <TranslateTransform X="0" />
                         </Border.RenderTransform>
                         <Border.Background>
                             <LinearGradientBrush StartPoint="100%,50%" EndPoint="0%,50%">
@@ -146,10 +142,7 @@
                     </Border>
                 </Grid>
 
-                <!--  Thumb canvas — ClipToBounds=False, overflow безопасен.
-                  TrackCenter = 0 + 4/2 = 2
-                  ThumbTop    = 2 - 7 = -5 (overflow вверх на 5px)
-                  CursorTop   = 2 - 6 = -4 (overflow вверх на 4px) -->
+                <!--  Layer 6: Thumb and Cursor  -->
                 <Canvas
                     Name="ThumbCanvas"
                     HorizontalAlignment="Stretch"
@@ -157,6 +150,7 @@
                     Background="Transparent"
                     ClipToBounds="False"
                     IsHitTestVisible="False">
+
                     <Border
                         Name="SeekCursor"
                         Canvas.Left="0"
@@ -182,6 +176,13 @@
                             <TranslateTransform X="0" />
                         </Ellipse.RenderTransform>
                     </Ellipse>
+
+                    <!-- ═══ НЕВИДИМЫЙ МАРКЕР ДЛЯ АВТОЦЕНТРИРОВАНИЯ ТУЛТИПА ═══ -->
+                    <Border Name="SeekHoverPositionMarker"
+                        Canvas.Top="0"
+                        Width="1" Height="1"
+                        Background="Transparent"
+                        IsHitTestVisible="False" />
                 </Canvas>
 
                 <!--  Hit area  -->
@@ -203,11 +204,10 @@
                 Name="SeekTooltipPopup"
                 IsHitTestVisible="False"
                 IsLightDismissEnabled="False"
-                Placement="TopEdgeAlignedLeft"
-                PlacementTarget="{Binding #SeekContainer}"
-                VerticalOffset="-5">
+                Placement="Top"
+                PlacementTarget="{Binding #SeekHoverPositionMarker}"
+                VerticalOffset="-10">
                 <Border
-                    Name="SeekTooltipBorder"
                     Padding="6,3"
                     Background="{DynamicResource BgSkeletonBrush}"
                     BorderBrush="{DynamicResource BgHighlightBrush}"
@@ -272,110 +272,8 @@
                         PointerEntered="OnShuffleButtonEntered"
                         PointerExited="OnShuffleButtonExited"
                         PointerPressed="OnShuffleButtonPressed">
-                        <Button.Styles>
-                            <!-- LMB: scale-bounce на контейнере -->
-                            <Style Selector="Button.active Panel.shuffle-content">
-                                <Style.Animations>
-                                    <Animation Duration="0:0:0.32" FillMode="None"
-                                        Easing="BackEaseOut">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="ScaleTransform.ScaleX" Value="1" />
-                                            <Setter Property="ScaleTransform.ScaleY" Value="1" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="28%">
-                                            <Setter Property="ScaleTransform.ScaleX" Value="0.68" />
-                                            <Setter Property="ScaleTransform.ScaleY" Value="0.68" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="ScaleTransform.ScaleX" Value="1" />
-                                            <Setter Property="ScaleTransform.ScaleY" Value="1" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-
-                            <!-- LMB: акцентный flash -->
-                            <Style Selector="Button.active PathIcon.shuffle-flash">
-                                <Style.Animations>
-                                    <Animation Duration="0:0:0.32" FillMode="None"
-                                        Easing="CubicEaseOut">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="Opacity" Value="0" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="20%">
-                                            <Setter Property="Opacity" Value="1" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="65%">
-                                            <Setter Property="Opacity" Value="1" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="Opacity" Value="0" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-
-                            <!-- RMB: normal уходит — только Opacity -->
-                            <Style Selector="Button.auto-enabled Panel.shuffle-normal">
-                                <Style.Animations>
-                                    <Animation Duration="0:0:0.15" FillMode="Forward"
-                                        Easing="QuadraticEaseIn">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="Opacity" Value="1" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="Opacity" Value="0" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-
-                            <!-- RMB: normal появляется — только Opacity -->
-                            <Style Selector="Button:not(.auto-enabled) Panel.shuffle-normal">
-                                <Style.Animations>
-                                    <Animation Duration="0:0:0.20" FillMode="Forward"
-                                        Easing="QuadraticEaseOut">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="Opacity" Value="0" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="Opacity" Value="1" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-
-                            <!-- RMB: auto уходит — только Opacity -->
-                            <Style Selector="Button:not(.auto-enabled) Panel.shuffle-auto">
-                                <Style.Animations>
-                                    <Animation Duration="0:0:0.15" FillMode="Forward"
-                                        Easing="QuadraticEaseIn">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="Opacity" Value="1" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="Opacity" Value="0" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-
-                            <!-- RMB: auto появляется — только Opacity -->
-                            <Style Selector="Button.auto-enabled Panel.shuffle-auto">
-                                <Style.Animations>
-                                    <Animation Duration="0:0:0.20" FillMode="Forward"
-                                        Easing="QuadraticEaseOut">
-                                        <KeyFrame Cue="0%">
-                                            <Setter Property="Opacity" Value="0" />
-                                        </KeyFrame>
-                                        <KeyFrame Cue="100%">
-                                            <Setter Property="Opacity" Value="1" />
-                                        </KeyFrame>
-                                    </Animation>
-                                </Style.Animations>
-                            </Style>
-                        </Button.Styles>
-
+                        <!-- Стили анимации шафла перенесены в Theme/PlayerBarStyles.axaml для
+                        чистоты -->
                         <Panel Classes="shuffle-content"
                             Width="18" Height="18"
                             RenderTransformOrigin="0.5,0.5">
@@ -383,7 +281,6 @@
                                 <ScaleTransform ScaleX="1" ScaleY="1" />
                             </Panel.RenderTransform>
 
-                            <!-- Обычный Shuffle -->
                             <Panel Classes="shuffle-normal"
                                 Width="18" Height="18"
                                 IsVisible="{Binding !AutoShuffleEnabled}">
@@ -391,7 +288,6 @@
                                     Data="{StaticResource Icon.Shuffle}" />
                             </Panel>
 
-                            <!-- ShuffleAuto -->
                             <Panel Classes="shuffle-auto"
                                 Width="18" Height="18"
                                 IsVisible="{Binding AutoShuffleEnabled}">
@@ -416,7 +312,6 @@
                     </Button>
 
                     <Popup x:Name="ShufflePopup"
-                        HorizontalOffset="-40"
                         IsLightDismissEnabled="False"
                         Placement="Top"
                         PlacementTarget="{Binding #ShuffleButton}"
@@ -468,9 +363,10 @@
                             <PathIcon Width="26" Height="26"
                                 Data="{StaticResource Icon.Pause}"
                                 IsVisible="{Binding IsPlaying}" />
+
                             <PathIcon Width="26" Height="26"
                                 Data="{StaticResource Icon.Play}"
-                                IsVisible="{Binding IsPaused}" />
+                                IsVisible="{Binding !IsPlaying}" />
                         </Panel>
                     </Button>
 
@@ -489,16 +385,13 @@
                         ToolTip.Placement="Top"
                         ToolTip.VerticalOffset="-6">
                         <Grid>
-                            <!-- None: обычный цвет -->
                             <PathIcon Width="18" Height="18"
                                 Data="{StaticResource Icon.Repeat}"
                                 IsVisible="{Binding IsRepeatNone}" />
-                            <!-- One: акцентный, RepeatOnce иконка -->
                             <PathIcon Width="18" Height="18"
                                 Data="{StaticResource Icon.RepeatOnce}"
                                 Foreground="{DynamicResource AccentBrush}"
                                 IsVisible="{Binding IsRepeatOne}" />
-                            <!-- All: акцентный, обычная Repeat иконка -->
                             <PathIcon Width="18" Height="18"
                                 Data="{StaticResource Icon.Repeat}"
                                 Foreground="{DynamicResource AccentBrush}"
@@ -538,7 +431,6 @@
 
                     <!-- Volume -->
                     <Panel Name="VolumePanel">
-                        <!-- Volume Button -->
                         <Button x:Name="VolumeButton" Width="38" Height="38"
                             Classes="icon-btn"
                             Classes.popup-open="{Binding #VolumePopup.IsOpen}"
@@ -569,7 +461,7 @@
                             </Grid>
                         </Button>
 
-                        <!-- Volume Popup -->
+                        <!-- Volume Popup (No manual offset needed, Placement=Top auto-centers) -->
                         <Popup
                             x:Name="VolumePopup"
                             IsLightDismissEnabled="False"
@@ -622,11 +514,11 @@
 
                         <!-- Volume Tooltip -->
                         <Popup Name="VolumeTooltipPopup"
-                            HorizontalOffset="-8"
                             IsHitTestVisible="False"
                             IsLightDismissEnabled="False"
                             Placement="Left"
-                            PlacementTarget="{Binding #VolumeHitBox}">
+                            PlacementTarget="{Binding #VolumeHitBox}"
+                            HorizontalOffset="-8">
                             <Border Padding="6,4"
                                 Background="{DynamicResource BgSkeletonBrush}"
                                 BorderBrush="{DynamicResource BgHighlightBrush}"
@@ -645,7 +537,6 @@
 
                     <!-- Like -->
                     <Panel>
-                        <!-- Like Button -->
                         <Button x:Name="LikeButton" Width="36" Height="36"
                             Classes="icon-btn"
                             Command="{Binding ToggleLikeCommand}" CornerRadius="18"
@@ -659,7 +550,6 @@
                                     ConverterParameter='Heart|HeartOutline'}" />
                         </Button>
 
-                        <!-- Like Hint Popup -->
                         <Popup HorizontalOffset="-20" IsLightDismissEnabled="False"
                             IsOpen="{Binding IsLikeHintVisible}" Placement="Top"
                             PlacementTarget="{Binding #LikeButton}" VerticalOffset="-8">
