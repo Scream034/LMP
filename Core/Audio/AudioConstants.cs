@@ -7,6 +7,28 @@ namespace LMP.Core.Audio;
 public static class AudioConstants
 {
     // ═══════════════════════════════════════════════════════
+    // SOURCE STATE — Общие значения для источников аудио
+    // ═══════════════════════════════════════════════════════
+
+    /// <summary>Неизвестная длительность трека в миллисекундах.</summary>
+    public const long UnknownDurationMs = -1;
+
+    /// <summary>Неизвестная sample rate из контейнера.</summary>
+    public const int UnknownSampleRate = 0;
+
+    /// <summary>Неизвестное количество каналов из контейнера.</summary>
+    public const int UnknownChannels = 0;
+
+    /// <summary>Полный прогресс буферизации в процентах.</summary>
+    public const double FullBufferProgressPercent = 100.0;
+
+    /// <summary>Начало полного диапазона буферизации.</summary>
+    public const double BufferedRangeStart = 0.0;
+
+    /// <summary>Конец полного диапазона буферизации.</summary>
+    public const double BufferedRangeEnd = 1.0;
+
+    // ═══════════════════════════════════════════════════════
     // CHUNK SETTINGS — Управление сегментацией данных
     // ═══════════════════════════════════════════════════════
 
@@ -141,6 +163,9 @@ public static class AudioConstants
     /// <summary>Размер буфера для файловых операций (64KB).</summary>
     public const int CacheFileBufferSize = 65_536;
 
+    /// <summary>Количество байт в одном килобайте.</summary>
+    public const int BytesPerKilobyte = 1024;
+
     /// <summary>Порог очистки кэша (80% от максимума).</summary>
     public const double CacheCleanupThreshold = 0.8;
 
@@ -192,7 +217,7 @@ public static class AudioConstants
     public const int FormatDetectionHeaderSize = 12;
 
     /// <summary>WebM: EBML header magic bytes.</summary>
-    public static ReadOnlySpan<byte> WebMMagic =>[0x1A, 0x45, 0xDF, 0xA3];
+    public static ReadOnlySpan<byte> WebMMagic => [0x1A, 0x45, 0xDF, 0xA3];
 
     /// <summary>MP4: 'ftyp' box identifier at offset 4.</summary>
     public static ReadOnlySpan<byte> Mp4FtypMagic => "ftyp"u8;
@@ -204,7 +229,7 @@ public static class AudioConstants
     // AAC DECODER TABLES
     // ═══════════════════════════════════════════════════════
 
-    private static readonly int[] AacSampleRates =[
+    private static readonly int[] AacSampleRates = [
         96000, 88200, 64000, 48000, 44100, 32000,
         24000, 22050, 16000, 12000, 11025, 8000
     ];

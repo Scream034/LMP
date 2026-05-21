@@ -23,6 +23,8 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed class LocalFileSource : IAudioSource
 {
+    private const long StreamStartPosition = 0;
+
     private readonly string _filePath;
     private FileStream? _fileStream;
     private IContainerParser? _parser;
@@ -47,7 +49,7 @@ public sealed class LocalFileSource : IAudioSource
     #region Properties
 
     /// <inheritdoc/>
-    public long DurationMs { get; private set; } = -1;
+    public long DurationMs { get; private set; } = UnknownDurationMs;
 
     /// <inheritdoc/>
     public long PositionMs => Volatile.Read(ref _positionMs);
@@ -60,7 +62,7 @@ public sealed class LocalFileSource : IAudioSource
 
     /// <inheritdoc/>
     /// <remarks>Всегда 100% — файл полностью доступен.</remarks>
-    public double BufferProgress => 100;
+    public double BufferProgress => FullBufferProgressPercent;
 
     /// <inheritdoc/>
     /// <remarks>Всегда true — файл полностью доступен.</remarks>
@@ -70,10 +72,10 @@ public sealed class LocalFileSource : IAudioSource
     public byte[]? DecoderConfig => _parser?.DecoderConfig;
 
     /// <inheritdoc/>
-    public int SampleRate => _parser?.SampleRate ?? 0;
+    public int SampleRate => _parser?.SampleRate ?? UnknownSampleRate;
 
     /// <inheritdoc/>
-    public int Channels => _parser?.Channels ?? 0;
+    public int Channels => _parser?.Channels ?? UnknownChannels;
 
     #endregion
 
@@ -104,7 +106,7 @@ public sealed class LocalFileSource : IAudioSource
             _initialized = true;
 
             Log.Info($"[LocalFileSource] Initialized: duration={DurationMs}ms, " +
-                     $"codec={Codec}, size={_fileStream.Length / 1024}KB");
+                     $"codec={Codec}, size={_fileStream.Length / BytesPerKilobyte}KB");
             return true;
         }
         catch (Exception ex)
@@ -134,7 +136,7 @@ public sealed class LocalFileSource : IAudioSource
                 totalRead += read;
             }
 
-            _fileStream!.Position = 0;
+            _fileStream!.Position = StreamStartPosition;
 
             var format = AudioSourceFactory.DetectFormatByMagic(header);
 
@@ -235,7 +237,7 @@ public sealed class LocalFileSource : IAudioSource
 
     /// <inheritdoc/>
     /// <remarks>Всегда возвращает полный диапазон [0, 1].</remarks>
-    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => [(0.0, 1.0)];
+    public IReadOnlyList<(double Start, double End)> GetBufferedRanges() => [(BufferedRangeStart, BufferedRangeEnd)];
 
     /// <inheritdoc/>
     /// <remarks>No-op — нет RAM буферов для локальных файлов.</remarks>

@@ -55,10 +55,6 @@ public sealed partial class CachingStreamSource
 
     #endregion
 
-    private const int ReadAtMaxEpochRetries = 5;
-    private const int ReadAtEpochRetryDelayMs = 50;
-    private const int MaxRefreshFailuresBeforeCircuitBreak = 2;
-
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private DateTime _lastRefreshTime = DateTime.MinValue;
     private int _consecutive403Count;

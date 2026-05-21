@@ -29,21 +29,80 @@ namespace LMP.Core.Audio.Sources;
 /// </summary>
 public sealed partial class CachingStreamSource : IAudioSource
 {
-    /// <summary>
-    /// Короткая задержка в миллисекундах перед окончательной утилизацией ресурсов.
-    /// Даёт фоновым fire-and-forget задачам завершить свои проверки на отмену.
-    /// </summary>
+    /// <summary>Короткая задержка перед окончательной утилизацией ресурсов (мс).</summary>
     private const int DisposalDelayMs = 32;
 
-    /// <summary>
-    /// Интервал времени (в миллисекундах) для ожидания открытия затвора активности воспроизведения.
-    /// </summary>
+    /// <summary>Таймаут ожидания открытия playback gate (мс).</summary>
     private const int PlaybackGateTimeoutMs = 128;
 
-    /// <summary>
-    /// Критический таймаут для затвора активности воспроизведения, после которого источник начинает агрессивно проверять
-    /// </summary>
+    /// <summary>Критический таймаут playback gate (мс).</summary>
     private const int PlaybackGateCriticalTimeoutMs = 512;
+
+    /// <summary>Количество повторов чтения при смене эпохи.</summary>
+    private const int ReadAtMaxEpochRetries = 5;
+
+    /// <summary>Задержка между retry чтения при смене эпохи (мс).</summary>
+    private const int ReadAtEpochRetryDelayMs = 50;
+
+    /// <summary>Задержка перед повтором после race/cancel (мс).</summary>
+    private const int RetryAfterTransientFailureDelayMs = 50;
+
+    /// <summary>Задержка после исчерпания слота загрузки (мс).</summary>
+    private const int RetryAfterSlotTimeoutDelayMs = 200;
+
+    /// <summary>Максимальная задержка экспоненциального backoff (мс).</summary>
+    private const int MaxRetryBackoffDelayMs = 10_000;
+
+    /// <summary>Количество последовательных 403 перед открытием circuit breaker.</summary>
+    private const int MaxRefreshFailuresBeforeCircuitBreak = 2;
+
+    /// <summary>Количество чанков critical read-ahead в suspend mode.</summary>
+    private const int CriticalReadAheadChunkCount = 5;
+
+    /// <summary>Инкремент для расчёта critical read-ahead.</summary>
+    private const int CriticalReadAheadExtraChunk = 1;
+
+    /// <summary>Размер batch для resumed partial cache.</summary>
+    private const int ResumedPartialCacheFillBatchSize = 3;
+
+    /// <summary>Порог прогресса для эвристик диагностики n-token.</summary>
+    private const int NTokenLikelyEncryptedMinLength = 15;
+
+    /// <summary>Порог прогресса для эвристик диагностики n-token.</summary>
+    private const int NTokenLikelyEncryptedMaxLength = 25;
+
+    /// <summary>Максимальная длина UA в диагностическом логе.</summary>
+    private const int DiagnosticUserAgentMaxLength = 50;
+
+    /// <summary>Максимальная длина тела ответа в диагностическом логе.</summary>
+    private const int DiagnosticResponseBodyMaxLength = 200;
+
+    /// <summary>Максимальная длина URL в диагностическом логе.</summary>
+    private const int DiagnosticUrlMaxLength = 300;
+
+    /// <summary>Максимальная длина n-token в диагностическом логе.</summary>
+    private const int DiagnosticTokenPreviewLength = 15;
+
+    /// <summary>Задержка очистки старого CTS после смены позиции (мс).</summary>
+    private const int DeferredReadCtsDisposeDelayMs = 0;
+
+    /// <summary>Минимальная граница seek clamp.</summary>
+    private const long SeekLowerBound = 0;
+
+    /// <summary>Смещение для последнего байта контента.</summary>
+    private const long SeekEndOffset = 1;
+
+    /// <summary>Начало диапазона буферизации.</summary>
+    private const double BufferedRangeStart = 0.0;
+
+    /// <summary>Конец диапазона буферизации.</summary>
+    private const double BufferedRangeEnd = 1.0;
+
+    /// <summary>Задержка перед утилизацией CTS предыдущей эпохи (мс).</summary>
+    private const int DeferredEpochDisposeDelayMs = 2000;
+
+    /// <summary>Таймаут ожидания завершения preload-таска при Dispose (мс).</summary>
+    private const int PreloadTaskDisposeWaitTimeoutMs = 1000;
 
     #region Fields
 
@@ -444,7 +503,7 @@ public sealed partial class CachingStreamSource : IAudioSource
                 // время вернуть результат перед освобождением ресурсов.
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(2000);
+                    await Task.Delay(DeferredEpochDisposeDelayMs);
                     try { oldCts.Dispose(); } catch { }
                 });
             }
@@ -576,7 +635,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         if (_preloadTask != null)
         {
-            try { await _preloadTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
+            try { await _preloadTask.WaitAsync(TimeSpan.FromMilliseconds(PreloadTaskDisposeWaitTimeoutMs)).ConfigureAwait(false); }
             catch { }
         }
 
