@@ -461,9 +461,9 @@ public sealed class AudioPipeline : IAsyncDisposable
         Action<Exception>? onError,
         CancellationToken ct)
     {
-        var previousLatencyMode = System.Runtime.GCSettings.LatencyMode;
-        try { System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency; }
-        catch (Exception ex) { Log.Debug($"[AudioPipeline] Could not set GC latency mode: {ex.Message}"); }
+        // ИСПРАВЛЕНИЕ: Удален GCSettings.LatencyMode = SustainedLowLatency.
+        // Он вызывал переполнение кучи при тяжелой расшифровке AST Solver'ом, 
+        // что приводило к Stop-The-World блокировке (фризу UI-потока).
 
         int retryCount = 0;
         int backoffCount = 0;
@@ -584,10 +584,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         {
             Log.Error($"[AudioPipeline] Decoder fatal: {ex.Message}", ex);
             onError?.Invoke(ex);
-        }
-        finally
-        {
-            try { System.Runtime.GCSettings.LatencyMode = previousLatencyMode; } catch { }
         }
     }
 

@@ -38,7 +38,7 @@ public sealed partial class CachingStreamSource
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
 
                 Log.Debug($"[CachingSource] Seek: awaiting critical chunk {targetChunk}");
-                await EnsureChunkAsync(targetChunk, linkedCts.Token);
+                await EnsureChunkAsync(targetChunk, linkedCts.Token, isCritical: true).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
@@ -85,7 +85,7 @@ public sealed partial class CachingStreamSource
         {
             var downloadToken = CurrentDownloadToken;
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
-            await EnsureChunkAsync(targetChunk, linkedCts.Token);
+            await EnsureChunkAsync(targetChunk, linkedCts.Token, isCritical: true).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

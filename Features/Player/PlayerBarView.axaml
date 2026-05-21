@@ -99,7 +99,7 @@
                         ClipToBounds="False">
                         <Border
                             Name="SeekPreviewCursor"
-                            Canvas.Top="-5"
+                            Canvas.Top="-4"
                             Width="3"
                             Height="14"
                             Background="{DynamicResource AccentBrush}"
@@ -167,7 +167,7 @@
                     <Ellipse
                         Name="SeekThumb"
                         Canvas.Left="0"
-                        Canvas.Top="-5"
+                        Canvas.Top="-4"
                         Width="14"
                         Height="14"
                         Classes="slider-thumb"

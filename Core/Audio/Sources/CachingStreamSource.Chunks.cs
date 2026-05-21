@@ -114,7 +114,7 @@ public sealed partial class CachingStreamSource
             return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
 
         // 2. Диск
-        if (await TryLoadChunkFromDiskAsync(chunkIndex, ct) is { } diskEntry)
+        if (await TryLoadChunkFromDiskAsync(chunkIndex, ct).ConfigureAwait(false) is { } diskEntry)
             return CopyFromChunk(diskEntry.Memory.Span, diskEntry.Length, offsetInChunk, buffer);
 
         // 3. Сеть — с retry по смене эпохи
@@ -127,14 +127,15 @@ public sealed partial class CachingStreamSource
                 var downloadToken = CurrentDownloadToken;
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
 
-                var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token);
+                // ИСПРАВЛЕНИЕ: Чтение данных, ожидаемых декодером прямо сейчас — это критический запрос.
+                var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token, isCritical: true).ConfigureAwait(false);
 
                 if (result == ChunkDownloadResult.OutOfRange) return 0;
 
                 if (_ramChunks.TryGetValue(chunkIndex, out ramEntry))
                     return CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer);
 
-                if (await TryLoadChunkFromDiskAsync(chunkIndex, ct) is { } afterNetworkDisk)
+                if (await TryLoadChunkFromDiskAsync(chunkIndex, ct).ConfigureAwait(false) is { } afterNetworkDisk)
                     return CopyFromChunk(afterNetworkDisk.Memory.Span, afterNetworkDisk.Length, offsetInChunk, buffer);
             }
             catch (ChunkDownloadFatalException) { throw; }
@@ -142,7 +143,7 @@ public sealed partial class CachingStreamSource
             {
                 Log.Debug($"[CachingSource] ReadAt chunk {chunkIndex}: epoch changed, " +
                           $"retry {attempt + 1}/{ReadAtMaxEpochRetries}");
-                await Task.Delay(ReadAtEpochRetryDelayMs, ct);
+                await Task.Delay(ReadAtEpochRetryDelayMs, ct).ConfigureAwait(false);
             }
         }
 
@@ -220,8 +221,9 @@ public sealed partial class CachingStreamSource
     /// </summary>
     /// <param name="index">Индекс чанка.</param>
     /// <param name="ct">Токен отмены (epoch или lifetime).</param>
+    /// <param name="isCritical">Если true, запрос обходит ограничения параллелизма.</param>
     /// <returns>Результат загрузки.</returns>
-    private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct)
+    private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct, bool isCritical = false)
     {
         if (index < 0 || index >= _totalChunks) return ChunkDownloadResult.OutOfRange;
 
@@ -233,7 +235,7 @@ public sealed partial class CachingStreamSource
         // Дедупликация: если уже есть активная загрузка этого чанка — ждём её.
         if (_activeDownloads.TryGetValue(index, out var existingTask))
         {
-            await WaitForActiveDownloadAsync(existingTask, ct);
+            await WaitForActiveDownloadAsync(existingTask, ct).ConfigureAwait(false);
             if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
         }
 
@@ -248,20 +250,21 @@ public sealed partial class CachingStreamSource
 
             if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
 
-            var downloadTask = DownloadChunkCoreAsync(index, ct);
+            // ИСПРАВЛЕНИЕ: Пробрасываем isCritical
+            var downloadTask = DownloadChunkCoreAsync(index, ct, isCritical);
 
             if (_activeDownloads.TryAdd(index, downloadTask))
             {
                 ChunkDownloadResult result;
                 try
                 {
-                    result = await downloadTask;
+                    result = await downloadTask.ConfigureAwait(false);
                 }
                 catch (ChunkDownloadFatalException) { throw; }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     _activeDownloads.TryRemove(index, out _);
-                    await Task.Delay(50, ct);
+                    await Task.Delay(50, ct).ConfigureAwait(false);
                     continue;
                 }
                 finally
@@ -276,23 +279,23 @@ public sealed partial class CachingStreamSource
                         return result;
 
                     case ChunkDownloadResult.Forbidden403:
-                        await CoordinatedRefreshAsync(ct);
+                        await CoordinatedRefreshAsync(ct).ConfigureAwait(false);
                         continue;
 
                     case ChunkDownloadResult.NetworkError:
                         int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
                         Log.Warn($"[CachingSource] Chunk {index}: network retry {attempt + 1}/{maxAttempts}, delay={delay}ms");
-                        await Task.Delay(delay, ct);
+                        await Task.Delay(delay, ct).ConfigureAwait(false);
                         continue;
 
                     case ChunkDownloadResult.SlotTimeout:
-                        await Task.Delay(200, ct);
+                        await Task.Delay(200, ct).ConfigureAwait(false);
                         continue;
 
                     case ChunkDownloadResult.Cancelled:
                         if (!ct.IsCancellationRequested)
                         {
-                            await Task.Delay(50, ct);
+                            await Task.Delay(50, ct).ConfigureAwait(false);
                             continue;
                         }
                         ct.ThrowIfCancellationRequested();
@@ -306,7 +309,7 @@ public sealed partial class CachingStreamSource
             {
                 // Другой поток создал задачу между нашей проверкой и TryAdd — ждём её.
                 if (_activeDownloads.TryGetValue(index, out var concurrentTask))
-                    await WaitForActiveDownloadAsync(concurrentTask, ct);
+                    await WaitForActiveDownloadAsync(concurrentTask, ct).ConfigureAwait(false);
 
                 if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
             }
@@ -380,7 +383,7 @@ public sealed partial class CachingStreamSource
     /// <para>Без удержания — неограниченный параллелизм при seek + preload + on-demand read
     /// → connection pool exhaustion → timeout → decoder starvation → underrun.</para>
     /// </remarks>
-    private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct)
+    private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct, bool isCritical)
     {
         if (_disposed || _cacheEntry!.IsChunkDownloaded(index))
             return _disposed ? ChunkDownloadResult.Cancelled : ChunkDownloadResult.Success;
@@ -402,8 +405,13 @@ public sealed partial class CachingStreamSource
             // Проверяем _disposed перед обращением и ловим гонку в catch.
             if (_disposed) return ChunkDownloadResult.Cancelled;
 
-            gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct);
-            if (!gotSlot) return ChunkDownloadResult.SlotTimeout;
+            // ИСПРАВЛЕНИЕ: Критические запросы (Seek/Read) обходят лимит слотов, 
+            // чтобы не ждать фоновую докачку.
+            if (!isCritical)
+            {
+                gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct).ConfigureAwait(false);
+                if (!gotSlot) return ChunkDownloadResult.SlotTimeout;
+            }
 
             if (_disposed) return ChunkDownloadResult.Cancelled;
 
@@ -413,7 +421,7 @@ public sealed partial class CachingStreamSource
             if (ct.IsCancellationRequested)
                 return ChunkDownloadResult.Cancelled;
 
-            return await DownloadChunkHttpAsync(index, start, end, ct);
+            return await DownloadChunkHttpAsync(index, start, end, ct).ConfigureAwait(false);
         }
         catch (ChunkDownloadFatalException) { throw; }
         catch (ObjectDisposedException) { return ChunkDownloadResult.Cancelled; }

@@ -290,40 +290,23 @@ public sealed partial class CachingStreamSource : IAudioSource
                 _bitrate,
                 chunkSize: _chunkSize);
 
-            // Сверяем ChunkSize с уже существующей записью кэша во избежание рассинхронизации побайтовой адресации на диске.
-            if (_cacheEntry.DownloadedChunks > 0)
+            // Примиряем ChunkSize: если в кэше уже есть чанки с другим размером,
+            // используем сохранённый размер, чтобы не сломать побайтовую адресацию.
+            if (_cacheEntry.DownloadedChunks > 0
+                && _cacheEntry.TotalChunks > 0
+                && _cacheEntry.TotalChunks != _totalChunks)
             {
-                if (_cacheEntry.ChunkSize > 0 && _cacheEntry.ChunkSize != _chunkSize)
-                {
-                    Log.Info($"[CachingSource] Locking chunk size to cached entry: " +
-                             $"requested={_chunkSize}B → locked={_cacheEntry.ChunkSize}B " +
-                             $"(totalChunks: {_totalChunks}→{_cacheEntry.TotalChunks})");
+                int reconciledChunkSize = _contentLength > 0 && _cacheEntry.TotalChunks > 0
+                    ? (int)Math.Ceiling((double)_contentLength / _cacheEntry.TotalChunks)
+                    : _chunkSize;
 
-                    _chunkSize = _cacheEntry.ChunkSize;
-                    _totalChunks = _cacheEntry.TotalChunks;
-                }
+                Log.Info($"[CachingSource] ChunkSize reconciled: " +
+                         $"config={_chunkSize}B → cached={reconciledChunkSize}B " +
+                         $"(totalChunks: {_totalChunks}→{_cacheEntry.TotalChunks})");
+
+                _chunkSize = reconciledChunkSize;
+                _totalChunks = _cacheEntry.TotalChunks;
             }
-            else
-            {
-                bool sizeChanged = _cacheEntry.TotalSize != _contentLength;
-                bool chunkSizeChanged = _cacheEntry.ChunkSize != _chunkSize;
-
-                if (sizeChanged || chunkSizeChanged)
-                {
-                    Log.Info($"[CachingSource] Updating empty cache entry schema: " +
-                             $"size={_cacheEntry.TotalSize}B→{_contentLength}B, " +
-                             $"chunkSize={_cacheEntry.ChunkSize}B→{_chunkSize}B, " +
-                             $"totalChunks={_cacheEntry.TotalChunks}→{_totalChunks}");
-
-                    _cacheEntry.TotalSize = _contentLength;
-                    _cacheEntry.ChunkSize = _chunkSize;
-                    _cacheEntry.TotalChunks = _totalChunks;
-                    _cacheEntry.ResetChunkMask();
-                }
-            }
-
-            // Подписываемся на событие очистки глобального кэша для динамического сброса маски чанков
-            _cacheManager.OnCacheCleared += HandleGlobalCacheCleared;
 
             if (_cacheEntry.DownloadedChunks > 0)
             {
@@ -334,7 +317,11 @@ public sealed partial class CachingStreamSource : IAudioSource
             _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             InitializeFirstEpoch();
 
-            await EnsureChunkAsync(0, _lifetimeCts.Token);
+            // ПАРАЛЛЕЛЬНАЯ ИНИЦИАЛИЗАЦИЯ
+            // Chunk 0 нужен для ParseHeaders (EBML + Segment + Tracks ≤ 128KB).
+            // Пока парсятся заголовки, остальные initial chunks загружаются параллельно.
+            // ИСПРАВЛЕНИЕ: Передаем isCritical = true
+            await EnsureChunkAsync(0, _lifetimeCts.Token, isCritical: true).ConfigureAwait(false);
 
             _readStream = new AsyncCachingReadStream(this);
             _parser = CreateParser(_readStream);
@@ -345,7 +332,7 @@ public sealed partial class CachingStreamSource : IAudioSource
                 ? LoadChunkRangeAsync(1, totalInitial, _lifetimeCts.Token)
                 : Task.CompletedTask;
 
-            await Task.WhenAll(parseTask, remainingTask);
+            await Task.WhenAll(parseTask, remainingTask).ConfigureAwait(false);
 
             if (!parseTask.Result)
                 throw new InvalidOperationException("Failed to parse container headers");
@@ -357,6 +344,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             _initialized = true;
 
+            // Preload loop стартует в пуле потоков — не блокирует вызывающий (UI) поток.
             _preloadTask = Task.Run(
                 () => PreloadLoopAsync(_lifetimeCts.Token), _lifetimeCts.Token);
 
@@ -400,7 +388,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         ResetDownloadEpoch();
     }
 
-    /// <summary>
+     /// <summary>
     /// Загружает диапазон чанков [<paramref name="from"/>, <paramref name="count"/>) параллельно.
     /// </summary>
     /// <param name="from">Первый индекс чанка включительно.</param>
@@ -410,8 +398,11 @@ public sealed partial class CachingStreamSource : IAudioSource
     {
         var tasks = new Task[count - from];
         for (int i = from; i < count; i++)
-            tasks[i - from] = EnsureChunkAsync(i, ct);
-        await Task.WhenAll(tasks);
+        {
+            // ИСПРАВЛЕНИЕ: Стартовые чанки критичны
+            tasks[i - from] = EnsureChunkAsync(i, ct, isCritical: true);
+        }
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     /// <summary>Выбирает парсер контейнера на основе формата трека.</summary>

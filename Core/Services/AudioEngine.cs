@@ -586,7 +586,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             Interlocked.Exchange(ref _nTokenWarnedTrackId, null);
 
-            var (streamUrl, bitrateHint) = await ResolveStreamUrlAsync(track, ct).ConfigureAwait(false);
+            // ИСПРАВЛЕНИЕ: Выгружаем получение потока на ThreadPool.
+            // Тяжелый AST Solver больше не заморозит поток актора или сеть.
+            var (streamUrl, bitrateHint) = await Task.Run(() => ResolveStreamUrlAsync(track, ct), ct).ConfigureAwait(false);
 
             if (IsSessionStale(session, ct) || IsSealedFailedTrack(track.Id))
                 return;
@@ -942,7 +944,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, sessionToken);
         try
         {
-            var info = await _youtube.RefreshStreamUrlAsync(track, true, linked.Token).ConfigureAwait(false);
+            // ИСПРАВЛЕНИЕ: Гарантируем, что расшифровка 403 ошибки при Seek (докачке чанков)
+            // выполняется в изолированном фоновом потоке.
+            var info = await Task.Run(() => _youtube.RefreshStreamUrlAsync(track, true, linked.Token), linked.Token).ConfigureAwait(false);
             return info?.Url;
         }
         catch (Exception ex) when (linked.IsCancellationRequested || sessionToken.IsCancellationRequested || IsCancellationLike(ex) || !string.Equals(CurrentTrack?.Id, trackId, StringComparison.Ordinal))
@@ -1237,8 +1241,13 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             ct.ThrowIfCancellationRequested();
 
-            var info = await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false)
+            // ИСПРАВЛЕНИЕ: Оффлоадим тяжелую работу AST Solver'а при смене качества
+            var info = await Task.Run(async () =>
+            {
+                return await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false)
                     ?? await _youtube.RefreshStreamUrlAsync(track, true, ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(false);
+
             if (info == null)
             {
                 if (!IsSessionStale(session, ct))
