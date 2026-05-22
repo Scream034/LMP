@@ -648,18 +648,42 @@ public partial class PlayerBarView : UserControl
 
     #region Seek Visual Helpers
 
+    /// <summary>
+    /// Обновляет позицию тултипа предпросмотра и его текст.
+    ///
+    /// <para><b>Почему HorizontalOffset вместо Canvas.SetLeft на маркере:</b>
+    /// Avalonia пересчитывает Popup placement только при layout-pass или при открытии.
+    /// <c>Canvas.SetLeft</c> на промежуточном маркере инициирует Invalidate,
+    /// но уже открытый Popup не гарантированно получает пересчёт координат до следующего
+    /// кадра — тултип «залипал» на старой X-позиции при быстром движении курсора.
+    /// <c>HorizontalOffset</c> — прямое свойство Popup, изменение которого форсирует
+    /// немедленный пересчёт позиции через <c>PopupPositioner</c>.</para>
+    /// </summary>
+    /// <param name="x">X-координата в пространстве <see cref="SeekContainer"/>.</param>
+    /// <param name="seconds">Позиция в секундах для отображаемого текста.</param>
     private void UpdateSeekTooltip(double x, double seconds)
     {
-        // 1. Обновляем невидимый маркер, чтобы Popup автоматически отцентрировался
-        Canvas.SetLeft(SeekHoverPositionMarker, x);
+        // Смещаем Popup так, чтобы его центр совпал с x.
+        // SeekTooltipPopup.Placement="Top", PlacementTarget=SeekContainer:
+        // HorizontalOffset = x - SeekContainer.Width/2
+        // При Placement=Top Avalonia центрирует popup горизонтально над PlacementTarget,
+        // то есть дефолтная позиция центра popup = SeekContainer.Width/2.
+        // Чтобы сдвинуть центр в точку x: offset = x - width/2.
+        double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
+        SeekTooltipPopup.HorizontalOffset = x - width / 2.0;
 
-        // 2. Обновляем текст
+        // Обновляем текст времени.
         var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
         HoverTimeText.Text = time.TotalHours >= 1
             ? time.ToString(@"h\:mm\:ss")
             : time.ToString(@"m\:ss");
     }
 
+    /// <summary>
+    /// Обновляет позицию курсора предпросмотра (тонкая вертикальная линия под курсором мыши).
+    /// Курсор широй <see cref="LayoutConstants.SeekPreviewCursorHalfWidth"/>×2 центрируется в точке x.
+    /// </summary>
+    /// <param name="x">X-координата в пространстве <see cref="SeekContainer"/>.</param>
     private void UpdateSeekPreview(double x)
         => Canvas.SetLeft(SeekPreviewCursor, x - LayoutConstants.SeekPreviewCursorHalfWidth);
 

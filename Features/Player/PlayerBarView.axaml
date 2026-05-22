@@ -25,6 +25,7 @@
                 ClipToBounds="False"
                 Cursor="Hand">
 
+                <!--  TrackContainer: ТОЛЬКО визуал дорожки, без курсоров  -->
                 <Grid
                     Name="TrackContainer"
                     Height="4"
@@ -40,7 +41,7 @@
                         CornerRadius="2"
                         Opacity="0.4" />
 
-                    <!-- Layer 1: SPARK -->
+                    <!--  Layer 1: SPARK  -->
                     <Border Name="SparkContainer"
                         ClipToBounds="True"
                         CornerRadius="2"
@@ -90,25 +91,7 @@
                         ClipToBounds="True"
                         IsHitTestVisible="False" />
 
-                    <!--  Layer 3: Seek preview cursor  -->
-                    <Canvas
-                        Name="PreviewCursorCanvas"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch"
-                        IsHitTestVisible="False"
-                        ClipToBounds="False">
-                        <Border
-                            Name="SeekPreviewCursor"
-                            Canvas.Top="-4"
-                            Width="3"
-                            Height="14"
-                            Background="{DynamicResource AccentBrush}"
-                            Classes="seek-preview-cursor"
-                            CornerRadius="1.5"
-                            IsHitTestVisible="False" />
-                    </Canvas>
-
-                    <!--  Layer 4: Progress bar — full-width, slides via TranslateTransform.X  -->
+                    <!--  Layer 3: Progress bar  -->
                     <Border
                         Name="ProgressBar"
                         HorizontalAlignment="Stretch"
@@ -120,7 +103,7 @@
                         </Border.RenderTransform>
                     </Border>
 
-                    <!--  Layer 5: Playing glow — slides alongside ProgressBar  -->
+                    <!--  Layer 4: Playing glow  -->
                     <Border
                         Name="PlayingGlow"
                         Height="4"
@@ -142,6 +125,26 @@
                     </Border>
                 </Grid>
 
+                <!--
+                    Layer 5: Seek preview cursor.
+                -->
+                <Canvas
+                    Name="PreviewCursorCanvas"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    IsHitTestVisible="False"
+                    ClipToBounds="False">
+                    <Border
+                        Name="SeekPreviewCursor"
+                        Canvas.Top="-3"
+                        Width="3"
+                        Height="14"
+                        Background="{DynamicResource AccentBrush}"
+                        Classes="seek-preview-cursor"
+                        CornerRadius="1.5"
+                        IsHitTestVisible="False" />
+                </Canvas>
+
                 <!--  Layer 6: Thumb and Cursor  -->
                 <Canvas
                     Name="ThumbCanvas"
@@ -154,7 +157,7 @@
                     <Border
                         Name="SeekCursor"
                         Canvas.Left="0"
-                        Canvas.Top="-4"
+                        Canvas.Top="-1"
                         Width="2"
                         Height="12"
                         Background="{DynamicResource AccentBrush}"
@@ -167,7 +170,7 @@
                     <Ellipse
                         Name="SeekThumb"
                         Canvas.Left="0"
-                        Canvas.Top="-4"
+                        Canvas.Top="-3"
                         Width="14"
                         Height="14"
                         Classes="slider-thumb"
@@ -176,13 +179,6 @@
                             <TranslateTransform X="0" />
                         </Ellipse.RenderTransform>
                     </Ellipse>
-
-                    <!-- ═══ НЕВИДИМЫЙ МАРКЕР ДЛЯ АВТОЦЕНТРИРОВАНИЯ ТУЛТИПА ═══ -->
-                    <Border Name="SeekHoverPositionMarker"
-                        Canvas.Top="0"
-                        Width="1" Height="1"
-                        Background="Transparent"
-                        IsHitTestVisible="False" />
                 </Canvas>
 
                 <!--  Hit area  -->
@@ -205,8 +201,9 @@
                 IsHitTestVisible="False"
                 IsLightDismissEnabled="False"
                 Placement="Top"
-                PlacementTarget="{Binding #SeekHoverPositionMarker}"
-                VerticalOffset="-10">
+                PlacementTarget="{Binding #SeekContainer}"
+                HorizontalOffset="0"
+                VerticalOffset="-14">
                 <Border
                     Padding="6,3"
                     Background="{DynamicResource BgSkeletonBrush}"
