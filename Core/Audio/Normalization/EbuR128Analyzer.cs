@@ -123,6 +123,22 @@ public sealed class EbuR128Analyzer
     private float _maxGain = DefaultMaxNormalizationGain;
     private NormalizationMode _mode = NormalizationMode.Bidirectional;
 
+    /// <summary>
+    /// Reference-обёртка для атомарной публикации <see cref="NormalizationConfig"/>
+    /// через volatile поле. Необходима потому что <c>volatile</c> применим только
+    /// к reference types и примитивам ≤ sizeof(nint), а <see cref="NormalizationConfig"/>
+    /// — value type из 4 полей (16 байт).
+    /// <para>Аллокация происходит только при смене настроек пользователем (редко).</para>
+    /// </summary>
+    private sealed record ConfigSnapshot(NormalizationConfig Value);
+
+    /// <summary>
+    /// Pending конфиг для атомарной публикации из command thread.
+    /// <c>null</c> = нет ожидающего обновления. Читается из fill thread
+    /// в начале <see cref="ProcessSamples"/> через volatile read.
+    /// </summary>
+    private volatile ConfigSnapshot? _pendingConfig;
+
     #endregion
 
     #region Public Properties
@@ -156,48 +172,80 @@ public sealed class EbuR128Analyzer
     #region Configuration API
 
     /// <summary>
-    /// Применяет конфигурацию нормализации.
-    /// Сброс состояния запрашивается только при реальном изменении параметров.
+    /// Применяет конфигурацию нормализации атомарно.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Thread safety:</b> Публикует новый конфиг через <c>volatile</c> write
+    /// (<see cref="_pendingConfig"/>). Fill thread читает его в начале
+    /// следующего <see cref="ProcessSamples"/> вызова через <c>volatile</c> read.
+    /// Это гарантирует что fill thread всегда видит целостную конфигурацию,
+    /// а не частично обновлённый набор полей.</para>
+    ///
+    /// <para><b>Recalculate vs Reset:</b> При изменении targetLufs или mode
+    /// накопленные gating blocks СОХРАНЯЮТСЯ и пересчитываются с новыми параметрами
+    /// вместо полного сброса. Это исключает 3-секундный период блуждающего
+    /// provisional gain после смены настроек.</para>
+    /// </remarks>
     public void Configure(NormalizationConfig config)
     {
         float clampedMaxGain = Math.Max(1f, config.MaxGain);
+        var normalizedConfig = config with { MaxGain = clampedMaxGain };
 
-        if (config.Enabled && !_enabled)
-        {
-            _targetLufs = config.TargetLufs;
-            _maxGain = clampedMaxGain;
-            _mode = config.Mode;
-            Interlocked.Exchange(ref _pendingNormReset, 1);
-            _enabled = true;
-            Log.Debug($"[EbuR128] Normalization ON: target={config.TargetLufs}LUFS, " +
-                      $"maxGain={clampedMaxGain:F1}x, mode={config.Mode}");
-        }
-        else if (!config.Enabled && _enabled)
+        if (!config.Enabled && _enabled)
         {
             _enabled = false;
             _lockedGain = float.NaN;
             _smoothedNormGain = 1.0f;
             Log.Debug("[EbuR128] Normalization OFF");
+            return;
         }
-        else if (config.Enabled)
+
+        if (!config.Enabled) return;
+
+        bool wasEnabled = _enabled;
+        bool changed = !wasEnabled
+            || MathF.Abs(_targetLufs - normalizedConfig.TargetLufs) > 0.01f
+            || MathF.Abs(_maxGain - normalizedConfig.MaxGain) > 0.01f
+            || _mode != normalizedConfig.Mode;
+
+        if (!changed) return;
+
+        bool needsReset = !wasEnabled; // Только при включении с нуля — полный reset
+        bool needsRecalc = wasEnabled && changed; // При изменении параметров — пересчёт
+
+        // Атомарная публикация конфига: fill thread читает после fence,
+        // всегда видит согласованное состояние.
+        _pendingConfig = new ConfigSnapshot(normalizedConfig);
+        _enabled = true;
+
+        if (needsReset)
         {
-            bool changed =
-                MathF.Abs(_targetLufs - config.TargetLufs) > 0.01f ||
-                MathF.Abs(_maxGain - clampedMaxGain) > 0.01f ||
-                _mode != config.Mode;
-
-            _targetLufs = config.TargetLufs;
-            _maxGain = clampedMaxGain;
-            _mode = config.Mode;
-
-            if (changed)
-            {
-                Interlocked.Exchange(ref _pendingNormReset, 1);
-                Log.Debug($"[EbuR128] Params changed: target={config.TargetLufs}LUFS, " +
-                          $"maxGain={clampedMaxGain:F1}x, mode={config.Mode}");
-            }
+            Interlocked.Exchange(ref _pendingNormReset, 1);
+            Log.Debug($"[EbuR128] Normalization ON: target={normalizedConfig.TargetLufs}LUFS, " +
+                      $"maxGain={normalizedConfig.MaxGain:F1}x, mode={normalizedConfig.Mode}");
         }
+        else if (needsRecalc)
+        {
+            Interlocked.Exchange(ref _pendingNormReset, 2); // 2 = recalc, не полный reset
+            Log.Debug($"[EbuR128] Params changed (recalc): target={normalizedConfig.TargetLufs}LUFS, " +
+                      $"maxGain={normalizedConfig.MaxGain:F1}x, mode={normalizedConfig.Mode}");
+        }
+    }
+
+    /// <summary>
+    /// Применяет конфигурацию из <see cref="_pendingConfig"/> и обновляет локальные поля.
+    /// Вызывается строго из fill thread в начале <see cref="ProcessSamples"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyPendingConfig()
+    {
+        var snapshot = _pendingConfig;
+        if (snapshot == null) return;
+
+        var cfg = snapshot.Value;
+        _targetLufs = cfg.TargetLufs;
+        _maxGain = Math.Max(1f, cfg.MaxGain);
+        _mode = cfg.Mode;
     }
 
     /// <summary>Устанавливает callback фиксации gain (для персистирования в БД).</summary>
@@ -227,32 +275,50 @@ public sealed class EbuR128Analyzer
 
     /// <summary>
     /// Применяет предзагруженный gain без вызова <see cref="_onGainLocked"/>.
-    /// Используется когда gain уже есть в БД или вычислен из YouTube metadata —
-    /// повторная персистенция избыточна.
     /// </summary>
-    /// <param name="gain">Linear gain из кэша.</param>
+    /// <remarks>
+    /// <para><b>Исправление stale _mode race:</b> <see cref="_mode"/> обновляется
+    /// лениво fill thread'ом через <see cref="ApplyPendingConfig"/>.
+    /// При вызове из command thread сразу после <see cref="Configure"/>
+    /// <see cref="_mode"/> содержит старое значение.
+    /// Метод читает mode из <see cref="_pendingConfig"/> если он есть —
+    /// это гарантирует применение <b>нового</b> mode к gain constraint.</para>
+    /// </remarks>
+    /// <param name="gain">Linear gain из кэша или из <see cref="NormalizationGainResolver"/>.</param>
     public void LockFromCachedGain(float gain)
     {
         if (!_enabled) return;
         if (gain <= 0f || !float.IsFinite(gain)) return;
 
-        if (_mode == NormalizationMode.DownwardOnly)
+        // Читаем mode из pending конфига если он есть (свежее обновление от command thread),
+        // иначе используем текущий _mode (уже синхронизирован fill thread'ом).
+        var pendingSnapshot = _pendingConfig;
+        var effectiveMode = pendingSnapshot?.Value.Mode ?? _mode;
+        var effectiveMaxGain = pendingSnapshot != null
+            ? Math.Max(1f, pendingSnapshot.Value.MaxGain)
+            : _maxGain;
+
+        if (effectiveMode == NormalizationMode.DownwardOnly)
             gain = MathF.Min(gain, 1.0f);
 
-        gain = Math.Clamp(gain, MinNormalizationGain, _maxGain);
+        gain = Math.Clamp(gain, MinNormalizationGain, effectiveMaxGain);
 
         Interlocked.Exchange(ref _pendingNormReset, 0);
         _lockedGain = gain;
         _smoothedNormGain = gain;
 
-        Log.Debug($"[EbuR128] Gain from cache: {gain:F3}x (analysis skipped)");
+        Log.Debug($"[EbuR128] Gain from cache: {gain:F3}x (mode={effectiveMode}, analysis skipped)");
     }
 
     /// <summary>
-    /// Фиксирует gain из реального EBU R128 анализа (pre-scan или real-time).
-    /// Единственная точка вызова <see cref="_onGainLocked"/> callback'а —
-    /// gain будет персистирован в БД для ускорения следующего воспроизведения.
+    /// Фиксирует gain из реального EBU R128 анализа.
     /// </summary>
+    /// <remarks>
+    /// <para>Режим DownwardOnly применяется ДО записи в <see cref="_lockedGain"/>,
+    /// что согласовано с <see cref="ComputeProvisionalGain"/> и
+    /// <see cref="ComputeIntegratedGainFromBlocks"/> — не будет скачка при переходе
+    /// из provisional в locked фазу.</para>
+    /// </remarks>
     public void LockGain(float gain)
     {
         if (_mode == NormalizationMode.DownwardOnly)
@@ -262,7 +328,8 @@ public sealed class EbuR128Analyzer
 
         Interlocked.Exchange(ref _pendingNormReset, 0);
         _lockedGain = gain;
-        _smoothedNormGain = gain;
+        // Намеренно НЕ обновляем _smoothedNormGain здесь.
+        // GainCrossfader в AudioPipeline плавно перейдёт к новому значению.
 
         _onGainLocked?.Invoke(gain);
     }
@@ -281,27 +348,34 @@ public sealed class EbuR128Analyzer
     #region Hot Path: Real-Time Analysis
 
     /// <summary>
-    /// Измеряет K-weighted LUFS и возвращает gain нормализации.
+    /// Измеряет K-weighted LUFS и возвращает целевой gain нормализации.
     /// НЕ модифицирует сэмплы — только анализирует raw сигнал.
     /// </summary>
     /// <remarks>
     /// <para><b>ВЫЗЫВАТЬ ТОЛЬКО ИЗ FILL THREAD.</b></para>
-    /// <para><b>Zero-alloc.</b> Bounds elision через <see cref="Unsafe.Add{T}(ref T, int)"/>.</para>
+    /// <para><b>Zero-alloc.</b></para>
     /// <para><b>Fast path:</b> gain зафиксирован → мгновенный return без фильтрации.</para>
+    /// <para><b>Deferred ops:</b> В начале каждого вызова обрабатываются отложенные
+    /// операции из command thread: применение конфига, reset или recalculate.
+    /// Этот паттерн гарантирует что все мутации состояния происходят
+    /// строго из fill thread — нет concurrent writes.</para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public float ProcessSamples(ReadOnlySpan<float> samples)
     {
-        // Deferred reset: исполняется строго из fill thread
-        if (Interlocked.Exchange(ref _pendingNormReset, 0) == 1)
+        // Deferred config apply: атомарно читаем конфиг из command thread
+        ApplyPendingConfig();
+
+        // Deferred reset/recalc: исполняется строго из fill thread
+        int pendingOp = Interlocked.Exchange(ref _pendingNormReset, 0);
+        if (pendingOp == 1)
             ExecuteReset();
+        else if (pendingOp == 2)
+            ExecuteRecalculate();
 
         // Fast path: gain зафиксирован — основной режим (≥3 сек от начала трека)
         if (!float.IsNaN(_lockedGain))
-        {
-            _smoothedNormGain = _lockedGain;
             return _lockedGain;
-        }
 
         // ──── Фаза анализа: K-weighted LUFS + provisional gain ────
 
@@ -340,12 +414,13 @@ public sealed class EbuR128Analyzer
 
             Log.Debug($"[EbuR128] Real-time locked: gain={_lockedGain:F3}x " +
                       $"(analyzed {_normalizationProcessedFrames / (double)_sampleRate:F1}s, " +
-                      $"blocks={_gatingBlockCount})");
+                      $"blocks={_gatingBlockCount}, mode={_mode})");
             return _lockedGain;
         }
 
-        _smoothedNormGain += (provisionalGain - _smoothedNormGain) * LerpFactor;
-        return _smoothedNormGain;
+        // Lerp убран: сглаживание делегировано GainCrossfader в AudioPipeline
+        // (per-sample вместо per-chunk). Возвращаем raw provisional gain.
+        return provisionalGain;
     }
 
     #endregion
@@ -458,8 +533,7 @@ public sealed class EbuR128Analyzer
     }
 
     /// <summary>
-    /// Provisional gain включая данные текущего неполного gating block.
-    /// Позволяет получить оценку с первого callback (~50ms).
+    /// Provisional gain с DownwardOnly constraint (для real-time playback).
     /// </summary>
     private float ComputeProvisionalGain()
     {
@@ -468,6 +542,8 @@ public sealed class EbuR128Analyzer
 
         if (!hasCompleted && !hasPartial)
             return _startingNormGain;
+
+        float rawGain;
 
         if (hasPartial)
         {
@@ -499,11 +575,62 @@ public sealed class EbuR128Analyzer
             double provisionalLufs = LufsOffset + 10.0 * Math.Log10(Math.Max(combinedPower, 1e-20));
             float gainDb = (float)(_targetLufs - provisionalLufs);
             float gain = MathF.Pow(10f, gainDb / 20f);
-            return Math.Clamp(gain, MinNormalizationGain, _maxGain);
+            rawGain = Math.Clamp(gain, MinNormalizationGain, _maxGain);
+        }
+        else
+        {
+            rawGain = ComputeIntegratedGainFromBlocks(
+                _gatingBlockPowers, _gatingBlockCount, _targetLufs, _maxGain);
         }
 
-        return ComputeIntegratedGainFromBlocks(
-            _gatingBlockPowers, _gatingBlockCount, _targetLufs, _maxGain);
+        // Mode constraint — только для real-time output, не для persist.
+        if (_mode == NormalizationMode.DownwardOnly)
+            rawGain = MathF.Min(rawGain, 1.0f);
+
+        return rawGain;
+    }
+
+    /// <summary>
+    /// Пересчитывает gain из существующих gating blocks с новыми параметрами
+    /// (targetLufs, mode) без потери накопленных данных анализа.
+    /// </summary>
+    /// <remarks>
+    /// <para>Вызывается вместо <see cref="ExecuteReset"/> при изменении параметров
+    /// нормализации во время воспроизведения. Существующие gating blocks содержат
+    /// корректные power values и могут быть пересчитаны с новыми параметрами за O(n).</para>
+    /// <para>Исключает 3-секундный период блуждающего provisional gain
+    /// который возникал при полном reset в предыдущей версии.</para>
+    /// </remarks>
+    private void ExecuteRecalculate()
+    {
+        if (_gatingBlockCount == 0)
+        {
+            ExecuteReset();
+            return;
+        }
+
+        if (!float.IsNaN(_lockedGain))
+        {
+            // Raw gain из блоков (без mode constraint)
+            float rawGain = ComputeIntegratedGainFromBlocks(
+                _gatingBlockPowers, _gatingBlockCount, _targetLufs, _maxGain);
+
+            // Mode constraint для рабочего значения
+            float constrained = _mode == NormalizationMode.DownwardOnly
+                ? MathF.Min(rawGain, 1.0f)
+                : rawGain;
+
+            _lockedGain = Math.Clamp(constrained, MinNormalizationGain, _maxGain);
+            _smoothedNormGain = _lockedGain;
+
+            Log.Debug($"[EbuR128] Recalculated from {_gatingBlockCount} blocks: " +
+                      $"gain={_lockedGain:F3}x (raw={rawGain:F3}x, target={_targetLufs}LUFS, mode={_mode})");
+            return;
+        }
+
+        _smoothedNormGain = _startingNormGain;
+        Log.Debug($"[EbuR128] Recalc: params updated, analysis continues " +
+                  $"(blocks={_gatingBlockCount}, target={_targetLufs}LUFS, mode={_mode})");
     }
 
     /// <summary>Сбрасывает всё состояние анализа (вызывается строго из fill thread).</summary>
@@ -520,8 +647,18 @@ public sealed class EbuR128Analyzer
 
     /// <summary>
     /// Вычисляет integrated LUFS gain из массива gating block powers (EBU R128).
-    /// Статический метод, переиспользуемый pre-scan и real-time анализом.
+    /// Возвращает RAW gain БЕЗ применения mode constraint.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Почему без DownwardOnly constraint:</b> Этот gain персистируется в БД
+    /// как <see cref="TrackInfo.CachedNormalizationGain"/>. Если применить DownwardOnly
+    /// clamp (1.0) до персистенции, при переключении на Bidirectional потерянный
+    /// raw gain (например 1.710) невозможно восстановить — тихий трек навсегда
+    /// останется без буста.</para>
+    /// <para>Mode constraint применяется на этапе ИСПОЛЬЗОВАНИЯ:
+    /// <see cref="NormalizationGainResolver.ApplyConstraints"/>,
+    /// <see cref="ComputeProvisionalGain"/>, <see cref="LockFromCachedGain"/>.</para>
+    /// </remarks>
     internal static float ComputeIntegratedGainFromBlocks(
         double[] blockPowers, int blockCount, float targetLufs, float maxGain)
     {
@@ -559,6 +696,7 @@ public sealed class EbuR128Analyzer
         float gainDb = (float)(targetLufs - integratedLufs);
         float gain = MathF.Pow(10f, gainDb / 20f);
 
+        // НЕ применяем DownwardOnly здесь — raw gain для персистенции.
         return Math.Clamp(gain, MinNormalizationGain, maxGain);
     }
 

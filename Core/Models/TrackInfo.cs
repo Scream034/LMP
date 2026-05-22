@@ -195,59 +195,98 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
     #region Audio Normalization
 
     /// <summary>
-    /// Закэшированный linear gain нормализации.
-    /// Единственный источник истины для воспроизведения.
+    /// Сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
+    ///
+    /// <para><b>Семантика:</b> Разница между интегральной громкостью трека и целевым
+    /// уровнем YouTube (-14 LUFS). Положительное значение = трек ГРОМЧЕ цели
+    /// (нужна аттенуация); отрицательное = трек ТИШЕ (YouTube не бустит).</para>
+    ///
+    /// <para><b>Примеры:</b></para>
+    /// <list type="bullet">
+    ///   <item>loudnessDb=+6.8 → трек на -7.2 LUFS, нужна аттенуация 6.8 dB</item>
+    ///   <item>loudnessDb=-2.0 → трек на -16 LUFS, тихий, YouTube не трогает</item>
+    ///   <item>loudnessDb=0 → трек ровно на -14 LUFS или YouTube не указал поправку</item>
+    /// </list>
+    ///
+    /// <para><b>Ограничения использования:</b> Значение валидно исключительно для
+    /// режима <see cref="NormalizationMode.DownwardOnly"/> при target ≈ -14 LUFS.
+    /// Для Bidirectional или других targetLufs требуется EBU R128 анализ.</para>
+    ///
+    /// <para><c>float.NaN</c> = значение отсутствует в API ответе.</para>
+    /// </summary>
+    [JsonIgnore]
+    public float YoutubeIntegratedLoudnessDb { get; private set; } = float.NaN;
+
+    /// <summary>
+    /// <c>true</c> если YouTube передал значение <see cref="YoutubeIntegratedLoudnessDb"/>.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasYoutubeLoudnessDb =>
+        !float.IsNaN(YoutubeIntegratedLoudnessDb) && float.IsFinite(YoutubeIntegratedLoudnessDb);
+
+    /// <summary>
+    /// Закэшированный linear gain нормализации, вычисленный EBU R128 анализом.
+    /// Единственный источник истины для Bidirectional режима и нестандартных targetLufs.
     ///
     /// <para><b>Откуда берётся:</b></para>
     /// <list type="bullet">
-    ///   <item>YouTube InnerTube API — через <see cref="TrySetGainFromLoudness"/></item>
-    ///   <item>EBU R128 pre-scan или real-time — через <see cref="SetGain"/></item>
+    ///   <item>EBU R128 pre-scan — через <see cref="SetGain"/></item>
+    ///   <item>EBU R128 real-time анализ (~3 сек) — через <see cref="SetGain"/></item>
     /// </list>
     ///
-    /// <para><c>float.NaN</c> = не вычислен → требуется анализ.</para>
+    /// <para><c>float.NaN</c> = не вычислен → требуется EBU R128 анализ.</para>
+    ///
+    /// <para><b>Намеренное отсутствие YouTube gain здесь:</b> YouTube gain является
+    /// DownwardOnly аттенуацией при фиксированном target -14 LUFS и хранится
+    /// отдельно в <see cref="YoutubeIntegratedLoudnessDb"/>. Смешивание двух
+    /// семантически разных величин в одном поле вызывало некорректное
+    /// применение gain в Bidirectional режиме.</para>
     /// </summary>
     [JsonIgnore]
     public float CachedNormalizationGain { get; set; } = float.NaN;
 
-    /// <summary>Возвращает true если gain вычислен и готов к применению.</summary>
+    /// <summary>
+    /// <c>true</c> если EBU R128 gain вычислен и готов к применению.
+    /// </summary>
     [JsonIgnore]
     public bool HasCachedNormalizationGain =>
         !float.IsNaN(CachedNormalizationGain) && float.IsFinite(CachedNormalizationGain);
 
     /// <summary>
-    /// Устанавливает gain напрямую (из EBU R128 анализа).
-    /// Не перезаписывает уже существующий gain.
+    /// Устанавливает EBU R128 gain. Перезаписывает если значение значимо изменилось.
     /// </summary>
-    /// <param name="gain">Linear gain множитель.</param>
-    /// <returns>true если gain установлен.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool SetGain(float gain)
     {
-        if (HasCachedNormalizationGain) return false;
         if (!float.IsFinite(gain) || gain <= 0f) return false;
+
+        // Перезапись только при значимом изменении (> 0.1% разницы).
+        // Предотвращает лишние persist при RepeatMode.One.
+        if (HasCachedNormalizationGain && MathF.Abs(CachedNormalizationGain - gain) < 0.001f)
+            return false;
 
         CachedNormalizationGain = gain;
         return true;
     }
 
     /// <summary>
-    /// Вычисляет linear gain из YouTube loudnessDb и кэширует.
-    /// Не перезаписывает уже существующий gain.
+    /// Кэширует сырое значение <c>loudnessDb</c> из YouTube InnerTube API.
     /// </summary>
     /// <remarks>
-    /// Конвертация: <c>gain = 10^(−loudnessDb / 20)</c>.
-    /// Пример: loudnessDb=6.80 → gain=0.457x (понижение на ~6.8 dB).
+    /// <para><b>Не записывает в <see cref="CachedNormalizationGain"/>.</b>
+    /// YouTube данные имеют DownwardOnly семантику и несовместимы с Bidirectional
+    /// режимом или нестандартными targetLufs. Конвертация и применение
+    /// выполняются через <see cref="NormalizationGainResolver.Resolve"/>
+    /// с учётом текущей <see cref="NormalizationConfig"/>.</para>
     /// </remarks>
     /// <param name="loudnessDb">Значение поля loudnessDb из InnerTube adaptiveFormats.</param>
-    /// <returns>true если gain успешно вычислен и установлен.</returns>
+    /// <returns><c>true</c> если значение валидно и сохранено.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TrySetGainFromLoudness(float loudnessDb)
     {
-        if (HasCachedNormalizationGain) return false;
         if (float.IsNaN(loudnessDb) || !float.IsFinite(loudnessDb)) return false;
-
-        float gain = MathF.Pow(10f, -loudnessDb / 20f);
-        return SetGain(gain);
+        YoutubeIntegratedLoudnessDb = loudnessDb;
+        return true;
     }
 
     #endregion

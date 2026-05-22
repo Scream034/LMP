@@ -279,13 +279,14 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>
     /// Конфигурирует pipeline до открытия gate.
-    /// Использует <see cref="NormalizationGainResolver"/> как единственный источник истины
-    /// для определения gain нормализации.
+    /// Использует <see cref="NormalizationGainResolver.Resolve(TrackInfo, NormalizationConfig)"/>
+    /// как единственный источник истины с учётом текущего mode и targetLufs.
     /// </summary>
     /// <remarks>
-    /// <para>Читает <see cref="_preparingTrack"/> вместо <see cref="CurrentTrack"/>,
-    /// поскольку CurrentTrack обновляется асинхронно через Dispatcher.Post
-    /// и может быть null/stale на момент вызова (race condition при кэшированных треках).</para>
+    /// <para>Порядок вызовов критичен: сначала <see cref="EbuR128Analyzer.Configure"/>
+    /// (устанавливает mode/target в анализаторе), затем <see cref="EbuR128Analyzer.LockFromCachedGain"/>
+    /// (применяет кэшированный gain с учётом mode).
+    /// Инверсия порядка давала race: fill thread мог прочитать partial state.</para>
     /// </remarks>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline)
     {
@@ -300,12 +301,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
         pipeline.Analyzer.Configure(normConfig);
 
-        if (!normConfig.Enabled) return;
+        if (normConfig.Enabled)
+        {
+            var track = _preparingTrack ?? CurrentTrack;
+            float cachedGain = NormalizationGainResolver.Resolve(track, normConfig);
+            if (!float.IsNaN(cachedGain))
+                pipeline.Analyzer.LockFromCachedGain(cachedGain);
+        }
 
-        var track = _preparingTrack ?? CurrentTrack;
-        float cachedGain = NormalizationGainResolver.Resolve(track);
-        if (!float.IsNaN(cachedGain))
-            pipeline.Analyzer.LockFromCachedGain(cachedGain);
+        // Снапим crossfader на итоговый combined gain ДО первого AudioCallback.
+        // Без этого crossfader стартует с 1.0f и делает 300ms переход к реальному gain →
+        // слышимый "бум" в начале трека.
+        pipeline.SnapCrossfaderToGain();
     }
 
     private void SubscribeToPlayerEvents()
@@ -1093,42 +1100,78 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         _player.GetActivePipeline()?.SetGain(gain);
     }
 
-    /// <summary> Пробрасывает настройки нормализации в активный pipeline. </summary>
+    /// <summary>
+    /// Пробрасывает настройки нормализации в активный pipeline при runtime изменении.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Почему нет SnapCrossfaderToGain здесь:</b>
+    /// В отличие от <c>ConfigurePipelineBeforeStart</c> (до первого AudioCallback),
+    /// runtime-смена выполняется во время воспроизведения.
+    /// <see cref="GainCrossfader.SetTarget"/> в следующем <see cref="AudioPipeline.AudioCallback"/>
+    /// получит новый combined target и сделает 300ms плавный переход.
+    /// Принудительный snap создал бы момент с неверным gain
+    /// (command thread читает _lockedGain до того как fill thread применил recalc).</para>
+    /// </remarks>
     private void ApplyNormalizationToPipeline()
     {
         var pipeline = _player.GetActivePipeline();
         if (pipeline == null) return;
 
         var audioSettings = _library.Settings.Audio;
-
         var normConfig = new NormalizationConfig(
             audioSettings.NormalizationEnabled,
             audioSettings.NormalizationTargetLufs,
             audioSettings.NormalizationMaxGain,
             audioSettings.NormalizationMode);
 
+        var track = CurrentTrack;
+        float cachedGain = normConfig.Enabled
+            ? NormalizationGainResolver.Resolve(track, normConfig)
+            : float.NaN;
+
+        // Атомарная публикация нового конфига (возможно установит _pendingNormReset).
         pipeline.Analyzer.Configure(normConfig);
 
         if (!normConfig.Enabled) return;
 
-        float cachedGain = NormalizationGainResolver.Resolve(CurrentTrack);
+        // Если есть cached gain — сразу lock (отменяет pending reset).
         if (!float.IsNaN(cachedGain))
             pipeline.Analyzer.LockFromCachedGain(cachedGain);
+
+        // НЕ вызываем SnapCrossfaderToGain здесь:
+        // crossfader подхватит новый target сам через SetTarget в AudioCallback.
+        // SnapCrossfaderToGain нужен только при старте трека (ConfigurePipelineBeforeStart).
     }
 
-    /// <summary> Вычисляет raw gain из процента громкости с применением volume curve. </summary>
+    /// <summary>
+    /// Вычисляет raw gain из процента громкости с применением volume curve.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Исправление Boost-режима:</b> При VolumeBoostEnabled = true
+    /// нормальный диапазон (0–100%) маппится на полный [0, 1] gain через volume curve,
+    /// а значения выше 100% (101–maxVolume) добавляют линейный boost сверх 1.0.
+    /// Предыдущая версия делила на VolumeNormalRange(200) вместо maxVolume,
+    /// что давало gain = 0.25 вместо 1.0 при 100% и maxVolumeLimit = 100.</para>
+    /// </remarks>
     private static float ComputeGain(int volumePercent, int maxVolume, AudioSettings audioSettings)
     {
         if (volumePercent <= 0) return 0f;
 
         if (audioSettings.VolumeBoostEnabled)
         {
-            if (volumePercent <= VolumeNormalRange)
+            // Граница нормального диапазона: min(maxVolume, VolumeNormalRange).
+            // При maxVolume=100: normalCeiling=100, slider 100 = gain 1.0.
+            // При maxVolume=400: normalCeiling=200, slider 200 = gain 1.0, 201+ = boost.
+            int normalCeiling = Math.Min(maxVolume, VolumeNormalRange);
+
+            if (volumePercent <= normalCeiling)
             {
-                float t = volumePercent / (float)VolumeNormalRange;
+                float t = (float)volumePercent / normalCeiling;
                 return ApplyVolumeCurve(t, audioSettings.VolumeCurve);
             }
-            float boostExtra = (volumePercent - VolumeNormalRange) / (float)VolumeNormalRange;
+
+            // Boost zone: линейный рост выше 1.0.
+            float boostExtra = (float)(volumePercent - normalCeiling) / VolumeNormalRange;
             return 1.0f + boostExtra;
         }
 

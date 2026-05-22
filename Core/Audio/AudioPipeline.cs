@@ -99,6 +99,20 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// <summary>EBU R128 анализатор нормализации (отдельный модуль).</summary>
     private readonly EbuR128Analyzer _analyzer;
 
+    /// <summary>
+    /// True Peak Limiter с Attack/Release envelope.
+    /// Заменяет stateless chunk-level peak scan, устраняя pumping эффект.
+    /// Несёт состояние между chunk'ами — gain reduction рампируется плавно.
+    /// </summary>
+    private TruePeakLimiter? _truePeakLimiter;
+
+    /// <summary>
+    /// Per-sample gain crossfader для плавных переходов gain нормализации и громкости.
+    /// Устраняет щелчки при: lock gain, смене настроек, смене трека.
+    /// Хранится как поле (value type) для zero-alloc hot path.
+    /// </summary>
+    private GainCrossfader _gainCrossfader;
+
     private CancellationTokenSource? _decoderCts;
     private Task? _decoderTask;
     private volatile bool _disposed;
@@ -200,6 +214,8 @@ public sealed class AudioPipeline : IAsyncDisposable
         _lifetimeCts = lifetimeCts;
 
         _analyzer = new EbuR128Analyzer(decoder.SampleRate, decoder.Channels);
+        _truePeakLimiter = new TruePeakLimiter(decoder.SampleRate);
+        _gainCrossfader = new GainCrossfader(1.0f);
     }
 
     #endregion
@@ -840,34 +856,30 @@ public sealed class AudioPipeline : IAsyncDisposable
     }
 
     /// <summary>
-    /// Устанавливает gain мгновенно.
-    /// Gain применяется программно к PCM сэмплам в <see cref="AudioCallback"/>.
+    /// Устанавливает целевой volume gain с плавным crossfade переходом.
     /// </summary>
     /// <remarks>
-    /// <para>Новый gain применяется к следующему chunk (~50ms). Уже буферизованный
-    /// PCM в provider (до 500ms) доиграет со старым gain — это обеспечивает
-    /// естественную плавность без артефактов.</para>
+    /// <para>Вместо мгновенного применения, обновляет <see cref="_gain"/> (volatile)
+    /// и инициирует crossfade в <see cref="_gainCrossfader"/> при следующем
+    /// вызове <see cref="AudioCallback"/> из fill thread.</para>
+    /// <para><see cref="_gain"/> пишется из command thread, читается из fill thread.
+    /// Volatile обеспечивает visibility без lock.</para>
     /// </remarks>
-    /// <param name="gain">Gain множитель (0.0 = тишина, 1.0 = 100%, до MaxVolumeGain).</param>
+    /// <param name="gain">Новый volume gain [0, MaxVolumeGain].</param>
     public void SetGain(float gain)
     {
         if (_disposed) return;
         _gain = Math.Clamp(gain, 0f, MaxVolumeGain);
+        // Crossfader подхватит изменение в следующем AudioCallback вызове
+        // через SetTarget — no explicit notification needed.
     }
 
     /// <summary>
-    /// Подготавливает pipeline к seek-операции: устанавливает skip frames,
-    /// target timestamp и сбрасывает анализ нормализации (если gain не зафиксирован).
+    /// Подготавливает pipeline к seek-операции.
+    /// Сбрасывает limiter и crossfader для исключения артефактов из предыдущей позиции.
     /// </summary>
-    /// <remarks>
-    /// <para>До исправления AAC всегда получал 0 skip frames — первые ~116мс после seek
-    /// декодировались из «грязного» состояния (encoder delay не компенсировался)
-    /// → слышимые артефакты в начале воспроизведения после перемотки.
-    /// Теперь: Opus = 2 skip, AAC = 5 skip, прочие = 0.</para>
-    /// </remarks>
     public void PrepareForSeek(long targetMs = -1)
     {
-        //  Учитываем encoder delay для каждого кодека
         int skipFrames = _source.Codec switch
         {
             AudioCodec.Opus => SkipFramesAfterSeekOpus,
@@ -879,6 +891,12 @@ public sealed class AudioPipeline : IAsyncDisposable
         Volatile.Write(ref _seekTargetMs, targetMs);
 
         _analyzer.PrepareForSeek();
+
+        // Сброс limiter и crossfader при seek: старый envelope и переход
+        // не должны влиять на новую позицию.
+        _truePeakLimiter?.Reset();
+        float currentGain = _gain;
+        _gainCrossfader.Reset(currentGain);
     }
 
     /// <summary>
@@ -954,6 +972,35 @@ public sealed class AudioPipeline : IAsyncDisposable
         _analyzer.SetInitialGain(gain);
     }
 
+    /// <summary>
+    /// Синхронизирует начальное состояние <see cref="_gainCrossfader"/> с ожидаемым
+    /// combined gain до первого вызова <see cref="AudioCallback"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Проблема без этого метода:</b> <see cref="_gainCrossfader"/> инициализируется
+    /// значением <c>1.0f</c>. Если трек имеет cached gain значительно отличный от 1.0
+    /// (например, 0.385 для громкого трека), первый <see cref="AudioCallback"/> видит
+    /// <c>currentGain=1.0</c> vs <c>targetGain=0.385×volumeGain</c> → дельта велика →
+    /// 300ms crossfade DOWN → трек начинается слишком громко → воспринимается как "бум".</para>
+    ///
+    /// <para><b>Решение:</b> После <see cref="EbuR128Analyzer.LockFromCachedGain"/>
+    /// (вызывается в <c>ConfigurePipelineBeforeStart</c>) crossfader снапится на
+    /// правильное значение — никакого перехода, первый chunk сразу играет верно.</para>
+    ///
+    /// <para>Вызывается из <c>AudioEngine.ConfigurePipelineBeforeStart</c> последним —
+    /// после <see cref="EbuR128Analyzer.Configure"/> и <see cref="EbuR128Analyzer.LockFromCachedGain"/>.</para>
+    /// </remarks>
+    public void SnapCrossfaderToGain()
+    {
+        if (_disposed) return;
+
+        // Берём текущий locked gain из анализатора (уже применён LockFromCachedGain).
+        // GetLockedGain() возвращает locked если зафиксирован, иначе smoothed.
+        float normGain = _analyzer.IsEnabled ? _analyzer.GetLockedGain() : 1.0f;
+        float combined = normGain * _gain;
+        _gainCrossfader.Reset(combined);
+    }
+
     #endregion
 
     #region Audio Callback
@@ -962,14 +1009,15 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Callback вызываемый из fill thread backend'а для заполнения аудио-буфера.
     /// </summary>
     /// <remarks>
-    /// <para><b>Порядок обработки:</b></para>
+    /// <para><b>Порядок обработки (per-chunk):</b></para>
     /// <list type="number">
-    ///   <item>Чтение PCM из ring buffer</item>
-    ///   <item>K-weighted LUFS анализ на RAW сигнале → normGain (без модификации сэмплов)</item>
-    ///   <item>combinedGain = normGain × volumeGain</item>
-    ///   <item>True Peak Limiter: chunk-level peak scan → safe combined gain без дисторции</item>
+    ///   <item>Чтение PCM из ring buffer.</item>
+    ///   <item>K-weighted LUFS анализ на RAW сигнале → targetNormGain (без модификации сэмплов).</item>
+    ///   <item>combinedTarget = targetNormGain × volumeGain.</item>
+    ///   <item><see cref="GainCrossfader.SetTarget"/> — обновить цель интерполяции.</item>
+    ///   <item><see cref="TruePeakLimiter.Process"/> — per-sample: crossfade gain + peak limiting.</item>
     /// </list>
-    /// <para><b>Zero-alloc.</b></para>
+    /// <para><b>Zero-alloc. GainCrossfader — value type ref, нет boxing.</b></para>
     /// </remarks>
     private int AudioCallback(Span<float> buffer)
     {
@@ -988,107 +1036,23 @@ public sealed class AudioPipeline : IAsyncDisposable
         {
             var samples = buffer[..read];
 
-            float normGain = _analyzer.IsEnabled
+            // Анализ raw сигнала (без модификации сэмплов)
+            float targetNormGain = _analyzer.IsEnabled
                 ? _analyzer.ProcessSamples(samples)
                 : 1.0f;
 
-            float combinedGain = normGain * _gain;
+            float targetCombined = targetNormGain * _gain;
 
-            ApplyGainWithTruePeak(samples, combinedGain);
+            // Обновить crossfader: если gain изменился — начать interpolation.
+            // При резком изменении (lock/reset) длительность 300ms,
+            // при постепенном — 50ms (один chunk).
+            _gainCrossfader.SetTarget(targetCombined, _decoder.SampleRate, _decoder.Channels);
+
+            // Per-sample: применить crossfaded gain + True Peak limiting
+            _truePeakLimiter!.Process(samples, ref _gainCrossfader);
         }
 
         return read / _decoder.Channels;
-    }
-
-    /// <summary>
-    /// Применяет gain к chunk с True Peak защитой от клиппинга.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Алгоритм:</b></para>
-    /// <list type="number">
-    ///   <item>Scan: найти максимальный абсолютный сэмпл в chunk</item>
-    ///   <item>Limit: если <c>peak × gain &gt; ceiling</c> → снизить gain до <c>ceiling / peak</c></item>
-    ///   <item>Apply: умножить все сэмплы на safeGain равномерно</item>
-    /// </list>
-    /// <para><b>SIMD-оптимизация:</b> оба прохода (peak scan и gain apply) используют
-    /// <see cref="Vector{T}"/> для обработки <see cref="Vector{Single}.Count"/> сэмплов
-    /// за одну инструкцию (8 float на AVX2, 4 на SSE2). Обращение к <paramref name="samples"/>
-    /// через <see cref="Unsafe.As{TFrom,TTo}(ref TFrom)"/> исключает bounds check и копирование.</para>
-    /// <para><b>Почему лучше tanh/SoftClip:</b></para>
-    /// <para>tanh — нелинейный вейвшейпер, вносит нечётные гармоники (3-я, 5-я, 7-я).
-    /// На транзиентах это воспринимается как треск и крякание. True Peak Limiter
-    /// снижает gain равномерно для всего chunk: форма волны не искажается,
-    /// chunk просто тише — артефактов нет.</para>
-    /// <para><b>Zero-alloc. Два прохода по samples — scan + apply.</b></para>
-    /// </remarks>
-    /// <param name="samples">PCM сэмплы для обработки (in-place).</param>
-    /// <param name="gain">Желаемый gain множитель.</param>
-    /// <param name="ceiling">True Peak ceiling (по умолчанию 1.0 = 0 dBFS).</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ApplyGainWithTruePeak(Span<float> samples, float gain, float ceiling = 1.0f)
-    {
-        if (gain < 0.0005f)
-        {
-            samples.Clear();
-            return;
-        }
-
-        if (MathF.Abs(gain - 1f) < 0.0005f)
-            return;
-
-        int length = samples.Length;
-        ref float samplesRef = ref MemoryMarshal.GetReference(samples);
-
-        // Pass 1: Peak scan
-        float peak = 0f;
-        int i = 0;
-
-        if (Vector.IsHardwareAccelerated && length >= Vector<float>.Count)
-        {
-            var vPeak = Vector<float>.Zero;
-            int vectorEnd = length - length % Vector<float>.Count;
-
-            for (; i < vectorEnd; i += Vector<float>.Count)
-            {
-                var v = Unsafe.As<float, Vector<float>>(
-                    ref Unsafe.Add(ref samplesRef, i));
-                vPeak = Vector.Max(vPeak, Vector.Abs(v));
-            }
-
-            for (int j = 0; j < Vector<float>.Count; j++)
-            {
-                if (vPeak[j] > peak) peak = vPeak[j];
-            }
-        }
-
-        for (; i < length; i++)
-        {
-            float abs = MathF.Abs(Unsafe.Add(ref samplesRef, i));
-            if (abs > peak) peak = abs;
-        }
-
-        float safeGain = gain;
-        if (peak > 0f && peak * gain > ceiling)
-            safeGain = ceiling / peak;
-
-        // Pass 2: Apply gain
-        i = 0;
-
-        if (Vector.IsHardwareAccelerated && length >= Vector<float>.Count)
-        {
-            var vGain = new Vector<float>(safeGain);
-            int vectorEnd = length - length % Vector<float>.Count;
-
-            for (; i < vectorEnd; i += Vector<float>.Count)
-            {
-                ref var v = ref Unsafe.As<float, Vector<float>>(
-                    ref Unsafe.Add(ref samplesRef, i));
-                v *= vGain;
-            }
-        }
-
-        for (; i < length; i++)
-            Unsafe.Add(ref samplesRef, i) *= safeGain;
     }
 
     #endregion
@@ -1122,10 +1086,6 @@ public sealed class AudioPipeline : IAsyncDisposable
             try { await _decoderTask.WaitAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs)); }
             catch { }
         }
-
-        try { _backend.Flush(); }
-        catch (ObjectDisposedException) { }
-        catch (Exception ex) { Log.Debug($"[AudioPipeline] Backend flush on dispose: {ex.Message}"); }
 
         _decoder.Dispose();
         await _source.DisposeAsync();
