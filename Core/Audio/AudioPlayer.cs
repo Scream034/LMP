@@ -1206,6 +1206,16 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         _events.RaiseStateChanged(MapState(newState));
     }
 
+    /// <summary>
+    /// Немедленно применяет volume gain к аудио выходу через GainWaveProvider.
+    /// Задержка отклика ≤ один waveOut буфер (~100ms).
+    /// </summary>
+    /// <param name="gain">Volume gain множитель.</param>
+    public void SetVolumeGain(float gain)
+    {
+        _sharedBackend.SetVolumeGain(gain);
+    }
+
     private static PlaybackState MapState(PlayerState state) => state switch
     {
         PlayerState.Idle => PlaybackState.Stopped,

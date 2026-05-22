@@ -276,6 +276,13 @@ public sealed partial class NAudioBackend : IPlaybackBackend
     /// </summary>
     private Action? _onStarvation;
 
+    /// <summary>
+    /// IWaveProvider-обёртка над <see cref="_provider"/>, применяющая volume gain
+    /// при чтении WaveOut. Инициализируется вместе с <see cref="_provider"/> в
+    /// <see cref="CreateWaveOut"/>. Живёт пока живёт <see cref="_provider"/>.
+    /// </summary>
+    private GainWaveProvider? _gainProvider;
+
     #endregion
 
     #region Properties
@@ -1011,13 +1018,16 @@ public sealed partial class NAudioBackend : IPlaybackBackend
     {
         var format = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
 
-        // ReadFully=true (дефолт): возвращает тишину когда буфер пуст.
-        // 500ms buffer: gain задержка ≤500ms, достаточно для сглаживания jitter.
         _provider = new BufferedWaveProvider(format)
         {
             BufferDuration = TimeSpan.FromSeconds(InternalBufferSeconds),
             DiscardOnBufferOverflow = true
         };
+
+        // Оборачиваем provider в GainWaveProvider.
+        // WaveOut читает из _gainProvider, который читает из _provider.
+        // Volume gain применяется в GainWaveProvider.Read() — нулевая задержка.
+        _gainProvider = new GainWaveProvider(_provider);
 
         _waveOut = new WaveOutEvent
         {
@@ -1025,14 +1035,13 @@ public sealed partial class NAudioBackend : IPlaybackBackend
             NumberOfBuffers = NumberOfBuffers
         };
 
-        _waveOut.Init(_provider);
+        // Init принимает GainWaveProvider, не _provider напрямую.
+        _waveOut.Init(_gainProvider);
         _waveOut.Volume = Volume;
     }
 
     /// <summary>
-    /// Безопасно освобождает waveOut и provider, обнуляя ссылки.
-    /// Предотвращает ситуацию когда битый waveOut остаётся доступным
-    /// для fast path в <see cref="Reinitialize"/>.
+    /// Безопасно освобождает waveOut, provider и gainProvider, обнуляя ссылки.
     /// </summary>
     private void DisposeWaveOutSafe()
     {
@@ -1040,6 +1049,7 @@ public sealed partial class NAudioBackend : IPlaybackBackend
         try { _waveOut?.Dispose(); } catch { }
         _waveOut = null;
         _provider = null;
+        _gainProvider = null;
     }
 
     private void AllocateBuffers(int sampleRate, int channels)
@@ -1079,6 +1089,17 @@ public sealed partial class NAudioBackend : IPlaybackBackend
     private static string GetDeviceErrorMessage() =>
         LocalizationService.Instance.Get("Error_NoAudioDevice", "Audio output device is not available. Please connect headphones or speakers.");
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Делегирует в <see cref="GainWaveProvider.SetVolumeGain"/>.
+    /// Применяется немедленно при следующем вызове WaveOut Read() (~100ms max delay),
+    /// минуя 500ms provider buffer.
+    /// </remarks>
+    public void SetVolumeGain(float gain)
+    {
+        _gainProvider?.SetVolumeGain(gain);
+    }
+
     #endregion
 
     #region Dispose
@@ -1102,6 +1123,10 @@ public sealed partial class NAudioBackend : IPlaybackBackend
         _provider = null;
         _floatBuffer = null;
         _byteBuffer = null;
+        _gainProvider = null;
+        _onDeviceAvailable = null;
+        _onDeviceLost = null;
+        _onStarvation = null;
 
         _fillWakeup.Dispose();
 

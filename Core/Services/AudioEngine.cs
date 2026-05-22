@@ -279,19 +279,15 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     /// <summary>
     /// Конфигурирует pipeline до открытия gate.
-    /// Использует <see cref="NormalizationGainResolver.Resolve(TrackInfo, NormalizationConfig)"/>
-    /// как единственный источник истины с учётом текущего mode и targetLufs.
     /// </summary>
-    /// <remarks>
-    /// <para>Порядок вызовов критичен: сначала <see cref="EbuR128Analyzer.Configure"/>
-    /// (устанавливает mode/target в анализаторе), затем <see cref="EbuR128Analyzer.LockFromCachedGain"/>
-    /// (применяет кэшированный gain с учётом mode).
-    /// Инверсия порядка давала race: fill thread мог прочитать partial state.</para>
-    /// </remarks>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline)
     {
-        pipeline.SetGain(ComputeFinalGain());
+        // Volume gain: устанавливаем в GainWaveProvider немедленно.
+        float volumeGain = ComputeFinalGain();
+        _currentGain = volumeGain;
+        _player.SetVolumeGain(volumeGain);
 
+        // Normalization: конфигурируем анализатор и резолвим cached gain.
         var audioSettings = _library.Settings.Audio;
         var normConfig = new NormalizationConfig(
             audioSettings.NormalizationEnabled,
@@ -309,9 +305,7 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
                 pipeline.Analyzer.LockFromCachedGain(cachedGain);
         }
 
-        // Снапим crossfader на итоговый combined gain ДО первого AudioCallback.
-        // Без этого crossfader стартует с 1.0f и делает 300ms переход к реальному gain →
-        // слышимый "бум" в начале трека.
+        // Snap crossfader на normGain (без volume — volume в GainWaveProvider).
         pipeline.SnapCrossfaderToGain();
     }
 
@@ -1092,12 +1086,25 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ApplyGainToPipeline();
     }
 
-    /// <summary>Вычисляет финальный gain и передаёт его в активный pipeline.</summary>
+    /// <summary>
+    /// Вычисляет финальный volume gain и немедленно применяет его к backend.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Разделение ответственности после рефакторинга:</b></para>
+    /// <list type="bullet">
+    ///   <item><b>Volume gain</b> → <see cref="AudioPlayer.SetVolumeGain"/>
+    ///     → <see cref="GainWaveProvider.SetVolumeGain"/> → применяется при
+    ///     следующем Read() WaveOut (≤100ms задержка).</item>
+    ///   <item><b>Normalization gain</b> → остаётся в <see cref="AudioPipeline.AudioCallback"/>
+    ///     через <see cref="GainCrossfader"/> + <see cref="TruePeakLimiter"/>.</item>
+    /// </list>
+    /// </remarks>
     private void ApplyGainToPipeline()
     {
         float gain = ComputeFinalGain();
         _currentGain = gain;
-        _player.GetActivePipeline()?.SetGain(gain);
+        // Volume gain идёт напрямую в GainWaveProvider — минуя 500ms provider buffer.
+        _player.SetVolumeGain(gain);
     }
 
     /// <summary>

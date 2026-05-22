@@ -145,6 +145,9 @@ public sealed class NullAudioBackend : IPlaybackBackend
     /// </remarks>
     public void SetStarvationCallback(Action? callback) { }
 
+    /// <inheritdoc/>
+    public void SetVolumeGain(float gain) { }
+
     #endregion
 
     #region Dispose

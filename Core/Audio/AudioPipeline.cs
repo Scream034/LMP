@@ -127,14 +127,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     private long _seekTargetMs = -1;
 
     /// <summary>
-    /// Текущий gain применяемый к PCM сэмплам в audio callback.
-    /// Записывается из UI/engine потока, читается из fill thread backend'а.
-    /// Gain применяется мгновенно к следующему chunk (~50ms).
-    /// Плавность обеспечивается provider buffer (~500ms) в NAudioBackend.
-    /// </summary>
-    private volatile float _gain = 1.0f;
-
-    /// <summary>
     /// Признак потери аудиоустройства (BT disconnect, USB unplug и т.д.).
     /// При <c>true</c> pipeline жив (source, decoder config, normalization state сохранены),
     /// но decoder остановлен и backend gate закрыт. Восстановление через
@@ -856,28 +848,17 @@ public sealed class AudioPipeline : IAsyncDisposable
     }
 
     /// <summary>
-    /// Устанавливает целевой volume gain с плавным crossfade переходом.
+    /// Подготавливает pipeline к seek-операции.
+    /// Сбрасывает limiter и crossfader на текущий normGain для исключения
+    /// артефактов из предыдущей позиции.
     /// </summary>
     /// <remarks>
-    /// <para>Вместо мгновенного применения, обновляет <see cref="_gain"/> (volatile)
-    /// и инициирует crossfade в <see cref="_gainCrossfader"/> при следующем
-    /// вызове <see cref="AudioCallback"/> из fill thread.</para>
-    /// <para><see cref="_gain"/> пишется из command thread, читается из fill thread.
-    /// Volatile обеспечивает visibility без lock.</para>
+    /// <para><b>Почему normGain без volumeGain:</b> После рефакторинга
+    /// volume gain живёт в <see cref="GainWaveProvider"/> на стороне backend.
+    /// <see cref="GainCrossfader"/> отвечает только за normalization gain transitions.
+    /// Crossfader сбрасывается на <see cref="EbuR128Analyzer.GetLockedGain"/>
+    /// — то значение, которое будет применяться к следующим сэмплам после seek.</para>
     /// </remarks>
-    /// <param name="gain">Новый volume gain [0, MaxVolumeGain].</param>
-    public void SetGain(float gain)
-    {
-        if (_disposed) return;
-        _gain = Math.Clamp(gain, 0f, MaxVolumeGain);
-        // Crossfader подхватит изменение в следующем AudioCallback вызове
-        // через SetTarget — no explicit notification needed.
-    }
-
-    /// <summary>
-    /// Подготавливает pipeline к seek-операции.
-    /// Сбрасывает limiter и crossfader для исключения артефактов из предыдущей позиции.
-    /// </summary>
     public void PrepareForSeek(long targetMs = -1)
     {
         int skipFrames = _source.Codec switch
@@ -892,11 +873,10 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         _analyzer.PrepareForSeek();
 
-        // Сброс limiter и crossfader при seek: старый envelope и переход
-        // не должны влиять на новую позицию.
         _truePeakLimiter?.Reset();
-        float currentGain = _gain;
-        _gainCrossfader.Reset(currentGain);
+
+        float normGain = _analyzer.IsEnabled ? _analyzer.GetLockedGain() : 1.0f;
+        _gainCrossfader.Reset(normGain);
     }
 
     /// <summary>
@@ -973,32 +953,19 @@ public sealed class AudioPipeline : IAsyncDisposable
     }
 
     /// <summary>
-    /// Синхронизирует начальное состояние <see cref="_gainCrossfader"/> с ожидаемым
-    /// combined gain до первого вызова <see cref="AudioCallback"/>.
+    /// Синхронизирует начальное состояние <see cref="_gainCrossfader"/> с normGain
+    /// до первого вызова <see cref="AudioCallback"/>.
     /// </summary>
     /// <remarks>
-    /// <para><b>Проблема без этого метода:</b> <see cref="_gainCrossfader"/> инициализируется
-    /// значением <c>1.0f</c>. Если трек имеет cached gain значительно отличный от 1.0
-    /// (например, 0.385 для громкого трека), первый <see cref="AudioCallback"/> видит
-    /// <c>currentGain=1.0</c> vs <c>targetGain=0.385×volumeGain</c> → дельта велика →
-    /// 300ms crossfade DOWN → трек начинается слишком громко → воспринимается как "бум".</para>
-    ///
-    /// <para><b>Решение:</b> После <see cref="EbuR128Analyzer.LockFromCachedGain"/>
-    /// (вызывается в <c>ConfigurePipelineBeforeStart</c>) crossfader снапится на
-    /// правильное значение — никакого перехода, первый chunk сразу играет верно.</para>
-    ///
-    /// <para>Вызывается из <c>AudioEngine.ConfigurePipelineBeforeStart</c> последним —
-    /// после <see cref="EbuR128Analyzer.Configure"/> и <see cref="EbuR128Analyzer.LockFromCachedGain"/>.</para>
+    /// <para>Снапируем только на normGain (без volume) — volume теперь
+    /// в GainWaveProvider и не нуждается в crossfader snap.</para>
     /// </remarks>
     public void SnapCrossfaderToGain()
     {
         if (_disposed) return;
 
-        // Берём текущий locked gain из анализатора (уже применён LockFromCachedGain).
-        // GetLockedGain() возвращает locked если зафиксирован, иначе smoothed.
         float normGain = _analyzer.IsEnabled ? _analyzer.GetLockedGain() : 1.0f;
-        float combined = normGain * _gain;
-        _gainCrossfader.Reset(combined);
+        _gainCrossfader.Reset(normGain);
     }
 
     #endregion
@@ -1009,15 +976,17 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Callback вызываемый из fill thread backend'а для заполнения аудио-буфера.
     /// </summary>
     /// <remarks>
-    /// <para><b>Порядок обработки (per-chunk):</b></para>
+    /// <para><b>Порядок обработки:</b></para>
     /// <list type="number">
     ///   <item>Чтение PCM из ring buffer.</item>
-    ///   <item>K-weighted LUFS анализ на RAW сигнале → targetNormGain (без модификации сэмплов).</item>
-    ///   <item>combinedTarget = targetNormGain × volumeGain.</item>
-    ///   <item><see cref="GainCrossfader.SetTarget"/> — обновить цель интерполяции.</item>
-    ///   <item><see cref="TruePeakLimiter.Process"/> — per-sample: crossfade gain + peak limiting.</item>
+    ///   <item>K-weighted LUFS анализ на RAW сигнале → normGain (без модификации).</item>
+    ///   <item>GainCrossfader.SetTarget(normGain) — обновить цель interpolation.</item>
+    ///   <item>TruePeakLimiter.Process — per-sample: normGain apply + peak limit.</item>
     /// </list>
-    /// <para><b>Zero-alloc. GainCrossfader — value type ref, нет boxing.</b></para>
+    /// <para><b>Volume gain НЕ применяется здесь.</b> Он применяется в
+    /// <see cref="GainWaveProvider.Read"/> — при чтении WaveOut из provider.
+    /// Это устраняет задержку отклика громкости с 500ms до ≤100ms.</para>
+    /// <para><b>Zero-alloc.</b></para>
     /// </remarks>
     private int AudioCallback(Span<float> buffer)
     {
@@ -1036,19 +1005,12 @@ public sealed class AudioPipeline : IAsyncDisposable
         {
             var samples = buffer[..read];
 
-            // Анализ raw сигнала (без модификации сэмплов)
-            float targetNormGain = _analyzer.IsEnabled
+            // Только normalization gain — без volume gain.
+            float normGain = _analyzer.IsEnabled
                 ? _analyzer.ProcessSamples(samples)
                 : 1.0f;
 
-            float targetCombined = targetNormGain * _gain;
-
-            // Обновить crossfader: если gain изменился — начать interpolation.
-            // При резком изменении (lock/reset) длительность 300ms,
-            // при постепенном — 50ms (один chunk).
-            _gainCrossfader.SetTarget(targetCombined, _decoder.SampleRate, _decoder.Channels);
-
-            // Per-sample: применить crossfaded gain + True Peak limiting
+            _gainCrossfader.SetTarget(normGain, _decoder.SampleRate, _decoder.Channels);
             _truePeakLimiter!.Process(samples, ref _gainCrossfader);
         }
 

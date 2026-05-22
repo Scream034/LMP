@@ -132,6 +132,20 @@ public interface IPlaybackBackend : IDisposable
     /// <param name="callback">Обработчик события starvation.</param>
     void SetStarvationCallback(Action? callback);
 
+    /// <summary>
+    /// Устанавливает volume gain, применяемый непосредственно перед передачей
+    /// PCM в аудиоустройство (on-read path). Изменение слышно немедленно
+    /// (задержка ≤ один waveOut буфер, ~100ms), минуя provider buffer.
+    /// </summary>
+    /// <remarks>
+    /// <para>Используется для управления громкостью пользователем (slider).
+    /// Нормализационный gain (<see cref="AudioPipeline"/> → <see cref="GainCrossfader"/>)
+    /// применяется отдельно в AudioCallback при записи в provider.</para>
+    /// <para>Вызывается из command thread — реализация должна быть thread-safe.</para>
+    /// </remarks>
+    /// <param name="gain">Volume gain множитель [0, MaxVolumeGain].</param>
+    void SetVolumeGain(float gain);
+
     // ── Diagnostics ──────────────────────────────────────────────────────────
 
     /// <summary>Громкость (0.0 – 1.0).</summary>
