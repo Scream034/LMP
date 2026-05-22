@@ -2,25 +2,34 @@ namespace LMP.Core.Audio.Interfaces;
 
 /// <summary>
 /// Абстракция над аудио API операционной системы (WaveOut, ALSA, PulseAudio, etc).
-/// 
+///
 /// <para><b>Lifecycle:</b></para>
 /// <list type="number">
 ///   <item><see cref="Initialize"/> — первичная инициализация (создаёт устройство, запускает fill loop)</item>
 ///   <item><see cref="Reinitialize"/> — переинициализация для нового трека (fast/slow path)</item>
 ///   <item><see cref="ActivateFillLoop"/> — активирует перекачку данных в буфер БЕЗ воспроизведения</item>
 ///   <item><see cref="WaitForWarmup"/> — ожидает накопления минимума данных в буфере</item>
-///   <item><see cref="Start"/> — запускает воспроизведение (waveOut.Play)</item>
+///   <item><see cref="Start"/> — запускает воспроизведение</item>
 ///   <item><see cref="Stop"/> — останавливает с micro fade-out</item>
 ///   <item><see cref="Flush"/> — очищает буферы (для seek)</item>
 /// </list>
-/// 
+///
 /// <para><b>Warmup Protocol:</b></para>
 /// <para>Для предотвращения артефактов при старте трека, вызывающий код должен:</para>
 /// <code>
 /// backend.ActivateFillLoop();          // Fill loop начинает наполнять BufferedWaveProvider
 /// backend.WaitForWarmup(timeoutMs);    // Ждём ≥200ms данных в буфере
-/// backend.Start();                     // Теперь безопасно запускать waveOut.Play()
+/// backend.Start();                     // Теперь безопасно запускать воспроизведение
 /// </code>
+///
+/// <para><b>Device Loss Protocol:</b></para>
+/// <para>Backend уведомляет подписчиков о событиях устройства через callbacks:</para>
+/// <code>
+/// backend.SetDeviceLostCallback(() => /* soft pause */);
+/// backend.SetDeviceAvailableCallback(() => /* auto-recovery */);
+/// backend.SetStarvationCallback(() => /* диагностика */);
+/// </code>
+/// <para>Все callbacks вызываются из фонового потока — реализация не должна блокировать.</para>
 /// </summary>
 public interface IPlaybackBackend : IDisposable
 {
@@ -28,23 +37,42 @@ public interface IPlaybackBackend : IDisposable
     /// Первичная инициализация backend.
     /// Создаёт аудио-устройство и запускает fill loop.
     /// </summary>
+    /// <param name="sampleRate">Частота дискретизации (Гц).</param>
+    /// <param name="channels">Количество каналов.</param>
+    /// <param name="dataCallback">Callback поставки PCM данных.</param>
     void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback);
 
     /// <summary>
-    /// Активирует fill loop для перекачки данных из callback в внутренний буфер,
+    /// Переинициализирует backend для нового трека.
+    ///
+    /// <para><b>Fast path</b> (формат совпадает): обновляет callback, flush буферов. ~0ms.</para>
+    /// <para><b>Slow path</b> (формат изменился): пересоздаёт аудио-устройство. ~50-200ms.</para>
+    /// <para><b>First call</b> (Initialize не вызывался): делегирует к Initialize.</para>
+    ///
+    /// <para>После Reinitialize backend находится в остановленном состоянии.
+    /// Вызывающий код должен использовать warmup protocol:
+    /// <see cref="ActivateFillLoop"/> → <see cref="WaitForWarmup"/> → <see cref="Start"/>.</para>
+    /// </summary>
+    /// <param name="sampleRate">Частота дискретизации (Гц).</param>
+    /// <param name="channels">Количество каналов.</param>
+    /// <param name="dataCallback">Callback поставки PCM данных.</param>
+    void Reinitialize(int sampleRate, int channels, AudioDataCallback dataCallback);
+
+    /// <summary>
+    /// Активирует fill loop для перекачки данных из callback во внутренний буфер,
     /// БЕЗ запуска воспроизведения.
-    /// 
+    ///
     /// <para>Вызывается перед <see cref="WaitForWarmup"/> для наполнения буфера
     /// до того, как <see cref="Start"/> запустит аудио-устройство.</para>
-    /// 
+    ///
     /// <para>Если fill loop уже активен — no-op.</para>
     /// </summary>
     void ActivateFillLoop();
 
     /// <summary>
     /// Ожидает накопления минимального количества данных во внутреннем буфере.
-    /// 
-    /// <para>Блокирует вызывающий поток. Используется между 
+    ///
+    /// <para>Блокирует вызывающий поток. Используется между
     /// <see cref="ActivateFillLoop"/> и <see cref="Start"/> для гарантии
     /// что аудио-устройство не начнёт читать из пустого буфера.</para>
     /// </summary>
@@ -55,7 +83,7 @@ public interface IPlaybackBackend : IDisposable
     /// <summary>Запускает воспроизведение.</summary>
     void Start();
 
-    /// <summary>Останавливает (приостанавливает) воспроизведение.</summary>
+    /// <summary>Останавливает (приостанавливает) воспроизведение с micro fade-out.</summary>
     void Stop();
 
     /// <summary>
@@ -64,27 +92,56 @@ public interface IPlaybackBackend : IDisposable
     /// </summary>
     void Flush();
 
-    /// <summary>
-    /// Переинициализирует backend для нового трека.
-    /// 
-    /// <para><b>Fast path</b> (формат совпадает): обновляет callback, flush буферов. ~0ms.</para>
-    /// <para><b>Slow path</b> (формат изменился): пересоздаёт аудио-устройство. ~50-200ms.</para>
-    /// <para><b>First call</b> (Initialize не вызывался): делегирует к Initialize.</para>
-    /// 
-    /// <para>После Reinitialize backend находится в остановленном состоянии.
-    /// Вызывающий код должен использовать warmup protocol:
-    /// <see cref="ActivateFillLoop"/> → <see cref="WaitForWarmup"/> → <see cref="Start"/>.</para>
-    /// </summary>
-    void Reinitialize(int sampleRate, int channels, AudioDataCallback dataCallback);
+    // ── Device Loss ──────────────────────────────────────────────────────────
 
-    /// <summary>Громкость (0.0 - 1.0).</summary>
+    /// <summary>
+    /// true если аудиоустройство потеряно (BT disconnect, USB unplug и т.д.).
+    /// При <c>true</c> вызовы <see cref="Start"/> недопустимы до восстановления
+    /// через <see cref="Reinitialize"/>.
+    /// </summary>
+    bool IsDeviceLost { get; }
+
+    /// <summary>
+    /// Регистрирует callback уведомления о потере устройства во время воспроизведения.
+    ///
+    /// <para>Callback вызывается из фонового потока (fill loop / timer).
+    /// Реализация не должна блокировать — используй <see cref="Task.Run(Action)"/> при необходимости.</para>
+    /// <para>null = отписаться.</para>
+    /// </summary>
+    /// <param name="callback">Обработчик события потери устройства.</param>
+    void SetDeviceLostCallback(Action? callback);
+
+    /// <summary>
+    /// Регистрирует callback уведомления о появлении устройства после потери.
+    ///
+    /// <para>Реализация запускает polling watcher при <see cref="IsDeviceLost"/> = true.
+    /// Callback вызывается из timer thread при обнаружении устройства.
+    /// Реализация не должна блокировать.</para>
+    /// <para>null = остановить watcher.</para>
+    /// </summary>
+    /// <param name="callback">Обработчик события появления устройства.</param>
+    void SetDeviceAvailableCallback(Action? callback);
+
+    /// <summary>
+    /// Регистрирует callback уведомления о длительном отсутствии PCM данных.
+    ///
+    /// <para>Вызывается когда fill loop не получает данных более 1 секунды при открытом gate.
+    /// Callback вызывается из fill thread — не должен блокировать.</para>
+    /// <para>null = отписаться.</para>
+    /// </summary>
+    /// <param name="callback">Обработчик события starvation.</param>
+    void SetStarvationCallback(Action? callback);
+
+    // ── Diagnostics ──────────────────────────────────────────────────────────
+
+    /// <summary>Громкость (0.0 – 1.0).</summary>
     float Volume { get; set; }
 
     /// <summary>Воспроизводится ли в данный момент.</summary>
     bool IsPlaying { get; }
 
     /// <summary>
-    /// Количество семплов (samples × channels), находящихся во внутреннем буфере,
+    /// Количество семплов (samples × channels) во внутреннем буфере,
     /// которые были переданы, но ещё не воспроизведены.
     /// </summary>
     int BufferedSamples { get; }

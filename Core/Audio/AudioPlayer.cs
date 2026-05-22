@@ -84,6 +84,15 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>Время ожидания (мс) до заполнения первичного PCM буфера для старта.</summary>
     private const int PlayBufferWaitTimeoutMs = 5000;
 
+    /// <summary>Задержка стабилизации audio endpoint после пересоздания WaveOut (мс).</summary>
+    /// <remarks>
+    /// <para>BT A2DP endpoint требует ~50–200мс на финализацию кодек-хэндшейка
+    /// после успешного <c>waveOutOpen</c>. Без задержки первые PCM chunk'и
+    /// попадают в нестабильный endpoint → jitter → crackling.
+    /// 100мс — эмпирический минимум, покрывающий SBC/AAC/aptX/LDAC.</para>
+    /// </remarks>
+    private const int PostDeviceRecoveryStabilizationMs = 100;
+
     /// <summary>Количество бит в одном байте (для расчета скорости).</summary>
     private const int BitsPerByte = 8;
 
@@ -288,6 +297,17 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         var pipeline = _activePipeline;
         if (pipeline == null) return;
 
+        // Device recovery: backend потерял WaveOut (BT disconnect, USB unplug).
+        // Синхронный Resume невозможен — Reinitialize содержит Thread.Sleep retry loop.
+        // Маршрутизация через actor command для async recovery на пуле потоков.
+        if (pipeline.IsDeviceLost)
+        {
+            int session = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+            SetState(PlayerState.Buffering);
+            _commandChannel.Writer.TryWrite(new DeviceRecoveryCommand(session));
+            return;
+        }
+
         int bufferedBytes = _sharedBackend.BufferedBytes;
         int minBytes = pipeline.SampleRate * pipeline.Channels * sizeof(float) * ResumeMinBufferMs / 1000;
 
@@ -380,6 +400,100 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         }
     }
 
+    /// <summary>
+    /// Восстанавливает воспроизведение после потери аудиоустройства.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Последовательность:</b></para>
+    /// <list type="number">
+    ///   <item><see cref="AudioPipeline.RecoverFromDeviceLossAsync"/>:
+    ///     stop decoder → flush → reinitialize backend (BT retry) → restart decoder</item>
+    ///   <item>Стабилизация endpoint (<see cref="PostDeviceRecoveryStabilizationMs"/>):
+    ///     BT A2DP handshake завершается асинхронно после <c>waveOutOpen</c></item>
+    ///   <item><see cref="AudioPipeline.WaitForBufferAsync"/>: ожидание минимального PCM</item>
+    ///   <item>ActivateFillLoop → Start → Playing</item>
+    /// </list>
+    /// <para><b>Failure:</b> Устройство недоступно после всех retry →
+    /// <see cref="AudioDeviceException"/> → Error state → UI уведомление.</para>
+    /// </remarks>
+    /// <param name="cmd">Команда recovery с session ID.</param>
+    private async Task HandleDeviceRecoveryAsync(DeviceRecoveryCommand cmd)
+    {
+        var pipeline = _activePipeline;
+
+        if (pipeline == null || !pipeline.IsDeviceLost)
+        {
+            if (_state == PlayerState.Buffering)
+                SetState(PlayerState.Paused);
+            return;
+        }
+
+        Log.Info("[AudioPlayer] Device recovery: reinitializing backend...");
+
+        try
+        {
+            await pipeline.RecoverFromDeviceLossAsync(
+                CreateUrlRefresher(), _options, OnTrackEnded, HandleError,
+                _lifetimeCts.Token).ConfigureAwait(false);
+
+            int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+            if (cmd.SessionId < currentSession || _activePipeline != pipeline)
+                return;
+
+            _lifetimeCts.Token.ThrowIfCancellationRequested();
+
+            // BT A2DP / USB DAC endpoint стабилизация.
+            // WaveOut.Play() вызван внутри Initialize, но кодек-хэндшейк
+            // завершается асинхронно. Без паузы первые PCM chunk'и
+            // попадают в нестабильный transport → crackling.
+            await Task.Delay(PostDeviceRecoveryStabilizationMs, _lifetimeCts.Token)
+                .ConfigureAwait(false);
+
+            if (_activePipeline != pipeline || _lifetimeCts.Token.IsCancellationRequested)
+                return;
+
+            int threshold = pipeline.SampleRate * pipeline.Channels * MinSeekResumeBufferMs / 1000;
+            await pipeline.WaitForBufferAsync(threshold, SeekWarmupTimeoutMs, _lifetimeCts.Token)
+                .ConfigureAwait(false);
+
+            if (_activePipeline != pipeline || _lifetimeCts.Token.IsCancellationRequested)
+                return;
+
+            _options.OnPipelineConfiguring?.Invoke(pipeline);
+
+            pipeline.ActivateFillLoop();
+            pipeline.Start();
+            StartTimers();
+            SetState(PlayerState.Playing);
+
+            Log.Info("[AudioPlayer] Device recovery complete — playback resumed");
+            _events.RaiseDeviceRestored();
+        }
+        catch (AudioDeviceException ex)
+        {
+            Log.Error($"[AudioPlayer] Device recovery failed: {ex.Message}");
+            SetState(PlayerState.Error);
+            _events.RaiseError(new AudioPlayerError(GetDeviceErrorMessage(), ex));
+        }
+        catch (NAudio.MmException ex)
+        {
+            Log.Error($"[AudioPlayer] Device recovery failed (MmException): {ex.Message}");
+            SetState(PlayerState.Error);
+            _events.RaiseError(new AudioPlayerError(GetDeviceErrorMessage(), ex));
+        }
+        catch (OperationCanceledException)
+        {
+            if (_state == PlayerState.Buffering)
+                SetState(PlayerState.Paused);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[AudioPlayer] Device recovery error: {ex.Message}", ex);
+            SetState(PlayerState.Error);
+            _events.RaiseError(new AudioPlayerError(ex.Message, ex));
+        }
+    }
+
     #endregion
 
     #region Command Processing
@@ -438,6 +552,7 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             case PlayCommand play: await HandlePlayAsync(play); break;
             case StopCommand: await HandleStopAsync(); break;
             case SeekCommand seek: await HandleSeekAsync(seek); break;
+            case DeviceRecoveryCommand recovery: await HandleDeviceRecoveryAsync(recovery); break;
             case DisposeCommand: await HandleDisposeAsync(); break;
         }
     }
@@ -497,18 +612,55 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
             var replaced = Interlocked.Exchange(ref _activePipeline, pipeline);
             if (replaced != null) await replaced.DisposeAsync();
 
+            // Регистрируем soft-pause handler для потери устройства.
+            // При BT disconnect pipeline остаётся живым — AudioPlayer
+            // переключает state в Paused, позиция сохраняется.
+            // Resume с DeviceRecoveryCommand пересоздаёт WaveOut.
+            // Регистрируем soft-pause handler для потери устройства.
+            var capturedSessionId = cmd.SessionId;
+            pipeline.SetDeviceLostHandler(() => OnPipelineDeviceLost(pipeline, capturedSessionId));
+
+            // ═══ NEW: Auto-recovery handler для появления устройства ═══
+            pipeline.SetDeviceAvailableHandler(() => OnPipelineDeviceAvailable(pipeline, capturedSessionId));
+
             pipeline.SetInitialNormalizationGain(previousLockedGain);
             _options.OnPipelineConfiguring?.Invoke(pipeline);
 
             // Регистрируем callback фиксации gain ДО pre-scan.
-            // PreScanNormalizationAsync → LockGain → _onGainLocked?.Invoke(gain).
-            // Если callback не зарегистрирован — gain вычисляется, но НИКОГДА
-            // не персистируется в БД, и при следующем запуске pre-scan повторяется.
             var lockedTrackId = cmd.TrackId;
             if (lockedTrackId != null && _options.OnGainLocked != null)
             {
                 var gainCallback = _options.OnGainLocked;
                 pipeline.Analyzer.SetGainLockedCallback(g => gainCallback(lockedTrackId, g));
+            }
+
+            // ═══ NEW: Degraded mode — устройство отсутствует, но pipeline жив ═══
+            // Source + decoder + normalization полностью рабочие.
+            // Запускаем decoder для наполнения ring buffer — данные готовы
+            // к мгновенному воспроизведению при появлении устройства.
+            // Device watcher в NAudioBackend автоматически инициирует recovery.
+            if (pipeline.IsDeviceLost)
+            {
+                // Pre-scan можно выполнить без backend — source читается в ring buffer напрямую.
+                await pipeline.PreScanNormalizationAsync(ct).ConfigureAwait(false);
+
+                if (cmd.SeekPosition is { TotalMilliseconds: > 0 } seekPosDegraded)
+                {
+                    long seekMs = (long)seekPosDegraded.TotalMilliseconds;
+                    pipeline.PrepareForSeek(seekMs);
+                    if (await pipeline.Source.SeekAsync(seekMs, ct))
+                    {
+                        long targetSamples = (long)(seekMs / 1000.0 * pipeline.SampleRate * pipeline.Channels);
+                        pipeline.SetDecodedSamplesPosition(targetSamples);
+                    }
+                }
+
+                pipeline.StartDecoding(CreateUrlRefresher(), _options, OnTrackEnded, HandleError);
+
+                Log.Warn("[AudioPlayer] Device unavailable — entering degraded mode (pipeline alive, waiting for device)");
+                SetState(PlayerState.Paused);
+                _events.RaiseDeviceLost();
+                return;
             }
 
             await pipeline.PreScanNormalizationAsync(ct).ConfigureAwait(false);
@@ -558,12 +710,6 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
         catch (NAudio.MmException ex)
         {
             Log.Error($"[AudioPlayer] Audio device error: {ex.Message}");
-            SetState(PlayerState.Error);
-            _events.RaiseError(new AudioPlayerError(GetDeviceErrorMessage(), ex));
-        }
-        catch (AudioDeviceException ex)
-        {
-            Log.Error($"[AudioPlayer] No audio device: {ex.Message}");
             SetState(PlayerState.Error);
             _events.RaiseError(new AudioPlayerError(GetDeviceErrorMessage(), ex));
         }
@@ -978,6 +1124,56 @@ public sealed class AudioPlayer : IAsyncDisposable, IDisposable
 
         _events.RaiseTrackEnded();
         SetState(PlayerState.Idle);
+    }
+
+    /// <summary>
+    /// Обрабатывает потерю аудиоустройства от pipeline.
+    /// Переводит плеер в паузу и публикует информационное уведомление.
+    /// </summary>
+    /// <remarks>
+    /// <para>Вызывается через <see cref="Task.Run(Action)"/> из fill thread NAudioBackend.
+    /// Пользователь видит паузу + info toast «устройство отключено».
+    /// При следующем Resume → <see cref="DeviceRecoveryCommand"/>.</para>
+    /// </remarks>
+    private void OnPipelineDeviceLost(AudioPipeline pipeline, int sessionId)
+    {
+        if (_disposed || _activePipeline != pipeline) return;
+
+        int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+        if (sessionId < currentSession) return;
+
+        CancelActiveSeek();
+        StopTimers();
+
+        Log.Warn("[AudioPlayer] Device lost — auto-pausing (pipeline alive)");
+        SetState(PlayerState.Paused);
+        _events.RaiseDeviceLost();
+    }
+
+    /// <summary>
+    /// Обрабатывает появление аудиоустройства после потери.
+    /// Автоматически инициирует recovery через actor command.
+    /// </summary>
+    /// <remarks>
+    /// <para>Вызывается через <see cref="Task.Run(Action)"/> из timer thread NAudioBackend.
+    /// Маршрутизация через <see cref="DeviceRecoveryCommand"/> гарантирует
+    /// последовательную обработку без гонки с другими командами.</para>
+    /// <para><b>Idempotent:</b> Если recovery уже в процессе (state == Buffering),
+    /// <see cref="PlayerStateTransitions.CanAcceptCommand"/> отклонит дублирующую команду.</para>
+    /// </remarks>
+    private void OnPipelineDeviceAvailable(AudioPipeline pipeline, int sessionId)
+    {
+        if (_disposed || _activePipeline != pipeline) return;
+
+        int currentSession = Interlocked.CompareExchange(ref _sessionId, 0, 0);
+        if (sessionId < currentSession) return;
+
+        if (_state is not (PlayerState.Paused or PlayerState.Error)) return;
+
+        Log.Info("[AudioPlayer] Audio device available — initiating auto-recovery");
+
+        SetState(PlayerState.Buffering);
+        _commandChannel.Writer.TryWrite(new DeviceRecoveryCommand(currentSession));
     }
 
     private void HandleError(Exception ex)

@@ -56,12 +56,91 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _libraryService = libraryService ?? throw new ArgumentNullException(nameof(libraryService));
 
         _audioEngine.OnErrorOccurred += HandleError;
+        _audioEngine.OnDeviceLost += HandleDeviceLost;
+        _audioEngine.OnDeviceRestored += HandleDeviceRestored;
 
         Log.Info("[PlaybackErrorOrchestrator] Subscribed to AudioEngine.OnErrorOccurred (handler count verification)");
         Log.Info("[PlaybackErrorOrchestrator] Initialized and ready");
     }
 
     #region Error Handling
+
+    /// <summary>
+    /// Информационное уведомление о потере устройства.
+    /// Показывает toast и OS-уведомление без эскалации как ошибки.
+    /// Плеер уже на паузе — пользователю достаточно нажать Play после reconnect.
+    /// </summary>
+    private void HandleDeviceLost()
+    {
+        if (_disposed) return;
+
+        string errorKey = "device_lost";
+        if (!TryRegisterError(errorKey)) return;
+
+        Log.Info("[Orchestrator] Device lost — showing informational toast");
+
+        _ = ShowDeviceLostToastAsync();
+    }
+
+    /// <summary>
+    /// Показывает info-toast о потере устройства и OS-уведомление.
+    /// </summary>
+    private async Task ShowDeviceLostToastAsync()
+    {
+        try
+        {
+            var L = LocalizationService.Instance;
+            string title = L.Get("Notification_DeviceLost_Title",
+                "Audio device disconnected");
+            string message = L.Get("Notification_DeviceLost_Message",
+                "Playback paused. Connect an audio device and press Play to resume.");
+
+            await _notificationService.ShowToastAsync(
+                titleKey: "Notification_DeviceLost_Title",
+                messageKey: "Notification_DeviceLost_Message",
+                severity: NotificationSeverity.Warning,
+                durationMs: SkipToastDurationMs);
+
+            await NotificationService.ShowOsNotificationAsync(
+                title, message, NotificationSeverity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Orchestrator] Failed to show device lost toast: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Информационное уведомление о восстановлении устройства.
+    /// Показывает success-toast. Воспроизведение уже возобновлено автоматически.
+    /// </summary>
+    private void HandleDeviceRestored()
+    {
+        if (_disposed) return;
+
+        Log.Info("[Orchestrator] Device restored — showing success toast");
+
+        _ = ShowDeviceRestoredToastAsync();
+    }
+
+    /// <summary>
+    /// Показывает success-toast о восстановлении устройства.
+    /// </summary>
+    private async Task ShowDeviceRestoredToastAsync()
+    {
+        try
+        {
+            await _notificationService.ShowToastAsync(
+                titleKey: "Notification_DeviceRestored_Title",
+                messageKey: "Notification_DeviceRestored_Message",
+                severity: NotificationSeverity.Success,
+                durationMs: SkipToastDurationMs);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Orchestrator] Failed to show device restored toast: {ex.Message}");
+        }
+    }
 
     private void HandleError(Exception exception)
     {
@@ -696,6 +775,8 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _disposed = true;
 
         _audioEngine.OnErrorOccurred -= HandleError;
+        _audioEngine.OnDeviceLost -= HandleDeviceLost;
+        _audioEngine.OnDeviceRestored -= HandleDeviceRestored;
 
         lock (_recentlyShownErrors)
         {

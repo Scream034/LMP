@@ -308,7 +308,6 @@
   "Stream_Speed_Kb": "{0:F0} КБ/с",
   "Stream_Bitrate": "{0} kbps",
 
-  "Settings_Title": "Настройки",
   "Settings_General": "Общие",
   "Settings_WindowBehavior": "Поведение окна",
   "Settings_MinimizeToTray": "Сворачивать в трей",
@@ -499,6 +498,10 @@
   "Notification_NToken_Title": "Сложная расшифровка",
   "Notification_NToken_Message": "Трек \"{0}\" требует сложной расшифровки подписи YouTube. Это может занять некоторое время или завершиться ошибкой.",
   "Notification_NToken_Skipped": "Трек \"{0}\" пропущен — требует сложной расшифровки.",
+  "Notification_DeviceLost_Title": "Аудиоустройство отключено",
+  "Notification_DeviceLost_Message": "Воспроизведение приостановлено. Подключите устройство и нажмите Play для продолжения.",
+  "Notification_DeviceRestored_Title": "Устройство подключено",
+  "Notification_DeviceRestored_Message": "Воспроизведение возобновлено автоматически.",
 
   "Attempt_Success": "Успешно",
   "Attempt_Failed": "Не удалось",

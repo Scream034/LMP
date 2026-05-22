@@ -50,3 +50,10 @@ public sealed record SeekCommand(
     TaskCompletionSource<bool>? Completion = null) : IAudioCommand;
 
 public sealed record DisposeCommand(int SessionId) : IAudioCommand;
+
+/// <summary>
+/// Команда восстановления аудиоустройства после потери (BT disconnect и т.д.).
+/// Pipeline остаётся живым, backend пересоздаётся через retry loop.
+/// </summary>
+/// <param name="SessionId">Сессия на момент отправки команды.</param>
+public sealed record DeviceRecoveryCommand(int SessionId) : IAudioCommand;

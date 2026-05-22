@@ -63,7 +63,7 @@ namespace LMP.Core.Audio.Backends;
 ///   <item><c>_deviceLost</c> — volatile, пишется из fill loop и читается из публичных методов</item>
 /// </list>
 /// </summary>
-public sealed class NAudioBackend : IPlaybackBackend
+public sealed partial class NAudioBackend : IPlaybackBackend
 {
     #region Constants
 
@@ -165,7 +165,33 @@ public sealed class NAudioBackend : IPlaybackBackend
     /// </remarks>
     private const int DeviceRecoveryMaxRetries = 3;
 
+    /// <summary>
+    /// Задержка между <c>waveOut.Dispose()</c> и созданием нового <c>WaveOutEvent</c> (мс).
+    /// </summary>
+    /// <remarks>
+    /// <para>Внутренний playback thread WaveOutEvent завершается асинхронно после Dispose.
+    /// Без паузы новый <c>waveOutOpen</c> конфликтует с умирающим потоком в wdmaud.drv,
+    /// что приводит к AlreadyAllocated, stale буферам или crackling.</para>
+    /// </remarks>
+    private const int PostDisposeSettleMs = 50;
+
+    /// <summary>
+    /// Интервал polling'а наличия аудиоустройства (мс).
+    /// 2 секунды — компромисс между отзывчивостью (BT reconnect ≤ 2с) 
+    /// и нагрузкой (waveOutGetNumDevs ≈ 0.01мс, пренебрежимо).
+    /// </summary>
+    private const int DeviceWatchIntervalMs = 2000;
+
     #endregion
+
+    /// <summary>
+    /// P/Invoke для определения количества доступных waveOut устройств.
+    /// <c>WaveOut.DeviceCount</c> недоступен в NAudio.Core (живёт в NAudio.WinForms).
+    /// Прямой вызов <c>waveOutGetNumDevs</c> из <c>winmm.dll</c> — zero-alloc,
+    /// ~0.01мс, не требует дополнительных пакетов.
+    /// </summary>
+    [System.Runtime.InteropServices.LibraryImport("winmm.dll")]
+    private static partial int waveOutGetNumDevs();
 
     #region Fields
 
@@ -199,6 +225,20 @@ public sealed class NAudioBackend : IPlaybackBackend
     /// Сбрасывается после успешного пересоздания waveOut.
     /// </summary>
     private volatile bool _deviceLost;
+
+    /// <summary>
+    /// Callback вызываемый когда аудиоустройство снова доступно после потери.
+    /// Устанавливается через <see cref="SetDeviceAvailableCallback"/>.
+    /// Watcher активен только пока <see cref="_deviceLost"/> = true.
+    /// </summary>
+    private Action? _onDeviceAvailable;
+
+    /// <summary>
+    /// Таймер polling'а доступности аудиоустройства.
+    /// Активируется при <see cref="_deviceLost"/> = true, останавливается
+    /// при успешном обнаружении устройства или <see cref="Dispose"/>.
+    /// </summary>
+    private Timer? _deviceWatchTimer;
 
     private volatile bool _disposed;
 
@@ -260,6 +300,7 @@ public sealed class NAudioBackend : IPlaybackBackend
                 catch (MmException ex)
                 {
                     _deviceLost = true;
+                    StartDeviceWatcher();
                     Log.Warn($"[NAudioBackend] Audio device lost: {ex.Message}");
                 }
                 catch (ObjectDisposedException) { }
@@ -269,6 +310,15 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <inheritdoc/>
     public bool IsPlaying => _gateOpen && !_fadingOut;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Читается из публичных методов и fill loop.
+    /// <c>true</c> при: исчерпании retry в <see cref="Initialize"/>,
+    /// детекции в <see cref="CheckDeviceHealth"/>, ошибке Volume setter.
+    /// Сбрасывается после успешного <see cref="Initialize"/>.
+    /// </remarks>
+    public bool IsDeviceLost => _deviceLost;
 
     /// <inheritdoc/>
     public int BufferedSamples =>
@@ -284,11 +334,13 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <para> Если <see cref="_deviceLost"/> = true (предыдущее устройство пропало),
-    /// перед созданием нового <see cref="WaveOutEvent"/> выполняется задержка
-    /// <see cref="DeviceRecoveryDelayMs"/> мс — даём Windows стабилизировать endpoint.
-    /// При неудаче — до <see cref="DeviceRecoveryMaxRetries"/> попыток с увеличивающейся задержкой
-    /// (линейный backoff: <c>DeviceRecoveryDelayMs × attempt</c>).</para>
+    /// <para><b>Cleanup order (critical):</b> Fill thread останавливается ДО dispose WaveOut.
+    /// Это гарантирует что fill loop не пишет в disposed <see cref="BufferedWaveProvider"/>.
+    /// Между dispose старого и созданием нового WaveOut — пауза
+    /// <see cref="PostDisposeSettleMs"/> для завершения внутреннего playback thread
+    /// WaveOutEvent (NAudio использует ThreadPool, выход асинхронный).</para>
+    /// <para><b>BT Recovery:</b> При <see cref="_deviceLost"/> = true выполняется
+    /// retry с линейным backoff для стабилизации endpoint.</para>
     /// </remarks>
     public void Initialize(int sampleRate, int channels, AudioDataCallback dataCallback)
     {
@@ -300,11 +352,9 @@ public sealed class NAudioBackend : IPlaybackBackend
 
         bool wasDeviceLost = _deviceLost;
         int maxAttempts = wasDeviceLost ? DeviceRecoveryMaxRetries : 0;
+
         for (int attempt = 0; attempt <= maxAttempts; attempt++)
         {
-            // attempt 0 при wasDeviceLost — первая задержка (DeviceRecoveryDelayMs).
-            // attempt > 0 — нарастающая задержка. Даёт Windows время
-            // завершить endpoint handshake после BT reconnect.
             if (wasDeviceLost)
             {
                 int delay = DeviceRecoveryDelayMs * (attempt + 1);
@@ -313,7 +363,16 @@ public sealed class NAudioBackend : IPlaybackBackend
                 Thread.Sleep(delay);
             }
 
+            // Fill thread ДОЛЖЕН быть остановлен ДО dispose WaveOut.
+            // Иначе fill loop продолжает вызывать _callback и писать
+            // в _provider параллельно с Dispose → stale PCM или crash.
+            StopFillThread();
             DisposeWaveOutSafe();
+
+            // Внутренний playback thread WaveOutEvent (ThreadPool work item)
+            // завершается асинхронно после Dispose. NAudio source:
+            // "risky if Playback thread has not exited".
+            Thread.Sleep(PostDisposeSettleMs);
 
             try
             {
@@ -328,7 +387,9 @@ public sealed class NAudioBackend : IPlaybackBackend
                 {
                     _deviceLost = true;
                     DisposeWaveOutSafe();
-                    Log.Error($"[NAudioBackend] Failed to open audio device after {attempt + 1} attempts: {ex.Message}");
+                    StartDeviceWatcher();
+                    Log.Error($"[NAudioBackend] Failed to open audio device " +
+                              $"after {attempt + 1} attempts: {ex.Message}");
                     throw new AudioDeviceException(GetDeviceErrorMessage(), ex);
                 }
             }
@@ -351,7 +412,9 @@ public sealed class NAudioBackend : IPlaybackBackend
         }
 
         _deviceLost = false;
-        Log.Info($"[NAudioBackend] Initialized (never-stop){(wasDeviceLost ? " [recovered]" : "")}: " +
+        StopDeviceWatcher();
+        Log.Info($"[NAudioBackend] Initialized (never-stop)" +
+                 $"{(wasDeviceLost ? " [recovered]" : "")}: " +
                  $"{sampleRate}Hz, {channels}ch");
     }
 
@@ -405,17 +468,23 @@ public sealed class NAudioBackend : IPlaybackBackend
             return;
         }
 
-        // Slow path: смена формата → пересоздаём waveOut.
         Log.Info($"[NAudioBackend] Reinit slow path: " +
                  $"{_sampleRate}Hz/{_channels}ch → {sampleRate}Hz/{channels}ch");
 
         _channels = channels;
         _sampleRate = sampleRate;
 
+        // Fill thread ДОЛЖЕН быть остановлен ДО dispose WaveOut —
+        // предотвращает запись в disposed BufferedWaveProvider.
         StopFillThread();
 
         try { _waveOut.Stop(); } catch { }
         try { _waveOut.Dispose(); } catch { }
+        _waveOut = null;
+        _provider = null;
+
+        // Внутренний playback thread WaveOutEvent завершается асинхронно.
+        Thread.Sleep(PostDisposeSettleMs);
 
         try
         {
@@ -466,6 +535,28 @@ public sealed class NAudioBackend : IPlaybackBackend
     public void SetStarvationCallback(Action? callback)
     {
         _onStarvation = callback;
+    }
+
+    /// <summary>
+    /// Устанавливает callback для уведомления о появлении аудиоустройства после потери.
+    /// Вызывается из AudioPipeline сразу после Reinitialize.
+    /// При <see cref="_deviceLost"/> = true автоматически запускает polling watcher.
+    /// </summary>
+    /// <param name="callback">
+    /// Callback, вызываемый из timer thread при обнаружении устройства.
+    /// Реализация не должна блокировать — внутри используется <see cref="Task.Run(Action)"/>.
+    /// null = отключить watcher.
+    /// </param>
+    public void SetDeviceAvailableCallback(Action? callback)
+    {
+        _onDeviceAvailable = callback;
+
+        // Если устройство уже потеряно и callback зарегистрирован — запустить watcher.
+        // Покрывает сценарий: pipeline создан с IsDeviceLost=true, callback регистрируется позже.
+        if (callback != null && _deviceLost && !_disposed)
+            StartDeviceWatcher();
+        else if (callback == null)
+            StopDeviceWatcher();
     }
 
     #endregion
@@ -732,16 +823,12 @@ public sealed class NAudioBackend : IPlaybackBackend
 
     /// <summary>
     /// Проверяет состояние waveOut во время воспроизведения.
+    /// Вызывается только из fill loop (нет конкурентного доступа).
     /// </summary>
     /// <remarks>
-    /// <para>Если waveOut неожиданно остановился — устанавливает <c>_deviceLost</c>
-    /// и вызывает <c>_onDeviceLost</c> callback на отдельном потоке.
-    /// Вызывается только из fill loop (нет конкурентного доступа).</para>
-    /// <para><b>BT Recovery:</b> Помимо проверки <c>PlaybackState</c>,
-    /// выполняется Volume probe — попытка прочитать <c>waveOut.Volume</c>.
-    /// При BT disconnect Volume getter бросает <see cref="MmException"/>
-    /// даже если <c>PlaybackState</c> ещё не обновился (WaveOutEvent lag до ~200мс).
-    /// Это позволяет обнаружить device loss на ~200мс раньше стандартной проверки.</para>
+    /// <para>Помимо проверки <c>PlaybackState</c>, выполняется Volume probe —
+    /// при BT disconnect <c>waveOut.Volume</c> getter бросает <see cref="MmException"/>
+    /// раньше чем <c>PlaybackState</c> обновится (до ~200мс lag).</para>
     /// </remarks>
     private void CheckDeviceHealth()
     {
@@ -751,15 +838,14 @@ public sealed class NAudioBackend : IPlaybackBackend
         {
             var state = _waveOut.PlaybackState;
 
-            // MmException при чтении Volume — надёжный индикатор device loss,
+            // Volume probe: MmException при чтении — индикатор device loss,
             // срабатывающий раньше чем PlaybackState переключится в Stopped.
-            // Проверяем только при активном gate — в паузе device loss не критичен.
             if (state != NAudio.Wave.PlaybackState.Stopped && _gateOpen)
             {
                 try { _ = _waveOut.Volume; }
                 catch (MmException)
                 {
-                    Log.Warn("[NAudioBackend] Volume probe failed — device likely disconnected");
+                    Log.Warn("[NAudioBackend] Volume probe failed — device disconnected");
                     state = NAudio.Wave.PlaybackState.Stopped;
                 }
             }
@@ -767,13 +853,16 @@ public sealed class NAudioBackend : IPlaybackBackend
             if (state == NAudio.Wave.PlaybackState.Stopped && _gateOpen && !_fadingOut)
             {
                 _deviceLost = true;
-                Log.Error("[NAudioBackend] Device lost during playback (waveOut stopped unexpectedly)");
+                Log.Error("[NAudioBackend] Device lost during playback " +
+                          "(waveOut stopped unexpectedly)");
 
                 lock (_stateLock)
                 {
                     _gateOpen = false;
                     _fillActive = false;
                 }
+
+                StartDeviceWatcher();
 
                 var cb = _onDeviceLost;
                 if (cb != null)
@@ -841,6 +930,82 @@ public sealed class NAudioBackend : IPlaybackBackend
     #endregion
 
     #region Internal Helpers
+
+    /// <summary>
+    /// Запускает периодический polling наличия аудиоустройства.
+    /// Idempotent — повторный вызов пересоздаёт таймер.
+    /// </summary>
+    /// <remarks>
+    /// <para>Использует <see cref="WaveOut.DeviceCount"/> (P/Invoke в waveOutGetNumDevs).
+    /// Стоимость вызова ~0.01мс — безопасно для 2-секундного интервала.</para>
+    /// </remarks>
+    private void StartDeviceWatcher()
+    {
+        if (_disposed) return;
+        StopDeviceWatcher();
+
+        var timer = new Timer(OnDeviceWatchTick, null, DeviceWatchIntervalMs, DeviceWatchIntervalMs);
+
+        // Гонка: Dispose мог произойти между проверкой _disposed и созданием таймера.
+        // Exchange гарантирует что старый таймер (если есть) будет disposed.
+        var existing = Interlocked.Exchange(ref _deviceWatchTimer, timer);
+        existing?.Dispose();
+
+        if (_disposed)
+        {
+            // Dispose уже вызван — убрать только что созданный таймер
+            Interlocked.Exchange(ref _deviceWatchTimer, null)?.Dispose();
+            return;
+        }
+
+        Log.Debug("[NAudioBackend] Device watcher started");
+    }
+
+    /// <summary>
+    /// Останавливает polling наличия аудиоустройства. Thread-safe, idempotent.
+    /// </summary>
+    private void StopDeviceWatcher()
+    {
+        Interlocked.Exchange(ref _deviceWatchTimer, null)?.Dispose();
+    }
+
+    /// <summary>
+    /// Tick polling'а: проверяет доступность хотя бы одного waveOut устройства.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>WaveOut.DeviceCount</b> маппит на <c>waveOutGetNumDevs()</c>.
+    /// При BT disconnect возвращает 0 (если нет других устройств).
+    /// При reconnect возвращает ≥ 1 — endpoint доступен для <c>waveOutOpen</c>.</para>
+    /// <para>Callback вызывается через <see cref="Task.Run(Action)"/> —
+    /// timer thread не блокируется обработчиком recovery.</para>
+    /// </remarks>
+    private void OnDeviceWatchTick(object? state)
+    {
+        if (_disposed || !_deviceLost)
+        {
+            StopDeviceWatcher();
+            return;
+        }
+
+        try
+        {
+            int deviceCount = waveOutGetNumDevs();
+
+            if (deviceCount > 0)
+            {
+                StopDeviceWatcher();
+                Log.Info($"[NAudioBackend] Audio device detected ({deviceCount} available) — triggering auto-recovery");
+
+                var cb = _onDeviceAvailable;
+                if (cb != null)
+                    Task.Run(cb);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[NAudioBackend] Device watch tick error: {ex.Message}");
+        }
+    }
 
     private void CreateWaveOut(int sampleRate, int channels)
     {
@@ -927,6 +1092,7 @@ public sealed class NAudioBackend : IPlaybackBackend
         _fillActive = false;
         _gateOpen = false;
 
+        StopDeviceWatcher();
         StopFillThread();
 
         try { _waveOut?.Stop(); } catch { }

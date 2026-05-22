@@ -214,6 +214,18 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     public event Action<BufferState>? OnBufferStateChanged;
 
     /// <summary>
+    /// Аудиоустройство отключено во время воспроизведения.
+    /// Плеер автоматически поставлен на паузу. При нажатии Play
+    /// произойдёт автоматическое восстановление.
+    /// </summary>
+    public event Action? OnDeviceLost;
+
+    /// <summary>
+    /// Аудиоустройство восстановлено — воспроизведение автоматически возобновлено.
+    /// </summary>
+    public event Action? OnDeviceRestored;
+
+    /// <summary>
     /// Событие ошибки воспроизведения.
     /// </summary>
     public event Action<Exception>? OnErrorOccurred;
@@ -277,19 +289,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
     /// </remarks>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline)
     {
-        var settings = _library.Settings;
-        var audioSettings = settings.Audio;
+        pipeline.SetGain(ComputeFinalGain());
 
-        float gain = ComputeGain(
-            _volumePercent,
-            Math.Max(settings.MaxVolumeLimit, 100),
-            audioSettings);
-
-        float targetGainDb = Math.Clamp(settings.TargetGainDb, -20f, 20f);
-        gain *= MathF.Pow(10f, targetGainDb / 20f);
-
-        pipeline.SetGain(Math.Clamp(gain, 0f, MaxGain));
-
+        var audioSettings = _library.Settings.Audio;
         var normConfig = new NormalizationConfig(
             audioSettings.NormalizationEnabled,
             audioSettings.NormalizationTargetLufs,
@@ -332,6 +334,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             else
                 RaiseError(new AudioException(err.Message, ex));
         };
+
+        _player.Events.DeviceLost += HandleDeviceLost;
+        _player.Events.DeviceRestored += HandleDeviceRestored;
     }
 
     private void SubscribeToProviderEvents()
@@ -656,6 +661,28 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         }
 
         return (track.StreamUrl, track.TransientBitrate);
+    }
+
+    /// <summary>
+    /// Обработчик потери аудиоустройства. Публикует информационное событие
+    /// для отображения toast через <see cref="PlaybackErrorOrchestrator"/> /
+    /// <see cref="NotificationService"/>. Не является ошибкой — плеер на паузе,
+    /// pipeline жив, позиция сохранена.
+    /// </summary>
+    private void HandleDeviceLost()
+    {
+        Log.Info("[AudioEngine] Device lost — notifying UI (informational)");
+        RaiseOnUI(() => OnDeviceLost?.Invoke());
+    }
+
+    /// <summary>
+    /// Обработчик восстановления аудиоустройства. Публикует информационное событие
+    /// для отображения success-toast. Pipeline уже восстановлен, воспроизведение идёт.
+    /// </summary>
+    private void HandleDeviceRestored()
+    {
+        Log.Info("[AudioEngine] Device restored — playback auto-resumed");
+        RaiseOnUI(() => OnDeviceRestored?.Invoke());
     }
 
     #endregion
@@ -1058,23 +1085,11 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
         ApplyGainToPipeline();
     }
 
-    /// <summary> Вычисляет финальный gain и передаёт его в активный pipeline. </summary>
+    /// <summary>Вычисляет финальный gain и передаёт его в активный pipeline.</summary>
     private void ApplyGainToPipeline()
     {
-        var settings = _library.Settings;
-        var audioSettings = settings.Audio;
-
-        float gain = ComputeGain(
-            _volumePercent,
-            Math.Max(settings.MaxVolumeLimit, 100),
-            audioSettings);
-
-        float targetGainDb = Math.Clamp(settings.TargetGainDb, -20f, 20f);
-        gain *= MathF.Pow(10f, targetGainDb / 20f);
-
-        gain = Math.Clamp(gain, 0f, MaxGain);
+        float gain = ComputeFinalGain();
         _currentGain = gain;
-
         _player.GetActivePipeline()?.SetGain(gain);
     }
 
@@ -1404,6 +1419,36 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
 
     #region Helpers
 
+    /// <summary>
+    /// Единственный источник истины для вычисления финального gain.
+    /// Инкапсулирует: volume curve → max limit → dB correction → MaxGain clamp.
+    /// </summary>
+    /// <remarks>
+    /// <para>Используется в двух точках применения gain:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="ConfigurePipelineBeforeStart"/> — при создании pipeline до открытия gate</item>
+    ///   <item><see cref="ApplyGainToPipeline"/> — при runtime изменении громкости или настроек</item>
+    /// </list>
+    /// <para>Обе точки гарантированно используют идентичную формулу —
+    /// исключена возможность расхождения при изменении логики.</para>
+    /// </remarks>
+    /// <returns>Финальный gain в диапазоне [0, <see cref="MaxGain"/>].</returns>
+    private float ComputeFinalGain()
+    {
+        var settings = _library.Settings;
+        var audioSettings = settings.Audio;
+
+        float gain = ComputeGain(
+            _volumePercent,
+            Math.Max(settings.MaxVolumeLimit, 100),
+            audioSettings);
+
+        float targetGainDb = Math.Clamp(settings.TargetGainDb, -20f, 20f);
+        gain *= MathF.Pow(10f, targetGainDb / 20f);
+
+        return Math.Clamp(gain, 0f, MaxGain);
+    }
+
     private async Task ProcessCommandsAsync()
     {
         try
@@ -1470,6 +1515,9 @@ public sealed class AudioEngine : ViewModelBase, IDisposable
             {
                 Log.Warn($"[AudioEngine] Gain flush on dispose failed: {ex.Message}");
             }
+
+            _player.Events.DeviceLost -= HandleDeviceLost;
+            _player.Events.DeviceRestored -= HandleDeviceRestored;
 
             _lifetimeCts.Cancel();
             _lifetimeCts.Dispose();

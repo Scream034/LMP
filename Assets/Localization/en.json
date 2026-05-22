@@ -310,7 +310,6 @@
   "Stream_Speed_Kb": "{0:F0} KB/s",
   "Stream_Bitrate": "{0} kbps",
 
-  "Settings_Title": "Settings",
   "Settings_General": "General",
   "Settings_WindowBehavior": "Window Behavior",
   "Settings_MinimizeToTray": "Minimize to tray",
@@ -499,6 +498,10 @@
   "Notification_NToken_Title": "Complex decryption",
   "Notification_NToken_Message": "Track \"{0}\" requires complex YouTube signature decryption. This may take some time or fail.",
   "Notification_NToken_Skipped": "Track \"{0}\" skipped — requires complex decryption.",
+  "Notification_DeviceLost_Title": "Audio device disconnected",
+  "Notification_DeviceLost_Message": "Playback paused. Connect an audio device and press Play to resume.",
+  "Notification_DeviceRestored_Title": "Audio device connected",
+  "Notification_DeviceRestored_Message": "Playback resumed automatically.",
 
   "Attempt_Success": "Success",
   "Attempt_Failed": "Failed",

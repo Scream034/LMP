@@ -120,9 +120,40 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// </summary>
     private volatile float _gain = 1.0f;
 
+    /// <summary>
+    /// Признак потери аудиоустройства (BT disconnect, USB unplug и т.д.).
+    /// При <c>true</c> pipeline жив (source, decoder config, normalization state сохранены),
+    /// но decoder остановлен и backend gate закрыт. Восстановление через
+    /// <see cref="RecoverFromDeviceLossAsync"/>.
+    /// </summary>
+    private volatile bool _deviceLost;
+
+    /// <summary>
+    /// Внешний обработчик события потери устройства.
+    /// Вызывается из backend fill thread через <see cref="NotifyDeviceLost"/> —
+    /// реализация не должна блокировать. Типичное использование:
+    /// AudioPlayer переводит state в Paused.
+    /// </summary>
+    private Action? _onDeviceLostExternal;
+
+    /// <summary>
+    /// Внешний обработчик события появления устройства после потери.
+    /// Вызывается из timer thread NAudioBackend через <see cref="NotifyDeviceAvailable"/>.
+    /// Реализация не должна блокировать — внутри используется <see cref="Task.Run(Action)"/>.
+    /// Типичное использование: AudioPlayer инициирует <see cref="DeviceRecoveryCommand"/>.
+    /// </summary>
+    private Action? _onDeviceAvailableExternal;
+
     #endregion
 
     #region Properties
+
+    /// <summary>
+    /// Потеряно ли аудиоустройство во время воспроизведения.
+    /// <c>true</c> означает что pipeline жив, но decoder остановлен
+    /// и backend gate закрыт до вызова <see cref="RecoverFromDeviceLossAsync"/>.
+    /// </summary>
+    public bool IsDeviceLost => _deviceLost;
 
     public AudioStreamInfo StreamInfo => _streamInfo;
     public IAudioSource Source => _source;
@@ -227,15 +258,29 @@ public sealed class AudioPipeline : IAsyncDisposable
                 source, decoder, sharedBackend, pcmBuffer, decodeBuffer,
                 streamInfo, lifetimeCts);
 
-            sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
+            bool deviceUnavailable = false;
 
-            if (sharedBackend is NAudioBackend naBackend)
+            try
             {
-                naBackend.SetDeviceLostCallback(pipeline.NotifyDeviceLost);
-                naBackend.SetStarvationCallback(pipeline.NotifyStarvation);
+                sharedBackend.Reinitialize(decoder.SampleRate, decoder.Channels, pipeline.AudioCallback);
+            }
+            catch (AudioDeviceException ex)
+            {
+                // Backend недоступен, но source + decoder + ring buffer полностью рабочие.
+                // Pipeline создаётся в degraded mode: IsDeviceLost = true.
+                // AudioPlayer переведёт state в Paused + покажет info toast.
+                // Device watcher в NAudioBackend уведомит о появлении устройства → auto-recovery.
+                deviceUnavailable = true;
+                pipeline._deviceLost = true;
+                Log.Warn($"[AudioPipeline] Created in degraded mode (no audio device): {ex.Message}");
             }
 
-            Log.Info($"[AudioPipeline] Created (shared backend): {streamInfo.FormatDisplay}");
+            sharedBackend.SetDeviceLostCallback(pipeline.NotifyDeviceLost);
+            sharedBackend.SetStarvationCallback(pipeline.NotifyStarvation);
+            sharedBackend.SetDeviceAvailableCallback(pipeline.NotifyDeviceAvailable);
+
+            Log.Info($"[AudioPipeline] Created (shared backend){(deviceUnavailable ? " [NO DEVICE]" : "")}: " +
+                     $"{streamInfo.FormatDisplay}");
 
             return pipeline;
         }
@@ -245,11 +290,6 @@ public sealed class AudioPipeline : IAsyncDisposable
             throw;
         }
         catch (Youtube.Exceptions.StreamUnavailableException)
-        {
-            CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
-            throw;
-        }
-        catch (AudioDeviceException)
         {
             CleanupOnErrorPartial(source, decoder, decodeBuffer, lifetimeCts);
             throw;
@@ -367,14 +407,141 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// <summary>
     /// Вызывается когда аудиоустройство пропало во время воспроизведения
     /// (callback от <see cref="NAudioBackend"/>).
-    /// Отменяет lifetime CTS — декодер получит OperationCanceledException и завершится.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Soft pause:</b> Pipeline остаётся живым — source, decoder config,
+    /// normalization state, позиция трека сохраняются. Lifetime CTS НЕ отменяется:
+    /// <see cref="WatchPipelineLifetimeAsync"/> в AudioPlayer не получает сигнала,
+    /// pipeline не уничтожается.</para>
+    /// <para><b>Decoder:</b> Останавливается через <see cref="_decoderCts"/>, чтобы
+    /// предотвратить busy-wait заполнение ring buffer при закрытом backend gate.</para>
+    /// <para><b>Идемпотентность:</b> Повторный вызов при <c>_deviceLost=true</c>
+    /// игнорируется — защита от двойного срабатывания health check.</para>
+    /// <para><b>Recovery:</b> AudioPlayer отправляет <see cref="DeviceRecoveryCommand"/>
+    /// при следующем Resume, который вызывает <see cref="RecoverFromDeviceLossAsync"/>.</para>
+    /// </remarks>
     internal void NotifyDeviceLost()
     {
-        if (_disposed) return;
-        Log.Error("[AudioPipeline] Audio device lost during playback");
-        try { _lifetimeCts.Cancel(); } catch (ObjectDisposedException) { }
+        if (_disposed || _deviceLost) return;
+        _deviceLost = true;
+
+        Log.Error("[AudioPipeline] Audio device lost — soft pause (pipeline alive)");
+
+        // Decoder необходимо остановить: backend gate закрыт (CheckDeviceHealth),
+        // ring buffer перестаёт потребляться. Без остановки decoder заполнит буфер
+        // и зависнет в busy-wait цикле (Task.Yield / Task.Delay(5ms)).
+        // Lifetime CTS НЕ отменяется — pipeline должен пережить disconnect.
+        try { _decoderCts?.Cancel(); } catch (ObjectDisposedException) { }
+
+        // External callback вызывается ПОСЛЕ отмены decoder —
+        // AudioPlayer может безопасно менять state без гонки с decoder loop.
+        var handler = _onDeviceLostExternal;
+        if (handler != null)
+            Task.Run(handler);
     }
+
+    /// <summary>
+    /// Регистрирует внешний обработчик потери устройства.
+    /// </summary>
+    /// <param name="handler">
+    /// Callback, вызываемый из fill thread при детекции device loss.
+    /// Реализация не должна блокировать — внутри используется <see cref="Task.Run(Action)"/>.
+    /// </param>
+    internal void SetDeviceLostHandler(Action handler) => _onDeviceLostExternal = handler;
+
+    /// <summary>
+    /// Восстанавливает pipeline после потери аудиоустройства.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Последовательность:</b></para>
+    /// <list type="number">
+    ///   <item>Ожидание завершения cancelled decoder task (graceful shutdown)</item>
+    ///   <item>Flush ring buffer и backend provider (удаление stale PCM)</item>
+    ///   <item>Reinitialize backend (пересоздание WaveOut с BT retry loop)</item>
+    ///   <item>Регистрация device callbacks на новом WaveOut</item>
+    ///   <item>Перезапуск decoder с текущей позиции source</item>
+    /// </list>
+    /// <para><b>Позиция:</b> Source сохраняет byte position. Decoder стартует
+    /// с текущей позиции — потеря аудио ≤ <see cref="AudioConstants.BufferSizeSeconds"/>
+    /// секунд (объём ring buffer на момент disconnect). Для BT reconnect (1–30с)
+    /// это приемлемый компромисс.</para>
+    /// </remarks>
+    /// <param name="urlRefresher">Делегат обновления истёкшего URL.</param>
+    /// <param name="options">Настройки плеера.</param>
+    /// <param name="onTrackEnded">Callback естественного завершения трека.</param>
+    /// <param name="onError">Callback фатальной ошибки декодера.</param>
+    /// <param name="ct">Токен отмены (lifetime плеера).</param>
+    internal async Task RecoverFromDeviceLossAsync(
+        Func<CancellationToken, Task<string?>>? urlRefresher,
+        AudioPlayerOptions options,
+        Action? onTrackEnded,
+        Action<Exception>? onError,
+        CancellationToken ct)
+    {
+        if (_disposed || !_deviceLost) return;
+
+        // Дожидаемся graceful shutdown decoder task.
+        // NotifyDeviceLost уже отменил _decoderCts, но task может быть
+        // в середине async ReadFrameAsync — нужно дать ему завершиться.
+        await StopDecodingAsync(TimeSpan.FromMilliseconds(DecoderStopTimeoutMs))
+            .ConfigureAwait(false);
+
+        ct.ThrowIfCancellationRequested();
+
+        // Stale PCM в ring buffer декодирован, но не воспроизведён.
+        // Provider может содержать частично воспроизведённый chunk.
+        // Оба буфера очищаются для бесшовного возобновления без артефактов.
+        _backend.Flush();
+        _pcmBuffer.Clear();
+
+        // Reinitialize пересоздаёт WaveOut если _deviceLost=true на стороне backend.
+        // NAudioBackend.Initialize содержит BT retry loop с линейным backoff.
+        _backend.Reinitialize(SampleRate, Channels, AudioCallback);
+
+        _backend.SetDeviceLostCallback(NotifyDeviceLost);
+        _backend.SetStarvationCallback(NotifyStarvation);
+        _backend.SetDeviceAvailableCallback(NotifyDeviceAvailable);
+
+        ct.ThrowIfCancellationRequested();
+
+        _deviceLost = false;
+
+        // Decoder перезапускается с текущей byte-позиции source.
+        // Source не сбрасывался — позиция сохранена.
+        StartDecoding(urlRefresher, options, onTrackEnded, onError);
+
+        Log.Info("[AudioPipeline] Recovered from device loss");
+    }
+
+    /// <summary>
+    /// Вызывается когда аудиоустройство снова доступно после потери
+    /// (callback от device watcher в <see cref="NAudioBackend"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Idempotent:</b> Если <see cref="_deviceLost"/> = false
+    /// (уже восстановлен вручную) — callback не вызывается.</para>
+    /// <para><b>Thread safety:</b> Вызывается из timer thread NAudioBackend.
+    /// <see cref="Task.Run(Action)"/> изолирует вызывающий поток от обработчика.</para>
+    /// </remarks>
+    internal void NotifyDeviceAvailable()
+    {
+        if (_disposed || !_deviceLost) return;
+
+        Log.Info("[AudioPipeline] Audio device available — notifying player for auto-recovery");
+
+        var handler = _onDeviceAvailableExternal;
+        if (handler != null)
+            Task.Run(handler);
+    }
+
+    /// <summary>
+    /// Регистрирует внешний обработчик появления устройства после потери.
+    /// </summary>
+    /// <param name="handler">
+    /// Callback, вызываемый из timer thread при обнаружении устройства.
+    /// Реализация не должна блокировать — внутри используется <see cref="Task.Run(Action)"/>.
+    /// </param>
+    internal void SetDeviceAvailableHandler(Action handler) => _onDeviceAvailableExternal = handler;
 
     #endregion
 
