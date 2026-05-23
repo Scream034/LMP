@@ -187,12 +187,12 @@ public sealed class KWeightingFilter
         double sqrtA = Math.Sqrt(a);
         double twoSqrtAAlpha = 2.0 * sqrtA * alpha;
 
-        double a0 = (a + 1.0) - (a - 1.0) * cosW0 + twoSqrtAAlpha;
-        double a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cosW0);
-        double a2 = (a + 1.0) - (a - 1.0) * cosW0 - twoSqrtAAlpha;
-        double b0 = a * ((a + 1.0) + (a - 1.0) * cosW0 + twoSqrtAAlpha);
-        double b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cosW0);
-        double b2 = a * ((a + 1.0) + (a - 1.0) * cosW0 - twoSqrtAAlpha);
+        double a0 = a + 1.0 - (a - 1.0) * cosW0 + twoSqrtAAlpha;
+        double a1 = 2.0 * (a - 1.0 - (a + 1.0) * cosW0);
+        double a2 = a + 1.0 - (a - 1.0) * cosW0 - twoSqrtAAlpha;
+        double b0 = a * (a + 1.0 + (a - 1.0) * cosW0 + twoSqrtAAlpha);
+        double b1 = -2.0 * a * (a - 1.0 + (a + 1.0) * cosW0);
+        double b2 = a * (a + 1.0 + (a - 1.0) * cosW0 - twoSqrtAAlpha);
 
         // Нормализация: делим все на a0
         double invA0 = 1.0 / a0;

@@ -456,7 +456,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         var hasTrackObs = this.WhenAnyValue(x => x.HasTrack);
 
-        // ИСПРАВЛЕНИЕ: Передаем canPlayPause вместо hasTrackObs
+        // Передаем canPlayPause вместо hasTrackObs
         PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             _playerControl.PlayPauseAsync, canPlayPause));
 
@@ -705,6 +705,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(pos =>
             {
                 if (_isSeeking || IsTrackResetting || IsSeekBusy) return;
+                Log.Debug($"[PlayerBar] PositionChanged: {pos}");
                 Position = pos;
                 PositionSeconds = pos.TotalSeconds;
                 this.RaisePropertyChanged(nameof(DurationTooltip));
@@ -1167,6 +1168,15 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _isSeeking = true;
     }
 
+    /// <summary>
+    /// Обновляет только визуальную позицию ползунка во время drag.
+    /// </summary>
+    /// <remarks>
+    /// Во время drag в движок ничего не отправляется.
+    /// Это устраняет restart storm на слабом интернете:
+    /// ни decoder, ни source, ни HTTP-чанки не трогаются,
+    /// пока пользователь не закончит действие.
+    /// </remarks>
     public void UpdateSeekPosition(double seconds)
     {
         if (!_isSeeking) return;
@@ -1177,6 +1187,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(DurationTooltip));
     }
 
+    /// <summary>
+    /// Завершает drag seek и выполняет единственный реальный seek.
+    /// </summary>
+    /// <remarks>
+    /// Используется прямой <see cref="AudioEngine.SeekAsync"/> без debounce:
+    /// это уже финальное намерение пользователя.
+    /// </remarks>
     public async void EndSeek()
     {
         if (!HasTrack)

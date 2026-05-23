@@ -84,7 +84,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             x => x.HasMoreItems,
             (more, init, net, hasMore) => !more && !init && !net && hasMore);
 
-        // FIX: Используем CreateCommand из базового класса
+        // Используем CreateCommand из базового класса
         LoadMoreCommand = CreateCommand(ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore));
 
         _sourceList.Connect()
@@ -279,7 +279,7 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             CancelLoading();
             _dynamicDataSubscriptions.Dispose();
 
-            // ═══ FIX: Разрыв GC-root цепочки ═══
+            // Разрыв GC-root цепочки
             // TrackItemVM.Dispose() отписывается от Track.PropertyChanged,
             // без этого: TrackRegistry._pinned → TrackInfo.PropertyChanged
             //   → TrackItemVM._onPlay → PageVM (удерживает весь граф).

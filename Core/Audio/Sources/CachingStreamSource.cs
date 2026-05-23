@@ -278,7 +278,7 @@ public sealed partial class CachingStreamSource : IAudioSource
             // ПАРАЛЛЕЛЬНАЯ ИНИЦИАЛИЗАЦИЯ
             // Chunk 0 нужен для ParseHeaders (EBML + Segment + Tracks ≤ 128KB).
             // Пока парсятся заголовки, остальные initial chunks загружаются параллельно.
-            // ИСПРАВЛЕНИЕ: Передаем isCritical = true
+            // Передаем isCritical = true
             await EnsureChunkAsync(0, _lifetimeCts.Token, isCritical: true).ConfigureAwait(false);
 
             _readStream = new AsyncCachingReadStream(this);
@@ -329,7 +329,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         var tasks = new Task[count - from];
         for (int i = from; i < count; i++)
         {
-            // ИСПРАВЛЕНИЕ: Стартовые чанки критичны
+            // Стартовые чанки критичны
             tasks[i - from] = EnsureChunkAsync(i, ct, isCritical: true);
         }
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -419,14 +419,6 @@ public sealed partial class CachingStreamSource : IAudioSource
                 // получат OperationCanceledException.
                 try { oldCts.Cancel(); }
                 catch (ObjectDisposedException) { }
-
-                // Dispose через background task — даём IO completion threads
-                // время вернуть результат перед освобождением ресурсов.
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(DeferredEpochDisposeDelayMs);
-                    try { oldCts.Dispose(); } catch { }
-                });
             }
 
             return _downloadCts.Token;
@@ -479,6 +471,8 @@ public sealed partial class CachingStreamSource : IAudioSource
         else
             _playbackGate.Reset();
 
+        // НАМЕРЕННО не вызываем ResetDownloadEpoch здесь.
+        // Epoch reset = только seek. Pause/Resume не меняют позицию потока.
         Log.Debug($"[CachingSource] Playback active state updated: {active}");
     }
 

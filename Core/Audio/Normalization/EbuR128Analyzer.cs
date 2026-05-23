@@ -114,6 +114,22 @@ public sealed class EbuR128Analyzer
     /// </summary>
     private volatile Action<float>? _onGainLocked;
 
+#if DEBUG
+    /// <summary>
+    /// Последний залогированный gain из кэша. Используется для дедупликации
+    /// повторных вызовов <see cref="LockFromCachedGain"/> с тем же значением
+    /// (возникает при повторных срабатываниях UI-биндингов в Settings).
+    /// <para><c>float.NaN</c> = ещё не логировался (начальное состояние или после reset).</para>
+    /// </summary>
+    private float _lastLoggedCacheGain = float.NaN;
+
+    /// <summary>
+    /// Последний залогированный mode при вызове <see cref="LockFromCachedGain"/>.
+    /// Вместе с <see cref="_lastLoggedCacheGain"/> образует ключ дедупликации.
+    /// </summary>
+    private NormalizationMode _lastLoggedCacheMode;
+#endif
+
     #endregion
 
     #region Configuration
@@ -283,6 +299,10 @@ public sealed class EbuR128Analyzer
     /// <see cref="_mode"/> содержит старое значение.
     /// Метод читает mode из <see cref="_pendingConfig"/> если он есть —
     /// это гарантирует применение <b>нового</b> mode к gain constraint.</para>
+    ///
+    /// <para><b>Лог-дедупликация:</b> Повторные вызовы с тем же gain/mode
+    /// (типично при UI-биндингах Settings слайдеров) не порождают лог-строк.
+    /// Dedup сбрасывается в <see cref="ExecuteReset"/> при смене трека.</para>
     /// </remarks>
     /// <param name="gain">Linear gain из кэша или из <see cref="NormalizationGainResolver"/>.</param>
     public void LockFromCachedGain(float gain)
@@ -303,11 +323,21 @@ public sealed class EbuR128Analyzer
 
         gain = Math.Clamp(gain, MinNormalizationGain, effectiveMaxGain);
 
+        // Idempotent state writes — безопасны при повторных вызовах
         Interlocked.Exchange(ref _pendingNormReset, 0);
         _lockedGain = gain;
         _smoothedNormGain = gain;
 
-        Log.Debug($"[EbuR128] Gain from cache: {gain:F3}x (mode={effectiveMode}, analysis skipped)");
+#if DEBUG
+        // Лог-дедупликация: пишем только при фактическом изменении gain или mode.
+        // Устраняет ~100 строк спама при UI-манипуляциях в Settings.
+        if (MathF.Abs(gain - _lastLoggedCacheGain) > 0.0005f || effectiveMode != _lastLoggedCacheMode)
+        {
+            _lastLoggedCacheGain = gain;
+            _lastLoggedCacheMode = effectiveMode;
+            Log.Debug($"[EbuR128] Gain from cache: {gain:F3}x (mode={effectiveMode}, analysis skipped)");
+        }
+#endif
     }
 
     /// <summary>
@@ -503,9 +533,15 @@ public sealed class EbuR128Analyzer
 
         float rawGain = ComputeIntegratedGainFromBlocks(blockPowers, blockCount, _targetLufs, _maxGain);
 
+#if DEBUG
         double scannedSeconds = totalFrames / (double)_sampleRate;
         Log.Debug($"[EbuR128] Pre-scan: gain={rawGain:F3}x " +
                   $"(scanned {scannedSeconds:F1}s, blocks={blockCount}, target={_targetLufs}LUFS)");
+        
+        // Stacktrace
+        var stackTrace = new System.Diagnostics.StackTrace(1, true);
+        Log.Debug($"[EbuR128] Pre-scan called from: {stackTrace}");
+#endif
 
         return rawGain;
     }
@@ -633,7 +669,10 @@ public sealed class EbuR128Analyzer
                   $"(blocks={_gatingBlockCount}, target={_targetLufs}LUFS, mode={_mode})");
     }
 
-    /// <summary>Сбрасывает всё состояние анализа (вызывается строго из fill thread).</summary>
+    /// <summary>
+    /// Сбрасывает всё состояние анализа (вызывается строго из fill thread).
+    /// Также сбрасывает лог-дедупликацию для корректного логирования нового трека.
+    /// </summary>
     private void ExecuteReset()
     {
         _lockedGain = float.NaN;
@@ -643,6 +682,13 @@ public sealed class EbuR128Analyzer
         _normalizationProcessedFrames = 0;
         _kWeightFilter.Reset();
         _smoothedNormGain = _startingNormGain;
+
+#if DEBUG
+        // Сброс лог-дедупликации: следующий LockFromCachedGain для нового трека
+        // гарантированно залогируется.
+        _lastLoggedCacheGain = float.NaN;
+        Log.Debug("[EbuR128] Analysis reset: ready for new track");
+#endif
     }
 
     /// <summary>

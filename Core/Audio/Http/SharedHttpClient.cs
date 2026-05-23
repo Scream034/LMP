@@ -16,7 +16,7 @@ public static class SharedHttpClient
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(15),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-            MaxConnectionsPerServer = 10,
+            MaxConnectionsPerServer = 16,
             AutomaticDecompression = DecompressionMethods.All,
             UseCookies = false,
             EnableMultipleHttp2Connections = true,
@@ -29,7 +29,6 @@ public static class SharedHttpClient
         {
             Timeout = TimeSpan.FromSeconds(30),
 
-            // ═══ FIX: RequestVersionOrLower вместо RequestVersionOrHigher ═══
             // RequestVersionOrHigher + Version20 = ТРЕБУЕТ HTTP/2, фейлит если сервер не поддерживает.
             // RequestVersionOrLower + Version20 = ПРОБУЕТ HTTP/2, фоллбэк на HTTP/1.1.
             // Это критично: PlayerContextManager скачивает iframe_api через этот клиент,
@@ -38,7 +37,6 @@ public static class SharedHttpClient
             DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
 
-        // ═══ FIX: НЕ ставим дефолтный User-Agent на уровне клиента ═══
         // UA должен соответствовать параметру c= в URL (WEB_REMIX → Chrome UA).
         // Статический UA из YoutubeClientUtils.UserAgent зависит от CurrentProfile,
         // который может быть ANDROID_VR (из-за fallback порядка), а URL — от WEB_REMIX.

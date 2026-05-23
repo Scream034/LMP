@@ -125,7 +125,7 @@ public sealed class LibraryViewModel : ViewModelBase
 
         RefreshCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoadPlaylistsAsync));
 
-        // ═══ ИСПРАВЛЕНИЕ: подписки ТОЛЬКО в конструкторе ═══
+        // ═══ подписки ТОЛЬКО в конструкторе ═══
         // Раньше подписывались в OnNavigatedToAsync при каждом переходе
         SubscribeToLibraryEvents();
     }

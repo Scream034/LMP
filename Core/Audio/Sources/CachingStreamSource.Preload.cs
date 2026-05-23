@@ -49,6 +49,9 @@ public sealed partial class CachingStreamSource
         int idleCycles = 0;
         _backgroundChunksLoaded = 0;
 
+        // Флаг: только что вышли из suspend — нужна пауза перед новыми загрузками.
+        bool justResumed = false;
+
 #if DEBUG
         int lastReportedProgress = -1;
 #endif
@@ -60,10 +63,9 @@ public sealed partial class CachingStreamSource
                 bool isSuspended = !_suspendGate.IsSet;
                 bool isPaused = !_playbackGate.IsSet;
 
-                // ═══ PAUSE DETECT ═══
+                // PAUSE DETECT
                 if (isPaused)
                 {
-                    // Если плеер поставлен на паузу, засыпаем до нажатия Resume или отмены, используя константу
                     try
                     {
                         _playbackGate.Wait(PlaybackGateTimeoutMs, ct);
@@ -74,18 +76,13 @@ public sealed partial class CachingStreamSource
 
                 if (isSuspended)
                 {
-                    // ═══ SUSPEND MODE: Только critical read-ahead ═══
-                    // Гарантирует бесперебойное воспроизведение при свёрнутом окне.
-                    // В фоне ОС тротлит ThreadPool (EcoQoS), но выделенный decoder thread
-                    // продолжает работать. Нужно обеспечить ему данные.
+                    // SUSPEND MODE: Только critical read-ahead
                     int current = Volatile.Read(ref _currentChunk);
                     var epochAtStart = Interlocked.Read(ref _downloadEpoch);
-                    var downloadToken = CurrentDownloadToken;
 
-                    // ═══ 5 чанков вместо 3 ═══
-                    // 5 чанков × 128KB = 640KB ≈ 40 секунд при 128kbps.
-                    // При тротлинге сети в фоне 3 чанков (~24 сек) может быть мало
-                    // если переключение трека совпало с медленным ответом от YouTube.
+                    // downloadToken отменяется при seek. Но critical chunks нужны
+                    // декодеру прямо сейчас — их нельзя прерывать из-за seek'а.
+                    // Lifetime token отменяется только при полном dispose/stop — это правильно.
                     int criticalAhead = Math.Min(5, _config.ReadAheadChunks + 1);
 
                     for (int i = 0; i <= criticalAhead; i++)
@@ -98,14 +95,10 @@ public sealed partial class CachingStreamSource
 
                         if (!IsChunkAvailable(idx) && !_activeDownloads.ContainsKey(idx))
                         {
-                            // ═══ await вместо fire-and-forget ═══
-                            // В suspend mode надёжность важнее параллелизма.
-                            // Sequential загрузка гарантирует что каждый чанк
-                            // реально загружен перед переходом к следующему.
-                            // Fire-and-forget в фоне может "застрять" на ThreadPool scheduling.
                             try
                             {
-                                await EnsureChunkAsync(idx, downloadToken);
+                                // FIX 5a: ct вместо downloadToken
+                                await EnsureChunkAsync(idx, ct).ConfigureAwait(false);
                             }
                             catch (OperationCanceledException) { break; }
                             catch (ChunkDownloadFatalException)
@@ -116,25 +109,43 @@ public sealed partial class CachingStreamSource
                             catch (Exception ex)
                             {
                                 Log.Debug($"[CachingSource] Critical chunk {idx}: {ex.Message}");
-                                // Продолжаем — следующий чанк может быть доступен
                             }
                         }
                     }
 
-                    // Мгновенный resume вместо ожидания до 200ms.
-                    // При Resume() _suspendGate.Set() немедленно разблокирует Wait.
-                    // Timeout 500ms — периодическая проверка critical chunks.
                     try
                     {
                         _suspendGate.Wait(PlaybackGateCriticalTimeoutMs, ct);
                     }
                     catch (OperationCanceledException) { break; }
 
+                    // Если _suspendGate только что стал Set (Resume вызван),
+                    // устанавливаем флаг — следующая итерация в normal mode
+                    // сделает паузу перед новыми загрузками.
+                    if (_suspendGate.IsSet)
+                        justResumed = true;
+
                     continue;
                 }
 
-                // ═══ NORMAL MODE: Полный preload ═══
-                await Task.Delay(_config.PreloadIntervalMs, ct);
+                // NORMAL MODE: Полный preload
+
+                if (justResumed)
+                {
+                    // Даём декодеру время завершить свои in-flight HTTP-запросы
+                    // (или пройти retry из Fix 1) без конкуренции с preload.
+                    // PreloadIntervalMs (обычно 200мс) достаточно: за это время
+                    // Fix 1 успевает выполнить retry и заполнить PCM buffer.
+                    justResumed = false;
+                    try
+                    {
+                        await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
+                await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
 
                 if (_cacheEntry.IsComplete) break;
 
@@ -173,7 +184,7 @@ public sealed partial class CachingStreamSource
                         _ = SafeEnsureChunkAsync(idx, tokenNormal);
                         pending++;
                         activePreload = true;
-                        await Task.Delay(50, ct);
+                        await Task.Delay(50, ct).ConfigureAwait(false);
                     }
                 }
 
@@ -183,12 +194,6 @@ public sealed partial class CachingStreamSource
                 if (!activePreload) idleCycles++;
                 else idleCycles = 0;
 
-                // Background fill
-                // ═══ Для частично закэшированных треков (resumed sessions) ═══
-                // Если read-ahead полностью покрыт, но трек не полный — немедленный
-                // background fill без ожидания idleCycles. При 12/20 чанков и позиции
-                // в начале файла preload loop мог простаивать 6+ секунд, оставляя
-                // пробелы в кэше. Seek в непокрытую область → сетевой fetch → underruns.
                 bool isResumedPartialCache = _cacheEntry.DownloadedChunks > 0
                     && !_cacheEntry.IsComplete
                     && chunksAhead >= _config.ReadAheadChunks;
@@ -206,9 +211,6 @@ public sealed partial class CachingStreamSource
                     if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
                         continue;
 
-                    // Для resumed partial cache — до 3 чанков за цикл вместо 1.
-                    // 3 × 128KB = 384KB/цикл. При PreloadIntervalMs=200 → ~1.5MB/сек
-                    // фонового заполнения. Seek в пробел станет on-demand вместо обязательного.
                     int fillBatch = isResumedPartialCache
                         ? Math.Min(3, _config.MaxConcurrentDownloads - pending)
                         : 1;
@@ -231,15 +233,13 @@ public sealed partial class CachingStreamSource
                         }
                     }
 
-                    await Task.Delay(_config.BackgroundFillIntervalMs, ct);
+                    await Task.Delay(_config.BackgroundFillIntervalMs, ct).ConfigureAwait(false);
                 }
 
-                // RAM eviction
                 if (_ramChunks.Count > _config.MaxRamChunks)
                     ReleaseRamBuffers();
 
 #if DEBUG
-                // ═══ Progress reporting (moved out of #if DEBUG, deduplicated) ═══
                 int progress = (int)(_cacheEntry?.DownloadProgress ?? 0);
                 if (progress != lastReportedProgress)
                 {

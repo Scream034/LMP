@@ -3,7 +3,7 @@ namespace LMP.Core.Audio.Sources;
 public sealed partial class CachingStreamSource
 {
     /// <inheritdoc/>
-    public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct = default)
+    public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct)
     {
         if (_parser == null) return false;
 
@@ -23,21 +23,16 @@ public sealed partial class CachingStreamSource
 
         Log.Debug($"[CachingSource] Seek: {positionMs}ms → byte {targetBytePos}, chunk {targetChunk}/{_totalChunks}");
 
-        // Если TryPrefetchChunkForSeekAsync (запущенный параллельно из AudioPlayer)
-        // успел загрузить чанк в _ramChunks ДО этой строки — он уже доступен.
-        // ResetDownloadEpoch отменяет только IN-FLIGHT загрузки, данные в _ramChunks не трогает.
         ResetDownloadEpoch();
 
         Volatile.Write(ref _currentChunk, targetChunk);
 
-        // ═══ FIX 4 (partial): Явный cancel pending reads — не через Position setter ═══
+        // Явный cancel pending reads — не через Position setter
         _readStream!.SeekAndCancelPendingReads(targetBytePos);
 
         _parser.Reset();
         Volatile.Write(ref _positionMs, segmentStartMs);
 
-        // Если prefetch успел положить чанк в _ramChunks — skip HTTP полностью.
-        // IsChunkAvailable проверяет и _ramChunks, и дисковый кэш.
         if (_cacheEntry != null && !IsChunkAvailable(targetChunk))
         {
             try
@@ -121,7 +116,7 @@ public sealed partial class CachingStreamSource
             int end = Math.Min(targetChunk + _config.SeekPreloadChunks, _totalChunks);
             int maxTasks = end - targetChunk;
 
-            // ═══ : ArrayPool вместо new Task[] на каждый seek ═══
+            // : ArrayPool вместо new Task[] на каждый seek
             var tasks = System.Buffers.ArrayPool<Task>.Shared.Rent(maxTasks);
             int taskCount = 0;
 

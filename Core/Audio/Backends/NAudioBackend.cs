@@ -771,7 +771,6 @@ public sealed partial class NAudioBackend : IPlaybackBackend
                                  $"BufferedMs={(int)provider.BufferedDuration.TotalMilliseconds}");
                     }
 
-                    // ═══ FIX: Starvation detection ═══
                     // 200 × 5ms = 1 секунда непрерывной тишины.
                     // Однократный вызов: callback решает — логировать, rebuffer или raise error.
                     // Без этого fill loop крутится бесконечно с framesRead=0,

@@ -253,14 +253,6 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
     /// <summary>
     /// Асинхронно извлекает signatureTimestamp из единого кэша PlayerContextManager.
     /// </summary>
-    /// <remarks>
-    /// <para><b>FIX:</b> Приоритет отдаётся <see cref="PlayerContext.Sts"/>, а не парсингу
-    /// <see cref="PlayerContext.BaseJs"/>. <c>BaseJs</c> гарантированно пуст после
-    /// <see cref="PlayerContext.ReleaseRawScripts"/> (вызывается из <see cref="JsDecryptorBase{T}.EnsureInitializedAsync"/>)
-    /// и при загрузке контекста из препроцессированного кэша.
-    /// <c>context.Sts</c> напротив всегда корректен — извлекается при создании
-    /// <see cref="PlayerContext"/> и сохраняется в отдельный файл на диске.</para>
-    /// </remarks>
     /// <param name="ct">Токен отмены.</param>
     /// <returns>Строка signatureTimestamp или <c>null</c> при ошибке.</returns>
     private async ValueTask<string?> ResolveSignatureTimestampAsync(CancellationToken ct)
@@ -271,7 +263,7 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
         {
             var context = await _playerManager.GetOrLoadAsync(ct).ConfigureAwait(false);
 
-            // ═══ FIX: context.Sts — единственный надёжный источник STS ═══
+            // context.Sts — единственный надёжный источник STS
             // context.BaseJs пустой в двух случаях:
             //   1. После ReleaseRawScripts() (вызывается NTokenDecryptor/SigCipherDecryptor
             //      в EnsureInitializedAsync после препроцессинга)

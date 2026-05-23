@@ -114,7 +114,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         if (!request.Headers.Contains("Accept-Language"))
             request.Headers.Add("Accept-Language", "en,ru;q=0.9");
 
-        // ═══ КРИТИЧНОЕ ИСПРАВЛЕНИЕ: Куки передаются ТОЛЬКО на домены *.youtube.com ═══
+        // ═══ КРИТИЧНОЕ Куки передаются ТОЛЬКО на домены *.youtube.com ═══
         // Это предотвращает отправку приватных кук на CDN-серверы googlevideo.com, 
         // убирая ложные 403 Forbidden блокировки при проверочных HEAD-запросах.
         if (isYoutubeDomain && !isMobileClient && authService is { IsAuthenticated: true })

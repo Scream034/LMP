@@ -52,20 +52,9 @@ public static class AudioConstants
     public const int PreloadAheadChunks = 4;
 
     /// <summary>Чанков загружать при seek (instant seek UX).</summary>
-    /// <remarks>
-    /// <para>При seek на незагруженный участок параллельно подгружаются 4 чанка.
-    /// На 128KB/чанк при 155kbps Opus это ~26 сек буфер.
-    /// Decoder начинает читать первый чанк немедленно (critical path),
-    /// остальные 3 готовы к моменту когда потребуются — zero-stall seek.</para>
-    /// </remarks>
     public const int SeekPreloadChunks = 4;
 
     /// <summary>Интервал проверки preload loop (мс).</summary>
-    /// <remarks>
-    /// <para><b>Было 1000, стало 500.</b> Синхронизировано с Medium профилем.</para>
-    /// <para>Preload loop проверяет чаще — чанки вокруг текущей позиции подгружаются
-    /// быстрее. 500ms × 4 ReadAheadChunks ≈ 2с полное покрытие read-ahead зоны.</para>
-    /// </remarks>
     public const int PreloadIntervalMs = 500;
 
     /// <summary>Максимум параллельных загрузок чанков (баланс скорость/RAM).</summary>
@@ -79,11 +68,6 @@ public static class AudioConstants
     public const int DownloadTimeoutMs = 15_000;
 
     /// <summary>Таймаут ожидания слота загрузки (мс).</summary>
-    /// <remarks>
-    /// <para>Критические чанки (isCritical) не ждут слот вовсе;
-    /// preload-чанки быстрее fail'ят и освобождают слоты при конкуренции
-    /// с critical path seek-загрузки.</para>
-    /// </remarks>
     public const int DownloadSlotTimeoutMs = 300;
 
     // ═══════════════════════════════════════════════════════
@@ -124,6 +108,13 @@ public static class AudioConstants
     /// <summary>Таймаут graceful shutdown декодера (мс).</summary>
     public const int DecoderStopTimeoutMs = 500;
 
+    /// <summary>
+    /// Таймаут остановки декодера при seek (мс).
+    /// Значительно короче <see cref="DecoderStopTimeoutMs"/> для минимизации perceived latency:
+    /// seek должен ощущаться мгновенно, поэтому допустимо прервать decoder forcefully.
+    /// </summary>
+    public const int DecoderStopTimeoutSeekMs = 50;
+
     // ═══════════════════════════════════════════════════════
     // PLAYBACK BUFFER SETTINGS — PCM циклический буфер
     // ═══════════════════════════════════════════════════════
@@ -135,22 +126,9 @@ public static class AudioConstants
     public const int BufferSizeSeconds = 2;
 
     /// <summary>Минимальный буфер для старта воспроизведения (мс).</summary>
-    /// <remarks>
-    /// <para>При 48kHz stereo: 80мс = 7680 float samples ≈ 30KB PCM.
-    /// Opus decoder гарантированно выдаёт первый фрейм (960 samples = 20мс)
-    /// за 5–10мс из RAM/диска. 80мс = 4 фрейма — достаточный запас
-    /// для бесшовного старта без увеличения perceived latency.</para>
-    /// </remarks>
     public const int MinBufferMs = 80;
 
     /// <summary>Минимальный буфер для возобновления после seek (мс).</summary>
-    /// <remarks>
-    /// <para>Streaming path: 48k×2×50/1000 = 4800 samples ≈ 19KB.
-    /// Fast-source (cached/local): <c>Math.Max(50/4, 12)</c> = 12мс = 1152 samples.
-    /// Opus decoder выдаёт 960 samples за один ReadFrame — порог достигается
-    /// за 1–2 вызова (≤10мс). Экономит 30–60мс perceived silence
-    /// при seek на закэшированных чанках.</para>
-    /// </remarks>
     public const int MinSeekResumeBufferMs = 50;
 
     // ═══════════════════════════════════════════════════════
@@ -224,7 +202,7 @@ public static class AudioConstants
 
     /// <summary>
     /// Нормализация битрейта для кэш-ключей.
-    /// <para>Группирует близкие битрейты в стандартные bucket'ы.</para>
+    /// Группирует близкие битрейты в стандартные bucket'ы.
     /// </summary>
     public static int NormalizeBitrate(int bitrate) => bitrate switch
     {
@@ -255,28 +233,61 @@ public static class AudioConstants
     public static ReadOnlySpan<byte> OggMagic => "OggS"u8;
 
     // ═══════════════════════════════════════════════════════
-    // AAC DECODER TABLES
+    // AAC DECODER TABLES — Единственный источник истины
     // ═══════════════════════════════════════════════════════
 
-    private static readonly int[] AacSampleRates = [
+    /// <summary>
+    /// Полная таблица sample rates по индексу из AAC Audio Specific Config (ISO 14496-3).
+    /// 16 элементов: индексы 0–11 = стандартные частоты, 12 = 7350 Hz (редкая),
+    /// 13–15 = зарезервированы (0).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Единственный источник истины.</b> Используется в Mp4ContainerParser,
+    /// AacDecoder и любом коде, работающем с AAC Audio Specific Config.</para>
+    /// <para>Предыдущая версия содержала 12 элементов (без 7350) — это приводило
+    /// к IndexOutOfRange при парсинге редких AAC-LC профилей.</para>
+    /// </remarks>
+    private static readonly int[] AacSampleRates =
+    [
         96000, 88200, 64000, 48000, 44100, 32000,
-        24000, 22050, 16000, 12000, 11025, 8000
+        24000, 22050, 16000, 12000, 11025, 8000,
+        7350, 0, 0, 0
     ];
 
-    /// <summary>Получить sample rate по индексу из AAC Audio Specific Config.</summary>
-    public static int GetAacSampleRate(int index) =>
-        (uint)index < (uint)AacSampleRates.Length ? AacSampleRates[index] : DefaultSampleRate;
-
-    /// <summary>Получить количество каналов по channel configuration из AAC ASC.</summary>
-    public static int GetAacChannels(int channelConfig) => channelConfig switch
+    /// <summary>
+    /// Получить sample rate по индексу из AAC Audio Specific Config.
+    /// </summary>
+    /// <param name="index">Индекс частоты (0–15) из ASC.</param>
+    /// <returns>Sample rate в Hz; <see cref="DefaultSampleRate"/> для невалидных/зарезервированных индексов.</returns>
+    public static int GetAacSampleRate(int index)
     {
-        1 => 1,
-        2 => 2,
-        3 => 3,
-        4 => 4,
-        5 => 5,
-        6 => 6,
-        7 => 8,
-        _ => DefaultChannels
-    };
+        if ((uint)index >= (uint)AacSampleRates.Length)
+            return DefaultSampleRate;
+
+        int rate = AacSampleRates[index];
+        return rate > 0 ? rate : DefaultSampleRate;
+    }
+
+    /// <summary>
+    /// Полная таблица channel count по channel configuration из AAC ASC (ISO 14496-3 §1.6.5.1).
+    /// </summary>
+    /// <remarks>
+    /// <para>Индекс 0 = определяется отдельно (program_config_element), здесь → <see cref="DefaultChannels"/>.</para>
+    /// <para>Индекс 7 = 7.1 surround (8 каналов), индексы 8–15 = зарезервированы.</para>
+    /// </remarks>
+    private static readonly int[] AacChannelCounts = [0, 1, 2, 3, 4, 5, 6, 8];
+
+    /// <summary>
+    /// Получить количество каналов по channel configuration из AAC Audio Specific Config.
+    /// </summary>
+    /// <param name="channelConfig">Channel configuration (0–7) из ASC.</param>
+    /// <returns>Количество каналов; <see cref="DefaultChannels"/> для невалидных значений.</returns>
+    public static int GetAacChannels(int channelConfig)
+    {
+        if ((uint)channelConfig >= (uint)AacChannelCounts.Length)
+            return DefaultChannels;
+
+        int ch = AacChannelCounts[channelConfig];
+        return ch > 0 ? ch : DefaultChannels;
+    }
 }

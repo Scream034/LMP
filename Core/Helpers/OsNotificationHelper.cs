@@ -39,8 +39,8 @@ public static class OsNotificationHelper
     private static async Task ShowWindowsToastAsync(string title, string message)
     {
         // PowerShell-based toast notification (works on Windows 10+)
-        var escapedTitle = title.Replace("'", "''").Replace("`", "``");
-        var escapedMessage = message.Replace("'", "''").Replace("`", "``");
+        _ = title.Replace("'", "''").Replace("`", "``");
+        _ = message.Replace("'", "''").Replace("`", "``");
 
         var script = $"""
             [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null

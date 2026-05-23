@@ -584,7 +584,7 @@ public partial class YoutubeProvider : IDisposable
             _sigCipherDecryptor.InvalidateCache();
             _nTokenDecryptor.PlayerManager.Invalidate();
 
-            // FIX: Сброс stale STS (аналогично forceRefresh в RefreshStreamUrlAsync) ═══
+            // Сброс stale STS (аналогично forceRefresh в RefreshStreamUrlAsync) ═══
             _youtube.Videos.Streams.InvalidateCipherManifest();
 
             ClearCache();
@@ -624,7 +624,7 @@ public partial class YoutubeProvider : IDisposable
                 _sigCipherDecryptor.InvalidateCache();
                 _nTokenDecryptor.PlayerManager.Invalidate();
 
-                // FIX: Сброс stale STS при 403-recovery ═══
+                // Сброс stale STS при 403-recovery ═══
                 // _signatureTimestamp в VideoController и _cipherManifest в StreamClient
                 // кэшируются на уровне экземпляра и НЕ инвалидировались ранее.
                 // После PlayerManager.Invalidate() контекст будет загружен заново,

@@ -33,10 +33,6 @@ namespace LMP.Features.Shell;
 /// На Windows — нативный <see cref="TrayManager"/> с перехватом WM_MOUSEWHEEL.
 /// На других платформах — стандартный Avalonia <see cref="TrayIcon"/>.</para>
 ///
-/// <para><b>Restore race condition fix:</b>
-/// <see cref="_isRestoringFromTray"/> guard блокирует <see cref="OnWindowDeactivated"/>
-/// во время <see cref="RestoreFromTray"/>, предотвращая re-suspend через 500мс
-/// из-за того что Windows может послать Deactivated после Show()+Activate().</para>
 /// </summary>
 public partial class MainWindow : Window
 {

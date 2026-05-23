@@ -47,12 +47,6 @@ public sealed class StreamClient
     /// <summary>
     /// Извлекает signatureTimestamp из единого кэша <see cref="PlayerContextManager"/>.
     /// </summary>
-    /// <remarks>
-    /// <para><b>FIX:</b> Использует <see cref="PlayerContext.Sts"/> как приоритетный источник
-    /// вместо <c>YoutubeAstSolver.ExtractSts(context.BaseJs)</c>. Причина аналогична
-    /// <c>VideoController.ResolveSignatureTimestampAsync</c>: <c>BaseJs</c> может быть пустым
-    /// после <see cref="PlayerContext.ReleaseRawScripts"/> или при загрузке из препроцессированного кэша.</para>
-    /// </remarks>
     /// <param name="cancellationToken">Токен отмены.</param>
     /// <returns>Вычисленный манифест шифрования плеера.</returns>
     private async ValueTask<CipherManifest> ResolveCipherManifestAsync(CancellationToken cancellationToken)
@@ -64,7 +58,7 @@ public sealed class StreamClient
         {
             var context = await _playerContextManager.GetOrLoadAsync(cancellationToken).ConfigureAwait(false);
 
-            // ═══ FIX: context.Sts — единственный надёжный источник STS ═══
+            // context.Sts — единственный надёжный источник STS
             // Идентичная причина что и в VideoController.ResolveSignatureTimestampAsync.
             var sts = context.Sts;
 

@@ -96,9 +96,18 @@ public sealed partial class CachingStreamSource
     /// Читает данные из позиции <paramref name="position"/>, загружая чанк при необходимости.
     /// Порядок поиска: RAM-кэш → диск → сеть.
     /// </summary>
+    /// <remarks>
+    /// <para><b>ИСПРАВЛЕНИЕ (epoch retry):</b> Epoch-retry guard теперь проверяет
+    /// <paramref name="ct"/> (внешний токен декодера), а НЕ linked token.</para>
+    /// <para>Предыдущая версия передавала linked token (ct + downloadToken) в EnsureChunkAsync.
+    /// При epoch reset downloadToken отменялся → linked CTS отменялся → 
+    /// <c>ct.IsCancellationRequested</c> на linked токене возвращал <c>true</c> →
+    /// guard <c>when (!ct.IsCancellationRequested)</c> не срабатывал → retry не выполнялся →
+    /// exception пробрасывался до DecoderLoopAsync → <c>catch (OCE) { break; }</c> → decoder death.</para>
+    /// </remarks>
     /// <param name="position">Абсолютная байтовая позиция в контенте.</param>
     /// <param name="buffer">Целевой буфер.</param>
-    /// <param name="ct">Токен отмены.</param>
+    /// <param name="ct">Токен отмены — ВНЕШНИЙ (decoder CTS), НЕ linked с epoch.</param>
     /// <returns>Количество прочитанных байт; 0 если позиция за EOF.</returns>
     internal async Task<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
     {
@@ -120,14 +129,20 @@ public sealed partial class CachingStreamSource
         // 3. Сеть — с retry по смене эпохи
         for (int attempt = 0; attempt < ReadAtMaxEpochRetries; attempt++)
         {
+            // Проверяем ВНЕШНИЙ ct (decoder), не linked
+            // Если decoder остановлен — выходим сразу.
+            // Если epoch сменился — linked отменён, но ct жив → retry.
             ct.ThrowIfCancellationRequested();
 
             try
             {
+                // Берём ТЕКУЩИЙ epoch token (после возможного reset).
+                // linked = ct (decoder) + downloadToken (epoch).
+                // Если epoch сброшен → linked отменяется → EnsureChunkAsync бросает OCE.
                 var downloadToken = CurrentDownloadToken;
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
 
-                // ИСПРАВЛЕНИЕ: Чтение данных, ожидаемых декодером прямо сейчас — это критический запрос.
+                // Чтение данных, ожидаемых декодером прямо сейчас — это критический запрос.
                 var result = await EnsureChunkAsync(chunkIndex, linkedCts.Token, isCritical: true).ConfigureAwait(false);
 
                 if (result == ChunkDownloadResult.OutOfRange) return 0;
@@ -139,6 +154,10 @@ public sealed partial class CachingStreamSource
                     return CopyFromChunk(afterNetworkDisk.Memory.Span, afterNetworkDisk.Length, offsetInChunk, buffer);
             }
             catch (ChunkDownloadFatalException) { throw; }
+            // 2b: Guard проверяет ВНЕШНИЙ ct, не linked
+            // ct — это decoder CTS, он НЕ содержит epoch token.
+            // Если ct жив, а linked отменён — значит это epoch reset (seek/preload) → retry.
+            // Если ct отменён — значит decoder остановлен → пробрасываем дальше.
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 Log.Debug($"[CachingSource] ReadAt chunk {chunkIndex}: epoch changed, " +
@@ -250,7 +269,7 @@ public sealed partial class CachingStreamSource
 
             if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
 
-            // ИСПРАВЛЕНИЕ: Пробрасываем isCritical
+            // Пробрасываем isCritical
             var downloadTask = DownloadChunkCoreAsync(index, ct, isCritical);
 
             if (_activeDownloads.TryAdd(index, downloadTask))
@@ -401,11 +420,11 @@ public sealed partial class CachingStreamSource
 
         try
         {
-            // ═══ Guard: SemaphoreSlim.WaitAsync на disposed семафоре → ObjectDisposedException.
+            // Guard: SemaphoreSlim.WaitAsync на disposed семафоре → ObjectDisposedException.
             // Проверяем _disposed перед обращением и ловим гонку в catch.
             if (_disposed) return ChunkDownloadResult.Cancelled;
 
-            // ИСПРАВЛЕНИЕ: Критические запросы (Seek/Read) обходят лимит слотов, 
+            // Критические запросы (Seek/Read) обходят лимит слотов, 
             // чтобы не ждать фоновую докачку.
             if (!isCritical)
             {
@@ -452,7 +471,7 @@ public sealed partial class CachingStreamSource
     /// <param name="end">Конец HTTP Range в байтах (включительно).</param>
     /// <param name="ct">Токен отмены.</param>
     private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(
-        int index, long start, long end, CancellationToken ct)
+     int index, long start, long end, CancellationToken ct)
     {
         int rn = Interlocked.Increment(ref _requestSequenceNumber);
         int expectedBytes = (int)(end - start + 1);
@@ -465,7 +484,7 @@ public sealed partial class CachingStreamSource
         try
         {
             response = await _httpClient.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, ct);
+                request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         }
         catch (TaskCanceledException) { return ChunkDownloadResult.NetworkError; }
         catch (HttpRequestException) { return ChunkDownloadResult.NetworkError; }
@@ -477,7 +496,7 @@ public sealed partial class CachingStreamSource
             if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
                 Interlocked.Increment(ref _consecutive403Count);
-                await LogAndDiagnose403Async(index, request, response);
+                await LogAndDiagnose403Async(index, request, response).ConfigureAwait(false);
                 return ChunkDownloadResult.Forbidden403;
             }
 
@@ -499,17 +518,45 @@ public sealed partial class CachingStreamSource
 
             response.EnsureSuccessStatusCode();
 
-            // Аренда через MemoryPool: владение передаётся в ChunkData.
-            // IMemoryOwner<byte> гарантирует возврат в пул через Dispose,
-            // исключая удержание рентованных буферов в RAM-кэше навсегда.
             IMemoryOwner<byte> memoryOwner = MemoryPool<byte>.Shared.Rent(expectedBytes);
             int actualLength;
 
             try
             {
-                using var contentStream = await response.Content.ReadAsStreamAsync(CancellationToken.None);
+                // 4: ct вместо CancellationToken.None
+                // CancellationToken.None → HTTP читает до таймаута (~30с) даже при stop/seek/dispose.
+                // За это время decoder CTS успевает отмениться → 1 видит ct=true → break.
+                // С явным ct: чтение прерывается мгновенно → TCE долетает до 1
+                // ДО отмены decoder CTS → retry срабатывает корректно.
+                using var contentStream = await response.Content
+                    .ReadAsStreamAsync(ct).ConfigureAwait(false);
+
                 actualLength = await ReadStreamFullyAsync(
-                    contentStream, memoryOwner.Memory[..expectedBytes], ct);
+                    contentStream, memoryOwner.Memory[..expectedBytes], ct).ConfigureAwait(false);
+            }
+            // ODE от SslStream при cancel во время чтения
+            // При epoch reset (seek) ct отменяется → HttpResponseMessage dispose'ит
+            // content stream → SslStream.ReadAsyncInternal бросает ODE.
+            // Семантически это та же отмена что и OCE — пробрасываем как OCE.
+            catch (ObjectDisposedException)
+            {
+                memoryOwner.Dispose();
+                throw new OperationCanceledException("HTTP stream disposed during read (seek/stop)");
+            }
+            catch (OperationCanceledException)
+            {
+                // Пробрасываем: EnsureChunkAsync обработает как Cancelled.
+                // НЕ логируем — это нормальный путь при seek/stop.
+                memoryOwner.Dispose();
+                throw;
+            }
+            catch (Exception ex) when (ct.IsCancellationRequested || _disposed || ex is IOException || ex is System.Net.Sockets.SocketException)
+            {
+                memoryOwner.Dispose();
+                if (ct.IsCancellationRequested || _disposed) return ChunkDownloadResult.Cancelled;
+
+                Log.Warn($"[CachingSource] Chunk {index} read I/O error: {ex.Message}");
+                return ChunkDownloadResult.NetworkError;
             }
             catch (Exception ex)
             {
@@ -543,19 +590,15 @@ public sealed partial class CachingStreamSource
                 Log.Debug($"[CachingSource] Chunk {index}: partial {actualLength}/{expectedBytes} (near EOF)");
             }
 
-            // Передача владения в ChunkData. После этой строки вызывать
-            // memoryOwner.Dispose() запрещено — он принадлежит chunkData.
             var chunkData = new ChunkData(memoryOwner, actualLength);
 
             if (!_ramChunks.TryAdd(index, chunkData))
             {
-                // Другой поток уже сохранил этот чанк — возвращаем буфер.
+                // Гонка: другой поток уже сохранил этот чанк
                 chunkData.Dispose();
             }
             else
             {
-                // Копия для fire-and-forget: жизненный цикл не зависит от chunkData.
-                // ArrayPool используется для краткосрочного буфера копии.
                 byte[] diskCopy = ArrayPool<byte>.Shared.Rent(actualLength);
                 chunkData.Memory.Span.CopyTo(diskCopy.AsSpan(0, actualLength));
                 _ = WriteToDiskFireAndForgetAsync(index, diskCopy, actualLength);
@@ -632,7 +675,7 @@ public sealed partial class CachingStreamSource
         var cParam = UrlEx.TryGetQueryParameterValue(_currentUrl, "c");
         var reqUa = request.Headers.UserAgent.ToString();
 
-        Log.Warn($"[CachingSource] ═══ 403 DIAGNOSTIC chunk {index} (consecutive={count}) ═══");
+        Log.Warn($"[CachingSource] 403 DIAGNOSTIC chunk {index} (consecutive={count})");
         Log.Warn($"[CachingSource]   c={cParam ?? "?"}, UA={reqUa[..Math.Min(reqUa.Length, 50)]}...");
         Log.Warn($"[CachingSource]   n-token: {nParam ?? "MISSING"} " +
                  $"(len={nParam?.Length ?? 0}, looks_encrypted={nParam?.Length is > 15 and < 25})");
@@ -647,7 +690,7 @@ public sealed partial class CachingStreamSource
         if (responseBody.Length > 0)
             Log.Warn($"[CachingSource]   Body: {responseBody[..Math.Min(responseBody.Length, 200)]}");
 
-        Log.Warn("[CachingSource] ════════════════════════════════════════════════════════");
+        Log.Warn("[CachingSource]══");
     }
 
     #endregion
@@ -676,7 +719,7 @@ public sealed partial class CachingStreamSource
                 httpStatusCode: 403);
         }
 
-        // ═══ Guard: _refreshLock может быть disposed при гонке с Dispose/DisposeAsync.
+        // Guard: _refreshLock может быть disposed при гонке с Dispose/DisposeAsync.
         if (_disposed) return;
 
         bool acquired;
@@ -835,7 +878,7 @@ public sealed partial class CachingStreamSource
     /// Удаляет до <c>MaxRamChunks / 4</c> самых далёких от текущей позиции чанков.
     /// </summary>
     /// <remarks>
-    /// <para><b>FIX 7:</b> Manual loop вместо LINQ (Where → OrderByDescending → Take → ToList).
+    /// <para><b>7:</b> Manual loop вместо LINQ (Where → OrderByDescending → Take → ToList).
     /// Устраняет аллокации замыканий, итераторов и промежуточного List на каждый вызов.
     /// Вызывается из preload loop и ReleaseRamBuffers — hot path при воспроизведении.</para>
     /// </remarks>

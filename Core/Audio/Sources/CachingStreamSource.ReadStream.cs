@@ -83,12 +83,6 @@ public sealed partial class CachingStreamSource
             try { oldCts.Cancel(); }
             catch (ObjectDisposedException) { }
 
-            ThreadPool.QueueUserWorkItem(static state =>
-            {
-                try { ((CancellationTokenSource)state!).Dispose(); }
-                catch (ObjectDisposedException) { }
-            }, oldCts);
-
             Volatile.Write(ref _position, position);
         }
 
@@ -177,10 +171,10 @@ public sealed partial class CachingStreamSource
             long length = _source._contentLength;
             long newPos = origin switch
             {
-                SeekOrigin.Begin   => offset,
+                SeekOrigin.Begin => offset,
                 SeekOrigin.Current => Volatile.Read(ref _position) + offset,
-                SeekOrigin.End     => length + offset,
-                _                  => Volatile.Read(ref _position)
+                SeekOrigin.End => length + offset,
+                _ => Volatile.Read(ref _position)
             };
 
             newPos = Math.Clamp(newPos, 0, length);
@@ -215,7 +209,6 @@ public sealed partial class CachingStreamSource
                 if (cts != null)
                 {
                     try { cts.Cancel(); } catch (ObjectDisposedException) { }
-                    try { cts.Dispose(); } catch (ObjectDisposedException) { }
                 }
             }
 

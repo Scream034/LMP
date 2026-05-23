@@ -341,7 +341,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
 
-    <!-- ИСПРАВЛЕНИЕ: Используем :disabled псевдокласс -->
+    <!-- Используем :disabled псевдокласс -->
     <Style Selector="Button.playback-btn:disabled">
         <Setter Property="Opacity" Value="0.4" />
         <Setter Property="Cursor" Value="Arrow" />
@@ -377,7 +377,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
     
-    <!-- ИСПРАВЛЕНИЕ: Добавлен :disabled стиль для главной кнопки -->
+    <!-- Добавлен :disabled стиль для главной кнопки -->
     <Style Selector="Button.playback-btn-main:disabled">
         <Setter Property="Opacity" Value="0.4" />
         <Setter Property="Cursor" Value="Arrow" />
