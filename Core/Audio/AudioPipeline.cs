@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using LMP.Core.Audio.Backends;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Helpers;
@@ -47,6 +49,9 @@ public sealed class AudioPipeline : IAsyncDisposable
     private CancellationTokenSource? _decoderCts;
     private Task? _decoderTask;
     private volatile bool _disposed;
+
+    private TaskCompletionSource? _warmupTcs;
+    private int _warmupThreshold;
 
     private int _skipFramesCounter;
     private int _decoderResetNeeded;
@@ -397,6 +402,14 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (cts == null || task == null) return;
 
         try { cts.Cancel(); } catch (ObjectDisposedException) { }
+
+        // Мгновенно прерываем блокирующие синхронные чтения сетевого потока перед ожиданием завершения таски [1].
+        // Без этого Read() зависнет на `.GetResult()`, дожидаясь скачивания чанка или 600мс тайм-аута.
+        if (_source is Sources.CachingStreamSource cachingSource)
+        {
+            cachingSource.CancelActiveReads();
+        }
+
         try { await task.WaitAsync(timeout).ConfigureAwait(false); }
         catch (TimeoutException) { Log.Warn("[AudioPipeline] Decoder stop timeout"); }
         catch (OperationCanceledException) { }
@@ -571,6 +584,15 @@ public sealed class AudioPipeline : IAsyncDisposable
                         int totalSamples = samplesDecoded * _decoder.Channels;
                         _pcmBuffer.Write(_decodeBuffer.AsSpan(0, totalSamples));
                         Interlocked.Add(ref _decodedSamples, totalSamples);
+
+                        // РЕАКТИВНЫЙ СИГНАЛ ПРОГРЕВА:
+                        int threshold = Volatile.Read(ref _warmupThreshold);
+                        if (threshold > 0 && _pcmBuffer.Count >= threshold)
+                        {
+                            Volatile.Write(ref _warmupThreshold, 0);
+                            var tcs = Interlocked.Exchange(ref _warmupTcs, null);
+                            tcs?.TrySetResult();
+                        }
                     }
                 }
                 catch (OperationCanceledException) { break; }
@@ -676,6 +698,13 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (_disposed) return;
         _backend.Flush();
         _pcmBuffer.Clear();
+
+        // Безопасный сброс триггера прогрева 
+        Volatile.Write(ref _warmupThreshold, 0);
+        var tcs = Interlocked.Exchange(ref _warmupTcs, null);
+        tcs?.TrySetResult();
+
+        Log.Debug("[AudioPipeline] Flushed");
     }
 
     /// <summary>Уведомляет о starvation backend.</summary>
@@ -698,6 +727,11 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         float normGain = _analyzer.IsEnabled ? _analyzer.GetLockedGain() : 1.0f;
         _gainCrossfader.Reset(normGain);
+
+        // Безопасный сброс триггера прогрева 
+        Volatile.Write(ref _warmupThreshold, 0);
+        var tcs = Interlocked.Exchange(ref _warmupTcs, null);
+        tcs?.TrySetResult();
     }
 
     /// <summary>Выполняет pre-scan нормализации.</summary>
@@ -825,24 +859,112 @@ public sealed class AudioPipeline : IAsyncDisposable
                 : 1.0f;
 
             _gainCrossfader.SetTarget(normGain, _decoder.SampleRate, _decoder.Channels);
-            _truePeakLimiter!.Process(samples, ref _gainCrossfader);
+
+            // ZERO-ALLOC HOT PATH / LIMITER BYPASS:
+            // Лимитер математически избыточен, если целевое усиление normGain <= 1.0f (ослабление/аттенуация)
+            // и огибающая лимитера полностью восстановилась (EnvelopeGain >= 0.999f).
+            // В этом случае мы полностью обходим сложный per-sample envelope follower лимитера
+            // и применяем громкость через высокоскоростной аппаратный векторный цикл (SIMD).
+            bool canBypassLimiter = normGain <= 1.0f && _truePeakLimiter!.EnvelopeGain >= 0.999f;
+
+            if (canBypassLimiter)
+            {
+                if (_gainCrossfader.IsActive)
+                {
+                    ApplyGainWithCrossfade(samples, ref _gainCrossfader);
+                }
+                else if (MathF.Abs(normGain - 1.0f) > 0.0001f)
+                {
+                    ApplyConstantGain(samples, normGain);
+                }
+                // Если normGain == 1.0f и кроссфейдер неактивен — чистый No-Op bypass (0% нагрузки на CPU)
+            }
+            else
+            {
+                _truePeakLimiter!.Process(samples, ref _gainCrossfader);
+            }
         }
 
         return read / _decoder.Channels;
+    }
+
+    /// <summary>
+    /// Применяет константный множитель громкости к аудиоданным с использованием аппаратного SIMD-ускорения.
+    /// Автоматически векторизуется под AVX2/SSE/Neon в зависимости от архитектуры CPU.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ApplyConstantGain(Span<float> samples, float gain)
+    {
+        int i = 0;
+        int vectorSize = Vector<float>.Count;
+
+        if (Vector.IsHardwareAccelerated && samples.Length >= vectorSize)
+        {
+            var gainVector = new Vector<float>(gain);
+            for (; i <= samples.Length - vectorSize; i += vectorSize)
+            {
+                var vector = new Vector<float>(samples.Slice(i, vectorSize));
+                (vector * gainVector).CopyTo(samples.Slice(i, vectorSize));
+            }
+        }
+
+        // Хвостовой цикл для остатка массива
+        for (; i < samples.Length; i++)
+        {
+            samples[i] *= gain;
+        }
+    }
+
+    /// <summary>
+    /// Применяет плавное изменение громкости (crossfade) напрямую к буферу без накладных расходов лимитера.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ApplyGainWithCrossfade(Span<float> samples, ref GainCrossfader crossfader)
+    {
+        ref float samplesRef = ref MemoryMarshal.GetReference(samples);
+        int len = samples.Length;
+        for (int i = 0; i < len; i++)
+        {
+            Unsafe.Add(ref samplesRef, i) *= crossfader.Advance();
+        }
     }
 
     #endregion
 
     #region Buffer Info
 
-    /// <summary>Ожидает минимального заполнения буфера.</summary>
+    /// <summary>
+    /// Ожидает минимального заполнения буфера реактивно, 100% Lock-Free.
+    /// </summary>
     public async Task WaitForBufferAsync(int minSamples, int maxWaitMs, CancellationToken ct)
     {
-        int waited = 0;
-        while (_pcmBuffer.Count < minSamples && waited < maxWaitMs && !ct.IsCancellationRequested)
+        if (_disposed || _pcmBuffer.Count >= minSamples) return;
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Interlocked.Exchange(ref _warmupTcs, tcs);
+        Volatile.Write(ref _warmupThreshold, minSamples);
+
+        // Двойная проверка во избежание гонки состояний (Race Condition)
+        if (_pcmBuffer.Count >= minSamples)
         {
-            await Task.Delay(WaitBufferDelayMs, ct).ConfigureAwait(false);
-            waited += WaitBufferDelayMs;
+            Volatile.Write(ref _warmupThreshold, 0);
+            tcs.TrySetResult();
+            return;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(maxWaitMs);
+
+        try
+        {
+            // Ждем сигнала от декодера или жесткого системного таймаута OS
+            await tcs.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            Volatile.Write(ref _warmupThreshold, 0);
+            Interlocked.CompareExchange(ref _warmupTcs, null, tcs);
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using NAudio.Wave;
@@ -14,7 +15,7 @@ namespace LMP.Core.Audio.Backends;
 /// с устаревшим gain прежде чем дойдёт до нового.</para>
 /// <para>GainWaveProvider применяет volumeGain при ЧТЕНИИ WaveOut из provider.
 /// WaveOut вызывает <see cref="Read"/> многократно, запрашивая следующий буфер.
-/// Gain применяется к тому, что WaveOut потребляет прямо сейчас →
+/// Gain применяется к тому, что WaveOut играет прямо сейчас →
 /// задержка = один waveOut буфер (~100ms), а не весь provider (500ms).</para>
 ///
 /// <para><b>Thread model:</b></para>
@@ -25,7 +26,7 @@ namespace LMP.Core.Audio.Backends;
 ///     cross-thread коммуникации. Все остальные поля — single writer (WaveOut thread).</item>
 /// </list>
 ///
-/// <para><b>Zero-alloc hot path.</b> Bounds elision через <see cref="Unsafe.Add{T}(ref T,int)"/>.</para>
+/// <para><b>Zero-alloc hot path.</b> Аппаратное SIMD-ускорение через <see cref="Vector{T}"/>.</para>
 /// </summary>
 public sealed class GainWaveProvider : IWaveProvider
 {
@@ -110,27 +111,10 @@ public sealed class GainWaveProvider : IWaveProvider
         _targetGain = Math.Max(0f, gain);
     }
 
-    /// <summary>
-    /// Читает PCM из source provider, применяет volume gain с ramp и возвращает
-    /// готовый буфер для WaveOut.
-    /// </summary>
+    /// <inheritdoc/>
     /// <remarks>
     /// <para><b>Вызывается из WaveOut playback thread.</b></para>
-    /// <para><b>Порядок обработки per-sample:</b></para>
-    /// <list type="number">
-    ///   <item>Читаем из <see cref="_source"/> (normalized PCM, normGain уже применён).</item>
-    ///   <item>Если target изменился — начинаем ramp от текущего к целевому.</item>
-    ///   <item>Применяем текущий gain к каждому сэмплу с clamp [-1, 1].</item>
-    /// </list>
-    /// <para><b>Clamp [-1, 1]:</b> Защита от hard clip при VolumeBoost > 1.0.
-    /// TruePeakLimiter в AudioCallback ограничивает нормализованный сигнал до 1.0,
-    /// но volumeGain > 1.0 (boost) может превысить это ограничение.
-    /// Hard clamp предпочтительнее тихого overflow.</para>
     /// </remarks>
-    /// <param name="buffer">Буфер для заполнения.</param>
-    /// <param name="offset">Смещение в байтах.</param>
-    /// <param name="count">Количество байт для чтения.</param>
-    /// <returns>Количество фактически прочитанных байт.</returns>
     public int Read(byte[] buffer, int offset, int count)
     {
         int read = _source.Read(buffer, offset, count);
@@ -144,7 +128,6 @@ public sealed class GainWaveProvider : IWaveProvider
         float target = _targetGain;
 
         // Инициализируем ramp если gain изменился с прошлого вызова Read.
-        // Выполняется из WaveOut thread — нет конкуренции с другими ramp-полями.
         if (MathF.Abs(target - _currentGain) > 0.0005f && _rampRemaining == 0)
         {
             _rampStartGain = _currentGain;
@@ -155,7 +138,7 @@ public sealed class GainWaveProvider : IWaveProvider
 
         if (_rampRemaining > 0)
         {
-            // Ramp path: per-sample линейная интерполяция.
+            // Ramp path: per-sample линейная интерполяция (активна только ~25мс после изменения громкости)
             for (int i = 0; i < length; i++)
             {
                 if (_rampRemaining > 0)
@@ -176,16 +159,38 @@ public sealed class GainWaveProvider : IWaveProvider
         }
         else if (MathF.Abs(_currentGain - 1.0f) > 0.0005f)
         {
-            // Constant gain path: SIMD через JIT auto-vectorization.
-            // Scalar loop с простой арифметикой — JIT векторизует на AVX2/SSE2.
+            // Constant gain path: Аппаратное SIMD-ускорение (AVX/SSE/Neon)
+            // Явное использование Vector<float> с Vector.Min и Vector.Max даёт 100% стабильную векторизацию
+            // на уровне инструкций процессора (MAXPS/MINPS) без ветвления и промахов предсказателя!
             float g = _currentGain;
-            for (int i = 0; i < length; i++)
+            int i = 0;
+            int vectorSize = Vector<float>.Count;
+
+            if (Vector.IsHardwareAccelerated && length >= vectorSize)
+            {
+                var gainVec = new Vector<float>(g);
+                var minVec = new Vector<float>(-1.0f);
+                var maxVec = new Vector<float>(1.0f);
+
+                for (; i <= length - vectorSize; i += vectorSize)
+                {
+                    var vec = new Vector<float>(floats.Slice(i, vectorSize));
+                    var amplified = vec * gainVec;
+                    
+                    // Branch-free Math.Clamp на регистрах процессора
+                    var clamped = Vector.Max(minVec, Vector.Min(maxVec, amplified));
+                    clamped.CopyTo(floats.Slice(i, vectorSize));
+                }
+            }
+
+            // Дорабатываем остаток буфера (unaligned tail)
+            for (; i < length; i++)
             {
                 float sample = Unsafe.Add(ref floatsRef, i) * g;
                 Unsafe.Add(ref floatsRef, i) = sample < -1f ? -1f : sample > 1f ? 1f : sample;
             }
         }
-        // else: gain == 1.0 — пропускаем без обработки (нет аллокаций, нет вычислений)
+        // else: gain == 1.0 — пропускаем без обработки (0% CPU, данные идут транзитом)
 
         return read;
     }

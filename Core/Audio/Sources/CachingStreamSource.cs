@@ -538,10 +538,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     /// <summary>
     /// Отменяет все загрузки текущей эпохи и создаёт новую.
-    /// Вызывается при seek — мгновенно прерывает все активные ReadAsync/SendAsync
-    /// через <see cref="OperationCanceledException"/> без ожидания их завершения.
     /// </summary>
-    /// <returns>CancellationToken новой эпохи.</returns>
     private CancellationToken ResetDownloadEpoch()
     {
         lock (_epochLock)
@@ -556,10 +553,12 @@ public sealed partial class CachingStreamSource : IAudioSource
 
             if (oldCts != null)
             {
-                // Синхронный Cancel — все ReadAsync/SendAsync мгновенно
-                // получат OperationCanceledException.
-                try { oldCts.Cancel(); }
-                catch (ObjectDisposedException) { }
+                // Отменяем в ThreadPool, чтобы не задерживать конвейер
+                ThreadPool.UnsafeQueueUserWorkItem(static state =>
+                {
+                    try { ((CancellationTokenSource)state!).Cancel(); }
+                    catch (ObjectDisposedException) { }
+                }, oldCts);
 
                 // Dispose откладывается: in-flight continuations ещё могут
                 // завершать обработку отмены и держать связанные регистрации.
@@ -578,6 +577,15 @@ public sealed partial class CachingStreamSource : IAudioSource
             lock (_epochLock)
                 return _downloadCts?.Token ?? CancellationToken.None;
         }
+    }
+
+    /// <summary>
+    /// Мгновенно отменяет все активные операции чтения на потоке без уничтожения источника.
+    /// Предотвращает мёртвые 600мс блокировки при быстрой смене эпох (rapid seeks) [1, 2].
+    /// </summary>
+    public void CancelActiveReads()
+    {
+        _readStream?.CancelActiveReads();
     }
 
     #endregion

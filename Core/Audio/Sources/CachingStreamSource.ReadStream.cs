@@ -88,6 +88,24 @@ public sealed partial class CachingStreamSource
             Volatile.Write(ref _position, position);
         }
 
+        /// <summary>
+        /// Мгновенно отменяет активный CTS чтения, прерывая любые заблокированные сетевые запросы.
+        /// Выполняется асинхронно для защиты от блокировок сокетов.
+        /// </summary>
+        internal void CancelActiveReads()
+        {
+            var oldCts = Interlocked.Exchange(ref _readCts, new CancellationTokenSource());
+
+            // Делегируем закрытие потоков и сокетов пулу
+            ThreadPool.UnsafeQueueUserWorkItem(static state =>
+            {
+                try { ((CancellationTokenSource)state!).Cancel(); }
+                catch (ObjectDisposedException) { }
+            }, oldCts);
+
+            DeferDisposeCancellationTokenSource(oldCts, 500);
+        }
+
         #endregion
 
         #region Read
@@ -113,8 +131,7 @@ public sealed partial class CachingStreamSource
         /// <inheritdoc/>
         /// <remarks>
         /// <para><b>Оптимизированный гибридный метод:</b> Если данные чанка уже доступны локально 
-        /// (в оперативной памяти или на диске), чтение происходит абсолютно синхронно, без выделения 
-        /// асинхронных стейт-машин и без блокировки потоков пула через <c>GetResult()</c>.</para>
+        /// (в оперативной памяти или на диске), чтение происходит абсолютно синхронно.</para>
         /// </remarks>
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -171,6 +188,12 @@ public sealed partial class CachingStreamSource
             }
             catch (OperationCanceledException) { return 0; }
             catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { return 0; }
+            catch (Exception ex) when (ex is System.IO.IOException || ex is System.Net.Sockets.SocketException)
+            {
+                // Глушитель для отладчика: при отмене сетевого запроса сокеты Windows рвутся с IOException.
+                // Возвращаем 0 (EOF), чтобы парсер тихо завершился без всплытия исключений по всему стеку приложения.
+                return 0;
+            }
         }
 
         /// <inheritdoc/>

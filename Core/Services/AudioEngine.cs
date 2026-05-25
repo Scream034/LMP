@@ -199,6 +199,25 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     /// <summary>Контекст предупреждения о n-токене.</summary>
     public readonly record struct NTokenWarningInfo(TrackInfo? Track, bool WasSkipped);
 
+    private readonly Action<TimeSpan> _positionChangedHandler;
+    private readonly Action _raisePositionChangedOnUIDelegate;
+    private long _currentPositionTicks;
+
+    private readonly Action<BufferState> _bufferStateChangedHandler;
+    private readonly Action _raiseBufferStateOnUIDelegate;
+    private BufferState _currentBufferState;
+    private readonly Lock _bufferStateLock = new();
+
+    private readonly Action<TimeSpan> _seekCompletedHandler;
+    private readonly Action _raiseSeekCompletedOnUIDelegate;
+    private long _seekCompletedTicks;
+
+    private readonly Action _deviceLostHandler;
+    private readonly Action _raiseDeviceLostOnUIDelegate;
+
+    private readonly Action _deviceRestoredHandler;
+    private readonly Action _raiseDeviceRestoredOnUIDelegate;
+
     #endregion
 
     #region Constructor
@@ -214,10 +233,27 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         ApplyStreamingProfile();
 
+        // Настройка делегатов один раз при создании класса. 
+        // Исключает аллокацию замыканий в куче (Gen 0) во время проигрывания.
+        _positionChangedHandler = HandlePositionChangedInternal;
+        _raisePositionChangedOnUIDelegate = () => OnPositionChanged?.Invoke(TimeSpan.FromTicks(Volatile.Read(ref _currentPositionTicks)));
+
+        _bufferStateChangedHandler = HandleBufferStateChangedInternal;
+        _raiseBufferStateOnUIDelegate = () => OnBufferStateChanged?.Invoke(GetLatestBufferState());
+
+        _seekCompletedHandler = HandleSeekCompletedInternal;
+        _raiseSeekCompletedOnUIDelegate = () => OnSeekCompleted?.Invoke(TimeSpan.FromTicks(Volatile.Read(ref _seekCompletedTicks)));
+
+        _deviceLostHandler = HandleDeviceLostInternal;
+        _raiseDeviceLostOnUIDelegate = () => OnDeviceLost?.Invoke();
+
+        _deviceRestoredHandler = HandleDeviceRestoredInternal;
+        _raiseDeviceRestoredOnUIDelegate = () => OnDeviceRestored?.Invoke();
+
         _player = new AudioPlayer(new AudioPlayerOptions
         {
             UrlRefreshCallback = RefreshUrlCallbackAsync,
-            PositionUpdateInterval = TimeSpan.FromMilliseconds(200),
+            PositionUpdateInterval = TimeSpan.FromMilliseconds(500), // Частота рассылки события снижена до 500мс для разгрузки UI-потока. Плавность слайдера обеспечивается экстраполяцией.
             MaxRetryAttempts = 3,
             UseNullBackend = false,
             OnPipelineConfiguring = ConfigurePipelineBeforeStart,
@@ -298,14 +334,14 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
     private void SubscribeToPlayerEvents()
     {
-        _player.Events.PositionChanged += pos => RaiseOnUI(() => OnPositionChanged?.Invoke(pos));
+        _player.Events.PositionChanged += _positionChangedHandler;
         _player.Events.StateChanged += HandlePlayerStateChanged;
         _player.Events.TrackEnded += HandlePlayerTrackEnded;
         _player.Events.StreamInfoChanged += HandleStreamInfoChanged;
-        _player.Events.BufferStateChanged += state => RaiseOnUI(() => OnBufferStateChanged?.Invoke(state));
-        _player.Events.SeekCompleted += t => RaiseOnUI(() => OnSeekCompleted?.Invoke(t));
-        _player.Events.DeviceLost += () => RaiseOnUI(() => OnDeviceLost?.Invoke());
-        _player.Events.DeviceRestored += () => RaiseOnUI(() => OnDeviceRestored?.Invoke());
+        _player.Events.BufferStateChanged += _bufferStateChangedHandler;
+        _player.Events.SeekCompleted += _seekCompletedHandler;
+        _player.Events.DeviceLost += _deviceLostHandler;
+        _player.Events.DeviceRestored += _deviceRestoredHandler;
 
         _player.Events.ErrorOccurred += err =>
         {
@@ -340,6 +376,49 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     private void ApplyStreamingProfile()
     {
         AudioSourceFactory.ApplyInternetProfile(_library.Settings.InternetProfile);
+    }
+
+    #endregion
+
+    #region Event Handlers
+
+    private void HandlePositionChangedInternal(TimeSpan pos)
+    {
+        Volatile.Write(ref _currentPositionTicks, pos.Ticks);
+        RaiseOnUI(_raisePositionChangedOnUIDelegate);
+    }
+
+    private void HandleBufferStateChangedInternal(BufferState state)
+    {
+        lock (_bufferStateLock)
+        {
+            _currentBufferState = state;
+        }
+        RaiseOnUI(_raiseBufferStateOnUIDelegate);
+    }
+
+    private BufferState GetLatestBufferState()
+    {
+        lock (_bufferStateLock)
+        {
+            return _currentBufferState;
+        }
+    }
+
+    private void HandleSeekCompletedInternal(TimeSpan t)
+    {
+        Volatile.Write(ref _seekCompletedTicks, t.Ticks);
+        RaiseOnUI(_raiseSeekCompletedOnUIDelegate);
+    }
+
+    private void HandleDeviceLostInternal()
+    {
+        RaiseOnUI(_raiseDeviceLostOnUIDelegate);
+    }
+
+    private void HandleDeviceRestoredInternal()
+    {
+        RaiseOnUI(_raiseDeviceRestoredOnUIDelegate);
     }
 
     #endregion

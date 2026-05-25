@@ -77,6 +77,12 @@ public sealed class TruePeakLimiter
     private float _envelopeGain;
 
     /// <summary>
+    /// Возвращает текущее состояние ослабления огибающей лимитера.
+    /// Значение 1.0f означает, что лимитер полностью восстановился и не ослабляет сигнал.
+    /// </summary>
+    public float EnvelopeGain => _envelopeGain;
+
+    /// <summary>
     /// Attack коэффициент (коэффициент экспоненциального сглаживания).
     /// Вычисляется один раз в конструкторе: <c>exp(-1 / (sampleRate × attackMs/1000))</c>.
     /// </summary>

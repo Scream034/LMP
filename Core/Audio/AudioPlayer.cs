@@ -63,6 +63,13 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     private Func<CancellationToken, Task<string?>>? _cachedUrlRefresher;
     private string? _cachedUrlRefresherTrackId;
 
+    private readonly SharedPlaybackState _sharedState = new();
+
+    /// <summary>
+    /// Последнее считанное из драйвера значение физически воспроизведённых сэмплов.
+    /// Используется для детекции шага дискретизации аппаратного буфера и сброса экстраполяции.
+    /// </summary>
+    private long _lastRawPlayedSamples = -1;
 
     #endregion
 
@@ -71,18 +78,33 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>События плеера.</summary>
     public AudioPlayerEvents Events => _events;
 
-    /// <summary>Текущая позиция воспроизведения.</summary>
+    /// <summary>Текущая позиция воспроизведения с суб-миллисекундной экстраполяцией времени [2, 3].</summary>
     public TimeSpan Position
     {
         get
         {
             var pipeline = _activePipeline;
             if (pipeline == null) return TimeSpan.Zero;
+
+            // Читаем сырое (дискретное) количество проигранных сэмплов непосредственно из звуковой карты.
+            // Значение обновляется драйвером скачкообразно в среднем раз в 50-100мс.
             long played = Math.Max(0, pipeline.PlayedSamples - pipeline.BackendBufferedSamples);
-            double seconds = (double)played / (pipeline.SampleRate * pipeline.Channels);
-            var dur = Duration;
-            if (dur.TotalSeconds > 0 && seconds > dur.TotalSeconds) seconds = dur.TotalSeconds;
-            return TimeSpan.FromSeconds(seconds);
+
+            // Если физическое положение изменилось (пришёл новый блок звука от звуковой карты),
+            // мы фиксируем это как новый опорный ориентир в разделяемой памяти.
+            if (played != _lastRawPlayedSamples)
+            {
+                _lastRawPlayedSamples = played;
+                _sharedState.Update(
+                    played,
+                    pipeline.SampleRate,
+                    pipeline.Channels,
+                    _state == PlayerState.Playing,
+                    (long)Duration.TotalMilliseconds);
+            }
+
+            // Наносекундный lock-free расчёт точного времени на основе Stopwatch.GetTimestamp()
+            return _sharedState.GetCurrentPosition();
         }
     }
 
@@ -132,12 +154,22 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
     #region Public API
 
+    /// <summary>
+    /// Инициирует запуск воспроизведения. 
+    /// Мгновенно отменяет любые фоновые операции перемещения (seek) для предотвращения зависания актора.
+    /// </summary>
     private void Play(string url, string? trackId = null, int bitrateHint = 0,
         TimeSpan? seekPosition = null, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // Мгновенно отменяем активное скачивание чанков предыдущего Seek на UI-потоке,
+        // чтобы разблокировать очередь команд плеера без ожидания сетевого таймаута [2].
+        CancelActiveSeek();
+
         int session = _session.BeginNew();
         _currentTrackId = trackId;
+        _lastRawPlayedSamples = -1; // Сброс базового счетчика для экстраполяции новой сессии
         SetState(PlayerState.Loading);
         _commandChannel.Writer.TryWrite(new PlayCommand(url, trackId, bitrateHint, session, seekPosition, ct));
     }
@@ -176,10 +208,21 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         AudioPlayer Player, Action<PlaybackState> OnState,
         Action<AudioPlayerError> OnError, CancellationTokenRegistration Reg);
 
-    /// <summary>Пауза.</summary>
+    /// <summary>
+    /// Приостанавливает воспроизведение. 
+    /// Поддерживает немедленное прерывание зависших сетевых операций перемещения (seek).
+    /// </summary>
     public void Pause()
     {
-        if (_state != PlayerState.Playing) return;
+        // Разрешаем паузу не только во время проигрывания, но и на этапах буферизации или перемещения
+        if (_state is not (PlayerState.Playing or PlayerState.Seeking or PlayerState.Buffering)) return;
+
+        if (_state is PlayerState.Seeking or PlayerState.Buffering)
+        {
+            // Пользователь нажал паузу во время ожидания сети — немедленно прерываем скачивание чанка [2].
+            CancelActiveSeek();
+        }
+
         SetState(PlayerState.Paused);
         _activePipeline?.Stop();
     }
@@ -209,10 +252,19 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         pipeline.Start();
     }
 
-    /// <summary>Останов.</summary>
+    /// <summary>
+    /// Останавливает воспроизведение.
+    /// Гарантирует мгновенную разблокировку UI-потока при зависшем скачивании.
+    /// </summary>
     public void Stop()
     {
         if (_state is PlayerState.Idle or PlayerState.Disposed) return;
+
+        // Мгновенно отменяем активный Seek на UI-потоке. Сетевой стрим CachingStreamSource
+        // выбросит OperationCanceledException, и цикл обработки команд мгновенно перейдет к StopCommand [2].
+        CancelActiveSeek();
+        _lastRawPlayedSamples = -1; // Сброс экстраполяции
+
         _commandChannel.Writer.TryWrite(new StopCommand(_session.BeginNew()));
     }
 
@@ -396,6 +448,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         if (oldPipeline != null) TrackAndFirePipelineDispose(oldPipeline);
 
         StopTimers();
+        _lastRawPlayedSamples = -1;
 
         try
         {
@@ -729,17 +782,17 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
     #region Dispose
 
-    /// <summary>
-    /// Синхронный Dispose — FALLBACK shutdown path.
-    /// </summary>
+    /// <inheritdoc/>
     /// <remarks>
-    /// Блокирует вызывающий поток не более <see cref="DisposeTaskTimeoutSec"/> секунд.
-    /// Для вызова из UI-потока предпочтительнее <see cref="DisposeAsync"/>.
+    /// Синхронный Dispose — FALLBACK shutdown path.
     /// </remarks>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Отменяем любые сетевые операции перемещения немедленно, чтобы не блокировать поток утилизации [2]
+        CancelActiveSeek();
 
         _commandChannel.Writer.TryWrite(new DisposeCommand(int.MaxValue));
         _lifetimeCts.Cancel();
@@ -747,29 +800,26 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         try { _commandProcessorTask.Wait(TimeSpan.FromSeconds(DisposeTaskTimeoutSec)); }
         catch { }
 
-        // К этому моменту HandleDisposeAsync уже дождался _oldPipelineDisposeTask,
-        // поэтому backend dispose безопасен.
         _sharedBackend.Dispose();
         _lifetimeCts.Dispose();
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>
+    /// <inheritdoc/>
+    /// <remarks>
     /// Асинхронный Dispose — PRIMARY shutdown path.
-    /// </summary>
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
 
-        // Отправляем DisposeCommand и сразу complete writer —
-        // ReadAllAsync завершится штатно после обработки последней команды,
-        // не дожидаясь Cancel.
+        // Отменяем любые сетевые операции перемещения немедленно [2]
+        CancelActiveSeek();
+
         await _commandChannel.Writer.WriteAsync(new DisposeCommand(int.MaxValue))
             .ConfigureAwait(false);
 
-        // Complete сигнализирует ReadAllAsync что новых команд не будет.
-        // Это первичный сигнал завершения loop — Cancel только fallback.
         _commandChannel.Writer.TryComplete();
 
         try
@@ -784,7 +834,6 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         }
         catch { }
 
-        // Cancel — fallback для незавершённых async операций внутри handlers
         _lifetimeCts.Cancel();
 
         _sharedBackend.Dispose();
@@ -792,6 +841,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
         GC.SuppressFinalize(this);
     }
+
 
     #endregion
 }
