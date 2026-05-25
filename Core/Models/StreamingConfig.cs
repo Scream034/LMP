@@ -60,10 +60,10 @@ public sealed record StreamingConfig
 
     #region Pre-Buffer Settings
 
-    /// <summary>Чанков загрузить перед стартом воспроизведения.</summary>
+    /// <summary>Размер предварительного буфера (в чанках) перед стартом воспроизведения.</summary>
     public int InitialChunksToLoad { get; init; } = Defaults.InitialChunksToLoad;
 
-    /// <summary>Чанков предзагрузить при seek.</summary>
+    /// <summary>Размер предварительного буфера (в чанках) при перетаскивании ползунка (seek).</summary>
     public int SeekPreloadChunks { get; init; } = Defaults.SeekPreloadChunks;
 
     #endregion
@@ -92,40 +92,37 @@ public sealed record StreamingConfig
     #endregion
 
     /// <summary>
-    /// Значения по умолчанию — совпадают с Medium профилем.
-    /// <para><b>SSOT:</b> <see cref="AudioConstants.ChunkSize"/> ДОЛЖЕН совпадать
-    /// с <see cref="ChunkSizeBytes"/> для корректного reconciliation в
-    /// <c>CachingStreamSource.InitializeAsync</c>.</para>
+    /// Значения по умолчанию — совпадают со сбалансированным Medium профилем (16 КБ).
     /// </summary>
     public static class Defaults
     {
-        // Chunk
-        public const int ChunkSizeBytes = 64 * 1024;
-        public const int ReadAheadChunks = 6;
-        public const int MaxRamChunks = 96;
-        public const int RamEvictionDistance = 14;
+        // Chunk Settings
+        public const int ChunkSizeBytes = 16 * 1024;
+        public const int ReadAheadChunks = 4;
+        public const int MaxRamChunks = 256;
+        public const int RamEvictionDistance = 16;
 
-        // Download
-        public const int MaxConcurrentDownloads = 3;
-        public const int DownloadTimeoutMs = 15_000;
-        public const int DownloadSlotTimeoutMs = 300;
+        // Download Settings
+        public const int MaxConcurrentDownloads = 2;
+        public const int DownloadTimeoutMs = 30_000;
+        public const int DownloadSlotTimeoutMs = 800;
 
-        // Retry
-        public const int MaxNetworkRetries = 3;
-        public const int NetworkRetryBaseDelayMs = 500;
+        // Retry / Resilience
+        public const int MaxNetworkRetries = 4;
+        public const int NetworkRetryBaseDelayMs = 800;
         public const bool UseExponentialBackoff = true;
         public const int Max403BeforeCircuitBreak = 3;
-        public const int RefreshCooldownMs = 3000;
-        public const int PostRefreshDelayMs = 500;
+        public const int RefreshCooldownMs = 5000;
+        public const int PostRefreshDelayMs = 800;
 
-        // Pre-buffer
+        // Pre-buffer Settings
         public const int InitialChunksToLoad = 4;
         public const int SeekPreloadChunks = 6;
 
-        // Background fill
-        public const int BackgroundFillIdleCycles = 5;
-        public const int BackgroundFillIntervalMs = 3000;
-        public const int MaxBackgroundChunksPerSession = 0;
+        // Background Fill
+        public const int BackgroundFillIdleCycles = 8;
+        public const int BackgroundFillIntervalMs = 5000;
+        public const int MaxBackgroundChunksPerSession = 60;
 
         /// <summary>
         /// Минимум буфера впереди перед началом фоновой докачки.
@@ -137,9 +134,9 @@ public sealed record StreamingConfig
         /// условие <c>chunksAhead >= MinBufferAheadForBackgroundFill</c>
         /// НИКОГДА не выполняется → background fill заблокирован навсегда.</para>
         /// </remarks>
-        public const int MinBufferAheadForBackgroundFill = 4;
+        public const int MinBufferAheadForBackgroundFill = 3;
 
-        // Preload loop
-        public const int PreloadIntervalMs = 500;
+        // Preload Loop
+        public const int PreloadIntervalMs = 800;
     }
 }

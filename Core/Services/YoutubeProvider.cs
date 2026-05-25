@@ -598,8 +598,6 @@ public partial class YoutubeProvider : IDisposable
 
     #endregion
 
-    #region RefreshStreamUrlAsync
-
     public async Task<(string Url, long Size, int Bitrate, string Codec, string Container)?> RefreshStreamUrlAsync(
             TrackInfo track,
             bool forceRefresh = false,
@@ -941,7 +939,39 @@ public partial class YoutubeProvider : IDisposable
         return streams.Count > 0 ? streams[0] : null;
     }
 
-    #endregion
+    /// <summary>
+    /// Выполняет сверхлегкий точечный запрос к InnerTube API для получения только громкости (loudnessDb) видео.
+    /// Исключает необходимость выполнения тяжелой локальной дешифрации подписей и токенов.
+    /// </summary>
+    /// <param name="videoId">Уникальный 11-значный идентификатор видео.</param>
+    /// <param name="ct">Токен отмены операции.</param>
+    /// <returns>Значение громкости в dB, либо <c>float.NaN</c> в случае ошибки или отсутствия сети.</returns>
+    public async ValueTask<float> GetLoudnessDbOnlyAsync(string videoId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(videoId))
+            return float.NaN;
+
+        try
+        {
+            var vId = VideoId.Parse(videoId);
+            var client = GetClient();
+
+            // Используем ANDROID_VR — он самый быстрый, не имеет оверхеда на PO Token и ротацию n-token шифров
+            var response = await client.Videos.GetPlayerResponseWithClientAsync(
+                vId, "ANDROID_VR", ct).ConfigureAwait(false);
+
+            return response.LoudnessDb;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[YouTube] GetLoudnessDbOnlyAsync failed for {videoId}: {ex.Message}");
+            return float.NaN;
+        }
+    }
 
     private static string DetermineCodec(string container, AudioOnlyStreamInfo stream)
     {

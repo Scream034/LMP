@@ -1,4 +1,3 @@
-using LMP.Core.Audio.Helpers;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Exceptions;
 using static LMP.Core.Audio.AudioConstants;
@@ -531,7 +530,7 @@ public sealed partial class AudioPlayer
     /// </summary>
     /// <param name="pipeline">Активный pipeline.</param>
     /// <param name="ct">Токен отмены seek-фазы.</param>
-    private async Task StopDecoderForReseekAsync(AudioPipeline pipeline, CancellationToken ct)
+    private static async Task StopDecoderForReseekAsync(AudioPipeline pipeline, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 

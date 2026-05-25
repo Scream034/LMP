@@ -56,29 +56,30 @@
     </StreamGeometry>
 
     <!-- ═══ VOLUME ═══ -->
-    <!-- Mute: рупор + X -->
+    
+    <!-- Mute: рупор + идеальный математический крестик -->
     <StreamGeometry x:Key="Icon.VolumeMute">
-        M3,9H7L12,4V20L7,15H3V9Z M15,9L21,15M21,9L15,15
+        M3,9 H7 L12,4 V20 L7,15 H3 V9 Z M16.59,9 L18,10.41 L19.41,9 L21,10.59 L19.41,12 L21,13.41 L19.41,15 L18,13.59 L16.59,15 L15,13.41 L16.59,12 L15,10.59 Z
     </StreamGeometry>
 
     <!-- Low: рупор + 1 столбик -->
     <StreamGeometry x:Key="Icon.VolumeLow">
-        M3,9H7L12,4V20L7,15H3V9Z M15,8H17V16H15V8Z
+        M3,9 H7 L12,4 V20 L7,15 H3 V9 Z M14,9 H16 V15 H14 Z
     </StreamGeometry>
 
     <!-- Medium: рупор + 2 столбика -->
     <StreamGeometry x:Key="Icon.VolumeMedium">
-        M3,9H7L12,4V20L7,15H3V9Z M15,8H17V16H15V8Z M19,6H21V18H19V6Z
+        M3,9 H7 L12,4 V20 L7,15 H3 V9 Z M14,9 H16 V15 H14 Z M18,7 H20 V17 H18 Z
     </StreamGeometry>
 
     <!-- High: рупор + 3 столбика -->
     <StreamGeometry x:Key="Icon.VolumeHigh">
-        M3,9H7L12,4V20L7,15H3V9Z M14,9H16V15H14V9Z M17,7H19V17H17V7Z M20,5H22V19H20V5Z
+        M3,9 H7 L12,4 V20 L7,15 H3 V9 Z M14,9 H16 V15 H14 Z M18,7 H20 V17 H18 Z M22,5 H24 V19 H22 Z
     </StreamGeometry>
 
-    <!-- Boosted: рупор + 3 сверхвысоких столбика (красится AccentBrush через Foreground) -->
+    <!-- Boosted: рупор + 3 агрессивных высоких столбика -->
     <StreamGeometry x:Key="Icon.VolumeVibrate">
-        M3,9H7L12,4V20L7,15H3V9Z M14,8H16V16H14V8Z M17,5H19V19H17V5Z M20,2H22V22H20V2Z
+        M3,9 H7 L12,4 V20 L7,15 H3 V9 Z M14,7 H16 V17 H14 Z M18,4 H20 V20 H18 Z M22,1 H24 V23 H22 Z
     </StreamGeometry>
 
     <!-- ═══ LIKE / SOCIAL ═══ -->

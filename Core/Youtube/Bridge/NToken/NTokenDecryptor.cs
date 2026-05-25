@@ -20,7 +20,7 @@ public sealed partial class NTokenDecryptor(PlayerContextManager playerManager)
     protected override string FunctionName => "n";
     protected override string TestInput => "Siib9I-K-KF0GqS-";
 
-    public DecryptionContextCookie PushDecryptionContext(string? contextId)
+    public static DecryptionContextCookie PushDecryptionContext(string? contextId)
     {
         var previousContext = CurrentDecryptionContext.Value;
         CurrentDecryptionContext.Value = contextId;

@@ -1,7 +1,6 @@
 ﻿using System.Net.Http.Headers;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Bridge.Common;
-using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Utils.Extensions;

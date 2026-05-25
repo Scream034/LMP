@@ -67,4 +67,12 @@ public sealed class VideoClient
             videoId, cancellationToken, isAuthenticated: isAuth);
         return response;
     }
+
+    internal ValueTask<PlayerResponse> GetPlayerResponseWithClientAsync(
+        VideoId videoId,
+        string clientName,
+        CancellationToken cancellationToken = default)
+    {
+        return _controller.GetPlayerResponseWithClientAsync(videoId, clientName, cancellationToken);
+    }
 }

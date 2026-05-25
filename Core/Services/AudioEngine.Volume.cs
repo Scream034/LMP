@@ -1,4 +1,3 @@
-using LMP.Core.Audio;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Models;
 
@@ -174,18 +173,7 @@ public sealed partial class AudioEngine
 
     /// <summary>
     /// Дренирует очередь отложенных записей gain нормализации в БД.
-    /// Reuse словаря через Clear() вместо пересоздания каждые 2 секунды.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Почему AddOrUpdateTrackAsync вместо SaveNormalizationGainAsync:</b></para>
-    /// <para>Предыдущая версия вызывала <c>SaveNormalizationGainAsync</c>,
-    /// который делает <c>ExecuteUpdateAsync</c> — обновляет строку ТОЛЬКО если она существует.
-    /// Треки из поиска (не добавленные в плейлист/лайки) отсутствуют в таблице Tracks,
-    /// и <c>ExecuteUpdate</c> молча ничего не делал. EBU gain терялся при перезапуске,
-    /// вызывая повторный 4-секундный pre-scan на каждом запуске.</para>
-    /// <para>Теперь используется <c>AddOrUpdateTrackAsync</c>, который делает полноценный
-    /// Upsert (Insert или Update) — трек гарантированно попадает в БД.</para>
-    /// </remarks>
     private async Task FlushPendingGainWritesAsync(CancellationToken ct)
     {
         if (_pendingGainWrites.IsEmpty) return;
@@ -200,17 +188,17 @@ public sealed partial class AudioEngine
         {
             try
             {
-                var track = _library.GetTrack(trackId);
+                // Исправление 3: Ищем трек напрямую в выделенном TrackRegistry,
+                // минимизируя шанс промаха из-за выгрузки WeakReference.
+                var track = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
                 if (track != null)
                 {
-                    // Upsert: гарантирует сохранение gain даже для треков из поиска,
-                    // которые ещё не были добавлены в БД через лайк/плейлист.
+                    // Гарантированно сохраняем сущность со всеми её метаданными через Upsert
                     await _library.AddOrUpdateTrackAsync(track, ct).ConfigureAwait(false);
                 }
                 else
                 {
-                    // Fallback: трек не найден в registry (уже GC'd из WeakReference).
-                    // Пробуем точечное обновление — сработает если трек был в БД ранее.
+                    // Резервный путь точечного обновления существующей записи
                     await _library.SaveTrackNormalizationGainAsync(trackId, gain, ct).ConfigureAwait(false);
                 }
             }

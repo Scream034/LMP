@@ -86,6 +86,7 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     private readonly YoutubeProvider _youtube;
     private readonly LibraryService _library;
     private readonly AudioPlayer _player;
+    private readonly TrackRegistry _trackRegistry; // Добавлено внедрение зависимости L1-кэша
 
     #endregion
 
@@ -197,10 +198,14 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
     #region Constructor
 
-    public AudioEngine(YoutubeProvider youtube, LibraryService library)
+    /// <summary>
+    /// Инициализирует центральный движок воспроизведения.
+    /// </summary>
+    public AudioEngine(YoutubeProvider youtube, LibraryService library, TrackRegistry trackRegistry)
     {
         _youtube = youtube;
         _library = library;
+        _trackRegistry = trackRegistry;
 
         ApplyStreamingProfile();
 
@@ -230,7 +235,7 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     }
 
     /// <summary>
-    /// Конфигурирует pipeline перед открытием gate: volume gain, нормализация, crossfader.
+    /// Конфигурирует pipeline перед открытием gate: громкость, нормализация и кроссфейдер.
     /// </summary>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline, string? trackId)
     {
@@ -247,15 +252,40 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         pipeline.Analyzer.Configure(normConfig);
 
+        Log.Debug($"[AudioEngine] Configuring pipeline for '{trackId}'. Normalization: {normConfig.Enabled}, Mode: {normConfig.Mode}");
+
         if (normConfig.Enabled && !string.IsNullOrEmpty(trackId))
         {
-            var track = _library.GetTrack(trackId)
-                        ?? (CurrentTrack?.Id == trackId ? CurrentTrack : null);
+            var registryTrack = _trackRegistry.TryGet(trackId) ?? _library.GetTrack(trackId);
+            var currentTrack = CurrentTrack;
 
-            float cachedGain = NormalizationGainResolver.Resolve(track, normConfig);
+            var track = registryTrack ?? (currentTrack?.Id == trackId ? currentTrack : null);
 
-            if (!float.IsNaN(cachedGain))
-                pipeline.Analyzer.LockFromCachedGain(cachedGain);
+            if (track != null)
+            {
+                float cachedGain = NormalizationGainResolver.Resolve(track, normConfig);
+
+                // Детальная телеметрия для отладки pre-scan
+                Log.Debug($"[AudioEngine] Track resolved: ID={track.Id}, Title='{track.Title}' " +
+                          $"| Source: {(registryTrack != null ? "Registry" : "CurrentTrackFallback")} " +
+                          $"| DB Cached Gain: {(float.IsNaN(track.CachedNormalizationGain) ? "NaN" : track.CachedNormalizationGain.ToString("F4"))} " +
+                          $"| YT Loudness: {(float.IsNaN(track.YoutubeIntegratedLoudnessDb) ? "NaN" : track.YoutubeIntegratedLoudnessDb.ToString("F2") + "dB")} " +
+                          $"| Resolved Gain: {(float.IsNaN(cachedGain) ? "NaN" : cachedGain.ToString("F4"))}");
+
+                if (!float.IsNaN(cachedGain))
+                {
+                    pipeline.Analyzer.LockFromCachedGain(cachedGain);
+                    Log.Info($"[AudioEngine] Normalization gain locked from cache: {cachedGain:F4}x for {trackId}");
+                }
+                else
+                {
+                    Log.Warn($"[AudioEngine] Normalization resolver returned NaN for {trackId}. EBU R128 Pre-scan is REQUIRED.");
+                }
+            }
+            else
+            {
+                Log.Error($"[AudioEngine] ⚠ FAILED to resolve TrackInfo for '{trackId}' during pipeline configuration. Pre-scan will be triggered.");
+            }
         }
 
         pipeline.SnapCrossfaderToGain();
@@ -365,14 +395,18 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         _player.Stop();
     }
 
-    /// <summary>Полностью останавливает воспроизведение после фатальной ошибки.</summary>
+    /// <summary>
+    /// Сбрасывает и останавливает воспроизведение при возникновении критической ошибки.
+    /// </summary>
     public void StopAfterFatalPlaybackError()
     {
         AbortCurrentTrackPlaybackAfterFatalError(CurrentTrack?.Id);
+
+        CurrentTrack = null;
+        StreamInfo = AudioStreamInfo.Empty;
+
         RaiseOnUI(() =>
         {
-            CurrentTrack = null;
-            StreamInfo = AudioStreamInfo.Empty;
             OnTrackChanged?.Invoke(null);
             OnPositionChanged?.Invoke(TimeSpan.Zero);
             OnPlaybackStateChanged?.Invoke(false, false);
@@ -487,16 +521,30 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     {
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
 
+        Log.Debug($"[AudioEngine] [PlayTrackCore] Initiating playback for track: {track.Id} ('{track.Title}') | Session: {session}");
+
         _player.Stop();
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
 
         var canonical = await _library.GetTrackAsync(track.Id, ct).ConfigureAwait(false);
-        if (canonical != null) { canonical.UpdateMetadata(track); track = canonical; }
+        if (canonical != null)
+        {
+            Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} found in DB. Upgrading metadata. Saved DB Gain: {(float.IsNaN(canonical.CachedNormalizationGain) ? "NaN" : canonical.CachedNormalizationGain.ToString("F4"))}");
+            canonical.UpdateMetadata(track);
+            track = canonical;
+        }
+        else
+        {
+            Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} NOT found in DB. Registering in TrackRegistry L1 cache.");
+            track = _trackRegistry.RegisterOrUpdate(track);
+        }
+
+        // Синхронное обновление стейта на текущем потоке для исключения гонки инициализации
+        CurrentTrack = track;
+        StreamInfo = AudioStreamInfo.Empty;
 
         RaiseOnUI(() =>
         {
-            CurrentTrack = track;
-            StreamInfo = AudioStreamInfo.Empty;
             OnTrackChanged?.Invoke(track);
             OnPositionChanged?.Invoke(TimeSpan.Zero);
         });
@@ -513,11 +561,13 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
             if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
 
             if (track.HasCachedNormalizationGain)
+            {
+                Log.Debug($"[AudioEngine] [PlayTrackCore] Queuing initial cached gain write: {track.CachedNormalizationGain:F4}x for {track.Id}");
                 _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
+            }
 
             try
             {
-                // Передаем seekPosition напрямую в плеер (atomic seek-before-play)
                 await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct, seekPosition: seekPosition).ConfigureAwait(false);
             }
             catch (Exception ex) when (_session.IsStaleOrCancelled(session, ct) || CancellationHelper.IsCancellationLike(ex))
@@ -546,21 +596,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     /// <summary>
     /// Разрешает stream URL для трека: кэш → сохранённый URL → YouTube API.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Порядок приоритетов:</b></para>
-    /// <list type="number">
-    ///   <item>Полный аудиокэш на диске — URL не нужен, возвращает пустую строку.</item>
-    ///   <item><c>track.StreamUrl</c> — ранее разрешённый URL, переиспользуется без сети.</item>
-    ///   <item>YouTube API — свежий resolve через <see cref="YoutubeProvider"/>.</item>
-    /// </list>
-    /// <para><b>Кэширование URL:</b> После успешного resolve URL записывается
-    /// в <c>track.StreamUrl</c>. При rapid next/prev повторный вызов для того же трека
-    /// мгновенно вернёт закэшированный URL, минуя сетевой round-trip.
-    /// URL инвалидируется естественным образом через TTL (~6 часов) на стороне YouTube.</para>
-    /// </remarks>
-    /// <param name="track">Трек для разрешения.</param>
-    /// <param name="ct">Токен отмены.</param>
-    /// <returns>Кортеж (URL, Bitrate). URL пустой если трек доступен из локального кэша.</returns>
     private async Task<(string Url, int Bitrate)> ResolveStreamUrlAsync(TrackInfo track, CancellationToken ct)
     {
         var rawId = track.GetRawIdSpan().ToString();
@@ -570,12 +605,42 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         if (cached != null)
         {
             track.TransientBitrate = cached.Value.Entry.Bitrate;
+
+            // ОПТИМИЗАЦИЯ: Если трек полностью кэширован локально на диске, но не имеет вычисленного EBU-gain,
+            // мы пробуем мгновенно получить его loudnessDb из сети. Это предотвращает 5-секундный локальный pre-scan.
+            if (float.IsNaN(track.CachedNormalizationGain) && float.IsNaN(track.YoutubeIntegratedLoudnessDb))
+            {
+                // Запускаем сетевой запрос со строгим таймаутом в 1 секунду для защиты UX
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(1));
+
+                try
+                {
+                    Log.Debug($"[AudioEngine] Local cache for {track.Id} has no gain metadata. Performing 1s fast online lookup...");
+
+                    float loudness = await _youtube.GetLoudnessDbOnlyAsync(rawId, timeoutCts.Token).ConfigureAwait(false);
+
+                    if (!float.IsNaN(loudness))
+                    {
+                        track.TrySetGainFromLoudness(loudness);
+                        Log.Info($"[AudioEngine] Successfully resolved online loudness for cached track {track.Id}: {loudness:F2}dB (Bypassed Pre-Scan!)");
+                    }
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    Log.Warn($"[AudioEngine] Online loudness lookup for cached track {track.Id} timed out. Local pre-scan fallback will be used.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[AudioEngine] Online loudness lookup failed for {track.Id}: {ex.Message}");
+                }
+            }
+
             return ("", cached.Value.Entry.Bitrate);
         }
 
         ct.ThrowIfCancellationRequested();
 
-        // Переиспользуем ранее разрешённый URL без обращения к сети.
         if (!string.IsNullOrEmpty(track.StreamUrl))
             return (track.StreamUrl, track.TransientBitrate);
 
@@ -584,8 +649,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         track.TransientBitrate = info.Bitrate;
 
-        // Кэшируем URL на TrackInfo для повторного использования.
-        // При rapid next/prev это исключает лишние YouTube API запросы.
         if (!string.IsNullOrEmpty(info.Url))
             track.StreamUrl = info.Url;
 
@@ -688,14 +751,19 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         else _player.Pause();
     }
 
+    /// <summary>
+    /// Останавливает воспроизведение и очищает стейт трека.
+    /// </summary>
     public void Stop()
     {
         BeginNewSession();
         _player.Stop();
+
+        CurrentTrack = null;
+        StreamInfo = AudioStreamInfo.Empty;
+
         RaiseOnUI(() =>
         {
-            CurrentTrack = null;
-            StreamInfo = AudioStreamInfo.Empty;
             OnTrackChanged?.Invoke(null);
         });
     }

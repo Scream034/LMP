@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
-using LMP.Core.Audio.Interfaces;
 
 namespace LMP.Core.Audio.Parsers;
 

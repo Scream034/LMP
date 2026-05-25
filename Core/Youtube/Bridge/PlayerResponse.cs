@@ -249,6 +249,39 @@ internal partial class PlayerResponse(JsonElement content)
         }
     }
 
+    /// <inheritdoc/>
+    /// <summary>
+    /// Извлекает значение целевой громкости (loudnessDb) из playerConfig.audioConfig плеера,
+    /// либо, в случае его отсутствия, из метаданных первого доступного медиапотока.
+    /// </summary>
+    /// <remarks>
+    /// Использует zero-alloc поиск по UTF-8 байтам для предотвращения аллокаций строк в куче (SOH).
+    /// </remarks>
+    public float LoudnessDb
+    {
+        get
+        {
+            var audioConfig = content
+                .GetPropertyOrNull("playerConfig"u8)
+                ?.GetPropertyOrNull("audioConfig"u8);
+
+            if (audioConfig.HasValue)
+            {
+                var val = audioConfig.Value.GetPropertyOrNull("loudnessDb"u8)?.GetDoubleOrNull();
+                if (val.HasValue) return (float)val.Value;
+            }
+
+            // Fallback-поиск в массиве стримов, если основной конфиг пуст
+            foreach (var stream in Streams)
+            {
+                if (!float.IsNaN(stream.LoudnessDb))
+                    return stream.LoudnessDb;
+            }
+
+            return float.NaN;
+        }
+    }
+
     [GeneratedRegex(@"video_id=(.{11})")]
     private static partial Regex MyRegex();
 }

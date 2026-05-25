@@ -7,12 +7,12 @@
     xmlns:controls="using:LMP.UI.Controls"
     x:DataType="vm:PlayerBarViewModel"
     Padding="0,5,0,0"
-    ClipToBounds="True"
+    ClipToBounds="False"
     Focusable="True"
     UseLayoutRounding="True">
 
-    <!--  MAIN CONTENT  -->
-    <Border Background="{DynamicResource BgSecondaryBrush}" UseLayoutRounding="True">
+    <Border Background="{DynamicResource BgSecondaryBrush}" UseLayoutRounding="True"
+        ClipToBounds="False">
         <Grid RowDefinitions="Auto,*">
 
             <Grid
@@ -25,7 +25,6 @@
                 ClipToBounds="False"
                 Cursor="Hand">
 
-                <!--  TrackContainer: ТОЛЬКО визуал дорожки, без курсоров  -->
                 <Grid
                     Name="TrackContainer"
                     Height="4"
@@ -35,13 +34,18 @@
                     ClipToBounds="True"
                     RenderTransformOrigin="0.5,0.0">
 
-                    <!--  Layer 0: Background track  -->
-                    <Border
-                        Background="{DynamicResource BgHighlightBrush}"
-                        CornerRadius="2"
-                        Opacity="0.4" />
+                    <!-- Высокопроизводительный кастомный векторный прогресс-бар -->
+                    <controls:BufferedProgressBar
+                        Name="CustomProgressBar"
+                        Value="{Binding PositionSeconds}"
+                        Maximum="{Binding DurationSeconds}"
+                        BufferedRanges="{Binding BufferedRanges}"
+                        IsFullyBuffered="{Binding IsFullyBuffered}"
+                        ForegroundBrush="{DynamicResource AccentBrush}"
+                        BackgroundBrush="{DynamicResource BgHighlightBrush}"
+                        BufferBrush="{DynamicResource TextSecondaryBrush}" />
 
-                    <!--  Layer 1: SPARK  -->
+                    <!-- Спарк загрузки -->
                     <Border Name="SparkContainer"
                         ClipToBounds="True"
                         CornerRadius="2"
@@ -74,8 +78,7 @@
                                 <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
                                     <GradientStop Offset="0"
                                         Color="{DynamicResource AccentHoverTransparent}" />
-                                    <GradientStop Offset="0.5"
-                                        Color="{DynamicResource Accent}" />
+                                    <GradientStop Offset="0.5" Color="{DynamicResource Accent}" />
                                     <GradientStop Offset="1"
                                         Color="{DynamicResource AccentHoverTransparent}" />
                                 </LinearGradientBrush>
@@ -83,27 +86,7 @@
                         </Border>
                     </Border>
 
-                    <!--  Layer 2: Buffer segments  -->
-                    <Canvas
-                        Name="BufferSegmentsCanvas"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch"
-                        ClipToBounds="True"
-                        IsHitTestVisible="False" />
-
-                    <!--  Layer 3: Progress bar  -->
-                    <Border
-                        Name="ProgressBar"
-                        HorizontalAlignment="Stretch"
-                        Background="{DynamicResource AccentBrush}"
-                        Classes="progress-bar"
-                        CornerRadius="2">
-                        <Border.RenderTransform>
-                            <TranslateTransform X="0" />
-                        </Border.RenderTransform>
-                    </Border>
-
-                    <!--  Layer 4: Playing glow  -->
+                    <!-- Свечение -->
                     <Border
                         Name="PlayingGlow"
                         Height="4"
@@ -125,9 +108,7 @@
                     </Border>
                 </Grid>
 
-                <!--
-                    Layer 5: Seek preview cursor.
-                -->
+                <!-- Курсор предпросмотра -->
                 <Canvas
                     Name="PreviewCursorCanvas"
                     HorizontalAlignment="Stretch"
@@ -145,7 +126,7 @@
                         IsHitTestVisible="False" />
                 </Canvas>
 
-                <!--  Layer 6: Thumb and Cursor  -->
+                <!-- Бегунок и основной курсор -->
                 <Canvas
                     Name="ThumbCanvas"
                     HorizontalAlignment="Stretch"
@@ -181,7 +162,61 @@
                     </Ellipse>
                 </Canvas>
 
-                <!--  Hit area  -->
+                <!-- ВЫСОКОПРОИЗВОДИТЕЛЬНЫЕ ВЕКТОРНЫЕ ОВЕРЛЕИ -->
+                <Canvas
+                    Name="OverlayCanvas"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    ClipToBounds="False"
+                    IsHitTestVisible="False">
+
+                    <!-- Тултип времени -->
+                    <Border
+                        Name="SeekTooltip"
+                        Padding="6,3"
+                        Background="{DynamicResource BgSkeletonBrush}"
+                        BorderBrush="{DynamicResource BgHighlightBrush}"
+                        BorderThickness="1"
+                        BoxShadow="0 2 8 0 #40000000"
+                        CornerRadius="4"
+                        Canvas.Top="-34"
+                        IsVisible="False">
+                        <Border.RenderTransform>
+                            <TranslateTransform X="0" />
+                        </Border.RenderTransform>
+                        <TextBlock
+                            Name="HoverTimeText"
+                            FontSize="12"
+                            FontWeight="Bold"
+                            Foreground="{DynamicResource TextPrimaryBrush}"
+                            Text="0:00" />
+                    </Border>
+
+                    <!-- Окно подсказки отмены Seek -->
+                    <Border
+                        Name="SeekHint"
+                        Padding="8,4"
+                        Background="{DynamicResource BgSkeletonBrush}"
+                        BorderBrush="{DynamicResource AccentBrush}"
+                        BorderThickness="1"
+                        BoxShadow="0 2 8 0 #60000000"
+                        CornerRadius="4"
+                        Canvas.Top="-58"
+                        IsVisible="False">
+                        <Border.RenderTransform>
+                            <TranslateTransform X="0" />
+                        </Border.RenderTransform>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Width="14" Height="14"
+                                Foreground="{DynamicResource AccentBrush}"
+                                Data="{StaticResource Icon.InformationOutline}" />
+                            <TextBlock Name="SeekHintText" FontSize="11" FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                </Canvas>
+
+                <!-- Область обработки кликов -->
                 <Border
                     Name="SeekHitBox"
                     HorizontalAlignment="Stretch"
@@ -195,71 +230,20 @@
                     PointerReleased="OnSeekAreaReleased" />
             </Grid>
 
-            <!--  Seek Tooltip (time)  -->
-            <Popup
-                Name="SeekTooltipPopup"
-                IsHitTestVisible="False"
-                IsLightDismissEnabled="False"
-                Placement="Top"
-                PlacementTarget="{Binding #SeekContainer}"
-                HorizontalOffset="0"
-                VerticalOffset="-14">
-                <Border
-                    Padding="6,3"
-                    Background="{DynamicResource BgSkeletonBrush}"
-                    BorderBrush="{DynamicResource BgHighlightBrush}"
-                    BorderThickness="1"
-                    BoxShadow="0 2 8 0 #40000000"
-                    CornerRadius="4">
-                    <TextBlock
-                        Name="HoverTimeText"
-                        FontSize="12"
-                        FontWeight="Bold"
-                        Foreground="{DynamicResource TextPrimaryBrush}"
-                        Text="0:00" />
-                </Border>
-            </Popup>
-
-            <!--  Seek Hint Popup (cancel / wait info)  -->
-            <Popup
-                Name="SeekHintPopup"
-                IsHitTestVisible="False"
-                IsLightDismissEnabled="False"
-                Placement="Top"
-                PlacementTarget="{Binding #SeekContainer}"
-                HorizontalOffset="0"
-                VerticalOffset="-28">
-                <Border
-                    Padding="8,4"
-                    Background="{DynamicResource BgSkeletonBrush}"
-                    BorderBrush="{DynamicResource AccentBrush}"
-                    BorderThickness="1"
-                    BoxShadow="0 2 8 0 #60000000"
-                    CornerRadius="4">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <PathIcon Width="14" Height="14"
-                            Foreground="{DynamicResource AccentBrush}"
-                            Data="{StaticResource Icon.InformationOutline}" />
-                        <TextBlock Name="SeekHintText" FontSize="11" FontWeight="SemiBold"
-                            Foreground="{DynamicResource TextPrimaryBrush}" />
-                    </StackPanel>
-                </Border>
-            </Popup>
-
-            <!--  ROW 1: CONTROLS  -->
+            <!-- КНОПКИ УПРАВЛЕНИЯ -->
             <Grid
                 Grid.Row="1"
                 Margin="8,4,8,4"
                 ColumnDefinitions="Auto,Auto,*,Auto,Auto">
 
-                <!--  Left Controls  -->
+                <!-- Левая секция -->
                 <StackPanel
                     Grid.Column="0"
                     VerticalAlignment="Center"
                     Orientation="Horizontal"
                     Spacing="2">
 
-                    <!-- Shuffle Button -->
+                    <!-- Кнопка случайного порядка -->
                     <Button x:Name="ShuffleButton" Width="40" Height="40"
                         Classes="playback-btn"
                         Classes.active="{Binding IsShuffleAnimating}"
@@ -269,8 +253,6 @@
                         PointerEntered="OnShuffleButtonEntered"
                         PointerExited="OnShuffleButtonExited"
                         PointerPressed="OnShuffleButtonPressed">
-                        <!-- Стили анимации шафла перенесены в Theme/PlayerBarStyles.axaml для
-                        чистоты -->
                         <Panel Classes="shuffle-content"
                             Width="18" Height="18"
                             RenderTransformOrigin="0.5,0.5">
@@ -308,6 +290,7 @@
                         </Panel>
                     </Button>
 
+                    <!-- Облегченный Popup подсказки Shuffle -->
                     <Popup x:Name="ShufflePopup"
                         IsLightDismissEnabled="False"
                         Placement="Top"
@@ -343,7 +326,7 @@
                         </Border>
                     </Popup>
 
-                    <!-- Previous -->
+                    <!-- Предыдущий трек -->
                     <Button Width="40" Height="40" Classes="playback-btn"
                         Command="{Binding PreviousCommand}" CornerRadius="20"
                         ToolTip.Tip="{Binding PreviousTooltip}"
@@ -351,7 +334,7 @@
                         <PathIcon Width="20" Height="20" Data="{StaticResource Icon.SkipPrevious}" />
                     </Button>
 
-                    <!-- Play/Pause -->
+                    <!-- Воспроизведение / Пауза -->
                     <Button Width="52" Height="52" Classes="playback-btn-main"
                         Command="{Binding PlayPauseCommand}" CornerRadius="26"
                         ToolTip.Tip="{Binding PlayPauseTooltip}"
@@ -367,7 +350,7 @@
                         </Panel>
                     </Button>
 
-                    <!-- Next -->
+                    <!-- Следующий трек -->
                     <Button Width="40" Height="40" Classes="playback-btn"
                         Command="{Binding NextCommand}" CornerRadius="20"
                         ToolTip.Tip="{Binding NextTooltip}"
@@ -375,6 +358,7 @@
                         <PathIcon Width="20" Height="20" Data="{StaticResource Icon.SkipNext}" />
                     </Button>
 
+                    <!-- Режим повторения -->
                     <Button x:Name="RepeatButton" Width="40" Height="40"
                         Classes="playback-btn"
                         Command="{Binding ToggleRepeatCommand}" CornerRadius="20"
@@ -426,113 +410,15 @@
                     <Border Width="1" Height="28" Margin="6,0"
                         Background="{DynamicResource BgHighlightBrush}" />
 
-                    <!-- Volume -->
-                    <Panel Name="VolumePanel">
-                        <Button x:Name="VolumeButton" Width="38" Height="38"
-                            Classes="icon-btn"
-                            Classes.popup-open="{Binding #VolumePopup.IsOpen}"
-                            Command="{Binding ToggleMuteCommand}" CornerRadius="19"
-                            ToolTip.Placement="Top" ToolTip.VerticalOffset="-6"
-                            PointerWheelChanged="OnVolumeScroll">
-                            <Grid>
-                                <PathIcon Width="20" Height="20"
-                                    Foreground="{DynamicResource TextMutedBrush}"
-                                    Data="{StaticResource Icon.VolumeMute}"
-                                    IsVisible="{Binding IsMuted}" />
-                                <PathIcon Width="20" Height="20"
-                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                    Data="{StaticResource Icon.VolumeLow}"
-                                    IsVisible="{Binding IsVolumeLow}" />
-                                <PathIcon Width="20" Height="20"
-                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                    Data="{StaticResource Icon.VolumeMedium}"
-                                    IsVisible="{Binding IsVolumeMedium}" />
-                                <PathIcon Width="20" Height="20"
-                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                    Data="{StaticResource Icon.VolumeHigh}"
-                                    IsVisible="{Binding IsVolumeHigh}" />
-                                <PathIcon Width="20" Height="20"
-                                    Foreground="{DynamicResource AccentBrush}"
-                                    Data="{StaticResource Icon.VolumeVibrate}"
-                                    IsVisible="{Binding IsVolumeBoosted}" />
-                            </Grid>
-                        </Button>
-
-                        <!-- Volume Popup (No manual offset needed, Placement=Top auto-centers) -->
-                        <Popup
-                            x:Name="VolumePopup"
-                            IsLightDismissEnabled="False"
-                            Placement="Top"
-                            PlacementTarget="{Binding #VolumeButton}"
-                            VerticalOffset="-4">
-                            <Border
-                                Padding="4"
-                                Background="{DynamicResource BgElevatedBrush}"
-                                BorderBrush="{DynamicResource BgHighlightBrush}"
-                                BorderThickness="1"
-                                CornerRadius="6"
-                                PointerEntered="OnVolumePopupContentEntered"
-                                PointerExited="OnVolumePopupContentExited">
-                                <Panel
-                                    Name="VolumeSliderPanel"
-                                    Width="20" MinHeight="60" Height="80"
-                                    HorizontalAlignment="Center">
-                                    <Border Width="4"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Stretch"
-                                        Classes="vol-track" />
-                                    <Border Name="VolumeBar"
-                                        Width="4" Height="0" MinHeight="0"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Bottom"
-                                        Classes="vol-fill"
-                                        Classes.boosted="{Binding IsVolumeBoosted}" />
-                                    <Ellipse Name="VolumeThumb"
-                                        Width="12" Height="12"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Top"
-                                        Classes="vol-thumb"
-                                        Classes.boosted="{Binding IsVolumeBoosted}" />
-                                    <Border Name="VolumeHitBox"
-                                        Width="20"
-                                        HorizontalAlignment="Stretch"
-                                        VerticalAlignment="Stretch"
-                                        Background="Transparent"
-                                        Cursor="Hand"
-                                        PointerCaptureLost="OnVolumeAreaCaptureLost"
-                                        PointerExited="OnVolumeAreaExited"
-                                        PointerMoved="OnVolumeAreaMoved"
-                                        PointerPressed="OnVolumeAreaPressed"
-                                        PointerReleased="OnVolumeAreaReleased"
-                                        PointerWheelChanged="OnVolumeScroll" />
-                                </Panel>
-                            </Border>
-                        </Popup>
-
-                        <!-- Volume Tooltip -->
-                        <Popup Name="VolumeTooltipPopup"
-                            IsHitTestVisible="False"
-                            IsLightDismissEnabled="False"
-                            Placement="Left"
-                            PlacementTarget="{Binding #VolumeHitBox}"
-                            HorizontalOffset="-8">
-                            <Border Padding="6,4"
-                                Background="{DynamicResource BgSkeletonBrush}"
-                                BorderBrush="{DynamicResource BgHighlightBrush}"
-                                BorderThickness="1"
-                                BoxShadow="0 2 6 0 #40000000"
-                                CornerRadius="4">
-                                <TextBlock Name="VolumeTooltipText"
-                                    FontSize="11" FontWeight="SemiBold"
-                                    Foreground="{DynamicResource TextPrimaryBrush}" />
-                            </Border>
-                        </Popup>
-                    </Panel>
+                    <controls:VolumeControl
+                        Volume="{Binding Volume}"
+                        MaxVolume="{Binding MaxVolume}"
+                        VolumeChangeCompleted="OnVolumeControlChangeCompleted" />
 
                     <Border Width="1" Height="28" Margin="6,0"
                         Background="{DynamicResource BgHighlightBrush}" />
 
-                    <!-- Like -->
+                    <!-- Кнопка Like -->
                     <Panel>
                         <Button x:Name="LikeButton" Width="36" Height="36"
                             Classes="icon-btn"
@@ -564,6 +450,7 @@
                         </Popup>
                     </Panel>
 
+                    <!-- Копирование ссылки -->
                     <controls:CopyLinkButton
                         CopyUrl="{Binding CurrentTrackUrl}"
                         SuccessText="{Binding L[Track_Copied]}"
@@ -572,14 +459,14 @@
                         IconSize="16" />
                 </StackPanel>
 
-                <!--  Divider  -->
+                <!-- Разделитель -->
                 <Border
                     Grid.Column="1"
                     Width="1"
                     Margin="10,10"
                     Background="{DynamicResource BgHighlightBrush}" />
 
-                <!--  Track Info  -->
+                <!-- Метаданные трека -->
                 <Grid
                     Grid.Column="2"
                     VerticalAlignment="Center"
@@ -627,14 +514,14 @@
                     </StackPanel>
                 </Grid>
 
-                <!--  Divider  -->
+                <!-- Разделитель -->
                 <Border
                     Grid.Column="3"
                     Width="1"
                     Margin="10,10"
                     Background="{DynamicResource BgHighlightBrush}" />
 
-                <!--  Queue + Duration + Format  -->
+                <!-- Очередь и Длительность -->
                 <StackPanel
                     Grid.Column="4"
                     Width="180"
@@ -686,6 +573,7 @@
                         </StackPanel>
                     </Grid>
                     <Panel>
+                        <!-- Формат / Качество -->
                         <Button
                             x:Name="FormatButton"
                             Padding="6,3"

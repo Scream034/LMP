@@ -1,7 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
-
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
@@ -17,99 +16,73 @@ namespace LMP.Features.Player;
 
 /// <summary>
 /// ViewModel для нижней панели управления плеером (Player Bar).
-///
-/// <para><b>Suspend/Resume архитектура (event-based):</b></para>
-/// <list type="bullet">
-///   <item>При Suspend: тяжёлые подписки (позиция, буфер, скорость) ОТПИСЫВАЮТСЯ через dispose</item>
-///   <item>При Resume: подписки ПЕРЕСОЗДАЮТСЯ, ForceSync восстанавливает состояние</item>
-///   <item>Критичные свойства (IsPlaying, CurrentTrack, RepeatMode) обновляются ВСЕГДА</item>
-/// </list>
-///
-/// <para><b>Volume Popup при suspend:</b></para>
-/// <para>View вызывает RequestResume() через PlayerControlService,
-/// что триггерит полный Resume (BroadcastResume) из MainWindow.</para>
 /// </summary>
+/// <remarks>
+/// <para><b>Атомарная событийно-ориентированная архитектура:</b></para>
+/// <para>Устранены все задержки на базе <see cref="Task.Delay"/> и временные опросы. 
+/// Сброс трека <see cref="IsTrackResetting"/> завершается атомарно в момент получения валидных 
+/// метаданных звукового потока <see cref="AudioStreamInfo"/> на аппаратном уровне.</para>
+/// 
+/// <para><b>Zero-Delay Commit Seek:</b></para>
+/// <para>Поскольку внутренний звуковой конвейер <see cref="AudioEngine"/> осуществляет собственное 
+/// слияние операций на уровне ядра (Coalescing Engine), UI-слой более не выполняет искусственного 
+/// дебаунсинга и посылает команду Seek в плеер мгновенно по завершении перетаскивания.</para>
+/// </remarks>
 public sealed class PlayerBarViewModel : ViewModelBase
 {
     #region Constants - UI & UX
 
-    /// <summary>Задержка для предотвращения дребезга при переключении треков (мс)</summary>
     private const int NavigationDebounceMs = 300;
-    /// <summary>Длительность отображения всплывающих подсказок (мс)</summary>
     private const int HintDisplayDurationMs = 1500;
-
-    /// <summary>Интервал обновления слайдера позиции (мс)</summary>
     private const int PositionUpdateThrottleMs = 50;
-    /// <summary>Минимальное время отображения состояния сброса трека (мс)</summary>
-    private const int TrackResetMinDurationMs = 300;
-    /// <summary>Интервал проверки позиции в фоновом режиме (мс)</summary>
     private const int FallbackPositionIntervalMs = 500;
-    /// <summary>Длительность анимации перемешивания (мс)</summary>
     private const int ShuffleAnimationDurationMs = 500;
-    /// <summary>Интервал обновления скорости загрузки (мс)</summary>
     private const int SpeedUpdateIntervalMs = 1000;
-    /// <summary>Таймаут ожидания ответа от движка при перемотке (мс)</summary>
-    private const int SeekBusyTimeoutMs = 2000;
-    /// <summary>Точность сравнения позиции для фильтрации дублей (мс)</summary>
     private const int PositionChangePrecisionMs = 100;
-    /// <summary>Короткий debounce финального commit seek после отпускания таймлайна (мс)</summary>
-    private const int SeekCommitDebounceMs = 120;
-    /// <summary>Таймаут, после которого состояние Reset считается зависшим (сек)</summary>
+
+    /// <summary>Таймаут, после которого состояние Reset считается зависшим (сек).</summary>
     private const int StaleResetTimeoutSec = 3;
-    /// <summary>Порог времени воспроизведения для определения активности аудио (сек)</summary>
+
+    /// <summary>Порог времени воспроизведения для определения активности аудио (сек).</summary>
     private const double AudioIsPlayingThresholdSec = 0.5;
 
     #endregion
 
     #region Constants - Audio & Volume
 
-    /// <summary>Громкость по умолчанию при первом запуске</summary>
     private const int DefaultVolume = 50;
-    /// <summary>Максимальная громкость по умолчанию</summary>
     private const int DefaultMaxVolume = 100;
-    /// <summary>Порог "низкой" громкости для иконки (%)</summary>
     private const int VolumeLowThresholdPercent = 33;
-    /// <summary>Порог "средней" громкости для иконки (%)</summary>
     private const int VolumeMediumThresholdPercent = 66;
-    /// <summary>Делитель для расчета эффективного процента при включенном Boost</summary>
     private const double VolumeBoostDivisor = 2.0;
-    /// <summary>Максимальный коэффициент усиления (Gain)</summary>
     private const float MaxGainClamp = 4.0f;
-    /// <summary>Делитель для расчета шага прокрутки громкости колесом мыши</summary>
     private const int VolumeScrollStepDivisor = 200;
-    /// <summary>Цвет предупреждения для режима Boost (Hex)</summary>
     private const string OrangeWarnHex = "#FFB86C";
 
     #endregion
 
     #region Constants - Network & Buffer
 
-    /// <summary>Интервал пропуска событий изменения состояния буфера (мс)</summary>
     private const int BufferStateThrottleMs = 100;
-    /// <summary>Минимальный порог скорости для отображения текста (КБ/с)</summary>
     private const double SpeedDisplayThresholdKbs = 10.0;
-    /// <summary>Количество байт в одном килобайте</summary>
     private const double BytesPerKb = 1024.0;
-    /// <summary>Минимальный интервал времени для расчета скорости (сек)</summary>
     private const double MinSpeedCalcIntervalSec = 0.5;
 
     #endregion
 
     #region Fields
 
-    private readonly AudioEngine _audio;
-    private readonly LibraryService _library;
-    private readonly YoutubeProvider _youtube;
-    private readonly MusicLibraryManager _musicManager;
-    private readonly PlayerControlService _playerControl;
+    // Инициализация заглушкой null! защищает от предупреждений компилятора CS8618 и CS0649
+    // при наличии дополнительных беспараметрических конструкторов (например, для дизайнера).
+    private readonly AudioEngine _audio = null!;
+    private readonly LibraryService _library = null!;
+    private readonly YoutubeProvider _youtube = null!;
+    private readonly MusicLibraryManager _musicManager = null!;
+    private readonly PlayerControlService _playerControl = null!;
 
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
 
-    /// <summary>
-    /// Подписки на тяжёлые события AudioEngine. Создаются при Resume, dispose при Suspend.
-    /// Это ключевой механизм: вместо флагов и .Where() фильтров мы просто отписываемся.
-    /// </summary>
     private CompositeDisposable? _heavySubscriptions;
 
     private bool _isSeeking;
@@ -119,45 +92,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private DateTime _lastSpeedCheck = DateTime.MinValue;
     private int _lastVolumeBeforeMute = DefaultVolume;
 
-    private int _trackResetSession;
     private DateTime _trackResetStartTime;
     private string? _pendingStreamInfoTrackId;
-    private long _seekBusyStartTicks;
-
-    /// <summary>
-    /// Id последнего обработанного трека. Предотвращает повторный BeginTrackReset
-    /// при ForceSync когда трек не менялся.
-    /// </summary>
     private string? _lastHandledTrackId;
-
-    /// <summary>
-    /// Последний валидный StreamInfo текст. Кэшируется для восстановления при ForceSync.
-    /// </summary>
     private string _lastValidStreamInfo = "";
-
-    /// <summary>
-    /// Кэшированный результат GetEffectivePercent для избежания повторных вычислений.
-    /// Обновляется при изменении Volume или MaxVolume.
-    /// </summary>
     private int _cachedEffectivePercent;
 
-    /// <summary>
-    /// CTS для текущего активного hint. При показе нового — предыдущий отменяется,
-    /// предотвращая гонку состояний при быстрых кликах.
-    /// </summary>
     private CancellationTokenSource? _activeHintCts;
-
-    /// <summary>
-    /// CTS текущего pending seek-коммита из UI.
-    /// Новый <see cref="EndSeek"/> отменяет предыдущий pending commit по модели latest-wins.
-    /// </summary>
-    private CancellationTokenSource? _activeSeekCommitCts;
-
-    /// <summary>
-    /// Монотонная версия seek-коммита.
-    /// Используется для подавления устаревших завершений при серии быстрых EndSeek вызовов.
-    /// </summary>
-    private int _seekCommitVersion;
 
     #endregion
 
@@ -172,7 +113,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool IsNavigating { get; private set; }
     [Reactive] public bool IsTrackResetting { get; private set; }
 
-    /// <summary>URL текущего трека для CopyLinkButton. Null если трека нет.</summary>
     public string? CurrentTrackUrl => CurrentTrack?.Url;
 
     public string SafeTitle => CurrentTrack?.Title ?? SL["Player_NotPlaying"];
@@ -291,7 +231,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #endregion
 
-    #region Properties - Hints (unified)
+    #region Properties - Hints
 
     [Reactive] public bool IsRepeatHintVisible { get; private set; }
     [Reactive] public string RepeatHintText { get; private set; } = "";
@@ -412,7 +352,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #endregion
 
-    #region Initialization
+    #region Setup
 
     private void InitializeFromSettings()
     {
@@ -453,24 +393,20 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void SetupCommands()
     {
-        // Условие для навигации (Next/Prev) — трек есть, нет другой навигации и нет загрузки/сброса
         var canNavigate = this.WhenAnyValue(
             x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading, x => x.IsTrackResetting,
             (hasTrack, isNav, loading, resetting) => hasTrack && !isNav && !loading && !resetting);
 
-        // Условие для перемешивания
         var canShuffle = this.WhenAnyValue(
             x => x.HasQueueToShuffle, x => x.IsLoading, x => x.IsTrackResetting,
             (hasTracks, loading, resetting) => hasTracks && !loading && !resetting);
 
-        // Условие для Play/Pause — трек есть и он не находится в стадии загрузки
         var canPlayPause = this.WhenAnyValue(
             x => x.HasTrack, x => x.IsLoading, x => x.IsTrackResetting,
             (hasTrack, loading, resetting) => hasTrack && !loading && !resetting);
 
         var hasTrackObs = this.WhenAnyValue(x => x.HasTrack);
 
-        // Передаем canPlayPause вместо hasTrackObs
         PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             _playerControl.PlayPauseAsync, canPlayPause));
 
@@ -569,8 +505,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
                 if (state.IsPlaying && IsTrackResetting)
                 {
-                    int session = Volatile.Read(ref _trackResetSession);
-                    EndTrackReset(session);
+                    EndTrackReset();
                 }
             })
             .DisposeWith(Disposables);
@@ -663,7 +598,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         var cacheManager = AudioSourceFactory.GlobalCache
             ?? throw new NullReferenceException("AudioSourceFactory.GlobalCache is not initialized");
 
-        // Подписка на событие кэширования конкретных форматов
         Observable.FromEvent<Action<string, string, int, bool>, (string TrackId, string Container, int Bitrate, bool Downloaded)>(
                 h => (t, c, b, d) => h((t, c, b, d)),
                 h => cacheManager.OnFormatCached += h,
@@ -671,7 +605,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(x => OnFormatCached(x.TrackId, x.Container, x.Bitrate, x.Downloaded))
             .DisposeWith(Disposables);
 
-        // Подписка на глобальную очистку кэша — мгновенно сбрасывает полоску буферизации на UI
         Observable.FromEvent(
                 h => cacheManager.OnCacheCleared += h,
                 h => cacheManager.OnCacheCleared -= h)
@@ -731,7 +664,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(pos =>
             {
-                Volatile.Write(ref _seekBusyStartTicks, 0L);
                 PositionSeconds = pos.TotalSeconds;
                 Position = pos;
                 SyncBufferState();
@@ -762,10 +694,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Unified Hint System
 
-    /// <summary>
-    /// Показывает всплывающую подсказку с заданным текстом и длительностью.
-    /// CTS гарантирует корректную отмену при быстрых повторных вызовах.
-    /// </summary>
     private async void ShowHint(Action<bool> setVisible, Action setText, int durationMs = HintDisplayDurationMs)
     {
         _activeHintCts?.Cancel();
@@ -785,7 +713,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #endregion
 
-    #region Buffer Progress (unified)
+    #region Buffer Progress
 
     private void SyncBufferState(BufferState? externalState = null)
     {
@@ -839,38 +767,21 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void BeginTrackReset()
     {
-        int session = Interlocked.Increment(ref _trackResetSession);
         _trackResetStartTime = DateTime.UtcNow;
-
         IsTrackResetting = true;
         Position = TimeSpan.Zero;
         PositionSeconds = 0;
         IsSeekBusy = true;
         ResetBufferState();
-
-        Log.Debug($"[PlayerBar] BeginTrackReset: session={session}");
     }
 
-    private async void EndTrackReset(int session)
+    /// <summary>
+    /// Атомарно завершает сброс по факту готовности аудиопотока.
+    /// </summary>
+    private void EndTrackReset()
     {
         if (!IsTrackResetting) return;
-
-        var elapsed = DateTime.UtcNow - _trackResetStartTime;
-        int remaining = TrackResetMinDurationMs - (int)elapsed.TotalMilliseconds;
-        if (remaining > 0)
-            await Task.Delay(remaining);
-
-        if (!IsTrackResetting) return;
-
-        int currentSession = Volatile.Read(ref _trackResetSession);
-        if (currentSession != session)
-        {
-            Log.Debug($"[PlayerBar] EndTrackReset skipped: session {session} != {currentSession}");
-            return;
-        }
-
         IsTrackResetting = false;
-        Log.Debug($"[PlayerBar] EndTrackReset: session={session}");
     }
 
     #endregion
@@ -901,9 +812,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         bool isNewTrack = newTrackId != _lastHandledTrackId;
         _lastHandledTrackId = newTrackId;
 
-        if (isNewTrack)
-            CancelPendingSeekCommit(clearBusy: true);
-
         CurrentTrack = track;
         HasTrack = track != null;
 
@@ -928,10 +836,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
                 Log.Debug($"[PlayerBar] New track: {track.Id}");
             }
-            else
-            {
-                Log.Debug($"[PlayerBar] Same track event skipped: {track.Id}");
-            }
 
             var storedTrack = _library.GetTrack(track.Id);
             IsLiked = storedTrack?.IsLiked ?? track.IsLiked;
@@ -950,8 +854,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void ResetToNoTrack()
     {
-        CancelPendingSeekCommit(clearBusy: true);
-
         _pendingStreamInfoTrackId = null;
         _lastDownloadedBytes = 0;
         _lastValidStreamInfo = "";
@@ -975,13 +877,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (IsTrackResetting)
         {
             IsTrackResetting = false;
-            Log.Debug("[PlayerBar] ForceSync: cleared stale IsTrackResetting");
         }
 
         if (IsSeekBusy)
         {
-            ClearSeekBusy();
-            Log.Debug("[PlayerBar] ForceSync: cleared stale IsSeekBusy");
+            IsSeekBusy = false;
         }
 
         SyncPositionFromEngine();
@@ -1022,8 +922,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(PlayPauseTooltip));
 
         UpdateQueueState();
-
-        Log.Debug($"[PlayerBar] ForceSync: pos={FormatTime(Position)}, dur={FormatTime(Duration)}, buf={BufferProgressPercent:F0}%, stream={StreamInfo}");
     }
 
     private void UpdateQueueState()
@@ -1088,8 +986,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 if (isForCurrentTrack)
                 {
                     _pendingStreamInfoTrackId = null;
-                    int session = Volatile.Read(ref _trackResetSession);
-                    EndTrackReset(session);
+                    EndTrackReset();
                 }
             }
         }
@@ -1156,14 +1053,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         if (IsSeekBusy)
         {
-            long busyTicks = Volatile.Read(ref _seekBusyStartTicks);
-            if (busyTicks > 0 &&
-                (DateTime.UtcNow.Ticks - busyTicks) > TimeSpan.FromMilliseconds(SeekBusyTimeoutMs).Ticks)
-            {
-                Log.Debug("[PlayerBar] Seek busy timeout — clearing guard");
-                ClearSeekBusy();
-                SyncPositionFromEngine();
-            }
             return;
         }
 
@@ -1186,15 +1075,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _isSeeking = true;
     }
 
-    /// <summary>
-    /// Обновляет только визуальную позицию ползунка во время drag.
-    /// </summary>
-    /// <remarks>
-    /// Во время drag в движок ничего не отправляется.
-    /// Это устраняет restart storm на слабом интернете:
-    /// ни decoder, ни source, ни HTTP-чанки не трогаются,
-    /// пока пользователь не закончит действие.
-    /// </remarks>
     public void UpdateSeekPosition(double seconds)
     {
         if (!_isSeeking) return;
@@ -1206,87 +1086,47 @@ public sealed class PlayerBarViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Завершает drag seek и выполняет единственный реальный seek.
+    /// Атомарный коммит перемотки без Task.Delay.
+    /// Передает задачу на слияние запросов напрямую в AudioEngine.
     /// </summary>
-    /// <remarks>
-    /// Используется прямой <see cref="AudioEngine.SeekAsync"/> без debounce:
-    /// это уже финальное намерение пользователя.
-    /// <para><b>Усиление latest-wins:</b> поверх финального намерения добавлено
-    /// очень короткое окно coalescing (<see cref="SeekCommitDebounceMs"/>), чтобы
-    /// подавлять дублирующиеся завершающие UI-события и быстрые повторные клики
-    /// по таймлайну. Это не меняет UX одиночного seek, но резко снижает churn
-    /// по engine seek path.</para>
-    /// </remarks>
     public async void EndSeek()
     {
         if (!HasTrack)
         {
             _isSeeking = false;
-            CancelPendingSeekCommit(clearBusy: true);
+            IsSeekBusy = false;
             return;
         }
 
         double target = PositionSeconds;
         _isSeeking = false;
 
-        // Оптимистичное обновление: UI показывает целевую позицию мгновенно.
         PositionSeconds = target;
         Position = TimeSpan.FromSeconds(target);
         this.RaisePropertyChanged(nameof(DurationTooltip));
 
         IsSeekBusy = true;
-        Volatile.Write(ref _seekBusyStartTicks, DateTime.UtcNow.Ticks);
-
-        int commitVersion = Interlocked.Increment(ref _seekCommitVersion);
-        using var seekCommitCts = ReplaceSeekCommitCts();
 
         try
         {
-            await Task.Delay(SeekCommitDebounceMs, seekCommitCts.Token);
-
-            // Если за debounce окно пришёл новый EndSeek — этот commit устарел.
-            if (commitVersion != Volatile.Read(ref _seekCommitVersion))
-                return;
-
+            // Отправляем команду немедленно без пауз, так как звуковой движок
+            // уже осуществляет атомарное слияние (coalescing) запросов.
             await _audio.SeekAsync(TimeSpan.FromSeconds(target));
-        }
-        catch (OperationCanceledException)
-        {
-            // Pending commit был вытеснен новым latest-wins seek или отменён reset/dispose.
-            // Снимаем busy только если это всё ещё актуальная версия.
-            if (commitVersion == Volatile.Read(ref _seekCommitVersion))
-            {
-                ClearSeekBusy();
-                Log.Debug("[PlayerBar] Seek commit cancelled, guards cleared");
-            }
         }
         catch (Exception ex)
         {
-            if (commitVersion == Volatile.Read(ref _seekCommitVersion))
-            {
-                ClearSeekBusy();
-                SyncPositionFromEngine();
-            }
-
+            IsSeekBusy = false;
+            SyncPositionFromEngine();
             Log.Warn($"[PlayerBar] Seek failed: {ex.Message}");
         }
     }
 
-    /// <summary>
-    /// Возвращает текущую позицию воспроизведения в секундах напрямую из AudioEngine.
-    ///
-    /// <remarks>Предназначен для per-frame чтения из View (RAF callback).
-    /// Минует Rx pipeline (Throttle → DistinctUntilChanged → ObserveOn) —
-    /// возвращает актуальную позицию на момент вызова, а не throttled snapshot.
-    /// Thread-safe: TimeSpan — 8-byte struct, атомарное чтение на x64.
-    /// Zero allocation.</remarks>
-    /// </summary>
     public double ReadCurrentPositionSeconds() => _audio.CurrentPosition.TotalSeconds;
 
     public void CancelSeek()
     {
         _isSeeking = false;
-        CancelPendingSeekCommit(clearBusy: true);
+        IsSeekBusy = false;
         SyncPositionFromEngine();
     }
 
@@ -1313,67 +1153,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     #endregion
 
     #region Private Helpers
-
-    /// <summary>
-    /// Заменяет текущий pending seek-коммит новым CTS по модели latest-wins.
-    /// </summary>
-    /// <returns>Новый CTS, принадлежащий текущему commit path.</returns>
-    /// <remarks>
-    /// <para>Предыдущий CTS отменяется и освобождается немедленно.
-    /// Это дешёвый UI-side coalescing слой, который уменьшает количество
-    /// реальных <see cref="AudioEngine.SeekAsync"/> вызовов при быстрых
-    /// последовательных завершениях drag/click по таймлайну.</para>
-    /// </remarks>
-    private CancellationTokenSource ReplaceSeekCommitCts()
-    {
-        var newCts = new CancellationTokenSource();
-        var oldCts = Interlocked.Exchange(ref _activeSeekCommitCts, newCts);
-
-        if (oldCts != null)
-        {
-            try { oldCts.Cancel(); }
-            catch (ObjectDisposedException) { }
-
-            try { oldCts.Dispose(); }
-            catch (ObjectDisposedException) { }
-        }
-
-        return newCts;
-    }
-
-    /// <summary>
-    /// Отменяет pending seek-коммит, если он существует.
-    /// </summary>
-    /// <param name="clearBusy">
-    /// Если <c>true</c>, дополнительно снимает локальный busy-флаг seek UI.
-    /// </param>
-    /// <remarks>
-    /// <para>Используется при смене трека, reset до состояния “no track”, явной отмене seek
-    /// и dispose ViewModel, чтобы stale UI-коммит не доехал до нового трека.</para>
-    /// </remarks>
-    private void CancelPendingSeekCommit(bool clearBusy)
-    {
-        var cts = Interlocked.Exchange(ref _activeSeekCommitCts, null);
-        if (cts != null)
-        {
-            try { cts.Cancel(); }
-            catch (ObjectDisposedException) { }
-
-            try { cts.Dispose(); }
-            catch (ObjectDisposedException) { }
-        }
-
-        Interlocked.Increment(ref _seekCommitVersion);
-
-        if (clearBusy)
-            ClearSeekBusy();
-    }
-
-    private void ClearSeekBusy()
-    {
-        IsSeekBusy = false;
-        Volatile.Write(ref _seekBusyStartTicks, 0L);
-    }
 
     private void SyncPositionFromEngine()
     {
@@ -1523,15 +1302,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 IsTrackResetting = false;
                 SyncPositionFromEngine();
                 SyncBufferState();
-                Log.Debug("[PlayerBar] OnResume: cleared stale IsTrackResetting");
             }
         }
 
-        if (IsSeekBusy)
-        {
-            ClearSeekBusy();
-            Log.Debug("[PlayerBar] OnResume: cleared stale IsSeekBusy");
-        }
+        IsSeekBusy = false;
 
         _lastDownloadedBytes = _audio.GetDownloadedBytes();
         _lastSpeedCheck = DateTime.UtcNow;
@@ -1551,8 +1325,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
             _activeHintCts?.Cancel();
             _activeHintCts?.Dispose();
-
-            CancelPendingSeekCommit(clearBusy: true);
 
             _heavySubscriptions?.Dispose();
 

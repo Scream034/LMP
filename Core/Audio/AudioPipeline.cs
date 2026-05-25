@@ -1,7 +1,5 @@
 using System.Buffers;
 using System.Numerics;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using LMP.Core.Audio.Backends;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Helpers;

@@ -5,6 +5,7 @@ namespace LMP.Core.Services;
 /// <summary>
 /// Фабрика профилей стриминга для разных условий сети.
 /// Каждый профиль — набор предварительно настроенных параметров <see cref="StreamingConfig"/>.
+/// </summary>
 public static class StreamingProfiles
 {
     /// <summary>
@@ -20,9 +21,44 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Экономия трафика. Chunk 16KB — минимальный seek latency при медленном соединении.
+    /// Максимальное сбережение трафика (Ultra-Low Data Saver).
+    /// Чанк 8 КБ обеспечивает моментальное начало воспроизведения при поиске и старте на медленных 2G/3G сетях.
+    /// Загрузка строго в 1 поток исключает сетевые заторы и снижает потери пакетов.
     /// </summary>
     public static StreamingConfig Low { get; } = new()
+    {
+        ChunkSizeBytes = 8 * 1024,
+        ReadAheadChunks = 3,
+        MaxRamChunks = 512,
+        RamEvictionDistance = 10,
+
+        MaxConcurrentDownloads = 1,
+        DownloadTimeoutMs = 45_000,
+        DownloadSlotTimeoutMs = 1000,
+
+        MaxNetworkRetries = 5,
+        NetworkRetryBaseDelayMs = 1000,
+        UseExponentialBackoff = true,
+        Max403BeforeCircuitBreak = 3,
+        RefreshCooldownMs = 6000,
+        PostRefreshDelayMs = 1000,
+
+        InitialChunksToLoad = 3,
+        SeekPreloadChunks = 4,
+
+        BackgroundFillIdleCycles = 12,
+        BackgroundFillIntervalMs = 8000,
+        MaxBackgroundChunksPerSession = 40,
+        MinBufferAheadForBackgroundFill = 2,
+
+        PreloadIntervalMs = 1000
+    };
+
+    /// <summary>
+    /// Экономия трафика и высокая скорость (бывший Low). 
+    /// Чанк 16 КБ дает минимальный seek latency и быстрый холодный старт при нестабильном соединении.
+    /// </summary>
+    public static StreamingConfig Medium { get; } = new()
     {
         ChunkSizeBytes = 16 * 1024,
         ReadAheadChunks = 4,
@@ -52,13 +88,10 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Сбалансированный (по умолчанию). Chunk 64KB — оптимум между seek latency и HTTP overhead.
-    ///
-    /// <para><b>Расчёт буфера:</b> 6 ReadAhead × 64KB = 384KB ≈ 20s @ 155kbps.
-    /// Достаточно для бесперебойного воспроизведения на обычном домашнем интернете.
-    /// Seek загружает 64KB вместо 128KB — perceived latency снижена в 2×.</para>
+    /// Сбалансированный средний профиль (бывший Medium). 
+    /// Чанк 64 КБ — оптимальный баланс между накладными расходами HTTP-запросов и задержкой позиционирования.
     /// </summary>
-    public static StreamingConfig Medium { get; } = new()
+    public static StreamingConfig High { get; } = new()
     {
         ChunkSizeBytes = 64 * 1024,
         ReadAheadChunks = 6,
@@ -88,9 +121,10 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Высокое качество. Chunk 128KB — баланс для быстрого интернета.
+    /// Стабильное высокое качество (бывший High). 
+    /// Чанк 128 КБ ориентирован на непрерывное вещание на быстрых домашних и мобильных сетях.
     /// </summary>
-    public static StreamingConfig High { get; } = new()
+    public static StreamingConfig Ultra { get; } = new()
     {
         ChunkSizeBytes = 128 * 1024,
         ReadAheadChunks = 8,
@@ -117,38 +151,6 @@ public static class StreamingProfiles
         MinBufferAheadForBackgroundFill = 6,
 
         PreloadIntervalMs = 350
-    };
-
-    /// <summary>
-    /// Максимальное кэширование. Chunk 256KB — агрессивный prefetch.
-    /// </summary>
-    public static StreamingConfig Ultra { get; } = new()
-    {
-        ChunkSizeBytes = 256 * 1024,
-        ReadAheadChunks = 12,
-        MaxRamChunks = 48,
-        RamEvictionDistance = 18,
-
-        MaxConcurrentDownloads = 6,
-        DownloadTimeoutMs = 15_000,
-        DownloadSlotTimeoutMs = 200,
-
-        MaxNetworkRetries = 2,
-        NetworkRetryBaseDelayMs = 300,
-        UseExponentialBackoff = false,
-        Max403BeforeCircuitBreak = 3,
-        RefreshCooldownMs = 1500,
-        PostRefreshDelayMs = 200,
-
-        InitialChunksToLoad = 5,
-        SeekPreloadChunks = 8,
-
-        BackgroundFillIdleCycles = 2,
-        BackgroundFillIntervalMs = 500,
-        MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 8,
-
-        PreloadIntervalMs = 200
     };
 
     #region Helpers
