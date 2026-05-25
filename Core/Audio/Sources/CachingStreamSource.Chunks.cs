@@ -244,19 +244,14 @@ public sealed partial class CachingStreamSource
     /// <returns>Результат загрузки.</returns>
     private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct, bool isCritical = false)
     {
-        if (index < 0 || index >= _totalChunks) return ChunkDownloadResult.OutOfRange;
+        if (_cacheEntry!.IsChunkCorruptedOffline(index))
+            return ChunkDownloadResult.Fatal; // Быстрый выход для безнадежных чанков
+        else if (index < 0 || index >= _totalChunks) return ChunkDownloadResult.OutOfRange;
 
         long chunkStart = (long)index * _chunkSize;
         if (chunkStart >= _contentLength) return ChunkDownloadResult.OutOfRange;
 
         if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
-
-        // Дедупликация: если уже есть активная загрузка этого чанка — ждём её.
-        if (_activeDownloads.TryGetValue(index, out var existingTask))
-        {
-            await WaitForActiveDownloadAsync(existingTask, ct).ConfigureAwait(false);
-            if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
-        }
 
         ct.ThrowIfCancellationRequested();
         CheckCircuitBreaker(index);
@@ -269,26 +264,28 @@ public sealed partial class CachingStreamSource
 
             if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
 
-            // Пробрасываем isCritical
-            var downloadTask = DownloadChunkCoreAsync(index, ct, isCritical);
+            var newLazy = CreateChunkDownloadLazy(index, ct, isCritical);
+            var actualLazy = _activeDownloads.GetOrAdd(index, newLazy);
 
-            if (_activeDownloads.TryAdd(index, downloadTask))
+            if (ReferenceEquals(newLazy, actualLazy))
             {
                 ChunkDownloadResult result;
+
                 try
                 {
-                    result = await downloadTask.ConfigureAwait(false);
+                    result = await actualLazy.Value.ConfigureAwait(false);
                 }
                 catch (ChunkDownloadFatalException) { throw; }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    _activeDownloads.TryRemove(index, out _);
-                    await Task.Delay(50, ct).ConfigureAwait(false);
+                    // Старый owner был отменён предыдущей эпохой, а текущий caller
+                    // (например, новый seek target) всё ещё актуален. Latest-wins path:
+                    // немедленно переходим к новой попытке без artificial delay.
                     continue;
                 }
                 finally
                 {
-                    _activeDownloads.TryRemove(index, out _);
+                    RemoveActiveDownloadIfOwner(index, actualLazy);
                 }
 
                 switch (result)
@@ -314,9 +311,11 @@ public sealed partial class CachingStreamSource
                     case ChunkDownloadResult.Cancelled:
                         if (!ct.IsCancellationRequested)
                         {
-                            await Task.Delay(50, ct).ConfigureAwait(false);
+                            // Обычно это результат отмены старой эпохи. Для active seek
+                            // лишняя задержка только увеличивает latency, поэтому retry сразу.
                             continue;
                         }
+
                         ct.ThrowIfCancellationRequested();
                         return result;
 
@@ -326,11 +325,10 @@ public sealed partial class CachingStreamSource
             }
             else
             {
-                // Другой поток создал задачу между нашей проверкой и TryAdd — ждём её.
-                if (_activeDownloads.TryGetValue(index, out var concurrentTask))
-                    await WaitForActiveDownloadAsync(concurrentTask, ct).ConfigureAwait(false);
+                await WaitForActiveDownloadAsync(actualLazy.Value, ct).ConfigureAwait(false);
 
-                if (IsChunkAvailable(index)) return ChunkDownloadResult.Success;
+                if (IsChunkAvailable(index))
+                    return ChunkDownloadResult.Success;
             }
         }
 
@@ -340,6 +338,43 @@ public sealed partial class CachingStreamSource
             consecutiveFailures: Volatile.Read(ref _consecutive403Count),
             reason: ChunkDownloadFailureReason.MaxRetriesExceeded,
             trackId: _trackId);
+    }
+
+    /// <summary>
+    /// Создаёт ленивую single-flight задачу загрузки чанка.
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="Lazy{T}"/> с режимом
+    /// <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/> гарантирует,
+    /// что HTTP-загрузка стартует ровно один раз для конкретного экземпляра lazy.</para>
+    /// <para>Это устраняет спекулятивный запуск второго HTTP-запроса проигравшим потоком,
+    /// который возможен при создании <see cref="Task"/> до публикации в словаре.</para>
+    /// </remarks>
+    /// <param name="index">Индекс чанка.</param>
+    /// <param name="ct">Токен отмены.</param>
+    /// <param name="isCritical">Флаг критической загрузки.</param>
+    /// <returns>Ленивая задача загрузки чанка.</returns>
+    private Lazy<Task<ChunkDownloadResult>> CreateChunkDownloadLazy(int index, CancellationToken ct, bool isCritical)
+    {
+        return new Lazy<Task<ChunkDownloadResult>>(
+            () => DownloadChunkCoreAsync(index, ct, isCritical),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    /// <summary>
+    /// Удаляет запись об активной загрузке только если текущий caller остаётся владельцем.
+    /// </summary>
+    /// <remarks>
+    /// <para>Проверка через <see cref="ReferenceEquals(object?, object?)"/> защищает от гонки:
+    /// если после завершения старой загрузки другой поток уже зарегистрировал новый lazy
+    /// для того же chunk index, текущий поток не должен удалять новую запись.</para>
+    /// </remarks>
+    /// <param name="index">Индекс чанка.</param>
+    /// <param name="ownerLazy">Lazy, созданный текущим владельцем загрузки.</param>
+    private void RemoveActiveDownloadIfOwner(int index, Lazy<Task<ChunkDownloadResult>> ownerLazy)
+    {
+        if (_activeDownloads.TryGetValue(index, out var current) && ReferenceEquals(current, ownerLazy))
+            _activeDownloads.TryRemove(index, out _);
     }
 
     /// <summary>
@@ -486,8 +521,26 @@ public sealed partial class CachingStreamSource
             response = await _httpClient.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         }
-        catch (TaskCanceledException) { return ChunkDownloadResult.NetworkError; }
-        catch (HttpRequestException) { return ChunkDownloadResult.NetworkError; }
+        catch (TaskCanceledException) when (ct.IsCancellationRequested || _disposed)
+        {
+            return ChunkDownloadResult.Cancelled;
+        }
+        catch (ObjectDisposedException) when (ct.IsCancellationRequested || _disposed)
+        {
+            return ChunkDownloadResult.Cancelled;
+        }
+        catch (HttpRequestException ex) when (IsCancelledSendFailure(ex, ct, _disposed))
+        {
+            return ChunkDownloadResult.Cancelled;
+        }
+        catch (TaskCanceledException)
+        {
+            return ChunkDownloadResult.NetworkError;
+        }
+        catch (HttpRequestException)
+        {
+            return ChunkDownloadResult.NetworkError;
+        }
 
         using (response)
         {
@@ -864,6 +917,52 @@ public sealed partial class CachingStreamSource
     #endregion
 
     #region Chunk Helpers
+
+    /// <summary>
+    /// Определяет, был ли <see cref="HttpRequestException"/> вызван штатной отменой
+    /// запроса (seek / dispose / epoch reset), а не реальной сетевой ошибкой.
+    /// </summary>
+    /// <param name="exception">Исключение, полученное из HTTP send path.</param>
+    /// <param name="ct">Токен операции загрузки чанка.</param>
+    /// <param name="disposed">Флаг утилизации источника.</param>
+    /// <returns>
+    /// <c>true</c>, если исключение следует классифицировать как
+    /// <see cref="ChunkDownloadResult.Cancelled"/>; иначе <c>false</c>.
+    /// </returns>
+    /// <remarks>
+    /// <para>Во время seek старый epoch отменяет in-flight <c>SendAsync</c> и SSL/socket
+    /// стек может выбросить не только <see cref="TaskCanceledException"/>, но и
+    /// <see cref="HttpRequestException"/> с вложенными
+    /// <see cref="ObjectDisposedException"/> или socket-abort ошибками.</para>
+    /// <para>Если трактовать такие случаи как <see cref="ChunkDownloadResult.NetworkError"/>,
+    /// <see cref="EnsureChunkAsync"/> запускает ложные retry и раздувает churn при scrubbing.</para>
+    /// </remarks>
+    private static bool IsCancelledSendFailure(
+        HttpRequestException exception, CancellationToken ct, bool disposed)
+    {
+        if (disposed || ct.IsCancellationRequested)
+            return true;
+
+        Exception? current = exception;
+        while (current != null)
+        {
+            switch (current)
+            {
+                case ObjectDisposedException:
+                    return true;
+
+                case System.Net.Sockets.SocketException socketException
+                    when socketException.SocketErrorCode is
+                        System.Net.Sockets.SocketError.OperationAborted or
+                        System.Net.Sockets.SocketError.Interrupted:
+                    return true;
+            }
+
+            current = current.InnerException;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Проверяет доступность чанка: либо загружен на диск, либо находится в RAM-кэше.

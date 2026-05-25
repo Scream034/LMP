@@ -159,8 +159,11 @@ public sealed class AacDecoder : IAudioDecoder
         {
             return new AscInfo
             {
-                ObjectType = 2, BaseSampleRate = 44100,
-                OutputSampleRate = 44100, Channels = 2, IsHeAac = false
+                ObjectType = 2,
+                BaseSampleRate = 44100,
+                OutputSampleRate = 44100,
+                Channels = 2,
+                IsHeAac = false
             };
         }
 
@@ -177,7 +180,14 @@ public sealed class AacDecoder : IAudioDecoder
 
         int channels = channelConfig switch
         {
-            1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 8, _ => 2
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            4 => 4,
+            5 => 5,
+            6 => 6,
+            7 => 8,
+            _ => 2
         };
 
         return new AscInfo
@@ -201,9 +211,20 @@ public sealed class AacDecoder : IAudioDecoder
     {
         return sampleRate switch
         {
-            96000 => 0, 88200 => 1, 64000 => 2, 48000 => 3, 44100 => 4,
-            32000 => 5, 24000 => 6, 22050 => 7, 16000 => 8, 12000 => 9,
-            11025 => 10, 8000 => 11, 7350 => 12, _ => 4
+            96000 => 0,
+            88200 => 1,
+            64000 => 2,
+            48000 => 3,
+            44100 => 4,
+            32000 => 5,
+            24000 => 6,
+            22050 => 7,
+            16000 => 8,
+            12000 => 9,
+            11025 => 10,
+            8000 => 11,
+            7350 => 12,
+            _ => 4
         };
     }
 
@@ -311,9 +332,43 @@ public sealed class AacDecoder : IAudioDecoder
         }
     }
 
+    /// <summary>
+    /// Лёгкий сброс внутреннего состояния декодера без полного пересоздания.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Индустриальная практика:</b></para>
+    /// <list type="bullet">
+    ///   <item>FFmpeg: <c>avcodec_flush_buffers</c> — обнуление internal buffers
+    ///     через <c>memset</c> на <c>ChannelElement</c> без пересоздания контекста.</item>
+    ///   <item>VLC: flush сбрасывает error state, позволяя продолжить после seek.</item>
+    ///   <item>ExoPlayer: <c>canKeepCodec</c> — reuse codec, flush при seek.</item>
+    /// </list>
+    ///
+    /// <para><b>Предыдущий подход (<see cref="RecreateDecoder"/>):</b>
+    /// <c>ParseMP4DecoderSpecificInfo</c> + <c>new Decoder</c> + <c>new SampleBuffer</c>
+    /// = ~2ms + 10 аллокаций. Вызывался на КАЖДОМ skip-фрейме (5 раз для AAC)
+    /// = ~10ms + 50 аллокаций на seek.</para>
+    ///
+    /// <para><b>Новый подход:</b> <c>Decoder.Flush()</c> обнуляет SyntacticElements
+    /// (prediction/LTP state) через <c>Array.Clear</c>. FilterBank overlap
+    /// вытесняется skip-frames. Стоимость: ~0.1ms + 1 аллокация.</para>
+    /// </remarks>
+    public void FlushState()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_initialized || _decoder == null) return;
+
+        _decoder.Flush();
+        _consecutiveErrors = 0;
+    }
+
+    /// <summary>
+    /// Декодирует фрейм с предварительным flush внутреннего state.
+    /// Вызывается ОДИН РАЗ после seek через <c>_decoderResetNeeded</c> CAS-флаг.
+    /// </summary>
     public int DecodeWithReset(ReadOnlySpan<byte> encodedData, Span<float> outputBuffer)
     {
-        RecreateDecoder();
+        FlushState();
         return Decode(encodedData, outputBuffer);
     }
 

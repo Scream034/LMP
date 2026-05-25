@@ -548,7 +548,7 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         MemoryCleanupHelper.PerformCleanup(aggressive: true);
 
         // Ждём завершения (синхронно для Debug)
-        System.Threading.Thread.Sleep(500);
+        Thread.Sleep(500);
         var after = GC.GetTotalMemory(true) / 1024 / 1024;
         AppendLog($"After:  {after} MB");
         AppendLog($"Freed:  {before - after} MB");

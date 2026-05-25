@@ -111,6 +111,10 @@ public static class PlayerStateTransitions
             SeekCommand => state is PlayerState.Playing or PlayerState.Paused,
             DisposeCommand => true,
 
+            // Natural end-of-track доставляется через actor channel.
+            // Разрешаем обработку в состояниях, где текущий pipeline ещё легитимно активен.
+            TrackEndedCommand => state is PlayerState.Buffering or PlayerState.Playing or PlayerState.Paused,
+
             // Recovery принимается из Buffering (Resume переключает Paused → Buffering
             // до отправки команды) и из Paused (race-safe fallback).
             DeviceRecoveryCommand => state is PlayerState.Buffering or PlayerState.Paused or PlayerState.Error,

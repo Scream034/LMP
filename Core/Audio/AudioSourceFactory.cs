@@ -85,7 +85,6 @@ public static class AudioSourceFactory
     /// </returns>
     public static string BuildCacheKey(string trackId, AudioFormat format, int bitrate)
     {
-        // ═══ НОРМАЛИЗАЦИЯ — ТОЛЬКО ДЛЯ КЛЮЧА ═══
         // BuildCacheKey использует NormalizeBitrate для группировки.
         // НО возвращаемый битрейт из CreateAsync — РЕАЛЬНЫЙ (не нормализованный).
         int normalizedBitrate = NormalizeBitrate(bitrate);
@@ -136,13 +135,13 @@ public static class AudioSourceFactory
     /// реальный битрейт берётся из <c>CacheEntry.Bitrate</c> (НЕ нормализованный).
     /// </returns>
     public static async Task<IAudioSource> CreateAsync(
-        string url,
-        HttpClient httpClient,
-        Func<CancellationToken, Task<string?>>? urlRefresher = null,
-        string? trackId = null,
-        int bitrateHint = 0,
-        StreamingConfig? config = null,
-        CancellationToken ct = default)
+          string url,
+          HttpClient httpClient,
+          Func<CancellationToken, Task<string?>>? urlRefresher = null,
+          string? trackId = null,
+          int bitrateHint = 0,
+          StreamingConfig? config = null,
+          CancellationToken ct = default)
     {
         if (_globalCacheManager == null)
         {
@@ -153,61 +152,43 @@ public static class AudioSourceFactory
         config ??= _currentConfig;
         trackId ??= GenerateTrackIdFromUrl(url);
 
-        // ── Пустой URL → ищем кэш ──
         if (string.IsNullOrEmpty(url))
         {
             var cached = FindAnyCachedTrack(trackId);
             if (cached != null)
             {
-                // ═══ РЕАЛЬНЫЙ БИТРЕЙТ ИЗ КЭША ═══
-                // CacheEntry.Bitrate содержит РЕАЛЬНЫЙ битрейт (134), не нормализованный.
-                // AudioCacheManager сохраняет оригинальный битрейт при создании entry.
-                Log.Info($"[AudioSourceFactory] Using cached: {trackId} " +
-                         $"({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
-                return new LocalFileSource(cached.Value.Path);
+                Log.Info($"[AudioSourceFactory] Using cached: {trackId} ({cached.Value.Entry.Format}/{cached.Value.Entry.Bitrate}kbps)");
+                // Прокидываем trackId в LocalFileSource
+                return new LocalFileSource(cached.Value.Path, cached.Value.Entry.TotalSize, trackId);
             }
 
             throw new ArgumentException("No URL provided and no cache available", nameof(url));
         }
 
-        // ── Определяем формат ──
         var format = await DetectFormatAsync(url, httpClient, ct);
         if (format == AudioFormat.Unknown)
             throw new NotSupportedException($"Could not detect audio format for: {url}");
 
-        // ── Метаданные потока ──
         var (contentLength, codec, detectedBitrate) =
             await GetStreamInfoAsync(url, format, httpClient, ct);
 
-        // ═══ РЕАЛЬНЫЙ БИТРЕЙТ — НЕ НОРМАЛИЗУЕМ ═══
-        // finalBitrate используется для:
-        // 1. BuildCacheKey (внутри него нормализация)
-        // 2. Логирования (показываем РЕАЛЬНЫЙ битрейт)
-        // 3. CachingStreamSource (сохраняет РЕАЛЬНЫЙ битрейт в metadata)
         int finalBitrate = bitrateHint > 0 ? bitrateHint : detectedBitrate;
-
-        // ═══ КЛЮЧ КЭША — НОРМАЛИЗОВАННЫЙ ═══
-        // BuildCacheKey внутри вызывает NormalizeBitrate(finalBitrate).
-        // Например: finalBitrate=134 → cacheKey содержит "128".
         string cacheKey = BuildCacheKey(trackId, format, finalBitrate);
 
-        // ── Проверяем точный кэш ──
         if (_globalCacheManager.IsFullyCached(cacheKey))
         {
             var cachePath = _globalCacheManager.GetCachePath(cacheKey);
             if (File.Exists(cachePath))
             {
+                var exactEntry = _globalCacheManager.GetCacheInfo(cacheKey);
                 Log.Info($"[AudioSourceFactory] Exact cache hit: {cacheKey}");
-                return new LocalFileSource(cachePath);
+                // Прокидываем trackId в LocalFileSource
+                return new LocalFileSource(cachePath, exactEntry?.TotalSize ?? 0, trackId);
             }
         }
 
-        // ═══ ЛОГ — ПОКАЗЫВАЕМ РЕАЛЬНЫЙ БИТРЕЙТ ═══
         Log.Info($"[AudioSourceFactory] Streaming {format}/{codec}/{finalBitrate}kbps: {cacheKey}");
 
-        // ═══ CACHINGSOURCE — РЕАЛЬНЫЙ БИТРЕЙТ ═══
-        // CachingStreamSource получает finalBitrate (134), не нормализованный.
-        // Он сохранит 134 в CacheEntry.Bitrate при завершении загрузки.
         return new CachingStreamSource(
             cacheKey, trackId, url, contentLength, format, codec,
             finalBitrate, httpClient, _globalCacheManager, config, urlRefresher);

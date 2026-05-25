@@ -36,23 +36,23 @@ public static class AudioConstants
     public const int ChunkSize = 64 * 1024;
 
     /// <summary>Максимум чанков в RAM (32 × 64KB = 2MB RAM на трек).</summary>
-    public const int MaxRamChunks = 32;
+    public const int MaxRamChunks = 96;
 
     /// <summary>Расстояние от текущей позиции для вытеснения (eviction) чанков из RAM.</summary>
-    public const int RamEvictionDistance = 10;
+    public const int RamEvictionDistance = 14;
 
     // ═══════════════════════════════════════════════════════
     // PRELOAD SETTINGS — Стратегия упреждающей загрузки
     // ═══════════════════════════════════════════════════════
 
     /// <summary>Чанков загружать перед стартом воспроизведения (300ms @ 128kbps).</summary>
-    public const int InitialChunksToLoad = 3;
+    public const int InitialChunksToLoad = 4;
 
     /// <summary>Чанков держать впереди от текущей позиции (adaptive buffering).</summary>
-    public const int PreloadAheadChunks = 4;
+    public const int PreloadAheadChunks = 6;
 
     /// <summary>Чанков загружать при seek (instant seek UX).</summary>
-    public const int SeekPreloadChunks = 4;
+    public const int SeekPreloadChunks = 6;
 
     /// <summary>Интервал проверки preload loop (мс).</summary>
     public const int PreloadIntervalMs = 500;

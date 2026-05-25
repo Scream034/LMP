@@ -60,7 +60,7 @@ public class MusicClient(HttpClient http)
                         YoutubeId = item.Id,
                         StoredName = item.Title,
                         // Используем локализацию
-                        Author = item.Author ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"],
+                        Author = item.Author ?? Services.LocalizationService.Instance["Track_UnknownAuthor"],
                         ThumbnailUrl = bestThumb,
                         SyncMode = PlaylistSyncMode.TwoWaySync
                     });
@@ -96,7 +96,7 @@ public class MusicClient(HttpClient http)
                     Id = string.Concat("yt_", item.Id),
                     Title = item.Title,
                     // Используем локализацию вместо "Unknown"
-                    Author = item.Author ?? item.Album ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"],
+                    Author = item.Author ?? item.Album ?? Services.LocalizationService.Instance["Track_UnknownAuthor"],
                     Duration = item.Duration ?? TimeSpan.Zero,
                     ThumbnailUrl = bestThumb,
                     IsMusic = true,

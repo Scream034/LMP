@@ -36,11 +36,15 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Фоновый цикл предзагрузки чанков.
     /// 
-    /// <para><b>Два режима:</b></para>
+    /// <para><b>Три режима:</b></para>
     /// <list type="bullet">
     ///   <item><b>Suspend mode:</b> Загружает только critical read-ahead (5 чанков вперёд).
     ///     Чанки загружаются последовательно (await) для надёжности при тротлинге сети.
     ///     Блокируется на _suspendGate до Resume или timeout 500ms.</item>
+    ///   <item><b>Active seek mode:</b> Preload loop уступает приоритет seek path —
+    ///     пропускает итерацию, если с момента последнего seek прошло менее
+    ///     <see cref="SeekPreloadDebounceMs"/>. Это предотвращает конкуренцию
+    ///     preload loop и critical seek downloads за download slots.</item>
     ///   <item><b>Normal mode:</b> Полный preload с parallel downloads и background fill.</item>
     /// </list>
     /// </summary>
@@ -80,9 +84,6 @@ public sealed partial class CachingStreamSource
                     int current = Volatile.Read(ref _currentChunk);
                     var epochAtStart = Interlocked.Read(ref _downloadEpoch);
 
-                    // downloadToken отменяется при seek. Но critical chunks нужны
-                    // декодеру прямо сейчас — их нельзя прерывать из-за seek'а.
-                    // Lifetime token отменяется только при полном dispose/stop — это правильно.
                     int criticalAhead = Math.Min(5, _config.ReadAheadChunks + 1);
 
                     for (int i = 0; i <= criticalAhead; i++)
@@ -97,7 +98,6 @@ public sealed partial class CachingStreamSource
                         {
                             try
                             {
-                                // FIX 5a: ct вместо downloadToken
                                 await EnsureChunkAsync(idx, ct).ConfigureAwait(false);
                             }
                             catch (OperationCanceledException) { break; }
@@ -119,9 +119,6 @@ public sealed partial class CachingStreamSource
                     }
                     catch (OperationCanceledException) { break; }
 
-                    // Если _suspendGate только что стал Set (Resume вызван),
-                    // устанавливаем флаг — следующая итерация в normal mode
-                    // сделает паузу перед новыми загрузками.
                     if (_suspendGate.IsSet)
                         justResumed = true;
 
@@ -132,14 +129,24 @@ public sealed partial class CachingStreamSource
 
                 if (justResumed)
                 {
-                    // Даём декодеру время завершить свои in-flight HTTP-запросы
-                    // (или пройти retry из Fix 1) без конкуренции с preload.
-                    // PreloadIntervalMs (обычно 200мс) достаточно: за это время
-                    // Fix 1 успевает выполнить retry и заполнить PCM buffer.
                     justResumed = false;
                     try
                     {
                         await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
+                // Active seek suppression: если seek был недавно, уступаем приоритет
+                // critical seek path, чтобы не конкурировать за download slots.
+                long msSinceLastSeek = Environment.TickCount64 - Volatile.Read(ref _lastSeekTimestamp);
+                if (msSinceLastSeek < SeekPreloadDebounceMs)
+                {
+                    try
+                    {
+                        int waitMs = (int)(SeekPreloadDebounceMs - msSinceLastSeek);
+                        await Task.Delay(waitMs, ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) { break; }
                     continue;

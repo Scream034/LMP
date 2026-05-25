@@ -5,7 +5,6 @@ namespace LMP.Core.Services;
 /// <summary>
 /// Фабрика профилей стриминга для разных условий сети.
 /// Каждый профиль — набор предварительно настроенных параметров <see cref="StreamingConfig"/>.
-/// </summary>
 public static class StreamingProfiles
 {
     /// <summary>
@@ -21,14 +20,14 @@ public static class StreamingProfiles
     };
 
     /// <summary>
-    /// Экономия трафика.
+    /// Экономия трафика. Chunk 16KB — минимальный seek latency при медленном соединении.
     /// </summary>
     public static StreamingConfig Low { get; } = new()
     {
-        ChunkSizeBytes = 32 * 1024,
-        ReadAheadChunks = 2,
-        MaxRamChunks = 128,
-        RamEvictionDistance = 8,
+        ChunkSizeBytes = 16 * 1024,
+        ReadAheadChunks = 4,
+        MaxRamChunks = 256,
+        RamEvictionDistance = 16,
 
         MaxConcurrentDownloads = 2,
         DownloadTimeoutMs = 30_000,
@@ -41,32 +40,34 @@ public static class StreamingProfiles
         RefreshCooldownMs = 5000,
         PostRefreshDelayMs = 800,
 
-        InitialChunksToLoad = 2,
-        SeekPreloadChunks = 3,
+        InitialChunksToLoad = 4,
+        SeekPreloadChunks = 6,
 
         BackgroundFillIdleCycles = 8,
         BackgroundFillIntervalMs = 5000,
-        MaxBackgroundChunksPerSession = 30,
-        MinBufferAheadForBackgroundFill = 2,
+        MaxBackgroundChunksPerSession = 60,
+        MinBufferAheadForBackgroundFill = 3,
 
         PreloadIntervalMs = 800
     };
 
     /// <summary>
-    /// Сбалансированный (по умолчанию). ~30 сек буфер.
-    /// Для обычного домашнего интернета.
+    /// Сбалансированный (по умолчанию). Chunk 64KB — оптимум между seek latency и HTTP overhead.
+    ///
+    /// <para><b>Расчёт буфера:</b> 6 ReadAhead × 64KB = 384KB ≈ 20s @ 155kbps.
+    /// Достаточно для бесперебойного воспроизведения на обычном домашнем интернете.
+    /// Seek загружает 64KB вместо 128KB — perceived latency снижена в 2×.</para>
     /// </summary>
     public static StreamingConfig Medium { get; } = new()
     {
-        ChunkSizeBytes = 128 * 1024,
-        ReadAheadChunks = 4,
-        MaxRamChunks = 64,
-        RamEvictionDistance = 10,
+        ChunkSizeBytes = 64 * 1024,
+        ReadAheadChunks = 6,
+        MaxRamChunks = 96,
+        RamEvictionDistance = 14,
 
         MaxConcurrentDownloads = 3,
         DownloadTimeoutMs = 15_000,
-        DownloadSlotTimeoutMs = 300,        // критический чанк не ждёт слот (isCritical),
-                                            // но preload-чанки быстрее fail'ят и не держат слоты
+        DownloadSlotTimeoutMs = 300,
 
         MaxNetworkRetries = 3,
         NetworkRetryBaseDelayMs = 500,
@@ -75,32 +76,26 @@ public static class StreamingProfiles
         RefreshCooldownMs = 3000,
         PostRefreshDelayMs = 500,
 
-        InitialChunksToLoad = 3,
-        SeekPreloadChunks = 4,              //  при seek на незагруженный участок
-                                            // параллельно подгружаются 4 чанка вместо 2.
-                                            // На 128KB/чанк при 155kbps это ~26 сек буфер.
-                                            // Decoder начинает читать первый чанк немедленно,
-                                            // остальные 3 готовы к моменту когда они понадобятся.
+        InitialChunksToLoad = 4,
+        SeekPreloadChunks = 6,
 
         BackgroundFillIdleCycles = 5,
         BackgroundFillIntervalMs = 3000,
         MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 3,
+        MinBufferAheadForBackgroundFill = 4,
 
-        PreloadIntervalMs = 500             // preload loop проверяет чаще,
-                                            // чанки вокруг текущей позиции подгружаются быстрее.
-                                            // 500ms × 4 ReadAheadChunks = ~2с полное покрытие.
+        PreloadIntervalMs = 500
     };
 
     /// <summary>
-    /// Высокое качество.
+    /// Высокое качество. Chunk 128KB — баланс для быстрого интернета.
     /// </summary>
     public static StreamingConfig High { get; } = new()
     {
-        ChunkSizeBytes = 256 * 1024,
-        ReadAheadChunks = 6,
-        MaxRamChunks = 48,
-        RamEvictionDistance = 12,
+        ChunkSizeBytes = 128 * 1024,
+        ReadAheadChunks = 8,
+        MaxRamChunks = 64,
+        RamEvictionDistance = 16,
 
         MaxConcurrentDownloads = 4,
         DownloadTimeoutMs = 20_000,
@@ -113,26 +108,26 @@ public static class StreamingProfiles
         RefreshCooldownMs = 2000,
         PostRefreshDelayMs = 300,
 
-        InitialChunksToLoad = 3,
-        SeekPreloadChunks = 5,
+        InitialChunksToLoad = 4,
+        SeekPreloadChunks = 6,
 
         BackgroundFillIdleCycles = 3,
         BackgroundFillIntervalMs = 1500,
         MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 4,
+        MinBufferAheadForBackgroundFill = 6,
 
         PreloadIntervalMs = 350
     };
 
     /// <summary>
-    /// Максимальное кэширование.
+    /// Максимальное кэширование. Chunk 256KB — агрессивный prefetch.
     /// </summary>
     public static StreamingConfig Ultra { get; } = new()
     {
-        ChunkSizeBytes = 512 * 1024,
-        ReadAheadChunks = 10,
-        MaxRamChunks = 40,
-        RamEvictionDistance = 15,
+        ChunkSizeBytes = 256 * 1024,
+        ReadAheadChunks = 12,
+        MaxRamChunks = 48,
+        RamEvictionDistance = 18,
 
         MaxConcurrentDownloads = 6,
         DownloadTimeoutMs = 15_000,
@@ -145,13 +140,13 @@ public static class StreamingProfiles
         RefreshCooldownMs = 1500,
         PostRefreshDelayMs = 200,
 
-        InitialChunksToLoad = 4,
-        SeekPreloadChunks = 6,
+        InitialChunksToLoad = 5,
+        SeekPreloadChunks = 8,
 
         BackgroundFillIdleCycles = 2,
         BackgroundFillIntervalMs = 500,
         MaxBackgroundChunksPerSession = 0,
-        MinBufferAheadForBackgroundFill = 6,
+        MinBufferAheadForBackgroundFill = 8,
 
         PreloadIntervalMs = 200
     };

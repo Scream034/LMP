@@ -220,7 +220,7 @@ public partial class CopyLinkButton : UserControl
             // Ресурсы недоступны — сбрасываем на AXAML-значение через ClearValue.
             // DynamicResource из разметки вернётся автоматически.
             _icon.ClearValue(PathIcon.DataProperty);
-            _icon.ClearValue(PathIcon.ForegroundProperty);
+            _icon.ClearValue(ForegroundProperty);
             return;
         }
 
@@ -231,7 +231,7 @@ public partial class CopyLinkButton : UserControl
             _icon.Foreground = brush;
         else
             // Fallback: не ставим null — сбрасываем на inherited/DynamicResource.
-            _icon.ClearValue(PathIcon.ForegroundProperty);
+            _icon.ClearValue(ForegroundProperty);
     }
 
     private void SetIconState(string geometryKey, string brushKey)

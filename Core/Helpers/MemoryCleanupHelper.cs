@@ -284,7 +284,7 @@ public static class MemoryCleanupHelper
                                 compositor.RequestCompositionUpdate(() =>
                                 {
                                     // Очистка кэшей SkiaSharp внутри потока рендеринга
-                                    SkiaSharp.SKGraphics.PurgeAllCaches();
+                                    SKGraphics.PurgeAllCaches();
                                 });
                             }
                         }

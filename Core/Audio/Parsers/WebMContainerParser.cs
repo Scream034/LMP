@@ -22,6 +22,12 @@ public sealed class WebMContainerParser : IContainerParser
     public int SampleRate => _parser.SampleRate > 0 ? _parser.SampleRate : 48000;
     public int Channels => _parser.Channels > 0 ? _parser.Channels : 2;
 
+    /// <summary>
+    /// Произошёл ли resync в текущем парсере.
+    /// Если true, последующий EOF означает реальное усечение файла.
+    /// </summary>
+    public bool ResyncOccurred => _parser.ResyncOccurred;
+
     public WebMContainerParser(Stream stream)
     {
         _parser = new WebMParser(stream);
@@ -101,6 +107,12 @@ public sealed class WebMContainerParser : IContainerParser
     {
         _currentFrameOwner?.Dispose();
         _currentFrameOwner = null;
+    }
+
+    public void RequireResync()
+    {
+        ReleaseCurrentFrame();
+        _parser.RequireResync();
     }
 
     public void Dispose()

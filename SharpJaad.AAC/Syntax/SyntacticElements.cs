@@ -461,5 +461,68 @@ namespace SharpJaad.AAC.Syntax
 
             buffer.SetData(b, freq, chs, 16, bitsRead);
         }
+
+        /// <summary>
+        /// Сбрасывает внутреннее состояние для seek без пересоздания объекта.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>Индустриальная практика (FFmpeg):</b> <c>avcodec_flush_buffers</c>
+        /// обнуляет внутренние буферы через <c>memset</c> без пересоздания
+        /// <c>AVCodecContext</c>. Аналогичный подход здесь.</para>
+        ///
+        /// <para><b>Что очищается:</b></para>
+        /// <list type="bullet">
+        ///   <item><c>elements[]</c> — накопленный state: <c>ICSInfo.windowShape[PREVIOUS]</c>,
+        ///     <c>LTPrediction</c> state буфер, <c>ICPrediction</c> coefficients.
+        ///     Null-ирование позволяет lazy-recreate при следующем <see cref="Decode"/> —
+        ///     стоимость: 1 CPE (stereo) или 1 SCE (mono) аллокация, ~0.1ms.</item>
+        ///   <item><c>cces[], dses[], fils[]</c> — coupling/data/fill элементы
+        ///     (редко используются, но могут содержать stale references).</item>
+        ///   <item><c>data[][]</c> — выходные PCM буферы обнуляются, а не null-ируются,
+        ///     чтобы избежать реаллокации в <see cref="Process"/>.</item>
+        ///   <item>Counters и frame — полный сброс позиции в потоке.</item>
+        /// </list>
+        ///
+        /// <para><b>Что НЕ очищается (намеренно):</b></para>
+        /// <list type="bullet">
+        ///   <item><c>FilterBank</c> — overlap-add буферы очищаются естественно
+        ///     через skip-frames после seek (<c>SkipFramesAfterSeekAac</c>).
+        ///     Первые N фреймов декодируются но отбрасываются, вытесняя stale overlap.</item>
+        ///   <item><c>config</c> — конфигурация декодера неизменна в рамках трека.</item>
+        /// </list>
+        /// </remarks>
+        public void Flush()
+        {
+            // Сброс frame counters (то же что StartNewFrame, но дополнительно frame=0)
+            curElem = 0;
+            curCCE = 0;
+            curDSE = 0;
+            curFIL = 0;
+            sbrPresent = false;
+            psPresent = false;
+            bitsRead = 0;
+            frame = 0;
+
+            // Null-ирование элементов: очищает accumulated prediction/LTP/coupling state.
+            // Элементы будут lazy-recreated при следующем Decode() через
+            // `if (elements[curElem] == null) elements[curElem] = new SCE_LFE(config);`
+            // Стоимость: 1 объект для stereo (CPE), 1 для mono (SCE_LFE). ~0.1ms.
+            Array.Clear(elements, 0, elements.Length);
+            Array.Clear(cces, 0, cces.Length);
+            Array.Clear(dses, 0, dses.Length);
+            Array.Clear(fils, 0, fils.Length);
+
+            // Обнуляем PCM буферы без реаллокации.
+            // data[][] dimensions проверяются в Process() и не изменяются
+            // в рамках одного трека — реаллокации не произойдёт.
+            if (data != null)
+            {
+                for (int i = 0; i < data.Length; i++)
+                {
+                    if (data[i] != null)
+                        Array.Clear(data[i], 0, data[i].Length);
+                }
+            }
+        }
     }
 }

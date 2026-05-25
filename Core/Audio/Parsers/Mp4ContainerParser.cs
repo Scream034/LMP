@@ -1,5 +1,6 @@
 using System.Buffers;
 using LMP.Core.Audio.Interfaces;
+using LMP.Core.Exceptions;
 
 namespace LMP.Core.Audio.Parsers;
 
@@ -20,7 +21,7 @@ namespace LMP.Core.Audio.Parsers;
 public sealed partial class Mp4ContainerParser : IContainerParser
 {
     private readonly Mp4BinaryReader _reader;
-    
+
     private long _durationMs;
     private byte[]? _decoderConfig;
     private int _sampleRate;
@@ -54,7 +55,7 @@ public sealed partial class Mp4ContainerParser : IContainerParser
         _reader = new Mp4BinaryReader(stream ?? throw new ArgumentNullException(nameof(stream)));
     }
 
-      /// <summary>
+    /// <summary>
     /// Выполняет первичный парсинг заголовков контейнера и строит индекс семплов.
     /// </summary>
     /// <param name="ct">Токен отмены операции.</param>
@@ -153,14 +154,17 @@ public sealed partial class Mp4ContainerParser : IContainerParser
         return await ReadSampleAsFrameAsync(_samples[_currentSampleIndex++], ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Изменяем чтение сэмпла: при сбое I/O выбрасываем ParserCorruptionException вместо возврата null.
+    /// </summary>
     private async ValueTask<AudioFrame?> ReadSampleAsFrameAsync(SampleInfo sample, CancellationToken ct)
     {
+        _reader.Position = sample.Offset;
+        var owner = MemoryPool<byte>.Shared.Rent(sample.Size);
+        var memory = owner.Memory[..sample.Size];
+
         try
         {
-            _reader.Position = sample.Offset;
-            var owner = MemoryPool<byte>.Shared.Rent(sample.Size);
-            var memory = owner.Memory[..sample.Size];
-
             await _reader.ReadExactlyAsync(memory, ct).ConfigureAwait(false);
             _currentFrameOwner = owner;
 
@@ -172,9 +176,11 @@ public sealed partial class Mp4ContainerParser : IContainerParser
                 IsKeyFrame = sample.IsKeyFrame
             };
         }
-        catch (Exception ex) { 
-            Log.Warn($"[Mp4Parser] Frame read error at {sample.Offset}: {ex.Message}");
-            return null; 
+        catch (Exception ex)
+        {
+            owner.Dispose();
+            if (ct.IsCancellationRequested) throw;
+            throw new ParserCorruptionException(sample.Offset, $"Failed to read MP4 sample at offset {sample.Offset}", ex);
         }
     }
 
@@ -199,6 +205,26 @@ public sealed partial class Mp4ContainerParser : IContainerParser
     {
         _currentFrameOwner?.Dispose();
         _currentFrameOwner = null;
+    }
+
+    /// <inheritdoc/>
+    public void RequireResync()
+    {
+        ReleaseCurrentFrame();
+        long currentPos = _reader.Position;
+
+        if (_isFragmented)
+        {
+            _fragmentSamples.Clear();
+        }
+        else
+        {
+            // Для классического MP4 сдвигаем индекс к первому сэмплу после текущей физической позиции
+            while (_currentSampleIndex < _samples.Count && _samples[_currentSampleIndex].Offset < currentPos)
+            {
+                _currentSampleIndex++;
+            }
+        }
     }
 
     public void Dispose()

@@ -15,26 +15,6 @@ namespace LMP.Core.Audio;
 
 /// <summary>
 /// Полный конвейер воспроизведения: Source → Decoder → PCM Buffer → Normalization → Gain → Backend.
-///
-/// <para><b>Архитектура громкости:</b></para>
-/// <para>Gain (volume curve, boost, user dB) применяется программно к PCM сэмплам
-/// в <see cref="AudioCallback"/>, НЕ через hardware volume backend'а.</para>
-///
-/// <para><b>Нормализация (EBU R128 / ITU-R BS.1770-4):</b></para>
-/// <para>Делегирована <see cref="EbuR128Analyzer"/> — отдельному модулю,
-/// отвечающему за K-weighted LUFS анализ, gating blocks и gain state machine.</para>
-///
-/// <para><b>Thread model (ИСПРАВЛЕНО):</b></para>
-/// <list type="bullet">
-///   <item>Decoder loop — <see cref="Task.Run"/> на ThreadPool (честный async).
-///     Предыдущая версия использовала dedicated thread с <c>.GetAwaiter().GetResult()</c>,
-///     что приводило к thread-hopping: после первого <c>await</c> continuation уходил
-///     в ThreadPool, а выделенный AboveNormal поток блокировался навечно.</item>
-///   <item>AudioCallback — вызывается из fill thread NAudioBackend.</item>
-///   <item><see cref="_gain"/> — volatile float, lock-free read/write.</item>
-///   <item>Normalization state — инкапсулирован в <see cref="EbuR128Analyzer"/>.</item>
-/// </list>
-/// </summary>
 public sealed class AudioPipeline : IAsyncDisposable
 {
     #region Constants
@@ -46,6 +26,10 @@ public sealed class AudioPipeline : IAsyncDisposable
     private const int WaitBufferDelayMs = 10;
     private const int HResultFileNotFound = unchecked((int)0x80070002);
     private const int HResultPathNotFound = unchecked((int)0x80070003);
+    /// <summary>
+    /// Допустимое расхождение между последним timestamp источника и объявленной длительностью трека.
+    /// </summary>
+    private const int PrematureEndToleranceMs = 2_000;
 
     #endregion
 
@@ -67,29 +51,16 @@ public sealed class AudioPipeline : IAsyncDisposable
     private volatile bool _disposed;
 
     private int _skipFramesCounter;
+    private int _decoderResetNeeded;
     private long _decodedSamples;
     private long _seekTargetMs = -1;
     private volatile bool _deviceLost;
     private Action? _onDeviceLostExternal;
     private Action? _onDeviceAvailableExternal;
 
-    /// <summary>
-    /// Task последнего запущенного обработчика device-события (lost / available).
-    /// Не <c>volatile</c> — доступ строго через <see cref="Volatile.Read"/>
-    /// и <see cref="Volatile.Write"/> для корректной публикации без
-    /// конфликта с передачей по <c>ref</c>.
-    /// Хранится для ожидания в <see cref="DisposeAsync"/>: исключает гонку
-    /// между обработчиком, вызывающим <c>pipeline.StartDecoding</c>,
-    /// и освобождением ресурсов pipeline.
-    /// </summary>
     private Task? _deviceEventTask;
 
 #if DEBUG
-    /// <summary>
-    /// Счётчик перезапусков decoder loop.
-    /// Публикуется через <see cref="DecoderRestartCount"/> для observability.
-    /// Компилируется только в DEBUG — в Release overhead отсутствует.
-    /// </summary>
     private int _decoderRestartCount;
 #endif
 
@@ -389,10 +360,10 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// Запускает decoder loop на ThreadPool.
     /// </summary>
     public void StartDecoding(
-    Func<CancellationToken, Task<string?>>? urlRefresher,
-    AudioPlayerOptions options,
-    Action? onTrackEnded,
-    Action<Exception>? onError)
+     Func<CancellationToken, Task<string?>>? urlRefresher,
+     AudioPlayerOptions options,
+     Action? onTrackEnded,
+     Action<Exception>? onError)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_decoderTask is { IsCompleted: false }) return;
@@ -401,11 +372,14 @@ public sealed class AudioPipeline : IAsyncDisposable
         _decoderCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
         var token = _decoderCts.Token;
 
+#if DEBUG
+        int restartCount = Interlocked.Increment(ref _decoderRestartCount);
+#endif
+
         _decoderTask = Task.Run(
             () => DecoderLoopAsync(urlRefresher, options, onTrackEnded, onError, token));
 
 #if DEBUG
-        int restartCount = Interlocked.Increment(ref _decoderRestartCount);
         var trackIdShort = _streamInfo.TrackId?.Length > ShortTrackIdLength
             ? _streamInfo.TrackId[..ShortTrackIdLength]
             : _streamInfo.TrackId ?? "?";
@@ -438,17 +412,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// <summary>
     /// Основной цикл декодирования.
     /// </summary>
-    /// <remarks>
-    /// <para><b>ИСПРАВЛЕНИЕ (критическое):</b> Разделена семантика отмены.</para>
-    /// <list type="bullet">
-    ///   <item><c>ct.IsCancellationRequested == true</c> → преднамеренная остановка (Stop/Seek/Dispose) → break</item>
-    ///   <item><c>ct.IsCancellationRequested == false</c> + <see cref="OperationCanceledException"/> →
-    ///     транзиентная ошибка: HTTP timeout, epoch reset, socket disconnect → retry</item>
-    /// </list>
-    /// <para>Предыдущая версия ловила ВСЕ <see cref="OperationCanceledException"/>
-    /// одним <c>catch</c> без проверки токена, что приводило к мгновенной
-    /// смерти decoder loop при каждом HTTP timeout. Retry-ветка была недостижима.</para>
-    /// </remarks>
     private async Task DecoderLoopAsync(
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
@@ -481,10 +444,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                     break;
                 }
                 // Транзиентные OCE (HTTP timeout, epoch reset) → retry
-                // TaskCanceledException наследует OperationCanceledException.
-                // HttpClient бросает TCE при timeout/disconnect с ct, который НЕ отменён.
-                // CachingStreamSource бросает OCE при ResetDownloadEpoch (seek/preload).
-                // Обе ситуации — recoverable, decoder должен повторить чтение.
                 catch (OperationCanceledException) when (retryCount++ < options.MaxRetryAttempts)
                 {
                     Log.Warn($"[AudioPipeline] Read transient cancel (retry {retryCount}/{options.MaxRetryAttempts})");
@@ -494,7 +453,6 @@ public sealed class AudioPipeline : IAsyncDisposable
                     }
                     catch (OperationCanceledException)
                     {
-                        // ct отменился во время delay — значит это реальная остановка
                         break;
                     }
                     continue;
@@ -515,33 +473,73 @@ public sealed class AudioPipeline : IAsyncDisposable
                 catch (ChunkDownloadFatalException) { throw; }
                 catch (FileNotFoundException ex)
                 {
-                    throw new CacheInvalidatedException("Cache file was deleted during playback.", ex);
+                    throw new CacheInvalidatedException(
+                        "Cache file was deleted during playback.",
+                        CacheInvalidationKind.FileDeleted,
+                        isRecoverable: true,
+                        trackId: _streamInfo.TrackId,
+                        inner: ex);
                 }
                 catch (DirectoryNotFoundException ex)
                 {
-                    throw new CacheInvalidatedException("Cache directory was deleted during playback.", ex);
+                    throw new CacheInvalidatedException(
+                        "Cache directory was deleted during playback.",
+                        CacheInvalidationKind.FileDeleted,
+                        isRecoverable: true,
+                        trackId: _streamInfo.TrackId,
+                        inner: ex);
                 }
                 catch (IOException ex) when (ex.HResult is HResultFileNotFound or HResultPathNotFound)
                 {
-                    throw new CacheInvalidatedException("Cache file became unavailable during playback.", ex);
+                    throw new CacheInvalidatedException(
+                        "Cache file became unavailable during playback.",
+                        CacheInvalidationKind.FileDeleted,
+                        isRecoverable: true,
+                        trackId: _streamInfo.TrackId,
+                        inner: ex);
                 }
-                catch (Exception ex) when (retryCount++ < options.MaxRetryAttempts)
+                catch (InvalidDataException)
+                {
+                    throw;
+                }
+                catch (EndOfStreamException ex)
+                {
+                    // EndOfStreamException из WebMParser означает одно из:
+                    // 1. Truncated WebM (YouTube quirk)
+                    // 2. Parser desync после cancellation-induced restart
+                    // TryResyncToNextClusterAsync внутри ReadNextBlockAsync уже попытался
+                    // восстановиться. Если мы здесь — resync не удался → пробрасываем.
+                    Log.Error($"[AudioPipeline] Decoder fatal: {ex.Message}", ex);
+                    throw;
+                }
+                catch (Exception ex) when (ex is not CacheInvalidatedException && retryCount++ < options.MaxRetryAttempts)
                 {
                     Log.Warn($"[AudioPipeline] Read retry {retryCount}: {ex.Message}");
-                    try
-                    {
-                        await Task.Delay(options.RetryDelay, ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
+                    try { await Task.Delay(options.RetryDelay, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
                     continue;
                 }
 
                 if (frame == null)
                 {
                     if (ct.IsCancellationRequested) break;
+
+                    if (IsPrematureEndOfStream())
+                    {
+                        var posMs = _source.PositionMs;
+                        var durMs = _streamInfo.DurationMs;
+                        Log.Warn($"[AudioPipeline] Truncated cache detected after resync: " +
+                                 $"pos={posMs}ms/{durMs}ms — invalidating cache entry");
+
+                        throw new CacheInvalidatedException(
+                            $"Cache file is truncated (resync was required): reached {posMs}ms of {durMs}ms",
+                            CacheInvalidationKind.ParserResync,
+                            isRecoverable: true,
+                            trackId: _streamInfo.TrackId);
+
+                        // throw CreatePrematureEndOfStreamException();
+                    }
+
                     await DrainBufferAsync(ct).ConfigureAwait(false);
                     if (!ct.IsCancellationRequested) onTrackEnded?.Invoke();
                     break;
@@ -550,13 +548,16 @@ public sealed class AudioPipeline : IAsyncDisposable
                 try
                 {
                     int skipCount = Volatile.Read(ref _skipFramesCounter);
-                    bool needReset = skipCount > 0;
 
-                    int samplesDecoded = needReset
-                        ? _decoder.DecodeWithReset(frame.Value.Data.Span, _decodeBuffer)
-                        : _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
+                    if (skipCount > 0)
+                    {
+                        if (Interlocked.CompareExchange(ref _decoderResetNeeded, 0, 1) == 1)
+                            _decoder.FlushState();
 
-                    if (needReset) { Interlocked.Decrement(ref _skipFramesCounter); continue; }
+                        _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
+                        Interlocked.Decrement(ref _skipFramesCounter);
+                        continue;
+                    }
 
                     long seekTarget = Volatile.Read(ref _seekTargetMs);
                     if (seekTarget >= 0)
@@ -564,6 +565,8 @@ public sealed class AudioPipeline : IAsyncDisposable
                         if (frame.Value.TimestampMs < seekTarget) continue;
                         Volatile.Write(ref _seekTargetMs, -1L);
                     }
+
+                    int samplesDecoded = _decoder.Decode(frame.Value.Data.Span, _decodeBuffer);
 
                     if (samplesDecoded > 0)
                     {
@@ -583,7 +586,7 @@ public sealed class AudioPipeline : IAsyncDisposable
             Log.Warn($"[AudioPipeline] Cache invalidated: {ex.Message}");
             onError?.Invoke(ex);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CacheInvalidatedException)
         {
             Log.Error($"[AudioPipeline] Decoder fatal: {ex.Message}", ex);
             onError?.Invoke(ex);
@@ -605,6 +608,34 @@ public sealed class AudioPipeline : IAsyncDisposable
 
             await Task.Delay(Math.Clamp(estimatedMs, DrainMinDelayMs, DrainMaxDelayMs), ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Вооружает decoder loop на post-seek warm-up.
+    /// </summary>
+    /// <param name="targetMs">Целевая временная отметка seek, либо -1 для отключения timestamp gating.</param>
+    private void ArmDecoderWarmupAfterSeek(long targetMs)
+    {
+        int skipFrames = GetSkipFramesAfterSeek(_source.Codec);
+
+        Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
+        Interlocked.Exchange(ref _decoderResetNeeded, skipFrames > 0 ? 1 : 0);
+        Volatile.Write(ref _seekTargetMs, targetMs);
+    }
+
+    /// <summary>
+    /// Возвращает количество warm-up skip-фреймов после seek для заданного кодека.
+    /// </summary>
+    /// <param name="codec">Кодек активного источника.</param>
+    /// <returns>Количество фреймов, которые должны быть декодированы и отброшены.</returns>
+    private static int GetSkipFramesAfterSeek(AudioCodec codec)
+    {
+        return codec switch
+        {
+            AudioCodec.Opus => SkipFramesAfterSeekOpus,
+            AudioCodec.Aac => SkipFramesAfterSeekAac,
+            _ => 0
+        };
     }
 
     #endregion
@@ -662,15 +693,7 @@ public sealed class AudioPipeline : IAsyncDisposable
     /// </summary>
     public void PrepareForSeek(long targetMs = -1)
     {
-        int skipFrames = _source.Codec switch
-        {
-            AudioCodec.Opus => SkipFramesAfterSeekOpus,
-            AudioCodec.Aac => SkipFramesAfterSeekAac,
-            _ => 0
-        };
-
-        Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
-        Volatile.Write(ref _seekTargetMs, targetMs);
+        ArmDecoderWarmupAfterSeek(targetMs);
 
         _analyzer.PrepareForSeek();
         _truePeakLimiter?.Reset();
@@ -691,15 +714,7 @@ public sealed class AudioPipeline : IAsyncDisposable
             _analyzer.LockGain(rawGain);
             await _source.SeekAsync(0, ct).ConfigureAwait(false);
 
-            int skipFrames = _source.Codec switch
-            {
-                AudioCodec.Opus => SkipFramesAfterSeekOpus,
-                AudioCodec.Aac => SkipFramesAfterSeekAac,
-                _ => 0
-            };
-
-            Interlocked.Exchange(ref _skipFramesCounter, skipFrames);
-            Volatile.Write(ref _seekTargetMs, -1L);
+            ArmDecoderWarmupAfterSeek(-1L);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { Log.Warn($"[AudioPipeline] Pre-scan failed: {ex.Message}"); }
@@ -725,6 +740,66 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (_disposed) return;
         float normGain = _analyzer.IsEnabled ? _analyzer.GetLockedGain() : 1.0f;
         _gainCrossfader.Reset(normGain);
+    }
+
+    /// <summary>
+    /// Определяет, является ли достигнутый source EOF преждевременным.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>v2 (resync-aware):</b> Если парсер уже выполнял resync
+    /// (перепрыгнул через повреждённые кластеры), повторный EOF означает
+    /// не "premature end" — а реальное усечение файла. В этом случае
+    /// вместо <see cref="InvalidDataException"/> бросается
+    /// <see cref="CacheInvalidatedException"/> для перехода на
+    /// свежий HTTP-стриминг.</para>
+    /// </remarks>
+    private bool IsPrematureEndOfStream()
+    {
+        long durationMs = _streamInfo.DurationMs;
+        if (durationMs <= 0) return false;
+
+        long positionMs = _source.PositionMs;
+        if (positionMs < 0) return false;
+
+        return positionMs + PrematureEndToleranceMs < durationMs;
+    }
+
+    /// <summary>
+    /// Проверяет, был ли resync в парсере контейнера источника.
+    /// </summary>
+    private bool SourceParserHadResync()
+    {
+        try
+        {
+            // LocalFileSource
+            if (_source is Sources.LocalFileSource localSrc)
+            {
+                return localSrc.Parser is Parsers.WebMContainerParser w && w.ResyncOccurred;
+            }
+            // CachingStreamSource
+            if (_source is Sources.CachingStreamSource cachingSrc)
+            {
+                return cachingSrc.Parser is Parsers.WebMContainerParser w && w.ResyncOccurred;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>
+    /// Создаёт диагностическое исключение для premature EOF.
+    /// </summary>
+    /// <returns>
+    /// Исключение с подробным описанием позиции, длительности и типа источника.
+    /// </returns>
+    private InvalidDataException CreatePrematureEndOfStreamException()
+    {
+        long positionMs = _source.PositionMs;
+        long durationMs = _streamInfo.DurationMs;
+
+        return new InvalidDataException(
+            $"Premature end of stream: pos={positionMs}ms/{durationMs}ms, " +
+            $"codec={_source.Codec}, source={_source.GetType().Name}");
     }
 
     #endregion

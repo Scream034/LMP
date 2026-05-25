@@ -244,21 +244,35 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
     #region Command Processing
 
+    /// <summary>
+    /// Основной акторный цикл обработки команд плеера.
+    /// </summary>
+    /// <remarks>
+    /// <para>Все переходы state machine и lifecycle-операции над active pipeline
+    /// выполняются только здесь. В том числе natural end-of-track теперь приходит
+    /// как <see cref="TrackEndedCommand"/>, а не как прямой callback из decoder thread.</para>
+    /// </remarks>
     private async Task ProcessCommandsAsync()
     {
         try
         {
-            await foreach (var command in _commandChannel.Reader.ReadAllAsync(_lifetimeCts.Token).ConfigureAwait(false))
+            await foreach (var command in _commandChannel.Reader
+                .ReadAllAsync(_lifetimeCts.Token)
+                .ConfigureAwait(false))
             {
                 if (_session.IsStale(command.SessionId) && command is not DisposeCommand)
                 {
-                    if (command is SeekCommand { Completion: { } tcs }) tcs.TrySetCanceled();
+                    if (command is SeekCommand { Completion: { } tcs })
+                        tcs.TrySetCanceled();
+
                     continue;
                 }
 
                 if (!PlayerStateTransitions.CanAcceptCommand(_state, command))
                 {
-                    if (command is SeekCommand { Completion: { } failTcs }) failTcs.TrySetResult(false);
+                    if (command is SeekCommand { Completion: { } failTcs })
+                        failTcs.TrySetResult(false);
+
                     continue;
                 }
 
@@ -266,23 +280,48 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
                 {
                     switch (command)
                     {
-                        case PlayCommand play: await HandlePlayAsync(play).ConfigureAwait(false); break;
-                        case StopCommand: await HandleStopAsync().ConfigureAwait(false); break;
-                        case SeekCommand seek: await HandleSeekAsync(seek).ConfigureAwait(false); break;
-                        case DeviceRecoveryCommand recovery: await HandleDeviceRecoveryAsync(recovery).ConfigureAwait(false); break;
-                        case DisposeCommand: await HandleDisposeAsync().ConfigureAwait(false); break;
+                        case PlayCommand play:
+                            await HandlePlayAsync(play).ConfigureAwait(false);
+                            break;
+
+                        case StopCommand:
+                            await HandleStopAsync().ConfigureAwait(false);
+                            break;
+
+                        case SeekCommand seek:
+                            await HandleSeekAsync(seek).ConfigureAwait(false);
+                            break;
+
+                        case TrackEndedCommand trackEnded:
+                            await HandleTrackEndedAsync(trackEnded).ConfigureAwait(false);
+                            break;
+
+                        case DeviceRecoveryCommand recovery:
+                            await HandleDeviceRecoveryAsync(recovery).ConfigureAwait(false);
+                            break;
+
+                        case DisposeCommand:
+                            await HandleDisposeAsync().ConfigureAwait(false);
+                            break;
                     }
                 }
-                catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { break; }
+                catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+                {
+                    break;
+                }
                 catch (Exception ex)
                 {
-                    if (CancellationHelper.IsCancellationLike(ex) || _session.IsStale(command.SessionId)) continue;
+                    if (CancellationHelper.IsCancellationLike(ex) || _session.IsStale(command.SessionId))
+                        continue;
+
                     Log.Error($"[AudioPlayer] Command error: {ex.Message}", ex);
                     HandleError(ex);
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     /// <summary>
@@ -305,6 +344,13 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// Общая подготовка pipeline перед стартом декодирования.
     /// Извлечена из HandlePlayAsync для устранения дупликации degraded/normal path.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Архитектура:</b> natural end-of-track callback создаётся session-bound
+    /// и доставляется обратно в actor loop через <see cref="TrackEndedCommand"/>.</para>
+    /// <para>Это сохраняет все переходы state machine строго в одном потоке команд
+    /// и устраняет гонки, когда старый decoder loop поздно вызывал завершение уже
+    /// после запуска нового pipeline.</para>
+    /// </remarks>
     private async Task PrepareAndStartDecodingAsync(
         AudioPipeline pipeline, PlayCommand cmd, CancellationToken ct)
     {
@@ -316,11 +362,17 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             pipeline.PrepareForSeek(seekMs);
 
             if (await pipeline.Source.SeekAsync(seekMs, ct).ConfigureAwait(false))
+            {
                 pipeline.SetDecodedSamplesPosition(
                     (long)(seekMs / 1000.0 * pipeline.SampleRate * pipeline.Channels));
+            }
         }
 
-        pipeline.StartDecoding(CreateUrlRefresher(), _options, OnTrackEnded, HandleError);
+        pipeline.StartDecoding(
+            CreateUrlRefresher(),
+            _options,
+            CreateTrackEndedCallback(cmd.SessionId),
+            HandleError);
     }
 
     private async Task HandlePlayAsync(PlayCommand cmd)
@@ -513,6 +565,47 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         Interlocked.Exchange(ref _oldPipelineDisposeTask, disposeTask);
     }
 
+    /// <summary>
+    /// Обрабатывает естественное завершение трека внутри actor loop.
+    /// </summary>
+    /// <param name="cmd">Команда завершения трека, привязанная к актуальной playback session.</param>
+    /// <returns>Завершённая задача обработки.</returns>
+    /// <remarks>
+    /// <para><b>Почему обработка идёт через actor:</b></para>
+    /// <para>Прежняя реализация вызывалась напрямую из decoder thread и могла
+    /// сбросить уже новый pipeline поздним stale callback'ом. Теперь завершение
+    /// трека сериализовано с Play/Stop/Seek и подчиняется тем же session guards.</para>
+    /// <para><b>Порядок действий:</b></para>
+    /// <list type="number">
+    ///   <item>Останавливаем UI timers и flush'им backend.</item>
+    ///   <item>Синхронно публикуем <see cref="AudioPlayerEvents.TrackEnded"/>,
+    ///       пока metadata текущего трека ещё доступна обработчикам.</item>
+    ///   <item>Только после этого обнуляем active pipeline и запускаем его dispose.</item>
+    /// </list>
+    /// </remarks>
+    private Task HandleTrackEndedAsync(TrackEndedCommand cmd)
+    {
+        if (_state is not (PlayerState.Buffering or PlayerState.Playing or PlayerState.Paused))
+            return Task.CompletedTask;
+
+        if (_activePipeline == null)
+            return Task.CompletedTask;
+
+        StopTimers();
+        _sharedBackend.Flush();
+
+        _events.RaiseTrackEnded();
+
+        _currentTrackId = null;
+
+        var old = Interlocked.Exchange(ref _activePipeline, null);
+        if (old != null)
+            TrackAndFirePipelineDispose(old);
+
+        SetState(PlayerState.Idle);
+        return Task.CompletedTask;
+    }
+
     /// <summary>Обработчик естественного завершения трека.</summary>
     private void OnTrackEnded()
     {
@@ -585,6 +678,28 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         return _cachedUrlRefresher;
     }
 
+    /// <summary>
+    /// Создаёт session-bound callback естественного завершения трека.
+    /// </summary>
+    /// <param name="sessionId">Сессия playback, к которой привязан текущий decoder loop.</param>
+    /// <returns>
+    /// Делегат, безопасно публикующий <see cref="TrackEndedCommand"/> в actor channel.
+    /// </returns>
+    /// <remarks>
+    /// <para>Callback намеренно не мутирует состояние плеера напрямую. Decoder loop
+    /// работает на фоне, а <see cref="AudioPlayer"/> использует actor model.</para>
+    /// <para>Session binding гарантирует, что late callback от старого pipeline будет
+    /// автоматически отброшен как stale-команда.</para>
+    /// </remarks>
+    private Action CreateTrackEndedCallback(int sessionId)
+    {
+        return () =>
+        {
+            if (_disposed) return;
+            _commandChannel.Writer.TryWrite(new TrackEndedCommand(sessionId));
+        };
+    }
+
     #endregion
 
     #region Statistics
@@ -642,42 +757,36 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>
     /// Асинхронный Dispose — PRIMARY shutdown path.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Порядок shutdown:</b></para>
-    /// <list type="number">
-    ///   <item>Отправляем <see cref="DisposeCommand"/> в channel.</item>
-    ///   <item>Ждём завершения command processor (HandleDisposeAsync внутри него
-    ///         дождётся <see cref="_oldPipelineDisposeTask"/>).</item>
-    ///   <item>Cancel lifetime — fallback для незавершённых async операций.</item>
-    ///   <item>Dispose backend — безопасно: pipeline dispose гарантированно завершён.</item>
-    ///   <item>Dispose lifetime CTS.</item>
-    /// </list>
-    /// <para>Отмена lifetime ДО dispose backend'а намеренно — ждём command
-    /// processor ДО cancel, иначе HandleDisposeAsync получит
-    /// <see cref="OperationCanceledException"/> и не завершит очистку.</para>
-    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
 
+        // Отправляем DisposeCommand и сразу complete writer —
+        // ReadAllAsync завершится штатно после обработки последней команды,
+        // не дожидаясь Cancel.
         await _commandChannel.Writer.WriteAsync(new DisposeCommand(int.MaxValue))
             .ConfigureAwait(false);
 
-        // Ждём command processor ДО cancel — HandleDisposeAsync должен
-        // завершиться полностью, включая await _oldPipelineDisposeTask.
+        // Complete сигнализирует ReadAllAsync что новых команд не будет.
+        // Это первичный сигнал завершения loop — Cancel только fallback.
+        _commandChannel.Writer.TryComplete();
+
         try
         {
             await _commandProcessorTask
                 .WaitAsync(TimeSpan.FromSeconds(DisposeTaskTimeoutSec))
                 .ConfigureAwait(false);
         }
+        catch (TimeoutException)
+        {
+            Log.Warn("[AudioPlayer] Command processor did not finish within dispose timeout");
+        }
         catch { }
 
+        // Cancel — fallback для незавершённых async операций внутри handlers
         _lifetimeCts.Cancel();
 
-        // Backend dispose безопасен: к этому моменту HandleDisposeAsync
-        // гарантированно завершил ожидание _oldPipelineDisposeTask.
         _sharedBackend.Dispose();
         _lifetimeCts.Dispose();
 

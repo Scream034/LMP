@@ -58,10 +58,40 @@ public sealed class OpusDecoder : IAudioDecoder
         }
     }
 
+    /// <summary>
+    /// Декодирует фрейм после seek с seek-safe семантикой сброса состояния.
+    /// </summary>
+    /// <param name="encodedData">Сжатые данные одного Opus-фрейма.</param>
+    /// <param name="outputBuffer">Выходной PCM float32 буфер.</param>
+    /// <returns>Количество декодированных семплов на канал.</returns>
+    /// <remarks>
+    /// <para><b>Почему здесь нет <c>ResetState()</c>:</b> Concentus предоставляет hard reset,
+    /// который обнуляет весь внутренний decoder state. Для seek это избыточно:
+    /// pipeline уже декодирует и отбрасывает несколько warm-up skip-фреймов,
+    /// которые естественно вытесняют переходное состояние без грубого hard reset.</para>
+    /// <para>Такой подход уменьшает риск слышимого артефакта на границе seek и
+    /// оставляет единую семантику: seek-подготовка выполняется через
+    /// <see cref="FlushState"/>, а не через отдельный destructive reset-path.</para>
+    /// </remarks>
     public int DecodeWithReset(ReadOnlySpan<byte> encodedData, Span<float> outputBuffer)
     {
-        _decoder.ResetState();
+        FlushState();
         return Decode(encodedData, outputBuffer);
+    }
+
+    /// <summary>
+    /// Выполняет лёгкий flush внутреннего состояния Opus-декодера.
+    /// </summary>
+    /// <remarks>
+    /// <para>Метод намеренно ничего не делает. В Concentus нет отдельного soft flush:
+    /// доступен только <c>ResetState()</c>, а это hard reset всего состояния декодера.</para>
+    /// <para>Для seek в Opus это хуже, чем обычный decode с последующим discard нескольких
+    /// warm-up фреймов: skip-фреймы сами вытесняют переходное состояние без грубого
+    /// обнуления overlap/prediction state.</para>
+    /// </remarks>
+    public void FlushState()
+    {
+        // Intentionally no-op for Opus/Concentus.
     }
 
     private int DecodePLC(Span<float> outputBuffer)

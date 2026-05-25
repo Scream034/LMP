@@ -39,8 +39,16 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     /// <summary>Маркерный интерфейс для typed commands AudioEngine.</summary>
     private interface IEngineCommand { }
 
-    /// <summary>Воспроизвести конкретный трек.</summary>
-    private sealed record PlayTrackCommand(TrackInfo Track, int Session) : IEngineCommand;
+    /// <summary>Воспроизвести конкретный трек с опциональной позиции (для бесшовного восстановления).</summary>
+    /// <param name="Track">Информация о треке.</param>
+    /// <param name="Session">ID сессии для отмены устаревших команд.</param>
+    /// <param name="SeekPosition">Позиция для старта воспроизведения.</param>
+    /// <param name="IsRetry">Флаг автоматического перезапуска при ошибке кэша.</param>
+    private sealed record PlayTrackCommand(
+        TrackInfo Track,
+        int Session,
+        TimeSpan? SeekPosition = null,
+        bool IsRetry = false) : IEngineCommand;
 
     /// <summary>Запустить очередь с указанного трека.</summary>
     private sealed record StartQueueCommand(IEnumerable<TrackInfo> Tracks, TrackInfo StartTrack, int Session) : IEngineCommand;
@@ -65,6 +73,12 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
     private const int QualitySwitchCooldownMs = 2000;
 
+    /// <summary>
+    /// Максимальное число автоматических попыток восстановления после
+    /// recoverable <see cref="CacheInvalidatedException"/> для одного трека.
+    /// </summary>
+    private const int MaxCacheAutoRetries = 2;
+
     #endregion
 
     #region Dependencies
@@ -80,7 +94,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     private readonly Channel<IEngineCommand> _commandQueue;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Lock _queueLock = new();
-    private readonly Lock _seekLock = new();
 
     private SessionGuard _session;
     private CancellationTokenSource? _sessionCts;
@@ -128,6 +141,13 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     /// при вызове обоих путей (<see cref="DisposeAsync"/> и <see cref="Dispose(bool)"/>).
     /// </summary>
     private volatile bool _disposed;
+
+    /// <summary>
+    /// Счётчик автоматических retry для текущего трека при recoverable cache ошибках.
+    /// Сбрасывается при смене трека в <see cref="HandlePlayTrackAsync"/>
+    /// и <see cref="HandleStartQueueAsync"/>.
+    /// </summary>
+    private int _cacheRetryCount;
 
     #endregion
 
@@ -205,9 +225,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
                 FullMode = BoundedChannelFullMode.DropOldest
             });
 
-        // Сохраняем Task'и для детерминированного ожидания в DisposeAsync.
-        // Task.Run — выполнение строго вне UI-контекста; хранение исключает
-        // fire-and-forget гонку на shutdown.
         _commandProcessorTask = Task.Run(ProcessCommandsAsync);
         _volumeSaveTask = Task.Run(VolumeSaveLoopAsync);
     }
@@ -215,19 +232,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     /// <summary>
     /// Конфигурирует pipeline перед открытием gate: volume gain, нормализация, crossfader.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Почему trackId параметром, а не через поле:</b></para>
-    /// <para>Предыдущая версия читала <c>_preparingTrack</c> — глобальное volatile поле,
-    /// которое перезаписывалось при rapid next/prev. При overlap нескольких
-    /// <see cref="PlayTrackCoreAsync"/> pipeline "А" мог получить gain от трека "Б".
-    /// Теперь trackId передаётся через замыкание делегата <see cref="AudioPlayerOptions.OnPipelineConfiguring"/>
-    /// и привязан к конкретному pipeline.</para>
-    /// </remarks>
-    /// <param name="pipeline">Конфигурируемый pipeline.</param>
-    /// <param name="trackId">
-    /// ID трека, для которого создан pipeline. Используется для lookup
-    /// cached gain через <see cref="NormalizationGainResolver"/>.
-    /// </param>
     private void ConfigurePipelineBeforeStart(AudioPipeline pipeline, string? trackId)
     {
         float volumeGain = ComputeFinalGain();
@@ -245,9 +249,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         if (normConfig.Enabled && !string.IsNullOrEmpty(trackId))
         {
-            // Безопасный lookup по trackId: сначала canonical из registry,
-            // fallback на CurrentTrack если совпадает Id.
-            // Не зависит от глобального mutable state.
             var track = _library.GetTrack(trackId)
                         ?? (CurrentTrack?.Id == trackId ? CurrentTrack : null);
 
@@ -278,11 +279,17 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
             var ex = err.Exception;
             if (ex is AudioDeviceException)
+            {
                 RaiseError(new AudioDeviceException(err.Message, ex?.InnerException));
-            else if (ex is CacheInvalidatedException)
-                RaiseError(new CacheInvalidatedException(err.Message, ex?.InnerException));
+            }
+            else if (ex is CacheInvalidatedException cacheEx)
+            {
+                HandleCacheInvalidated(cacheEx);
+            }
             else
+            {
                 RaiseError(new AudioException(err.Message, ex));
+            }
         };
     }
 
@@ -438,18 +445,9 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     }
 
     /// <summary>
-    /// Запускает воспроизведение трека по текущему индексу очереди.
+    /// Запускает воспроизведение трека по текущему индексу очереди с опциональной позиции.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Single-flight guarantee:</b> Задача подготовки хранится в <see cref="_activePlayTask"/>
-    /// и await'ится actor'ом. Это исключает overlap нескольких параллельных
-    /// <see cref="PlayTrackCoreAsync"/>: каждая новая команда ждёт завершения (или отмены)
-    /// предыдущей перед стартом своей.</para>
-    /// <para>Отмена предыдущей задачи происходит через <see cref="_sessionCts"/>,
-    /// который cancel'ится в <see cref="BeginNewSession"/>.</para>
-    /// </remarks>
-    /// <param name="session">ID сессии для stale-проверки.</param>
-    private async Task PlayCurrentIndexAsync(int session)
+    private async Task PlayCurrentIndexAsync(int session, TimeSpan? seekPosition = null)
     {
         TrackInfo? track;
         lock (_queueLock)
@@ -460,9 +458,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         if (track == null || IsSealedFailedTrack(track.Id)) return;
 
-        // Ожидаем завершение предыдущей задачи подготовки.
-        // Она уже отменена через BeginNewSession → _sessionCts.Cancel(),
-        // поэтому ожидание обычно мгновенное.
         var previousTask = Volatile.Read(ref _activePlayTask);
         if (previousTask is { IsCompleted: false })
         {
@@ -473,7 +468,8 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         if (_session.IsStale(session)) return;
 
-        var playTask = PlayTrackCoreAsync(track, session, GetSessionToken());
+        // Передаем seekPosition в задачу подготовки
+        var playTask = PlayTrackCoreAsync(track, session, GetSessionToken(), seekPosition);
         Volatile.Write(ref _activePlayTask, playTask);
 
         try
@@ -481,22 +477,13 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
             await playTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
-        catch (Exception) { /* ошибки обрабатываются внутри PlayTrackCoreAsync */ }
+        catch (Exception) { }
     }
 
     /// <summary>
-    /// Основной метод подготовки и запуска воспроизведения трека.
+    /// Основной метод подготовки и запуска воспроизведения трека с поддержкой SeekPosition.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Session-aware:</b> Проверяет <see cref="_session"/> на каждом этапе.
-    /// При устаревании сессии — ранний выход без побочных эффектов.</para>
-    /// <para><b>Failure Barrier:</b> При фатальной ошибке трек запечатывается
-    /// через <see cref="SealFailedTrack"/> — повторные попытки блокируются
-    /// до явного сброса пользователем.</para>
-    /// <para><b>Stream URL кэширование:</b> После успешного resolve URL сохраняется
-    /// в <c>track.StreamUrl</c> для повторного использования при rapid next/prev.</para>
-    /// </remarks>
-    private async Task PlayTrackCoreAsync(TrackInfo track, int session, CancellationToken ct)
+    private async Task PlayTrackCoreAsync(TrackInfo track, int session, CancellationToken ct, TimeSpan? seekPosition = null)
     {
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
 
@@ -530,7 +517,8 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
             try
             {
-                await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct).ConfigureAwait(false);
+                // Передаем seekPosition напрямую в плеер (atomic seek-before-play)
+                await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct, seekPosition: seekPosition).ConfigureAwait(false);
             }
             catch (Exception ex) when (_session.IsStaleOrCancelled(session, ct) || CancellationHelper.IsCancellationLike(ex))
             {
@@ -673,7 +661,7 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         if (track == null) return Task.CompletedTask;
         ResetSealedFailedTrack();
         int session = BeginNewSession();
-        EnqueueCommand(new PlayTrackCommand(track, session));
+        EnqueueCommand(new PlayTrackCommand(track, session, null)); // Обычный запуск с начала
         return Task.CompletedTask;
     }
 
@@ -723,6 +711,12 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     {
         if (_session.IsStale(cmd.Session)) return;
 
+        // Сбрасываем лимит авто-попыток только при обычном (неавтоматическом) запуске трека
+        if (!cmd.IsRetry)
+        {
+            Interlocked.Exchange(ref _cacheRetryCount, 0);
+        }
+
         lock (_queueLock)
         {
             int idx = _queue.FindIndex(t => t.Id == cmd.Track.Id);
@@ -732,12 +726,15 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         }
 
         RaiseOnUI(() => OnQueueChanged?.Invoke());
-        await PlayCurrentIndexAsync(cmd.Session).ConfigureAwait(false);
+        // Передаем SeekPosition дальше в проигрыватель
+        await PlayCurrentIndexAsync(cmd.Session, cmd.SeekPosition).ConfigureAwait(false);
     }
 
     private async Task HandleStartQueueAsync(StartQueueCommand cmd)
     {
         if (_session.IsStale(cmd.Session)) return;
+
+        Interlocked.Exchange(ref _cacheRetryCount, 0);
 
         lock (_queueLock)
         {
@@ -889,6 +886,68 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
     #region Error Handling
 
+    /// <summary>
+    /// Обрабатывает инвалидацию кэша: при сбое чтения выполняет 
+    /// бесшовное переключение на стриминг, который хирургически пропатчит повреждённый чанк на диске.
+    /// </summary>
+    private void HandleCacheInvalidated(CacheInvalidatedException cacheEx)
+    {
+        var trackId = cacheEx.TrackId ?? CurrentTrack?.Id;
+
+        if (cacheEx.IsRecoverable && _cacheRetryCount < MaxCacheAutoRetries)
+        {
+            int retryNumber = Interlocked.Increment(ref _cacheRetryCount);
+            var resumePosition = CurrentPosition;
+            var track = CurrentTrack;
+
+            Log.Info($"[AudioEngine] Cache auto-retry #{retryNumber}/{MaxCacheAutoRetries}: track={trackId}, kind={cacheEx.Kind}, pos={resumePosition}");
+
+            // Полное физическое стирание файла с диска выполняем ТОЛЬКО если файла действительно нет на месте (FileDeleted)
+            if (cacheEx.Kind is CacheInvalidationKind.FileDeleted)
+            {
+                if (!string.IsNullOrEmpty(trackId))
+                {
+                    try
+                    {
+                        AudioSourceFactory.GlobalCache?.RemoveTrackCache(trackId);
+                        Log.Info($"[AudioEngine] Removed missing cache registry for retry: {trackId}");
+                    }
+                    catch (Exception removeEx)
+                    {
+                        Log.Warn($"[AudioEngine] Failed to remove cache: {removeEx.Message}");
+                    }
+                }
+            }
+            else if (cacheEx.Kind is CacheInvalidationKind.ParserResync or CacheInvalidationKind.ShortRead)
+            {
+                // При повреждении файла мы сохраняем его на диске!
+                // Метод LocalFileSource уже пометил повреждённый чанк неактивным.
+                // Пересоздание конвейера создаст CachingStreamSource, который скачает из сети
+                // исключительно недостающий чанк и запишет его прямо в тело существующего файла.
+                Log.Info($"[AudioEngine] Surgical patch in progress. Preserving existing cache file for: {trackId}");
+            }
+
+            if (track != null)
+            {
+                ResetSealedFailedTrack();
+                int session = BeginNewSession();
+                // Указываем IsRetry: true для предотвращения сброса счетчика попыток
+                EnqueueCommand(new PlayTrackCommand(track, session, resumePosition, IsRetry: true));
+            }
+            return;
+        }
+
+        Log.Warn($"[AudioEngine] Cache error non-recoverable or retry budget exhausted (retries={_cacheRetryCount}, kind={cacheEx.Kind}): {cacheEx.Message}");
+
+        if (!string.IsNullOrEmpty(trackId))
+        {
+            try { AudioSourceFactory.GlobalCache?.RemoveTrackCache(trackId); }
+            catch (Exception ex) { Log.Warn($"[AudioEngine] Failed to remove cache: {ex.Message}"); }
+        }
+
+        RaiseError(new CacheInvalidatedException(cacheEx.Message, cacheEx.InnerException));
+    }
+
     private void RaiseError(Exception exception)
     {
         RaiseOnUI(() => OnErrorOccurred?.Invoke(exception));
@@ -960,31 +1019,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     /// <summary>
     /// Асинхронный dispose — PRIMARY shutdown path.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Порядок shutdown (детерминированный):</b></para>
-    /// <list type="number">
-    ///   <item>Отписка событий, отмена seek/session CTS.</item>
-    ///   <item>Синхронное сохранение настроек (in-memory, без I/O).</item>
-    ///   <item>Async flush pending gain writes с hard timeout.</item>
-    ///   <item>Complete channel writer — семантически сигнализирует «новых команд нет».</item>
-    ///   <item>Cancel lifetime — останавливает command loop и volume save loop.</item>
-    ///   <item>Await command processor + volume save task — детерминированный drain.</item>
-    ///   <item>Async dispose плеера (ожидает его command processor).</item>
-    ///   <item>Dispose lifetime CTS.</item>
-    /// </list>
-    ///
-    /// <para><b>Почему Complete() ДО Cancel():</b>
-    /// <c>ReadAllAsync</c> завершается по двум путям: отмена токена или явный
-    /// <see cref="ChannelWriter{T}.Complete"/>. Вызов <c>Complete</c> первым —
-    /// семантически правильно и позволяет ProcessCommandsAsync завершиться
-    /// штатно (через <c>ChannelClosedException</c>), а не через
-    /// <c>OperationCanceledException</c>. Cancel нужен как fallback на случай
-    /// если writer ещё ждёт.</para>
-    ///
-    /// <para><b>Почему await task ПОСЛЕ Cancel:</b> Cancel сигнализирует loop,
-    /// Complete закрывает канал — вместе гарантируют что loop выйдет из
-    /// <c>await foreach</c> максимально быстро. Затем ждём завершения.</para>
-    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;

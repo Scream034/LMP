@@ -55,9 +55,14 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         foreach (var key in keys.Keys)
         {
-            if (_entries.TryGetValue(key, out var entry) && entry.IsComplete)
+            if (_entries.TryGetValue(key, out var entry)
+                && entry.IsComplete
+                && EnsureCacheFileIntegrity(entry))
+            {
                 return true;
+            }
         }
+
         return false;
     }
 
@@ -92,6 +97,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             {
                 if (_entries.TryGetValue(key, out var entry)
                     && entry.IsComplete
+                    && EnsureCacheFileIntegrity(entry)
                     && (bestEntry == null || entry.Bitrate > bestEntry.Bitrate))
                 {
                     bestEntry = entry;
@@ -107,7 +113,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     }
 
     public bool IsFullyCached(string cacheKey) =>
-        _entries.TryGetValue(cacheKey, out var entry) && entry.IsComplete;
+        _entries.TryGetValue(cacheKey, out var entry)
+        && entry.IsComplete
+        && EnsureCacheFileIntegrity(entry);
 
     public CacheEntry? FindBestCache(string trackId)
     {
@@ -119,6 +127,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         {
             if (_entries.TryGetValue(key, out var entry)
                 && entry.IsComplete
+                && EnsureCacheFileIntegrity(entry)
                 && (best == null || entry.Bitrate > best.Bitrate))
             {
                 best = entry;
@@ -147,9 +156,9 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     }
 
     public CacheEntry CreateOrUpdate(
-        string cacheKey, string trackId, string url, long totalSize,
-        AudioFormat format, AudioCodec codec, int bitrate = 0,
-        long durationMs = -1, int chunkSize = ChunkSize)
+         string cacheKey, string trackId, string url, long totalSize,
+         AudioFormat format, AudioCodec codec, int bitrate = 0,
+         long durationMs = -1, int chunkSize = ChunkSize)
     {
         var entry = _entries.GetOrAdd(cacheKey, _ => new CacheEntry
         {
@@ -171,6 +180,15 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         entry.LastAccessedAt = DateTime.UtcNow;
         if (bitrate > 0) entry.Bitrate = bitrate;
         if (durationMs > 0) entry.DurationMs = durationMs;
+
+        // Если кэш-запись существовала, но не содержала скачанных данных,
+        // мы можем безопасно обновить размер чанка под новый сетевой профиль.
+        if (entry.DownloadedChunks == 0 && entry.ChunkSize != chunkSize)
+        {
+            entry.ChunkSize = chunkSize;
+            entry.TotalChunks = (int)Math.Ceiling((double)totalSize / chunkSize);
+            entry.ResetChunkMask();
+        }
 
         AddToTrackIndex(trackId, cacheKey);
         return entry;
@@ -242,6 +260,14 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
     }
 
+    /// <summary>
+    /// Читает чанк из файла кэша.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Short read handling:</b> Если прочитано меньше байт чем ожидалось,
+    /// чанк инвалидируется в bitmap через <see cref="CacheEntry.InvalidateChunk"/>.
+    /// При следующем обращении <see cref="CachingStreamSource"/> перекачает его заново.</para>
+    /// </remarks>
     public async Task<(IMemoryOwner<byte> Owner, int Length)?> ReadChunkAsync(
         string cacheKey, int chunkIndex, CancellationToken ct = default)
     {
@@ -282,6 +308,13 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             if (totalRead != size)
             {
                 memoryOwner.Dispose();
+
+                // Инвалидируем только этот чанк — не весь entry.
+                // CachingStreamSource при следующем EnsureChunkAsync перекачает его.
+                entry.InvalidateChunk(chunkIndex);
+
+                Log.Warn($"[AudioCache] Short read chunk {chunkIndex} of {cacheKey}: " +
+                         $"expected={size}, got={totalRead}. Chunk invalidated for re-download.");
                 return null;
             }
 
@@ -297,7 +330,12 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     public Stream? OpenCachedStream(string cacheKey)
     {
-        if (!IsFullyCached(cacheKey)) return null;
+        if (!_entries.TryGetValue(cacheKey, out var entry)
+            || !entry.IsComplete
+            || !EnsureCacheFileIntegrity(entry))
+        {
+            return null;
+        }
 
         Touch(cacheKey);
         return new FileStream(
@@ -599,9 +637,14 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         foreach (var key in keys.Keys)
         {
-            if (_entries.TryGetValue(key, out var entry) && entry.IsComplete)
+            if (_entries.TryGetValue(key, out var entry)
+                && entry.IsComplete
+                && EnsureCacheFileIntegrity(entry))
+            {
                 result.Add((entry.Format.ToString(), entry.Bitrate));
+            }
         }
+
         return result;
     }
 
@@ -849,6 +892,142 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
     }
 
+    /// <summary>
+    /// Проверяет, что файл кэша, помеченный как <see cref="CacheEntry.IsComplete"/>,
+    /// физически существует на диске и его размер ≥ <see cref="CacheEntry.TotalSize"/>.
+    ///
+    /// <para><b>Почему необходимо:</b> при crash/kill процесса между установкой
+    /// <c>IsComplete = true</c> (in-memory) и физическим flush последних чанков
+    /// на диск, индекс кэша сохраняется с <c>IsComplete</c>, а файл остаётся
+    /// усечённым. Без этой проверки <see cref="Sources.LocalFileSource"/> открывает
+    /// truncated файл, и парсер падает с <see cref="EndOfStreamException"/>
+    /// при seek за границу реальных данных.</para>
+    ///
+    /// <para><b>Побочные эффекты при невалидности:</b></para>
+    /// <list type="bullet">
+    ///   <item><c>IsComplete</c> сбрасывается в <c>false</c></item>
+    ///   <item>Битовая маска чанков обнуляется</item>
+    ///   <item>Повреждённый файл удаляется с диска</item>
+    ///   <item>Индекс асинхронно пересохраняется</item>
+    /// </list>
+    /// <para>Вызывающий код (FindBestCache, IsFullyCached и т.д.) получает <c>false</c>
+    /// и не предлагает эту entry как готовую. <see cref="AudioSourceFactory"/> при следующем
+    /// воспроизведении создаст <see cref="Sources.CachingStreamSource"/> и скачает трек заново.</para>
+    /// </summary>
+    /// <param name="entry">Запись кэша для проверки. Должна иметь <c>IsComplete == true</c>.</param>
+    /// <returns>
+    /// <c>true</c> — файл валиден, можно использовать.<br/>
+    /// <c>false</c> — файл отсутствует или усечён, entry инвалидирована.
+    /// </returns>
+    private bool EnsureCacheFileIntegrity(CacheEntry entry)
+    {
+        if (!entry.IsComplete) return false;
+
+        var filePath = GetCachePath(entry.CacheKey);
+
+        try
+        {
+            var fi = new FileInfo(filePath);
+
+            if (fi.Exists && fi.Length >= entry.TotalSize)
+                return true;
+
+            long actualSize = fi.Exists ? fi.Length : 0;
+
+            Log.Warn($"[AudioCache] ⚠ Truncated cache invalidated: {entry.CacheKey} " +
+                     $"(disk={actualSize / 1024}KB, expected={entry.TotalSize / 1024}KB). " +
+                     $"Track will re-download on next play.");
+
+            // Сброс метаданных — entry остаётся в словаре, но больше
+            // не проходит фильтр IsComplete ни в одном lookup-методе.
+            entry.IsComplete = false;
+            entry.CompletedAt = null;
+            entry.ActualFileSize = 0;
+            entry.ResetChunkMask();
+
+            // Удаление повреждённого файла — CachingStreamSource создаст новый.
+            if (fi.Exists)
+            {
+                try { fi.Delete(); }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[AudioCache] Failed to delete truncated file: {ex.Message}");
+                }
+            }
+
+            _ = SaveIndexAsync();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioCache] Integrity check I/O error for {entry.CacheKey}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Принудительно инвалидирует конкретный чанк в кэше.
+    /// Используется Self-Healing конвейером при обнаружении мусора парсером.
+    /// </summary>
+    public void InvalidateChunk(string cacheKey, int chunkIndex)
+    {
+        if (_entries.TryGetValue(cacheKey, out var entry))
+        {
+            // Сбрасываем флаг завершенности, чтобы разрешить запись исправленного чанка на диск
+            entry.IsComplete = false;
+            entry.CompletedAt = null;
+            entry.InvalidateChunk(chunkIndex);
+
+            // Синхронизируем размер файла на диске
+            UpdateFileSizeCache(entry);
+
+            // Асинхронно сохраняем индекс, чтобы при перезапуске битый чанк был скачан заново
+            _ = SaveIndexAsync();
+            Log.Info($"[AudioCache] Chunk {chunkIndex} invalidated for {cacheKey} due to corruption.");
+        }
+    }
+
+    /// <summary>
+    /// Выполняет точечную хирургическую инвалидацию конкретного чанка для лучшего формата указанного trackId.
+    /// Переводит запись в статус незавершённой, сохраняя сам файл на диске для последующего патчинга.
+    /// </summary>
+    /// <param name="trackId">Идентификатор трека.</param>
+    /// <param name="chunkIndex">Индекс повреждённого чанка.</param>
+    public void InvalidateCacheChunkByTrackId(string trackId, int chunkIndex)
+    {
+        if (string.IsNullOrEmpty(trackId)) return;
+
+        var entry = FindBestCache(trackId);
+        if (entry != null)
+        {
+            InvalidateCacheChunk(entry.CacheKey, chunkIndex);
+        }
+    }
+
+    /// <summary>
+    /// Выполняет точечную хирургическую инвалидацию конкретного чанка по его cacheKey.
+    /// Переводит запись в статус незавершённой, сохраняя сам файл на диске для последующего патчинга.
+    /// </summary>
+    /// <param name="cacheKey">Уникальный ключ кэша.</param>
+    /// <param name="chunkIndex">Индекс повреждённого чанка.</param>
+    public void InvalidateCacheChunk(string cacheKey, int chunkIndex)
+    {
+        if (string.IsNullOrEmpty(cacheKey)) return;
+
+        if (_entries.TryGetValue(cacheKey, out var entry))
+        {
+            entry.IsComplete = false;
+            entry.CompletedAt = null;
+            entry.InvalidateChunk(chunkIndex);
+
+            // Обновляем ActualFileSize, но файл на диске сохраняем нетронутым
+            UpdateFileSizeCache(entry);
+
+            _ = SaveIndexAsync();
+            Log.Info($"[AudioCache] Surgical Invalidation: Key {cacheKey}, Chunk {chunkIndex} marked corrupt. File kept intact for stream-patching.");
+        }
+    }
+
     #endregion
 
     #region Private Helpers
@@ -988,7 +1167,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
     #endregion
 }
-/// <summary>
+
 /// Представляет запись метаданных кэша для конкретного аудиопотока.
 /// </summary>
 public sealed class CacheEntry
@@ -1060,6 +1239,7 @@ public sealed class CacheEntry
     public string? ChunkMaskData { get; set; }
 
     [JsonIgnore] private int[]? _chunkBits;
+    private ConcurrentDictionary<int, byte>? _corruptedOfflineChunks;
 
     /// <summary>Прогресс загрузки в процентах (0.0 - 100.0).</summary>
     [JsonIgnore]
@@ -1096,6 +1276,48 @@ public sealed class CacheEntry
         if ((original & bit) == 0)
             Interlocked.Increment(ref _downloadedChunks);
     }
+
+    /// <summary>
+    /// Сбрасывает флаг загрузки для одного чанка через CAS-цикл.
+    /// </summary>
+    public void InvalidateChunk(int index)
+    {
+        EnsureChunkBits();
+        if (index < 0 || index >= TotalChunks) return;
+
+        int word = index >> 5;
+        int bit = 1 << (index & 31);
+        int current = Volatile.Read(ref _chunkBits![word]);
+
+        if ((current & bit) == 0) return;
+
+        int original;
+        do
+        {
+            original = current;
+            current = Interlocked.CompareExchange(ref _chunkBits![word], original & ~bit, original);
+        } while (current != original);
+
+        if ((original & bit) != 0)
+            Interlocked.Decrement(ref _downloadedChunks);
+    }
+
+    /// <summary>
+    /// Помечает чанк как "безнадежно испорченный" для текущей оффлайн-сессии.
+    /// Предотвращает бесконечные попытки парсера прочитать мусор, если нет сети для восстановления.
+    /// </summary>
+    public void MarkChunkCorruptedOffline(int index)
+    {
+        _corruptedOfflineChunks ??= new ConcurrentDictionary<int, byte>();
+        _corruptedOfflineChunks.TryAdd(index, 1);
+        InvalidateChunk(index); // Сбрасываем основной бит
+    }
+
+    /// <summary>
+    /// Проверяет, был ли чанк помечен как мертвый в оффлайне.
+    /// </summary>
+    public bool IsChunkCorruptedOffline(int index) =>
+        _corruptedOfflineChunks != null && _corruptedOfflineChunks.ContainsKey(index);
 
     /// <summary>
     /// Сериализует битовую маску чанков в Base64 для сохранения в JSON-индекс.

@@ -734,7 +734,7 @@ public partial class TrackListControl : UserControl
             _lastWheelTime = Environment.TickCount64;
 
             sv.AddHandler(
-                InputElement.PointerWheelChangedEvent,
+                PointerWheelChangedEvent,
                 OnWheel,
                 RoutingStrategies.Tunnel,
                 handledEventsToo: false);
@@ -873,7 +873,7 @@ public partial class TrackListControl : UserControl
             _disposed = true;
 
             _animTimer.Stop();
-            _sv.RemoveHandler(InputElement.PointerWheelChangedEvent, OnWheel);
+            _sv.RemoveHandler(PointerWheelChangedEvent, OnWheel);
         }
     }
 }

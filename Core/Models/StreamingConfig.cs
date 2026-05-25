@@ -92,15 +92,18 @@ public sealed record StreamingConfig
     #endregion
 
     /// <summary>
-    /// Значения по умолчанию (Medium профиль).
+    /// Значения по умолчанию — совпадают с Medium профилем.
+    /// <para><b>SSOT:</b> <see cref="AudioConstants.ChunkSize"/> ДОЛЖЕН совпадать
+    /// с <see cref="ChunkSizeBytes"/> для корректного reconciliation в
+    /// <c>CachingStreamSource.InitializeAsync</c>.</para>
     /// </summary>
     public static class Defaults
     {
         // Chunk
-        public const int ChunkSizeBytes = 128 * 1024;       // 128 KB
-        public const int ReadAheadChunks = 4;
-        public const int MaxRamChunks = 64;
-        public const int RamEvictionDistance = 10;
+        public const int ChunkSizeBytes = 64 * 1024;
+        public const int ReadAheadChunks = 6;
+        public const int MaxRamChunks = 96;
+        public const int RamEvictionDistance = 14;
 
         // Download
         public const int MaxConcurrentDownloads = 3;
@@ -116,13 +119,13 @@ public sealed record StreamingConfig
         public const int PostRefreshDelayMs = 500;
 
         // Pre-buffer
-        public const int InitialChunksToLoad = 3;
-        public const int SeekPreloadChunks = 4;
+        public const int InitialChunksToLoad = 4;
+        public const int SeekPreloadChunks = 6;
 
         // Background fill
         public const int BackgroundFillIdleCycles = 5;
         public const int BackgroundFillIntervalMs = 3000;
-        public const int MaxBackgroundChunksPerSession = 0;  // unlimited
+        public const int MaxBackgroundChunksPerSession = 0;
 
         /// <summary>
         /// Минимум буфера впереди перед началом фоновой докачки.
@@ -134,7 +137,7 @@ public sealed record StreamingConfig
         /// условие <c>chunksAhead >= MinBufferAheadForBackgroundFill</c>
         /// НИКОГДА не выполняется → background fill заблокирован навсегда.</para>
         /// </remarks>
-        public const int MinBufferAheadForBackgroundFill = 3;
+        public const int MinBufferAheadForBackgroundFill = 4;
 
         // Preload loop
         public const int PreloadIntervalMs = 500;

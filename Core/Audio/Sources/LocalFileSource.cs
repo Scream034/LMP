@@ -2,6 +2,7 @@
 
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
+using LMP.Core.Exceptions;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio.Sources;
@@ -26,21 +27,27 @@ public sealed class LocalFileSource : IAudioSource
     private const long StreamStartPosition = 0;
 
     private readonly string _filePath;
+    private readonly long _expectedSize;
+    private readonly string? _trackId; // Храним trackId для точечной инвалидации кэша
+
     private FileStream? _fileStream;
     private IContainerParser? _parser;
     private long _positionMs;
     private bool _initialized;
     private bool _disposed;
 
+
     /// <summary>
     /// Создаёт источник из локального файла.
     /// </summary>
     /// <param name="filePath">Путь к аудио файлу.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="filePath"/> is null.</exception>
-    /// <exception cref="FileNotFoundException">Файл не найден.</exception>
-    public LocalFileSource(string filePath)
+    /// <param name="expectedSize">Ожидаемый размер файла в байтах.</param>
+    /// <param name="trackId">Идентификатор трека (если файл открыт из кэша).</param>
+    public LocalFileSource(string filePath, long expectedSize = 0, string? trackId = null)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
+        _expectedSize = expectedSize;
+        _trackId = trackId;
 
         if (!File.Exists(filePath))
             throw new FileNotFoundException("Audio file not found", filePath);
@@ -77,6 +84,11 @@ public sealed class LocalFileSource : IAudioSource
     /// <inheritdoc/>
     public int Channels => _parser?.Channels ?? UnknownChannels;
 
+    /// <summary>
+    /// Парсер контейнера. Доступен для диагностики (resync detection).
+    /// </summary>
+    internal IContainerParser? Parser => _parser;
+
     #endregion
 
     #region Initialization
@@ -91,6 +103,18 @@ public sealed class LocalFileSource : IAudioSource
             _fileStream = new FileStream(
                 _filePath, FileMode.Open, FileAccess.Read, FileShare.Read,
                 bufferSize: CacheFileBufferSize, useAsync: true);
+
+            // Defense-in-depth: если вызывающий код передал ожидаемый размер,
+            // проверяем что файл не усечён ДО парсинга заголовков.
+            // Основная проверка — в AudioCacheManager.EnsureCacheFileIntegrity,
+            // но между lookup и open файл мог измениться (race condition).
+            if (_expectedSize > 0 && _fileStream.Length < _expectedSize)
+            {
+                Log.Error($"[LocalFileSource] Truncated file rejected: " +
+                          $"actual={_fileStream.Length}, expected={_expectedSize}, " +
+                          $"path={Path.GetFileName(_filePath)}");
+                return false;
+            }
 
             var format = await DetectFormatAsync(ct);
             _parser = CreateParser(format);
@@ -175,8 +199,10 @@ public sealed class LocalFileSource : IAudioSource
 
     /// <inheritdoc/>
     /// <remarks>
-    /// НЕ потокобезопасен с <see cref="SeekAsync"/>.
-    /// Вызывающий код должен остановить decoder loop перед seek.
+    /// <para><b>Surgical Cache Repair:</b> при обнаружении коррупции в файле кэша 
+    /// мы НЕ удаляем его целиком. Вместо этого мы точечно сбрасываем бит повреждённого чанка в ноль, 
+    /// сохраняя весь остальной файл на диске, и инициируем ретрай. Новый CachingStreamSource откроет 
+    /// этот же файл и докачает из сети ТОЛЬКО повреждённый 64KB-сегмент.</para>
     /// </remarks>
     public async ValueTask<AudioFrame?> ReadFrameAsync(CancellationToken ct = default)
     {
@@ -185,13 +211,60 @@ public sealed class LocalFileSource : IAudioSource
         if (!_initialized || _parser == null)
             throw new InvalidOperationException("Source not initialized");
 
-        var frame = await _parser.ReadNextFrameAsync(ct);
+        int maxHealingAttempts = 3;
+        for (int attempt = 0; attempt < maxHealingAttempts; attempt++)
+        {
+            try
+            {
+                var frame = await _parser.ReadNextFrameAsync(ct).ConfigureAwait(false);
+                if (frame == null) return null;
 
-        if (frame == null)
-            return null;
+                Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
+                return frame;
+            }
+            catch (ParserCorruptionException ex)
+            {
+                if (ct.IsCancellationRequested) throw;
 
-        Volatile.Write(ref _positionMs, frame.Value.TimestampMs);
-        return frame;
+                // Сценарий А: Файл открыт из кэша. Запускаем хирургическую точечную инвалидацию чанка
+                if (!string.IsNullOrEmpty(_trackId) && _expectedSize > 0)
+                {
+                    int chunkSize = AudioConstants.ChunkSize;
+                    int chunkIndex = (int)(ex.AbsoluteBytePosition / chunkSize);
+
+                    Log.Warn($"[LocalFileSource] Cache corruption detected for track {_trackId} at byte {ex.AbsoluteBytePosition} (Chunk {chunkIndex}). Performing surgical invalidation.");
+
+                    // Хирургически инвалидируем только поврежденный чанк, сохраняя остальной файл целым!
+                    AudioSourceFactory.GlobalCache?.InvalidateCacheChunkByTrackId(_trackId, chunkIndex);
+
+                    throw new CacheInvalidatedException(
+                        $"Cache corruption detected at byte {ex.AbsoluteBytePosition} (Chunk {chunkIndex})",
+                        CacheInvalidationKind.ParserResync,
+                        isRecoverable: true,
+                        trackId: _trackId,
+                        chunkIndex: chunkIndex,
+                        inner: ex);
+                }
+
+                // Сценарий Б: Это кастомный локальный файл или мы оффлайн. Пропускаем битый чанк
+                Log.Warn($"[LocalFileSource] Offline fallback: skipping corrupted range around byte {ex.AbsoluteBytePosition}");
+
+                int chunkIndexFallback = (int)(ex.AbsoluteBytePosition / ChunkSize);
+                long nextChunkBoundary = (long)(chunkIndexFallback + 1) * ChunkSize;
+
+                if (nextChunkBoundary >= _fileStream!.Length)
+                {
+                    return null; // Безопасный EOF
+                }
+
+                _fileStream.Position = nextChunkBoundary;
+                _parser.RequireResync();
+
+                Volatile.Write(ref _positionMs, DurationMs * nextChunkBoundary / _fileStream.Length);
+            }
+        }
+
+        throw new InvalidDataException("Unrecoverable local file corruption after maximum resync attempts.");
     }
 
     #endregion
@@ -199,30 +272,19 @@ public sealed class LocalFileSource : IAudioSource
     #region Seeking
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// <para>НЕ потокобезопасен с <see cref="ReadFrameAsync"/>.
-    /// Вызывающий код должен остановить decoder loop перед seek.</para>
-    /// 
-    /// <para>Использует только точки seek из контейнера (Cluster boundaries для WebM,
-    /// moof atoms для fMP4). Не использует линейную интерполяцию — она ненадёжна
-    /// для VBR потоков и попадает в середину фреймов.</para>
-    /// </remarks>
     public ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct = default)
     {
         if (_parser == null || _fileStream == null)
             return ValueTask.FromResult(false);
 
         var seekInfo = _parser.FindSeekPosition(positionMs);
-
         if (seekInfo == null)
         {
             Log.Warn($"[LocalFileSource] No seek point for {positionMs}ms");
             return ValueTask.FromResult(false);
         }
 
-        Log.Debug($"[LocalFileSource] Seek: target={positionMs}ms, " +
-                  $"actual={seekInfo.Value.TimestampMs}ms, " +
-                  $"byte={seekInfo.Value.BytePosition}");
+        Log.Debug($"[LocalFileSource] Seek: target={positionMs}ms, actual={seekInfo.Value.TimestampMs}ms, byte={seekInfo.Value.BytePosition}");
 
         _fileStream.Position = seekInfo.Value.BytePosition;
         _parser.Reset();

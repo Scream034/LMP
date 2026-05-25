@@ -84,7 +84,7 @@ public class SearchClient(HttpClient http)
                 Id = videoId, // TrackInfo setter автоматически добавит префикс
                 Title = videoData.Title ?? "",
                 // Используем локализацию
-                Author = videoData.Author ?? LMP.Core.Services.LocalizationService.Instance["Track_UnknownAuthor"],
+                Author = videoData.Author ?? Services.LocalizationService.Instance["Track_UnknownAuthor"],
                 ChannelId = videoData.ChannelId,
                 Duration = videoData.Duration ?? TimeSpan.Zero,
                 ThumbnailUrl = thumbUrl,

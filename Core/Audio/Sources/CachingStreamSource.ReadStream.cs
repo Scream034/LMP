@@ -83,6 +83,8 @@ public sealed partial class CachingStreamSource
             try { oldCts.Cancel(); }
             catch (ObjectDisposedException) { }
 
+            DeferDisposeCancellationTokenSource(oldCts, 500);
+
             Volatile.Write(ref _position, position);
         }
 
@@ -209,6 +211,7 @@ public sealed partial class CachingStreamSource
                 if (cts != null)
                 {
                     try { cts.Cancel(); } catch (ObjectDisposedException) { }
+                    try { cts.Dispose(); } catch (ObjectDisposedException) { }
                 }
             }
 

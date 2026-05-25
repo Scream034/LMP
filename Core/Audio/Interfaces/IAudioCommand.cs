@@ -38,18 +38,52 @@ public sealed record PlayCommand(
     TimeSpan? SeekPosition = null,
     CancellationToken ExternalCancellationToken = default) : IAudioCommand;
 
+/// <summary>
+/// Команда полной остановки воспроизведения.
+/// </summary>
+/// <param name="SessionId">Уникальный ID сессии.</param>
 public sealed record StopCommand(int SessionId) : IAudioCommand;
 
+/// <summary>
+/// Команда постановки воспроизведения на паузу.
+/// </summary>
+/// <param name="SessionId">Уникальный ID сессии.</param>
 public sealed record PauseCommand(int SessionId) : IAudioCommand;
 
+/// <summary>
+/// Команда возобновления воспроизведения после паузы.
+/// </summary>
+/// <param name="SessionId">Уникальный ID сессии.</param>
 public sealed record ResumeCommand(int SessionId) : IAudioCommand;
 
+/// <summary>
+/// Команда seek к новой позиции внутри текущего трека.
+/// </summary>
+/// <param name="Position">Целевая позиция.</param>
+/// <param name="SessionId">Уникальный ID сессии.</param>
+/// <param name="Completion">Опциональный completion source для awaitable seek.</param>
 public sealed record SeekCommand(
     TimeSpan Position,
     int SessionId,
     TaskCompletionSource<bool>? Completion = null) : IAudioCommand;
 
+/// <summary>
+/// Команда финального уничтожения плеера и его инфраструктуры.
+/// </summary>
+/// <param name="SessionId">Уникальный ID сессии.</param>
 public sealed record DisposeCommand(int SessionId) : IAudioCommand;
+
+/// <summary>
+/// Команда естественного завершения текущего трека.
+/// </summary>
+/// <remarks>
+/// <para>Команда публикуется из decoder loop в actor channel вместо прямого вызова
+/// <c>AudioPlayer.OnTrackEnded()</c> из фонового потока.</para>
+/// <para>Это сохраняет single-threaded actor semantics для state machine плеера и
+/// устраняет поздние stale-callback'и, которые могли сбрасывать уже новый pipeline.</para>
+/// </remarks>
+/// <param name="SessionId">Сессия, в рамках которой трек завершился.</param>
+public sealed record TrackEndedCommand(int SessionId) : IAudioCommand;
 
 /// <summary>
 /// Команда восстановления аудиоустройства после потери (BT disconnect и т.д.).

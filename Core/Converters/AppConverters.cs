@@ -359,7 +359,7 @@ public sealed class SeverityToColorConverter : IValueConverter
             _ => "TextMuted"
         };
 
-        if (Avalonia.Application.Current?.Resources.TryGetResource(resourceKey, null, out var resource) == true)
+        if (Application.Current?.Resources.TryGetResource(resourceKey, null, out var resource) == true)
         {
             if (resource is Color color) return color;
             if (resource is SolidColorBrush brush) return brush.Color;

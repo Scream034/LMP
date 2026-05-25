@@ -52,6 +52,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int SeekBusyTimeoutMs = 2000;
     /// <summary>Точность сравнения позиции для фильтрации дублей (мс)</summary>
     private const int PositionChangePrecisionMs = 100;
+    /// <summary>Короткий debounce финального commit seek после отпускания таймлайна (мс)</summary>
+    private const int SeekCommitDebounceMs = 120;
     /// <summary>Таймаут, после которого состояние Reset считается зависшим (сек)</summary>
     private const int StaleResetTimeoutSec = 3;
     /// <summary>Порог времени воспроизведения для определения активности аудио (сек)</summary>
@@ -144,6 +146,18 @@ public sealed class PlayerBarViewModel : ViewModelBase
     /// предотвращая гонку состояний при быстрых кликах.
     /// </summary>
     private CancellationTokenSource? _activeHintCts;
+
+    /// <summary>
+    /// CTS текущего pending seek-коммита из UI.
+    /// Новый <see cref="EndSeek"/> отменяет предыдущий pending commit по модели latest-wins.
+    /// </summary>
+    private CancellationTokenSource? _activeSeekCommitCts;
+
+    /// <summary>
+    /// Монотонная версия seek-коммита.
+    /// Используется для подавления устаревших завершений при серии быстрых EndSeek вызовов.
+    /// </summary>
+    private int _seekCommitVersion;
 
     #endregion
 
@@ -698,14 +712,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnPositionChanged += h,
                 h => _audio.OnPositionChanged -= h)
-            .Where(_ => !_isSeeking && !IsTrackResetting && !IsSeekBusy)
+            .Where(_ => !_isSeeking && !IsTrackResetting)
             .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
             .DistinctUntilChanged(pos => (long)(pos.TotalMilliseconds / PositionChangePrecisionMs))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(pos =>
             {
-                if (_isSeeking || IsTrackResetting || IsSeekBusy) return;
-                Log.Debug($"[PlayerBar] PositionChanged: {pos}");
+                if (_isSeeking || IsTrackResetting) return;
                 Position = pos;
                 PositionSeconds = pos.TotalSeconds;
                 this.RaisePropertyChanged(nameof(DurationTooltip));
@@ -888,6 +901,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
         bool isNewTrack = newTrackId != _lastHandledTrackId;
         _lastHandledTrackId = newTrackId;
 
+        if (isNewTrack)
+            CancelPendingSeekCommit(clearBusy: true);
+
         CurrentTrack = track;
         HasTrack = track != null;
 
@@ -934,6 +950,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void ResetToNoTrack()
     {
+        CancelPendingSeekCommit(clearBusy: true);
+
         _pendingStreamInfoTrackId = null;
         _lastDownloadedBytes = 0;
         _lastValidStreamInfo = "";
@@ -1193,37 +1211,63 @@ public sealed class PlayerBarViewModel : ViewModelBase
     /// <remarks>
     /// Используется прямой <see cref="AudioEngine.SeekAsync"/> без debounce:
     /// это уже финальное намерение пользователя.
+    /// <para><b>Усиление latest-wins:</b> поверх финального намерения добавлено
+    /// очень короткое окно coalescing (<see cref="SeekCommitDebounceMs"/>), чтобы
+    /// подавлять дублирующиеся завершающие UI-события и быстрые повторные клики
+    /// по таймлайну. Это не меняет UX одиночного seek, но резко снижает churn
+    /// по engine seek path.</para>
     /// </remarks>
     public async void EndSeek()
     {
         if (!HasTrack)
         {
             _isSeeking = false;
+            CancelPendingSeekCommit(clearBusy: true);
             return;
         }
 
         double target = PositionSeconds;
         _isSeeking = false;
 
+        // Оптимистичное обновление: UI показывает целевую позицию мгновенно.
         PositionSeconds = target;
         Position = TimeSpan.FromSeconds(target);
+        this.RaisePropertyChanged(nameof(DurationTooltip));
 
         IsSeekBusy = true;
         Volatile.Write(ref _seekBusyStartTicks, DateTime.UtcNow.Ticks);
 
+        int commitVersion = Interlocked.Increment(ref _seekCommitVersion);
+        using var seekCommitCts = ReplaceSeekCommitCts();
+
         try
         {
+            await Task.Delay(SeekCommitDebounceMs, seekCommitCts.Token);
+
+            // Если за debounce окно пришёл новый EndSeek — этот commit устарел.
+            if (commitVersion != Volatile.Read(ref _seekCommitVersion))
+                return;
+
             await _audio.SeekAsync(TimeSpan.FromSeconds(target));
         }
         catch (OperationCanceledException)
         {
-            ClearSeekBusy();
-            Log.Debug("[PlayerBar] Seek cancelled, guards cleared");
+            // Pending commit был вытеснен новым latest-wins seek или отменён reset/dispose.
+            // Снимаем busy только если это всё ещё актуальная версия.
+            if (commitVersion == Volatile.Read(ref _seekCommitVersion))
+            {
+                ClearSeekBusy();
+                Log.Debug("[PlayerBar] Seek commit cancelled, guards cleared");
+            }
         }
         catch (Exception ex)
         {
-            ClearSeekBusy();
-            SyncPositionFromEngine();
+            if (commitVersion == Volatile.Read(ref _seekCommitVersion))
+            {
+                ClearSeekBusy();
+                SyncPositionFromEngine();
+            }
+
             Log.Warn($"[PlayerBar] Seek failed: {ex.Message}");
         }
     }
@@ -1242,7 +1286,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     public void CancelSeek()
     {
         _isSeeking = false;
-        ClearSeekBusy();
+        CancelPendingSeekCommit(clearBusy: true);
         SyncPositionFromEngine();
     }
 
@@ -1269,6 +1313,61 @@ public sealed class PlayerBarViewModel : ViewModelBase
     #endregion
 
     #region Private Helpers
+
+    /// <summary>
+    /// Заменяет текущий pending seek-коммит новым CTS по модели latest-wins.
+    /// </summary>
+    /// <returns>Новый CTS, принадлежащий текущему commit path.</returns>
+    /// <remarks>
+    /// <para>Предыдущий CTS отменяется и освобождается немедленно.
+    /// Это дешёвый UI-side coalescing слой, который уменьшает количество
+    /// реальных <see cref="AudioEngine.SeekAsync"/> вызовов при быстрых
+    /// последовательных завершениях drag/click по таймлайну.</para>
+    /// </remarks>
+    private CancellationTokenSource ReplaceSeekCommitCts()
+    {
+        var newCts = new CancellationTokenSource();
+        var oldCts = Interlocked.Exchange(ref _activeSeekCommitCts, newCts);
+
+        if (oldCts != null)
+        {
+            try { oldCts.Cancel(); }
+            catch (ObjectDisposedException) { }
+
+            try { oldCts.Dispose(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        return newCts;
+    }
+
+    /// <summary>
+    /// Отменяет pending seek-коммит, если он существует.
+    /// </summary>
+    /// <param name="clearBusy">
+    /// Если <c>true</c>, дополнительно снимает локальный busy-флаг seek UI.
+    /// </param>
+    /// <remarks>
+    /// <para>Используется при смене трека, reset до состояния “no track”, явной отмене seek
+    /// и dispose ViewModel, чтобы stale UI-коммит не доехал до нового трека.</para>
+    /// </remarks>
+    private void CancelPendingSeekCommit(bool clearBusy)
+    {
+        var cts = Interlocked.Exchange(ref _activeSeekCommitCts, null);
+        if (cts != null)
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { }
+
+            try { cts.Dispose(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        Interlocked.Increment(ref _seekCommitVersion);
+
+        if (clearBusy)
+            ClearSeekBusy();
+    }
 
     private void ClearSeekBusy()
     {
@@ -1452,6 +1551,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
             _activeHintCts?.Cancel();
             _activeHintCts?.Dispose();
+
+            CancelPendingSeekCommit(clearBusy: true);
 
             _heavySubscriptions?.Dispose();
 

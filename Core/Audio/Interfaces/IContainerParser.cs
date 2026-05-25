@@ -39,4 +39,10 @@ public interface IContainerParser : IAsyncDisposable, IDisposable
     /// Сбрасывает состояние парсера после seek.
     /// </summary>
     void Reset();
+
+    /// <summary>
+    /// Дает команду парсеру отказаться от текущего внутреннего буфера и 
+    /// принудительно искать следующий валидный блок синхронизации при следующем чтении.
+    /// </summary>
+    void RequireResync();
 }

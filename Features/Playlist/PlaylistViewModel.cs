@@ -723,7 +723,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
                 try
                 {
                     var effectiveColor = Color.Parse(effectiveColorStr);
-                    await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                    await Dispatcher.UIThread.InvokeAsync(() =>
                         HeaderBackground = DominantColorService.CreateHeaderGradient(effectiveColor));
                     return;
                 }
@@ -745,7 +745,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             if (dominantColor is not null)
             {
                 _ = SaveComputedColorAsync(dominantColor.Value);
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                await Dispatcher.UIThread.InvokeAsync(() =>
                     HeaderBackground = DominantColorService.CreateHeaderGradient(dominantColor.Value));
             }
             else
@@ -799,7 +799,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     }
 
     private async Task SetHeaderBackgroundAsync(IBrush? brush) =>
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
+        await Dispatcher.UIThread.InvokeAsync(
             () => HeaderBackground = brush);
 
     private async Task HydrateCacheStatusInBackgroundAsync()
