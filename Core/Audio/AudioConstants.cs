@@ -110,10 +110,12 @@ public static class AudioConstants
 
     /// <summary>
     /// Таймаут остановки декодера при seek (мс).
-    /// Значительно короче <see cref="DecoderStopTimeoutMs"/> для минимизации perceived latency:
-    /// seek должен ощущаться мгновенно, поэтому допустимо прервать decoder forcefully.
     /// </summary>
-    public const int DecoderStopTimeoutSeekMs = 50;
+    /// <remarks>
+    /// <para>Увеличенный таймаут гарантирует, что старый декодер полностью прекратит работу 
+    /// и освободит порт ДО старта нового декодера, предотвращая утечки потоков и SocketException.</para>
+    /// </remarks>
+    public const int DecoderStopTimeoutSeekMs = 600;
 
     // ═══════════════════════════════════════════════════════
     // PLAYBACK BUFFER SETTINGS — PCM циклический буфер

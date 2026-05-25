@@ -1115,9 +1115,14 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            Log.Warn($"[PlayerBar] Seek failed: {ex.Message}");
+        }
+        finally
+        {
+            // ГАРАНТИЯ: Визуальное состояние "IsSeekBusy" сбрасывается строго в finally,
+            // а позиция принудительно синхронизируется, исключая гонку событий.
             IsSeekBusy = false;
             SyncPositionFromEngine();
-            Log.Warn($"[PlayerBar] Seek failed: {ex.Message}");
         }
     }
 

@@ -341,6 +341,20 @@ public sealed class TrackInfo : ReactiveObject, IBatchItem, ISearchResult
 
         if (fresh.HasCachedNormalizationGain && !HasCachedNormalizationGain)
             CachedNormalizationGain = fresh.CachedNormalizationGain;
+
+        // Предотвращаем потерю StreamUrl и связанных runtime-свойств 
+        // при слиянии метаданных с сущностью, загруженной из базы данных.
+        if (!string.IsNullOrEmpty(fresh.StreamUrl) && fresh.StreamUrl != StreamUrl)
+            StreamUrl = fresh.StreamUrl;
+
+        if (!string.IsNullOrEmpty(fresh.TransientContainer) && fresh.TransientContainer != TransientContainer)
+            TransientContainer = fresh.TransientContainer;
+
+        if (fresh.TransientBitrate > 0 && fresh.TransientBitrate != TransientBitrate)
+            TransientBitrate = fresh.TransientBitrate;
+
+        if (fresh.TransientSize > 0 && fresh.TransientSize != TransientSize)
+            TransientSize = fresh.TransientSize;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

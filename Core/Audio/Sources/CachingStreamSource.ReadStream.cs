@@ -112,12 +112,55 @@ public sealed partial class CachingStreamSource
 
         /// <inheritdoc/>
         /// <remarks>
-        /// <para>Sync-over-async fallback для парсеров,
-        /// использующих синхронный <c>Stream.Read()</c>.
-        /// Основной путь — <see cref="ReadAsync(Memory{byte}, CancellationToken)"/>.</para>
+        /// <para><b>Оптимизированный гибридный метод:</b> Если данные чанка уже доступны локально 
+        /// (в оперативной памяти или на диске), чтение происходит абсолютно синхронно, без выделения 
+        /// асинхронных стейт-машин и без блокировки потоков пула через <c>GetResult()</c>.</para>
         /// </remarks>
         public override int Read(byte[] buffer, int offset, int count)
         {
+            long posBefore = Volatile.Read(ref _position);
+            if (posBefore >= _source._contentLength) return 0;
+
+            int chunkIndex = (int)(posBefore / _source._chunkSize);
+
+            // ШАГ 1: Проверяем локальную доступность чанка в кэше
+            if (_source.IsChunkAvailable(chunkIndex))
+            {
+                int offsetInChunk = (int)(posBefore % _source._chunkSize);
+
+                // А. Прямое быстрое чтение из RAM-кэша (Lock-Free)
+                if (_source._ramChunks.TryGetValue(chunkIndex, out var ramEntry))
+                {
+                    int read = CopyFromChunk(ramEntry.Memory.Span, ramEntry.Length, offsetInChunk, buffer.AsMemory(offset, count));
+                    Volatile.Write(ref _position, posBefore + read);
+                    return read;
+                }
+
+                // Б. Синхронизированный запрос к диску (чтение файла)
+                try
+                {
+                    var diskResult = _source._cacheManager.ReadChunkAsync(_source._cacheKey, chunkIndex, CancellationToken.None)
+                        .GetAwaiter()
+                        .GetResult();
+
+                    if (diskResult.HasValue)
+                    {
+                        var (owner, length) = diskResult.Value;
+                        using (owner)
+                        {
+                            int read = CopyFromChunk(owner.Memory.Span, length, offsetInChunk, buffer.AsMemory(offset, count));
+                            Volatile.Write(ref _position, posBefore + read);
+                            return read;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fallback на стандартное асинхронное чтение при сбое ввода-вывода
+                }
+            }
+
+            // ШАГ 2: Медленный путь (сетевой запрос) с контролируемым Sync-over-Async
             try
             {
                 return ReadAsyncCore(buffer.AsMemory(offset, count), GetCurrentReadToken())

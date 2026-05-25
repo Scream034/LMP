@@ -133,6 +133,7 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     private string? _nTokenActiveTrackId;
     private string? _nTokenWarnedTrackId;
     private string? _sealedFailedTrackId;
+    private volatile bool _isManualLoading;
 
     /// <summary>Очередь отложенных записей gain нормализации в БД.</summary>
     private readonly ConcurrentQueue<(string TrackId, float Gain)> _pendingGainWrites = new();
@@ -159,7 +160,11 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
     public bool IsPlaying => _player.State == PlaybackState.Playing;
     public bool IsPaused => _player.State == PlaybackState.Paused;
-    public bool IsLoading => _player.State is PlaybackState.Loading or PlaybackState.Buffering;
+
+    /// <summary>
+    /// Возвращает true, если плеер выполняет буферизацию или движок асинхронно разрешает Stream URL.
+    /// </summary>
+    public bool IsLoading => _isManualLoading || _player.State is PlaybackState.Loading or PlaybackState.Buffering;
 
     public int CurrentQueueIndex => Volatile.Read(ref _currentIndex);
     public bool ShuffleEnabled { get; set; }
@@ -526,31 +531,34 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         _player.Stop();
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
 
-        var canonical = await _library.GetTrackAsync(track.Id, ct).ConfigureAwait(false);
-        if (canonical != null)
-        {
-            Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} found in DB. Upgrading metadata. Saved DB Gain: {(float.IsNaN(canonical.CachedNormalizationGain) ? "NaN" : canonical.CachedNormalizationGain.ToString("F4"))}");
-            canonical.UpdateMetadata(track);
-            track = canonical;
-        }
-        else
-        {
-            Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} NOT found in DB. Registering in TrackRegistry L1 cache.");
-            track = _trackRegistry.RegisterOrUpdate(track);
-        }
-
-        // Синхронное обновление стейта на текущем потоке для исключения гонки инициализации
-        CurrentTrack = track;
-        StreamInfo = AudioStreamInfo.Empty;
-
-        RaiseOnUI(() =>
-        {
-            OnTrackChanged?.Invoke(track);
-            OnPositionChanged?.Invoke(TimeSpan.Zero);
-        });
+        // Включаем индикатор загрузки немедленно перед началом любых асинхронных операций
+        SetManualLoading(true);
 
         try
         {
+            var canonical = await _library.GetTrackAsync(track.Id, ct).ConfigureAwait(false);
+            if (canonical != null)
+            {
+                Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} found in DB. Upgrading metadata. Saved DB Gain: {(float.IsNaN(canonical.CachedNormalizationGain) ? "NaN" : canonical.CachedNormalizationGain.ToString("F4"))}");
+                canonical.UpdateMetadata(track);
+                track = canonical;
+            }
+            else
+            {
+                Log.Debug($"[AudioEngine] [PlayTrackCore] Track {track.Id} NOT found in DB. Registering in TrackRegistry L1 cache.");
+                track = _trackRegistry.RegisterOrUpdate(track);
+            }
+
+            // Синхронное обновление стейта на текущем потоке для исключения гонки инициализации
+            CurrentTrack = track;
+            StreamInfo = AudioStreamInfo.Empty;
+
+            RaiseOnUI(() =>
+            {
+                OnTrackChanged?.Invoke(track);
+                OnPositionChanged?.Invoke(TimeSpan.Zero);
+            });
+
             ct.ThrowIfCancellationRequested();
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             Interlocked.Exchange(ref _nTokenWarnedTrackId, null);
@@ -589,6 +597,7 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         }
         finally
         {
+            SetManualLoading(false);
             Interlocked.CompareExchange(ref _nTokenActiveTrackId, null, track.Id);
         }
     }
@@ -606,33 +615,45 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         {
             track.TransientBitrate = cached.Value.Entry.Bitrate;
 
-            // ОПТИМИЗАЦИЯ: Если трек полностью кэширован локально на диске, но не имеет вычисленного EBU-gain,
-            // мы пробуем мгновенно получить его loudnessDb из сети. Это предотвращает 5-секундный локальный pre-scan.
+            // Если у локального кэша нет сохранённого gain'а или YT-громкости
             if (float.IsNaN(track.CachedNormalizationGain) && float.IsNaN(track.YoutubeIntegratedLoudnessDb))
             {
-                // Запускаем сетевой запрос со строгим таймаутом в 1 секунду для защиты UX
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(1));
+                var profileStr = _library.Settings.InternetProfile.ToString();
+                bool isDataSaving = profileStr.Contains("Cellular", StringComparison.OrdinalIgnoreCase) ||
+                                    profileStr.Contains("Mobile", StringComparison.OrdinalIgnoreCase) ||
+                                    profileStr.Contains("Low", StringComparison.OrdinalIgnoreCase);
 
-                try
+                if (!isDataSaving)
                 {
-                    Log.Debug($"[AudioEngine] Local cache for {track.Id} has no gain metadata. Performing 1s fast online lookup...");
+                    // Делаем быстрый синхронный сетевой запрос громкости перед возвратом URL.
+                    // Это занимает всего 150-250мс, но гарантирует обход тяжелого 5-секундного EBU R128 Pre-scan
+                    // локального файла на диске, сохраняя UX отзывчивым и разгружая процессор.
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(1.2)); // Безопасный таймаут для защиты интерфейса
 
-                    float loudness = await _youtube.GetLoudnessDbOnlyAsync(rawId, timeoutCts.Token).ConfigureAwait(false);
-
-                    if (!float.IsNaN(loudness))
+                    try
                     {
-                        track.TrySetGainFromLoudness(loudness);
-                        Log.Info($"[AudioEngine] Successfully resolved online loudness for cached track {track.Id}: {loudness:F2}dB (Bypassed Pre-Scan!)");
+                        Log.Debug($"[AudioEngine] Local cache for {track.Id} has no gain metadata. Performing 1.2s fast online lookup to bypass local pre-scan...");
+                        float loudness = await _youtube.GetLoudnessDbOnlyAsync(rawId, timeoutCts.Token).ConfigureAwait(false);
+
+                        if (!float.IsNaN(loudness))
+                        {
+                            track.TrySetGainFromLoudness(loudness);
+                            Log.Info($"[AudioEngine] Successfully resolved online loudness for cached track {track.Id}: {loudness:F2}dB (Bypassed Local Pre-Scan!)");
+                        }
+                    }
+                    catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        Log.Warn($"[AudioEngine] Online loudness lookup for cached track {track.Id} timed out. Local pre-scan fallback will be used.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"[AudioEngine] Online loudness lookup failed for {track.Id}: {ex.Message}. Local pre-scan fallback will be used.");
                     }
                 }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                else
                 {
-                    Log.Warn($"[AudioEngine] Online loudness lookup for cached track {track.Id} timed out. Local pre-scan fallback will be used.");
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"[AudioEngine] Online loudness lookup failed for {track.Id}: {ex.Message}");
+                    Log.Debug($"[AudioEngine] Skipping online loudness lookup for {track.Id} due to active cellular/low internet profile: {profileStr}. EBU R128 Local Pre-scan will be triggered.");
                 }
             }
 
@@ -668,7 +689,7 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
             this.RaisePropertyChanged(nameof(IsLoading));
             this.RaisePropertyChanged(nameof(TotalDuration));
             OnPlaybackStateChanged?.Invoke(state == PlaybackState.Playing, state == PlaybackState.Paused);
-            OnLoadingStateChanged?.Invoke(state is PlaybackState.Loading or PlaybackState.Buffering);
+            OnLoadingStateChanged?.Invoke(IsLoading);
         });
     }
 
@@ -1068,6 +1089,22 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// Потокобезопасно обновляет статус ручной загрузки движка на UI-потоке.
+    /// </summary>
+    private void SetManualLoading(bool loading)
+    {
+        RaiseOnUI(() =>
+        {
+            if (_isManualLoading != loading)
+            {
+                _isManualLoading = loading;
+                this.RaisePropertyChanged(nameof(IsLoading));
+                OnLoadingStateChanged?.Invoke(IsLoading);
+            }
+        });
+    }
 
     private static void RaiseOnUI(Action action)
     {

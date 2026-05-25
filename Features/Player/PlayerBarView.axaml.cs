@@ -18,8 +18,8 @@ public partial class PlayerBarView : UserControl
         public const double SeekCursorHalfWidth = 1.0;
         public const double SeekPreviewCursorHalfWidth = 1.5;
 
-        public const int SeekHintAutoHideMs = 1250; 
-        
+        public const int SeekHintAutoHideMs = 1250;
+
         public const double RenderTransformResetValue = 0.0;
         public const double DefaultTooltipWidth = 46.0;
         public const double DefaultHintWidth = 180.0;
@@ -27,7 +27,7 @@ public partial class PlayerBarView : UserControl
 
     private static class GlideConstants
     {
-        public const double DurationSec = 0.175; 
+        public const double DurationSec = 0.175;
         public const double TriggerThresholdSec = 0.8;
         public const double RetargetThresholdSec = 0.1;
         public const double MaxJumpSec = 0.25;
@@ -370,10 +370,18 @@ public partial class PlayerBarView : UserControl
             _isRafRunning = false;
     }
 
+    /// <summary>
+    /// Рассчитывает положение ползунка на каждый кадр анимации.
+    /// </summary>
     private bool ApplySeekFrame(TimeSpan frameTime)
     {
         if (_currentViewModel is not { } vm) return false;
         if (vm.IsTrackResetting) return false;
+
+        // ОПТИМИЗАЦИЯ: Если пользователь вручную перетаскивает ползунок,
+        // полностью отключаем расчеты и отрисовку из фонового цикла воспроизведения.
+        // Это предотвращает конфликт отрисовки (layout-fighting) и разгружает UI-поток до нуля.
+        if (_isDraggingSeek) return true;
 
         double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
         double duration = vm.DurationSeconds;
@@ -421,7 +429,7 @@ public partial class PlayerBarView : UserControl
             else
             {
                 double t = glideElapsed / GlideConstants.DurationSec;
-                double easeOut = t * (2.0 - t); 
+                double easeOut = t * (2.0 - t);
                 displayPosition = _glideStart + (_glideTarget - _glideStart) * easeOut;
             }
         }
