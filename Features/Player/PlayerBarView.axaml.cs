@@ -41,6 +41,12 @@ public partial class PlayerBarView : UserControl
     private double _seekDragRatio;
     private double _cachedSeekWidth;
 
+    /// <summary>
+    /// Сохраняет координату предпросмотра (0.0 - 1.0) для анимации
+    /// интерактивного соединительного моста (Span Selection Bridge).
+    /// </summary>
+    private double? _currentPreviewRatio;
+
     private readonly SerialDisposable _seekHintDisposable = new();
 
     private FlyoutBase? _formatFlyout;
@@ -53,7 +59,6 @@ public partial class PlayerBarView : UserControl
     private TranslateTransform? _seekThumbTranslate;
     private TranslateTransform? _seekCursorTranslate;
     private TranslateTransform? _seekTooltipTranslate;
-    private TranslateTransform? _seekHintTranslate;
 
     private double _lastEnginePosition = -1.0;
     private double _anchorPosition;
@@ -84,9 +89,6 @@ public partial class PlayerBarView : UserControl
 
         _seekTooltipTranslate = new TranslateTransform();
         SeekTooltip.RenderTransform = _seekTooltipTranslate;
-
-        _seekHintTranslate = new TranslateTransform();
-        SeekHint.RenderTransform = _seekHintTranslate;
 
         ApplySliderReset();
     }
@@ -198,14 +200,9 @@ public partial class PlayerBarView : UserControl
         switch (e.PropertyName)
         {
             case nameof(PlayerBarViewModel.IsPlaying):
-                if (vm.IsPlaying && !_isDraggingSeek)
-                    EnsureRafRunning();
-                break;
-
             case nameof(PlayerBarViewModel.PositionSeconds):
             case nameof(PlayerBarViewModel.DurationSeconds):
-                if (!_isDraggingSeek)
-                    EnsureRafRunning();
+                EnsureRafRunning();
                 break;
         }
     }
@@ -229,6 +226,10 @@ public partial class PlayerBarView : UserControl
 
         _isGliding = false;
         _displayPosition = 0;
+        _currentPreviewRatio = null;
+
+        SeekRangeSpan.Opacity = 0;
+        SeekTooltip.Opacity = 0;
 
         SparkContainer.IsVisible = true;
     }
@@ -370,18 +371,10 @@ public partial class PlayerBarView : UserControl
             _isRafRunning = false;
     }
 
-    /// <summary>
-    /// Рассчитывает положение ползунка на каждый кадр анимации.
-    /// </summary>
     private bool ApplySeekFrame(TimeSpan frameTime)
     {
         if (_currentViewModel is not { } vm) return false;
         if (vm.IsTrackResetting) return false;
-
-        // ОПТИМИЗАЦИЯ: Если пользователь вручную перетаскивает ползунок,
-        // полностью отключаем расчеты и отрисовку из фонового цикла воспроизведения.
-        // Это предотвращает конфликт отрисовки (layout-fighting) и разгружает UI-поток до нуля.
-        if (_isDraggingSeek) return true;
 
         double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
         double duration = vm.DurationSeconds;
@@ -391,7 +384,7 @@ public partial class PlayerBarView : UserControl
 
         if (Math.Abs(enginePosition - _lastEnginePosition) > 0.001)
         {
-            if (_lastEnginePosition >= 0.0 && Math.Abs(enginePosition - _lastEnginePosition) > GlideConstants.TriggerThresholdSec && !_isDraggingSeek)
+            if (_lastEnginePosition >= 0.0 && Math.Abs(enginePosition - _lastEnginePosition) > GlideConstants.TriggerThresholdSec)
             {
                 _isGliding = true;
                 _glideStart = _displayPosition;
@@ -435,13 +428,24 @@ public partial class PlayerBarView : UserControl
         }
 
         _displayPosition = displayPosition;
+        double currentRatio = displayPosition / duration;
+        double currentX = currentRatio * width;
 
-        double ratio = displayPosition / duration;
-        ApplySeekVisual(ratio, width);
-
+        ApplySeekVisual(currentRatio, width);
         CustomProgressBar.Value = displayPosition;
 
-        return vm.IsPlaying || _isGliding;
+        // Динамическое позиционирование полых рельс моста через Canvas.SetLeft
+        if (_currentPreviewRatio.HasValue && _isDraggingSeek)
+        {
+            double previewX = _currentPreviewRatio.Value * width;
+            double left = Math.Min(currentX, previewX);
+            double spanWidth = Math.Abs(currentX - previewX);
+
+            Canvas.SetLeft(SeekRangeSpan, left);
+            SeekRangeSpan.Width = spanWidth;
+        }
+
+        return vm.IsPlaying || _isGliding || (_isDraggingSeek && _currentPreviewRatio.HasValue);
     }
 
     #endregion
@@ -478,14 +482,14 @@ public partial class PlayerBarView : UserControl
 
     #region Seek Hint (Canvas-based)
 
+    /// <summary>
+    /// Отображает центрированную подсказку отмены перемотки.
+    /// Благодаря авторазметке Grid, позиционирование происходит аппаратно и плавно.
+    /// </summary>
     private void ShowSeekHint(string text, int autoHideMs)
     {
         SeekHintText.Text = text;
         SeekHint.IsVisible = true;
-
-        double width = _cachedSeekWidth > 0.0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
-        double hintWidth = SeekHint.Bounds.Width > 0.0 ? SeekHint.Bounds.Width : LayoutConstants.DefaultHintWidth;
-        _seekHintTranslate!.X = (width - hintWidth) / 2.0;
 
         _seekHintDisposable.Disposable = Observable
             .Timer(TimeSpan.FromMilliseconds(autoHideMs))
@@ -505,7 +509,8 @@ public partial class PlayerBarView : UserControl
 
     private void CloseAllPopups()
     {
-        SeekTooltip.IsVisible = false;
+        SeekTooltip.Opacity = 0;
+        SeekRangeSpan.Opacity = 0;
         SeekHint.IsVisible = false;
         _seekHintDisposable.Disposable = null;
     }
@@ -537,25 +542,34 @@ public partial class PlayerBarView : UserControl
         double seconds = ratio * vm.DurationSeconds;
 
         UpdateSeekTooltip(x, seconds);
+        _currentPreviewRatio = ratio;
 
         if (_isDraggingSeek)
         {
             _seekDragRatio = ratio;
             ShowSeekPreview();
             UpdateSeekPreview(x);
-            SeekTooltip.IsVisible = true;
+
+            SeekTooltip.Opacity = 1;
+            SeekRangeSpan.Opacity = 1; // Рельсы становятся видимыми при перетаскивании
         }
         else if (SeekHitBox.IsPointerOver)
         {
             ShowSeekPreview();
             UpdateSeekPreview(x);
-            SeekTooltip.IsVisible = true;
+
+            SeekTooltip.Opacity = 1;
+            SeekRangeSpan.Opacity = 0;
         }
         else
         {
-            SeekTooltip.IsVisible = false;
+            SeekTooltip.Opacity = 0;
+            SeekRangeSpan.Opacity = 0;
             HideSeekPreview();
+            _currentPreviewRatio = null;
         }
+
+        EnsureRafRunning();
     }
 
     private void OnSeekAreaPressed(object? sender, PointerPressedEventArgs e)
@@ -577,11 +591,16 @@ public partial class PlayerBarView : UserControl
 
         double x = Math.Clamp(point.Position.X, 0.0, width);
         _seekDragRatio = x / width;
+        _currentPreviewRatio = _seekDragRatio;
 
         ShowSeekPreview();
         UpdateSeekPreview(x);
         UpdateSeekTooltip(x, _seekDragRatio * vm.DurationSeconds);
-        SeekTooltip.IsVisible = true;
+
+        SeekTooltip.Opacity = 1;
+        SeekRangeSpan.Opacity = 1; // Зажигаем рельсы при нажатии
+
+        EnsureRafRunning();
 
         ShowSeekHint(
             vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel"),
@@ -607,8 +626,10 @@ public partial class PlayerBarView : UserControl
     {
         if (_isDraggingSeek) return;
 
-        SeekTooltip.IsVisible = false;
+        SeekTooltip.Opacity = 0;
+        SeekRangeSpan.Opacity = 0;
         HideSeekPreview();
+        _currentPreviewRatio = null;
     }
 
     private void OnSeekAreaCaptureLost(object? sender, PointerCaptureLostEventArgs e)
@@ -621,8 +642,14 @@ public partial class PlayerBarView : UserControl
 
         SeekContainer.Classes.Remove("dragging");
 
-        SeekTooltip.IsVisible = false;
-        HideSeekPreview();
+        SeekRangeSpan.Opacity = 0;
+
+        if (!SeekHitBox.IsPointerOver)
+        {
+            SeekTooltip.Opacity = 0;
+            HideSeekPreview();
+            _currentPreviewRatio = null;
+        }
     }
 
     private void CancelSeekDrag()
@@ -643,8 +670,10 @@ public partial class PlayerBarView : UserControl
             }
         }
 
-        SeekTooltip.IsVisible = false;
+        SeekTooltip.Opacity = 0;
+        SeekRangeSpan.Opacity = 0;
         HideSeekPreview();
+        _currentPreviewRatio = null;
     }
 
     #endregion
@@ -656,7 +685,6 @@ public partial class PlayerBarView : UserControl
         if (e.Key != Key.Escape) return;
 
         bool hadSeek = _isDraggingSeek;
-
         CancelSeekDrag();
 
         if (hadSeek) e.Handled = true;

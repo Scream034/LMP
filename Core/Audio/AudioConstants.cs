@@ -138,7 +138,7 @@ public static class AudioConstants
     // ═══════════════════════════════════════════════════════
 
     /// <summary>Интервал обновления позиции по умолчанию (мс).</summary>
-    public const int DefaultPositionUpdateIntervalMs = 200;
+    public const int DefaultPositionUpdateIntervalMs = 250;
 
     /// <summary>Интервал проверки состояния буфера (мс).</summary>
     public const int BufferStateUpdateIntervalMs = 500;

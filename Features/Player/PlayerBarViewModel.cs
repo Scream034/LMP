@@ -645,13 +645,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Observable.FromEvent<Action<TimeSpan>, TimeSpan>(
                 h => _audio.OnPositionChanged += h,
                 h => _audio.OnPositionChanged -= h)
-            .Where(_ => !_isSeeking && !IsTrackResetting)
+            .Where(_ => !IsTrackResetting)
             .Throttle(TimeSpan.FromMilliseconds(PositionUpdateThrottleMs))
-            .DistinctUntilChanged(pos => (long)(pos.TotalMilliseconds / PositionChangePrecisionMs))
+            .DistinctUntilChanged(pos => (long)pos.TotalSeconds)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(pos =>
             {
-                if (_isSeeking || IsTrackResetting) return;
+                if (IsTrackResetting) return;
                 Position = pos;
                 PositionSeconds = pos.TotalSeconds;
                 this.RaisePropertyChanged(nameof(DurationTooltip));
@@ -1061,8 +1061,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (IsPlaying)
         {
             var pos = _audio.CurrentPosition;
-            Position = pos;
-            PositionSeconds = pos.TotalSeconds;
+
+            // Обновляем VM-свойства текстового таймера и тултипа только при смене секунды во избежание лишнего парсинга строк
+            if ((long)pos.TotalSeconds != (long)Position.TotalSeconds)
+            {
+                Position = pos;
+                PositionSeconds = pos.TotalSeconds;
+            }
         }
     }
 
