@@ -726,18 +726,83 @@ public sealed class PlayerBarViewModel : ViewModelBase
             return;
         }
 
+        double currentRatio = DurationSeconds > 0 ? PositionSeconds / DurationSeconds : 0.0;
+
+        IReadOnlyList<(double Start, double End)> rawRanges;
         if (externalState.HasValue)
         {
             var state = externalState.Value;
             BufferProgressPercent = state.Progress;
             IsFullyBuffered = state.IsFullyBuffered;
-            BufferedRanges = state.Ranges;
+            rawRanges = state.Ranges;
         }
         else
         {
             BufferProgressPercent = _audio.BufferProgress;
-            BufferedRanges = _audio.GetBufferedRanges();
             IsFullyBuffered = _audio.IsFullyBuffered;
+            rawRanges = _audio.GetBufferedRanges();
+        }
+
+        if (IsFullyBuffered)
+        {
+            SetFullyBuffered();
+            return;
+        }
+
+        // VBR Visual Gap Fix: 
+        // CachingStreamSource рассчитывает кэш в байтах (физические чанки на диске).
+        // Слайдер (таймлайн) оперирует временем. Из-за переменного битрейта (VBR) кодеков Opus/AAC,
+        // временной прогресс может отклоняться от байтового на 10-15%.
+        // Чтобы избежать тёмных "дыр" между ползунком и кэшем, мы находим ближайший
+        // диапазон и визуально растягиваем его так, чтобы он покрывал текущий ползунок.
+
+        // ВАЖНО: Мы применяем это только если данные реально есть (плеер не буферизируется и не ждет сеть)
+        bool isPcmDataGuaranteed = !IsLoading && !IsSeekBusy;
+
+        if (isPcmDataGuaranteed && rawRanges.Count > 0 && currentRatio > 0.0)
+        {
+            var adjustedRanges = new List<(double Start, double End)>(rawRanges.Count);
+
+            // Находим ближайший диапазон кэша к текущему положению ползунка
+            int closestIndex = -1;
+            double minDistance = double.MaxValue;
+
+            for (int i = 0; i < rawRanges.Count; i++)
+            {
+                var r = rawRanges[i];
+                double dist = 0;
+                if (currentRatio < r.Start) dist = r.Start - currentRatio;
+                else if (currentRatio > r.End) dist = currentRatio - r.End;
+
+                if (dist < minDistance)
+                {
+                    minDistance = dist;
+                    closestIndex = i;
+                }
+            }
+
+            for (int i = 0; i < rawRanges.Count; i++)
+            {
+                double start = rawRanges[i].Start;
+                double end = rawRanges[i].End;
+
+                // Дотягиваем края кэша до ползунка. 
+                // Ограничение 0.15 (15%) защищает от слияния далеких кусков.
+                if (i == closestIndex && minDistance < 0.15)
+                {
+                    // Делаем запас (bleed) 0.5% вперёд и назад, чтобы ползунок не выпадал 
+                    // из кэша между тиками 500-мс таймера при воспроизведении.
+                    if (start > currentRatio) start = Math.Max(0.0, currentRatio - 0.005);
+                    if (end < currentRatio) end = Math.Min(1.0, currentRatio + 0.005);
+                }
+
+                adjustedRanges.Add((start, end));
+            }
+            BufferedRanges = adjustedRanges;
+        }
+        else
+        {
+            BufferedRanges = rawRanges;
         }
 
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
