@@ -19,7 +19,7 @@ public static class ManualTests
         Console.WriteLine("  LMP TEST SUITE (Auto-Discovery)");
         Console.WriteLine(new string('═', 70) + "\n");
 
-        var runner = new TestRunner(Program.Services);
+        var runner = new TestRunner(AppEntry.Services);
         int passed = 0, failed = 0, skipped = 0;
 
         runner.TestCompleted += (descriptor, result) =>
@@ -73,17 +73,17 @@ public static class ManualTests
 
     /// <summary>Быстрый тест N-Token (самый важный).</summary>
     public static Task TestNTokenQuickAsync() =>
-        Unit.NTokenTests.TestLiveDecryptionAsync(Program.Services);
+        Unit.NTokenTests.TestLiveDecryptionAsync(AppEntry.Services);
 
     /// <summary>Быстрый тест Sig Cipher.</summary>
     public static Task TestSigCipherQuickAsync() =>
-        Unit.SigCipherTests.TestLiveDecryptionAsync(Program.Services);
+        Unit.SigCipherTests.TestLiveDecryptionAsync(AppEntry.Services);
 
     /// <summary>Полный pipeline тест.</summary>
     public static Task TestSigCipherFullAsync(string videoId = "dQw4w9WgXcQ") =>
-        Integration.StreamPipelineTests.TestFullPipelineInternalAsync(Program.Services, videoId);
+        Integration.StreamPipelineTests.TestFullPipelineInternalAsync(AppEntry.Services, videoId);
 
     /// <summary>Benchmark N-Token.</summary>
     public static Task BenchmarkNTokenAsync() =>
-        Unit.NTokenTests.BenchmarkAsync(Program.Services);
+        Unit.NTokenTests.BenchmarkAsync(AppEntry.Services);
 }

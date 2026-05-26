@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
 
 namespace LMP.Core.Youtube.Music;
 

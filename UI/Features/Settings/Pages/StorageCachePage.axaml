@@ -1,0 +1,158 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.UI.Features.Settings"
+    x:Class="LMP.UI.Features.Settings.Pages.StorageCachePage"
+    x:DataType="vm:SettingsViewModel"
+    x:CompileBindings="True">
+
+    <StackPanel Margin="32,24">
+        <Grid ColumnDefinitions="Auto, *" Margin="0,0,0,16">
+            <PathIcon Grid.Column="0" Data="{StaticResource Icon.Database}"
+                Width="20" Height="20" VerticalAlignment="Center"
+                Foreground="{DynamicResource AccentBrush}" />
+            <TextBlock Grid.Column="1" Classes="h2"
+                Text="{Binding L[Settings_Storage_Data]}"
+                VerticalAlignment="Center" Margin="8,0,0,0" />
+        </Grid>
+
+        <Border Classes="card">
+            <StackPanel Spacing="20">
+
+                <!-- ── Download path ── -->
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackPanel Margin="0,0,20,0">
+                        <TextBlock Classes="label" Text="{Binding L[Storage_Path]}" />
+                        <TextBlock Classes="desc"
+                            Text="{Binding DownloadPath}"
+                            TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                        Content="{Binding L[Storage_Change]}"
+                        Command="{Binding BrowseDownloadPathCommand}" />
+                </Grid>
+
+                <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                <!-- ── Downloaded tracks ── -->
+                <Grid ColumnDefinitions="*, 140">
+                    <StackPanel>
+                        <TextBlock Classes="label" Text="{Binding L[Settings_DownloadedTracks]}" />
+                        <ProgressBar Value="{Binding DownloadsUsagePercent}"
+                            Maximum="1" Height="6" Margin="0,8,0,8"
+                            Foreground="{DynamicResource SystemSuccessGreenBrush}" />
+                        <TextBlock Classes="desc" Text="{Binding DownloadsStats}" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                        Content="{Binding L[Common_Clear]}"
+                        Command="{Binding ClearDownloadsCommand}"
+                        VerticalAlignment="Center" HorizontalAlignment="Right" />
+                </Grid>
+
+                <!-- ── Image cache ── -->
+                <Grid ColumnDefinitions="*, 140">
+                    <StackPanel>
+                        <TextBlock Classes="label" Text="{Binding L[Settings_ImageCache]}" />
+                        <ProgressBar Value="{Binding ImageCacheUsagePercent}"
+                            Maximum="1" Height="6" Margin="0,8,0,8"
+                            Foreground="{DynamicResource AccentBrush}" />
+                        <TextBlock Classes="desc" Text="{Binding ImageCacheStats}" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                        Content="{Binding L[Common_Clear]}"
+                        Command="{Binding ClearImageCacheCommand}"
+                        VerticalAlignment="Center" HorizontalAlignment="Right" />
+                </Grid>
+
+                <!-- ── Audio cache ── -->
+                <Grid ColumnDefinitions="*, 140">
+                    <StackPanel>
+                        <TextBlock Classes="label" Text="{Binding L[Settings_AudioCache]}" />
+                        <ProgressBar Value="{Binding AudioCacheUsagePercent}"
+                            Maximum="1" Height="6" Margin="0,8,0,8"
+                            Foreground="{DynamicResource SystemInfoBlueBrush}" />
+                        <TextBlock Classes="desc" Text="{Binding AudioCacheStats}" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                        Content="{Binding L[Common_Clear]}"
+                        Command="{Binding ClearAudioCacheCommand}"
+                        VerticalAlignment="Center" HorizontalAlignment="Right" />
+                </Grid>
+
+                <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                <!-- ── RAM bitmap cache ── -->
+                <StackPanel Spacing="12">
+                    <Grid ColumnDefinitions="*, Auto">
+                        <StackPanel>
+                            <TextBlock Classes="label" Text="{Binding L[Settings_RamCache]}" />
+                            <TextBlock Classes="desc" Text="{Binding L[Settings_RamCacheDesc]}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding ImageCachePresets}"
+                            SelectedItem="{Binding SelectedImageCachePreset}"
+                            PlaceholderText="{Binding L[Theme_Custom]}"
+                            MinWidth="140" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*, 60">
+                        <Slider Minimum="10" Maximum="200" TickFrequency="10"
+                            IsSnapToTickEnabled="True"
+                            Value="{Binding MaxBitmapCacheItems}"
+                            Margin="0,0,12,0" />
+                        <TextBlock Grid.Column="1" Classes="value-label"
+                            Text="{Binding MaxBitmapCacheItems}" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- ── Auto-save ── -->
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <TextBlock Classes="label" Text="{Binding L[Settings_AutoSaveDownloads]}" />
+                        <TextBlock Classes="desc" Text="{Binding L[Settings_AutoSaveDownloadsDesc]}" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" IsChecked="{Binding AutoSaveToDownloads}" />
+                </Grid>
+
+                <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                <!-- ── Limits ── -->
+                <StackPanel Spacing="16">
+                    <TextBlock Classes="label" Text="{Binding L[Settings_Limits]}" />
+
+                    <Grid ColumnDefinitions="120, *, 70">
+                        <TextBlock Text="{Binding L[Settings_DownloadsLimit]}"
+                            VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" Minimum="500" Maximum="20000"
+                            Value="{Binding DownloadedTracksLimitMb}"
+                            Margin="12,0" />
+                        <TextBlock Grid.Column="2" Classes="value-label"
+                            Text="{Binding DownloadedTracksLimitMb,
+                                              StringFormat='{}{0} MB'}" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="120, *, 70">
+                        <TextBlock Text="{Binding L[Settings_ImagesLimit]}"
+                            VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" Minimum="100" Maximum="2000"
+                            Value="{Binding ImageCacheLimitMb}"
+                            Margin="12,0" />
+                        <TextBlock Grid.Column="2" Classes="value-label"
+                            Text="{Binding ImageCacheLimitMb,
+                                              StringFormat='{}{0} MB'}" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="120, *, 70">
+                        <TextBlock Text="{Binding L[Settings_AudioLimit]}"
+                            VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" Minimum="500" Maximum="10000"
+                            Value="{Binding AudioCacheLimitMb}"
+                            Margin="12,0" />
+                        <TextBlock Grid.Column="2" Classes="value-label"
+                            Text="{Binding AudioCacheLimitMb,
+                                              StringFormat='{}{0} MB'}" />
+                    </Grid>
+                </StackPanel>
+
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

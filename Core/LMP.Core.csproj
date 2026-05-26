@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>LMP.Core</AssemblyName>
+    <RootNamespace>LMP.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package Versions">
+    <EfCoreVersion>10.0.2</EfCoreVersion>
+    <MsExtVersion>10.0.2</MsExtVersion>
+    <ReactiveUIFodyVersion>19.5.41</ReactiveUIFodyVersion>
+    <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
+    <AvaloniaVersion>12.0.3</AvaloniaVersion>
+    <AsyncImageLoaderVersion>3.8.0</AsyncImageLoaderVersion>
+    <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
+  </PropertyGroup>
+
+  <ItemGroup Label="UI Core Dependencies">
+    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="AsyncImageLoader.Avalonia" Version="$(AsyncImageLoaderVersion)" />
+    <PackageReference Include="SkiaSharp" Version="$(SkiaSharpVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Label="Entity Framework">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreVersion)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="$(EfCoreVersion)">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Label="MVVM">
+    <PackageReference Include="ReactiveUI" Version="23.1.8" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+    <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Label="Microsoft Extensions">
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MsExtVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Label="Audio">
+    <PackageReference Include="NAudio" Version="2.3.0" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Scripting">
+    <PackageReference Include="Acornima" Version="1.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpJaad.AAC\SharpJaad.AAC.csproj" />
+  </ItemGroup>
+
+</Project>

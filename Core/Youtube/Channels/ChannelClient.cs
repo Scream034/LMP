@@ -6,7 +6,7 @@ using LMP.Core.Youtube.Bridge;
 
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Playlists;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
 
 namespace LMP.Core.Youtube.Channels;
 

@@ -12,13 +12,14 @@ using LMP.Core.Youtube.Search;
 using LMP.Core.Youtube.Videos;
 using LMP.Core.Youtube.Videos.Streams;
 using LMP.Core.Youtube.Utils;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Audio;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
+using LMP.Core.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LMP.Core.Services;
@@ -33,6 +34,7 @@ public partial class YoutubeProvider : IDisposable
     private readonly TrackRegistry _trackRegistry;
     public readonly CookieAuthService AuthService = null!;
     private readonly LibraryService? _libraryService;
+    private readonly YoutubeUserDataService _userDataService;
     private readonly TimeSpan _streamCacheLifetime = TimeSpan.FromHours(DefaultCacheLifetimeHours);
 
     private readonly ConcurrentDictionary<string, StreamCacheEntry> _streamCache =
@@ -81,13 +83,15 @@ public partial class YoutubeProvider : IDisposable
         LibraryService? libraryService,
         CookieAuthService cookieAuth,
         NTokenDecryptor nTokenDecryptor,
-        SigCipherDecryptor sigCipherDecryptor)
+        SigCipherDecryptor sigCipherDecryptor,
+        YoutubeUserDataService userDataService)
     {
         _trackRegistry = trackRegistry;
         _libraryService = libraryService;
         AuthService = cookieAuth;
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
+        _userDataService = userDataService;
 
         _nTokenDecryptor.OnComplexDecryptionStarted += HandleNTokenDecryptionStarted;
 
@@ -1599,10 +1603,9 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
-    public static async Task<List<Playlist>> GetUserPlaylistsByAuthAsync()
+    public async Task<List<Playlist>> GetUserPlaylistsByAuthAsync()
     {
-        var userDataService = Program.Services.GetRequiredService<YoutubeUserDataService>();
-        return await userDataService.GetMyPlaylistsAsync();
+        return await _userDataService.GetMyPlaylistsAsync();
     }
 
     public async Task<Playlist?> ImportPlaylistAsync(

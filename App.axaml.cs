@@ -3,7 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
-using LMP.Features.Shell;
+using LMP.UI.Features.Shell;
 using LMP.Core.Services;
 using LMP.Core.Models;
 using AsyncImageLoader;
@@ -35,11 +35,11 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             // ═══ ЭТАП 1: Тема (мгновенно) ═══
-            var themeManager = Program.Services.GetRequiredService<ThemeManagerService>();
+            var themeManager = AppEntry.Services.GetRequiredService<ThemeManagerService>();
             themeManager.LoadAndApplyThemeOnStartup();
 
             // ═══ ЭТАП 2: Локализация (мгновенно) ═══
-            var bootstrap = Program.Services.GetRequiredService<BootstrapSettings>();
+            var bootstrap = AppEntry.Services.GetRequiredService<BootstrapSettings>();
             LocalizationService.Instance.Initialize(bootstrap.LanguageCode);
             Log.Info($"Localization: {bootstrap.LanguageCode}");
 
@@ -94,7 +94,7 @@ public partial class App : Application
             // ─── Audio Cache ───
             _splash?.UpdateStatus(L["Splash_InitAudioCache"]);
             var audioCacheManager = await Task.Run(() =>
-                Program.Services.GetRequiredService<AudioCacheManager>());
+                AppEntry.Services.GetRequiredService<AudioCacheManager>());
             AudioSourceFactory.InitializeGlobalCache(audioCacheManager);
             _splash?.SetProgress(20);
 
@@ -105,7 +105,7 @@ public partial class App : Application
 
             // ─── Library Service ───
             _splash?.UpdateStatus(L["Splash_LoadingLibrary"]);
-            var library = Program.Services.GetRequiredService<LibraryService>();
+            var library = AppEntry.Services.GetRequiredService<LibraryService>();
             await Task.Run(async () => await library.InitializeAsync());
             _splash?.SetProgress(45);
 
@@ -113,11 +113,11 @@ public partial class App : Application
             // Теперь Settings загружены из DB — перечитываем.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var audio = Program.Services.GetRequiredService<AudioEngine>();
+                var audio = AppEntry.Services.GetRequiredService<AudioEngine>();
                 audio.ShuffleEnabled = library.Settings.ShuffleEnabled;
                 audio.RepeatMode = library.Settings.RepeatMode;
 
-                var playerControl = Program.Services.GetRequiredService<PlayerControlService>();
+                var playerControl = AppEntry.Services.GetRequiredService<PlayerControlService>();
                 playerControl.ForceSync(); // уже существующий метод — синхронизирует все subjects из AudioEngine
             });
 
@@ -141,20 +141,20 @@ public partial class App : Application
             _splash?.SetProgress(50);
 
             // ═══ КРИТИЧНО: NotificationService после LibraryService ═══
-            var notifications = Program.Services.GetRequiredService<NotificationService>();
+            var notifications = AppEntry.Services.GetRequiredService<NotificationService>();
             await notifications.InitializeAsync();
             Log.Info("[Startup] NotificationService history loaded");
             _splash?.SetProgress(55);
 
             // ═══ PlaybackErrorOrchestrator после NotificationService ═══
-            var orchestrator = Program.Services.GetRequiredService<PlaybackErrorOrchestrator>();
+            var orchestrator = AppEntry.Services.GetRequiredService<PlaybackErrorOrchestrator>();
             Log.Info("[Startup] PlaybackErrorOrchestrator ready");
             _splash?.SetProgress(60);
 
             // ─── Image Cache ───
             _splash?.UpdateStatus(L["Splash_PreparingImages"]);
             var imageCache = await Task.Run(() =>
-                Program.Services.GetRequiredService<ImageCacheService>());
+                AppEntry.Services.GetRequiredService<ImageCacheService>());
 
             // Создаём loader только один раз, не дублируем.
             // Старый loader из splash (если был установлен) диспозим.
@@ -167,8 +167,8 @@ public partial class App : Application
 
             // ─── YouTube Provider ───
             _splash?.UpdateStatus(L["Splash_ConnectingYouTube"]);
-            var youtube = Program.Services.GetRequiredService<YoutubeProvider>();
-            await Task.Run(async () => await youtube.InitializeAsync());
+            var youtube = AppEntry.Services.GetRequiredService<Lazy<YoutubeProvider>>();
+            await Task.Run(async () => await youtube.Value.InitializeAsync());
             _splash?.SetProgress(80);
 
             // ─── Create Main Window ───
@@ -176,7 +176,7 @@ public partial class App : Application
             MainWindow? mainWindow = null;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var mainWindowVM = Program.Services.GetRequiredService<MainWindowViewModel>();
+                var mainWindowVM = AppEntry.Services.GetRequiredService<MainWindowViewModel>();
                 mainWindow = new MainWindow { DataContext = mainWindowVM };
             });
             _splash?.SetProgress(93);
@@ -243,7 +243,7 @@ public partial class App : Application
                 mainWindow?.KeyDown += (s, e) =>
                     {
                         if (e.Key == Avalonia.Input.Key.F9)
-                            new Features.Debug.DebugWindow().Show();
+                            new UI.Features.Debug.DebugWindow().Show();
 
                         if (e.Key == Avalonia.Input.Key.F10)
                             _ = Task.Run(ManualTests.RunAllAsync);

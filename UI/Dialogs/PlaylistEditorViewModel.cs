@@ -335,7 +335,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         try
         {
             var youtube = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
-                .GetRequiredService<YoutubeProvider>(Program.Services);
+                .GetRequiredService<Lazy<YoutubeProvider>>(AppEntry.Services);
 
             byte[] imageData;
             string mimeType = "image/jpeg";
@@ -389,7 +389,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
                 return;
             }
 
-            var success = await youtube.UploadPlaylistThumbnailAsync(
+            var success = await youtube.Value.UploadPlaylistThumbnailAsync(
                 _originalPlaylist.YoutubeId, imageData, mimeType);
 
             if (success)
@@ -460,7 +460,7 @@ public sealed class PlaylistEditorViewModel : ViewModelBase
         {
             var dominantColorService = Microsoft.Extensions.DependencyInjection
                 .ServiceProviderServiceExtensions
-                .GetRequiredService<DominantColorService>(Program.Services);
+                .GetRequiredService<DominantColorService>(AppEntry.Services);
 
             var color = await dominantColorService.GetDominantColorAsync(ThumbnailUrl, ct);
 

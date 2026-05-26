@@ -1,6 +1,7 @@
 using System.Xml.Linq;
 using LMP.Core.Youtube.Utils;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
+using LMP.Core.Helpers;
 
 namespace LMP.Core.Youtube.Bridge;
 

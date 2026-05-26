@@ -1,6 +1,6 @@
 ﻿using LMP.Core.Models;
 using LMP.Core.Youtube.Playlists;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
 
 namespace LMP.Core.Services;
 
@@ -10,12 +10,19 @@ namespace LMP.Core.Services;
 /// </summary>
 public partial class YoutubeUserDataService
 {
-    private readonly YoutubeProvider _provider;
+    private readonly Lazy<YoutubeProvider> _youtubeLazy;
     private readonly CookieAuthService _auth;
+    
+    private YoutubeProvider Provider => _youtubeLazy.Value;
 
-    public YoutubeUserDataService(YoutubeProvider provider, CookieAuthService auth)
+    /// <summary>
+    /// Инициализирует новый экземпляр службы с ленивой зависимостью на провайдер.
+    /// </summary>
+    public YoutubeUserDataService(
+        Lazy<YoutubeProvider> youtubeLazy, // Разрывает циклическую зависимость в DI
+        CookieAuthService auth)
     {
-        _provider = provider;
+        _youtubeLazy = youtubeLazy;
         _auth = auth;
     }
 
@@ -47,7 +54,7 @@ public partial class YoutubeUserDataService
                     Log.Info("[Sync] Fetching Music Likes (LM) from YouTube Music...");
                     try
                     {
-                        likedTracks = await _provider.GetClient().Music.GetLikedTracksAsync();
+                        likedTracks = await Provider.GetClient().Music.GetLikedTracksAsync();
                         Log.Info($"[Sync] Got {likedTracks.Count} music likes from LM.");
                     }
                     catch (Exception ex)
@@ -91,7 +98,7 @@ public partial class YoutubeUserDataService
 
     private async Task<List<TrackInfo>> GetAllLikedVideosAsync()
     {
-        return await _provider.GetClient().Playlists
+        return await Provider.GetClient().Playlists
             .GetVideosAsync(new PlaylistId("LL"))
             .TakeAsync(1000)
             .ToListAsync();
@@ -103,7 +110,7 @@ public partial class YoutubeUserDataService
 
     public async Task RateVideoAsync(string videoId, string rating)
     {
-        await _provider.LikeTrackAsync(videoId, rating == "like");
+        await Provider.LikeTrackAsync(videoId, rating == "like");
     }
 
     #endregion
@@ -114,18 +121,18 @@ public partial class YoutubeUserDataService
     {
         // Description is no longer supported via WEB client mutations.
         // Title-only creation via PlaylistMutationController.
-        return await _provider.CreatePlaylistAsync(title)
+        return await Provider.CreatePlaylistAsync(title)
             ?? throw new InvalidOperationException("YouTube API returned null playlist ID.");
     }
 
     public async Task DeletePlaylistAsync(string youtubePlaylistId)
     {
-        await _provider.DeletePlaylistAsync(youtubePlaylistId);
+        await Provider.DeletePlaylistAsync(youtubePlaylistId);
     }
 
     public async Task AddTrackToPlaylistAsync(string youtubePlaylistId, string videoId)
     {
-        await _provider.AddToPlaylistAsync(youtubePlaylistId, videoId);
+        await Provider.AddToPlaylistAsync(youtubePlaylistId, videoId);
     }
 
     #endregion
@@ -138,7 +145,7 @@ public partial class YoutubeUserDataService
 
         try
         {
-            var json = await _provider.GetClient().Music.GetAccountMenuAsync();
+            var json = await Provider.GetClient().Music.GetAccountMenuAsync();
 
             var header = json.GetPropertyOrNull("actions")
                 ?.EnumerateArrayOrNull()
@@ -191,7 +198,7 @@ public partial class YoutubeUserDataService
 
         try
         {
-            return await _provider.GetClient().Music.GetLibraryPlaylistsAsync();
+            return await Provider.GetClient().Music.GetLibraryPlaylistsAsync();
         }
         catch (Exception ex)
         {

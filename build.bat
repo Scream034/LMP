@@ -50,20 +50,20 @@ echo Available: debug ^| optimized ^| release ^| publish ^| restore ^| clean
 goto :END
 
 :RESTORE
-echo Performing full restore...
-dotnet restore --force --force-evaluate
+echo Performing full restore of the solution...
+dotnet restore LMP.sln --force --force-evaluate
 goto :SUCCESS
 
 :DEBUG
-echo Building Debug...
-dotnet build LMP.csproj -c Debug ^
+echo Building Debug (Full Solution)...
+dotnet build LMP.sln -c Debug ^
     -p:Version=!VERSION! ^
     -p:InformationalVersion=!FULL_VERSION!
 goto :CHECK
 
 :OPTIMIZED
-echo Building Optimized Debug...
-dotnet build LMP.csproj -c Debug ^
+echo Building Optimized Debug (Full Solution)...
+dotnet build LMP.sln -c Debug ^
     -p:Version=!VERSION! ^
     -p:InformationalVersion=!FULL_VERSION!-opt ^
     -p:Optimize=true ^
@@ -80,8 +80,8 @@ if %ERRORLEVEL% NEQ 0 (
     echo.
 )
 
-echo Building Release...
-dotnet build LMP.csproj -c Release ^
+echo Building Release (Full Solution)...
+dotnet build LMP.sln -c Release ^
     -p:Version=!VERSION! ^
     -p:DebugType=None ^
     -p:DebugSymbols=false
@@ -116,11 +116,21 @@ echo ✓ Publish completed: ./publish
 goto :END
 
 :CLEAN
-echo Cleaning project...
-if exist "bin" rmdir /s /q "bin"
-if exist "obj" rmdir /s /q "obj"
+echo Cleaning all project folders recursively...
+
+:: Очистка папки публикации и архивов в корне
 if exist "publish" rmdir /s /q "publish"
 del /q "*.7z" 2>nul
+
+:: Рекурсивный поиск и безопасное удаление всех вложенных папок bin и obj
+echo Finding and removing all nested bin and obj folders...
+for /f "delims=" %%i in ('dir /b /s /ad bin obj 2^>nul') do (
+    if exist "%%i" (
+        echo Deleting: %%i
+        rmdir /s /q "%%i"
+    )
+)
+
 echo ✓ Clean complete!
 goto :END
 

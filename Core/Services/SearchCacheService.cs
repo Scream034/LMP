@@ -16,6 +16,7 @@ public class CachedSearchResult
 
 public class SearchCacheService
 {
+    private readonly LibraryService _libraryService;
     private readonly int _maxCacheFiles = 50;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
@@ -24,15 +25,16 @@ public class SearchCacheService
     private readonly LinkedList<string> _lruOrder = new();
     private const int MaxMemoryCacheItems = 15;
 
-    private LibraryService LibService => field ??= Program.Services.GetRequiredService<LibraryService>();
+    
 
     private TimeSpan CacheTtl => TimeSpan.FromMinutes(
-        LibService.Settings.SearchCacheTtlMinutes > 0
-            ? LibService.Settings.SearchCacheTtlMinutes
+        _libraryService.Settings.SearchCacheTtlMinutes > 0
+            ? _libraryService.Settings.SearchCacheTtlMinutes
             : 60);
 
-    public SearchCacheService()
+    public SearchCacheService(LibraryService libraryService)
     {
+        _libraryService = libraryService;
         _ = Task.Run(CleanupOldCacheAsync);
     }
 

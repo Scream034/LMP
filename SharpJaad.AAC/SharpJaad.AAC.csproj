@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>LMP.Decoders.AAC</AssemblyName>
+    <RootNamespace>SharpJaad.AAC</RootNamespace>
+    <!-- Unsafe blocks для эффективного побитового сдвига и работы с указателями в аудио-декодере -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- Декодер SharpJaad написан на чистом C# и не требует внешних NuGet-пакетов -->
+
+</Project>

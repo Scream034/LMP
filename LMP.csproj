@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <!--      ВЕРСИИ ПАКЕТОВ        -->
   <PropertyGroup Label="Package Versions">
@@ -122,118 +122,71 @@
     <DebugType>none</DebugType>
     <Optimize>true</Optimize>
 
-    <DefaultItemExcludes>$(DefaultItemExcludes);Features\Debug\**;Tests\**;Tools\**</DefaultItemExcludes>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
+    <DefaultItemExcludes>$(DefaultItemExcludes);UI\Features\Debug\**;Tests\**;Tools\**</DefaultItemExcludes>
   </PropertyGroup>
 
-  <!--   PLATFORM DEFINES-->
-  <!-- Используется для условной компиляции Windows-специфичного кода:
-       TrayVolumeHook, глобальные хоткеи, WinAPI interop -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
-  <!--  ФАЙЛЫ     -->
+  <!-- Исключаем папки суб-проектов. Всё остальное в корне собирается автоматически! -->
+  <ItemGroup>
+    <Compile Remove="Core\**" />
+    <Compile Remove="SharpJaad.AAC\**" />
+    <None Include="Core\**" />
+    <None Include="SharpJaad.AAC\**" />
+  </ItemGroup>
+
   <ItemGroup Label="File Includes/Excludes">
-    <Folder Include="Models\" />
-
-    <!-- Все ресурсы Assets включаем как Avalonia-ресурсы -->
     <AvaloniaResource Include="Assets\**" />
-
-    <!-- Иконка приложения должна быть явно помечена как Content -->
     <Content Include="Assets/app.ico" />
   </ItemGroup>
 
-  <!--  ПАКЕТЫ    -->
-
-  <!-- Avalonia Core -->
   <ItemGroup Label="Avalonia Core">
     <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Desktop" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
-
-    <!--
-      ReactiveUI.Avalonia — официальная замена Avalonia.ReactiveUI.
-      Старый пакет Avalonia.ReactiveUI помечен deprecated (legacy).
-    -->
     <PackageReference Include="ReactiveUI.Avalonia" Version="$(ReactiveUIAvaloniaVersion)" />
-
-    <!-- Dev-only: визуальное дерево + инспектор свойств -->
-    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1"
+      Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
-  <!-- Avalonia Hot Reload -->
+  <ItemGroup>
+    <None Include="quickjs_bridge.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <!-- Указываем компилятору упаковать DLL внутрь SingleFile EXE -->
+      <ExcludeFromSingleFile>false</ExcludeFromSingleFile>
+    </None>
+  </ItemGroup>
+
   <ItemGroup Label="Hot Reload" Condition="'$(Configuration)' == 'Debug'">
     <PackageReference Include="HotAvalonia" Version="$(HotAvaloniaVersion)" PrivateAssets="All" />
   </ItemGroup>
 
   <ItemGroup Label="Avalonia Community">
-    <!--
-        Avalonia.Controls.ItemsRepeater — внешний пакет нужен для PlaylistCoverPicker
-        (UniformGridLayout для сетки обложек). Пакет совместим с Avalonia 12.x.
-        ItemsRepeater из этого пакета отличается от встроенного ItemsControl.
-    -->
     <PackageReference Include="Avalonia.Controls.ItemsRepeater" Version="12.0.0" />
     <PackageReference Include="Xaml.Behaviors.Avalonia" Version="12.0.0" />
   </ItemGroup>
 
-  <!-- Entity Framework Core -->
-  <ItemGroup Label="Entity Framework">
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="$(EfCoreVersion)" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="$(EfCoreVersion)" />
-
-    <!--
-      Design-time инструменты (миграции, скаффолдинг).
-      IncludeAssets/PrivateAssets гарантируют, что тулинг не попадёт в runtime.
-    -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="$(EfCoreVersion)">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
-  </ItemGroup>
-
-  <!-- MVVM + Reactive -->
   <ItemGroup Label="MVVM">
-    <!-- Source generator: [ObservableProperty], [RelayCommand] и т.д. -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
-
-    <!-- Fody-weaver: авто-генерация RaisePropertyChanged для [Reactive]-свойств -->
     <PackageReference Include="ReactiveUI.Fody" Version="$(ReactiveUIFodyVersion)" />
   </ItemGroup>
 
-  <!-- Microsoft Extensions -->
-  <ItemGroup Label="Microsoft Extensions">
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MsExtVersion)" />
-  </ItemGroup>
-
-  <!-- Аудио-пайплайн -->
-  <!--
-    NAudio: PCM-вывод через WASAPI/WinMM, управление буферами.
-    Concentus: декодер Opus в чистом C# (без нативных зависимостей).
-  -->
-  <ItemGroup Label="Audio">
-    <PackageReference Include="NAudio" Version="2.3.0" />
-    <PackageReference Include="Concentus" Version="2.2.2" />
-  </ItemGroup>
-
-  <!-- UI Утилиты -->
   <ItemGroup Label="UI Utilities">
-    <!-- 3.8.0 — Avalonia 12 support -->
     <PackageReference Include="AsyncImageLoader.Avalonia" Version="$(AsyncImageLoaderVersion)" />
   </ItemGroup>
 
-  <!-- Скриптование / YT-байпас -->
-  <ItemGroup Label="Scripting">
-    <PackageReference Include="Acornima" Version="1.6.2" />
-  </ItemGroup>
-
-  <!-- Linux D-Bus (системные уведомления, MPRIS) -->
-  <!--
-    Версия 0.21.3 совместима с Avalonia 11.3.x (FreeDesktop требует >= 0.21.2).
-    При миграции на Avalonia 12.x нужно обновить до 0.92.0+.
-  -->
   <ItemGroup Label="Linux Interop">
     <PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Core\LMP.Core.csproj" />
   </ItemGroup>
 
 </Project>

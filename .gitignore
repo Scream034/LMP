@@ -49,3 +49,6 @@ Desktop.ini
 ## --- [ Логи и временные файлы ] ---
 *.log
 *.tmp
+
+FodyWeavers.xsd
+packages.lock.json

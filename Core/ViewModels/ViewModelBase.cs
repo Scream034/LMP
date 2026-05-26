@@ -1,4 +1,7 @@
 ﻿using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Disposables.Fluent;
+using System.Linq;
 
 using LMP.Core.Services;
 using ReactiveUI;

@@ -1,0 +1,93 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.UI.Features.Player"
+    xmlns:controls="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Features.Player.QueueView"
+    x:DataType="vm:QueueViewModel">
+
+    <Grid>
+        <!-- Empty State -->
+        <StackPanel IsVisible="{Binding IsEmpty}" HorizontalAlignment="Center"
+            VerticalAlignment="Center" Spacing="16">
+            <!-- Empty State: иконка пустой очереди -->
+            <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                Width="64" Height="64"
+                Foreground="{DynamicResource TextMutedBrush}"
+                HorizontalAlignment="Center" />
+            <StackPanel HorizontalAlignment="Center">
+                <TextBlock Text="{Binding L[Queue_Empty]}" FontSize="20" FontWeight="Bold"
+                    Foreground="{DynamicResource TextPrimaryBrush}" TextAlignment="Center" />
+                <TextBlock Text="{Binding L[Queue_EmptySubtitle]}" FontSize="14"
+                    Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center"
+                    Margin="0,4,0,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Content -->
+        <Grid RowDefinitions="Auto, *" IsVisible="{Binding !IsEmpty}">
+
+            <!-- HEADER -->
+            <StackPanel Grid.Row="0" Margin="24,24,24,8" Spacing="12">
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackPanel>
+                        <TextBlock Text="{Binding L[Queue_Title]}" FontSize="24"
+                            FontWeight="Bold" />
+                        <TextBlock Text="{Binding L[Queue_NowPlaying]}" FontSize="12"
+                            Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                        <!-- Header actions -->
+                        <Button Command="{Binding ShuffleQueueCommand}" Classes="icon-btn"
+                            ToolTip.Tip="{Binding L[Queue_Shuffle]}">
+                            <PathIcon Data="{StaticResource Icon.Shuffle}" Width="20" Height="20" />
+                        </Button>
+                        <Button Command="{Binding DownloadAllCommand}" Classes="icon-btn"
+                            ToolTip.Tip="{Binding L[Queue_DownloadAll]}">
+                            <PathIcon Data="{StaticResource Icon.Download}" Width="20"
+                                Height="20" />
+                        </Button>
+                        <Button Command="{Binding SaveQueueToPlaylistCommand}" Classes="icon-btn"
+                            ToolTip.Tip="{Binding L[Queue_SaveToPlaylist]}">
+                            <PathIcon Data="{StaticResource Icon.ContentSave}" Width="20"
+                                Height="20" />
+                        </Button>
+                        <Button Command="{Binding ClearQueueCommand}" Classes="icon-btn"
+                            ToolTip.Tip="{Binding L[Queue_Clear]}">
+                            <PathIcon Data="{StaticResource Icon.Broom}" Width="20" Height="20" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <controls:FilterBar
+                    FilterText="{Binding FilterQuery}"
+                    Watermark="{Binding L[Search_LocalFilterTitle]}"
+                    Compact="True" />
+            </StackPanel>
+
+            <!-- Filter No Results -->
+            <StackPanel Grid.Row="1"
+                IsVisible="{Binding IsFilterEmpty}"
+                HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
+                <PathIcon Data="{StaticResource Icon.MagnifyClose}"
+                    Width="48" Height="48"
+                    Foreground="{DynamicResource TextMutedBrush}"
+                    HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding L[Search_NoResults]}" FontSize="16"
+                    Foreground="{DynamicResource TextSecondaryBrush}" TextAlignment="Center" />
+            </StackPanel>
+
+            <!-- List — ScrollViewer здесь, не внутри TrackListControl -->
+            <ScrollViewer Grid.Row="1" Margin="24,0"
+                IsVisible="{Binding !IsFilterEmpty}">
+                <controls:TrackListControl
+                    Items="{Binding QueueItems}"
+                    IsLoading="False"
+                    IsLoadingMore="False"
+                    ReachedEnd="True"
+                    IsQueueContext="True"
+                    EnableReordering="{Binding CanReorderItems}"
+                    MoveItemCommand="{Binding MoveItemCommand}" />
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

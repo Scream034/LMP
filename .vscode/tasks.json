@@ -9,7 +9,11 @@
                 "cwd": "${workspaceFolder}",
                 "shell": {
                     "executable": "C:\\Windows\\System32\\cmd.exe",
-                    "args": ["/d", "/c", "chcp 65001 >nul &&"]
+                    "args": [
+                        "/d",
+                        "/c",
+                        "chcp 65001 >nul &&"
+                    ]
                 }
             },
             "group": {
@@ -31,7 +35,11 @@
                 "cwd": "${workspaceFolder}",
                 "shell": {
                     "executable": "C:\\Windows\\System32\\cmd.exe",
-                    "args": ["/d", "/c", "chcp 65001 >nul &&"]
+                    "args": [
+                        "/d",
+                        "/c",
+                        "chcp 65001 >nul &&"
+                    ]
                 }
             },
             "group": "build",
@@ -50,7 +58,11 @@
                 "cwd": "${workspaceFolder}",
                 "shell": {
                     "executable": "C:\\Windows\\System32\\cmd.exe",
-                    "args": ["/d", "/c", "chcp 65001 >nul &&"]
+                    "args": [
+                        "/d",
+                        "/c",
+                        "chcp 65001 >nul &&"
+                    ]
                 }
             },
             "group": "build",
@@ -62,13 +74,61 @@
             }
         },
         {
+            "label": "publish: single-file",
+            "type": "shell",
+            "command": "${workspaceFolder}\\build.bat publish nopause",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\cmd.exe",
+                    "args": [
+                        "/d",
+                        "/c",
+                        "chcp 65001 >nul &&"
+                    ]
+                }
+            },
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            }
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "${workspaceFolder}\\build.bat clean nopause",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\cmd.exe",
+                    "args": [
+                        "/d",
+                        "/c",
+                        "chcp 65001 >nul &&"
+                    ]
+                }
+            },
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            }
+        },
+        {
             "label": "check: dead events",
             "type": "shell",
             "command": "powershell.exe",
             "args": [
                 "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-File", "${workspaceFolder}\\Tools\\find-dead-events.ps1"
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\Tools\\find-dead-events.ps1"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -88,9 +148,12 @@
             "command": "powershell.exe",
             "args": [
                 "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-File", "${workspaceFolder}\\Tools\\find-dead-code.ps1",
-                "-Project", "${workspaceFolder}\\LMP.csproj"
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\Tools\\find-dead-code.ps1",
+                "-Project",
+                "${workspaceFolder}\\LMP.csproj"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -110,8 +173,10 @@
             "command": "powershell.exe",
             "args": [
                 "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-File", "${workspaceFolder}\\Tools\\find-dead-l10n.ps1"
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\Tools\\find-dead-l10n.ps1"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -130,9 +195,12 @@
             "type": "shell",
             "command": "dotnet",
             "args": [
-                "watch", "run",
-                "--project", "LMP.csproj",
-                "--configuration", "Debug"
+                "watch",
+                "run",
+                "--project",
+                "LMP.csproj",
+                "--configuration",
+                "Debug"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

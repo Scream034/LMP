@@ -1,0 +1,171 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.UI.Features.Search"
+    xmlns:i="using:Avalonia.Xaml.Interactivity"
+    xmlns:b="using:LMP.UI.Behaviors"
+    xmlns:controls="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Features.Search.SearchView"
+    x:DataType="vm:SearchViewModel"
+    x:Name="SearchRoot">
+
+    <Grid RowDefinitions="Auto, *">
+
+        <!-- ═══ HEADER ═══ -->
+        <StackPanel Grid.Row="0" Margin="24,20,24,8" Spacing="12">
+
+            <Grid ColumnDefinitions="*, Auto">
+                <TextBox Classes="search-box"
+                    PlaceholderText="{Binding L[Search_Placeholder]}"
+                    Text="{Binding SearchQuery}"
+                    CornerRadius="20" Padding="15,10">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding SearchCommand}" />
+                    </TextBox.KeyBindings>
+                    <TextBox.InnerLeftContent>
+                        <!-- Icon.Search визуально идентичен Magnify из MDI -->
+                        <PathIcon Data="{StaticResource Icon.Search}"
+                            Width="18" Height="18"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            Margin="8,0,0,0" />
+                    </TextBox.InnerLeftContent>
+                    <TextBox.InnerRightContent>
+                        <Button Command="{Binding SearchCommand}" Classes="icon-btn"
+                            Margin="0,0,4,0" Height="30" Width="30"
+                            ToolTip.Tip="{Binding L[Search_Execute]}">
+                            <PathIcon Data="{StaticResource Icon.ArrowRight}" Width="18" Height="18" />
+                        </Button>
+                    </TextBox.InnerRightContent>
+                </TextBox>
+
+                <!-- Source selector buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="12,0,0,0">
+                    <Button Classes="icon-btn"
+                        Classes.active="{Binding Source,
+                            Converter={StaticResource EnumToBool},
+                            ConverterParameter=YouTubeMusic}"
+                        Command="{Binding SetSourceCommand}"
+                        CommandParameter="YouTubeMusic"
+                        ToolTip.Tip="YouTube Music" Width="36" Height="36">
+                        <PathIcon Data="{StaticResource Icon.MusicCircle}" Width="18" Height="18" />
+                    </Button>
+                    <Button Classes="icon-btn"
+                        Classes.active="{Binding Source,
+                            Converter={StaticResource EnumToBool},
+                            ConverterParameter=YouTube}"
+                        Command="{Binding SetSourceCommand}"
+                        CommandParameter="YouTube"
+                        ToolTip.Tip="YouTube" Width="36" Height="36">
+                        <PathIcon Data="{StaticResource Icon.Youtube}" Width="18" Height="18" />
+                    </Button>
+                    <Button Classes="icon-btn"
+                        Classes.active="{Binding Source,
+                            Converter={StaticResource EnumToBool},
+                            ConverterParameter=Local}"
+                        Command="{Binding SetSourceCommand}"
+                        CommandParameter="Local"
+                        ToolTip.Tip="{Binding L[Search_LocalFiles]}" Width="36" Height="36">
+                        <PathIcon Data="{StaticResource Icon.DatabaseSearch}" Width="18" Height="18" />
+                    </Button>
+                    <Border Width="1" Height="20"
+                        Background="{DynamicResource BgHighlightBrush}"
+                        Margin="4,0" VerticalAlignment="Center"
+                        IsVisible="{Binding ShowForceSearchButton}" />
+                    <Button Classes="icon-btn"
+                        Command="{Binding ForceSearchCommand}"
+                        IsVisible="{Binding ShowForceSearchButton}"
+                        ToolTip.Tip="{Binding L[Search_ForceRefresh]}" Width="36" Height="36">
+                        <PathIcon Data="{StaticResource Icon.Refresh}"
+                            Width="18" Height="18"
+                            Foreground="{DynamicResource AccentBrush}" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Spacing="16"
+                IsVisible="{Binding IsOfflineMode}">
+                <!-- Offline mode indicator -->
+                <StackPanel Orientation="Horizontal" Spacing="6" Opacity="0.8">
+                    <PathIcon Data="{StaticResource Icon.WifiOff}"
+                        Width="14" Height="14"
+                        Foreground="{DynamicResource SystemWarnOrangeBrush}" />
+                    <TextBlock Text="{Binding L[Search_OfflineMode]}" FontSize="12"
+                        Foreground="{DynamicResource SystemWarnOrangeBrush}" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- From cache indicator -->
+            <StackPanel Orientation="Horizontal" Spacing="6"
+                IsVisible="{Binding IsFromCache}" Opacity="0.6">
+                <PathIcon Data="{StaticResource Icon.DatabaseSearch}"
+                    Width="14" Height="14"
+                    Foreground="{DynamicResource TextMutedBrush}" />
+                <TextBlock Text="{Binding L[Search_FromCache]}" FontSize="12"
+                    Foreground="{DynamicResource TextMutedBrush}" />
+            </StackPanel>
+
+            <ItemsControl ItemsSource="{Binding RecentSearches}"
+                Margin="0,4,0,0" IsVisible="{Binding !IsOfflineMode}"
+                DataContext="{Binding}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <Border Classes="search-chip" Margin="0,0,6,6">
+                            <Grid ColumnDefinitions="Auto, Auto">
+                                <Button Grid.Column="0" Classes="search-chip-text"
+                                    Content="{Binding}"
+                                    Command="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).HistoryClickCommand}"
+                                    CommandParameter="{Binding}" />
+                                <!-- Recent searches chip close button -->
+                                <Button Grid.Column="1" Classes="search-chip-close"
+                                    Command="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).RemoveHistoryCommand}"
+                                    CommandParameter="{Binding}"
+                                    ToolTip.Tip="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).L[Common_Remove]}">
+                                    <PathIcon Data="{StaticResource Icon.Close}" Width="12"
+                                        Height="12" />
+                                </Button>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <Border
+                IsVisible="{Binding ErrorMessage,
+                Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                Background="{DynamicResource SystemErrorBgBrush}" CornerRadius="8"
+                Padding="12" Margin="0,4,0,0">
+                <!-- Error banner -->
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="{StaticResource Icon.AlertCircle}"
+                        Width="18" Height="18"
+                        Foreground="{DynamicResource SystemErrorBrush}" />
+                    <TextBlock Text="{Binding ErrorMessage}"
+                        Foreground="{DynamicResource SystemErrorBrush}"
+                        VerticalAlignment="Center" FontSize="13" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- ═══ RESULTS LIST ═══ -->
+        <ScrollViewer Grid.Row="1" Margin="24,0">
+            <i:Interaction.Behaviors>
+                <b:InfiniteScrollBehavior
+                    Command="{Binding LoadMoreCommand}"
+                    Threshold="300" />
+            </i:Interaction.Behaviors>
+
+            <controls:TrackListControl
+                Items="{Binding Items}"
+                IsLoading="{Binding IsLoading}"
+                IsLoadingMore="{Binding IsLoadingMore}"
+                IsFetchingFromNetwork="{Binding IsFetchingFromNetwork}"
+                ReachedEnd="{Binding ReachedEnd}"
+                LoadMoreCommand="{Binding LoadMoreCommand}"
+                UseSearchLoader="True" />
+        </ScrollViewer>
+    </Grid>
+</UserControl>

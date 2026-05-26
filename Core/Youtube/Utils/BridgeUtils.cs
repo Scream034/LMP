@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
 
 namespace LMP.Core.Youtube.Utils;
 

@@ -1,33 +1,45 @@
 <Project>
-  <Target Name="SetGitVersionInfo" BeforeTargets="CoreCompile;GetAssemblyVersion" Condition="Exists('.git')">
+  <!-- Таргет для сборки метаданных из Git. 
+       Выполняется как для Debug, так и для Release, но только во время РЕАЛЬНОЙ сборки (не фоновой в
+  редакторе) -->
+  <Target Name="SetGitVersionInfo"
+    BeforeTargets="PrepareForBuild;GetAssemblyVersion;GenerateAssemblyInfo"
+    Condition="Exists('$(MSBuildThisFileDirectory).git') And '$(DesignTimeBuild)' != 'true'">
 
+    <!-- Получаем количество коммитов (номер сборки) -->
     <Exec Command="git rev-list --count HEAD"
-          ConsoleToMSBuild="true"
-          StandardOutputImportance="low"
-          IgnoreExitCode="true"
-          ContinueOnError="true">
+      WorkingDirectory="$(MSBuildThisFileDirectory)"
+      ConsoleToMSBuild="true"
+      StandardOutputImportance="low"
+      IgnoreExitCode="true"
+      ContinueOnError="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
       <Output TaskParameter="ExitCode" PropertyName="GitExitCode" />
     </Exec>
 
+    <!-- Получаем короткий SHA-хэш последнего коммита -->
     <Exec Command="git rev-parse --short=7 HEAD"
-          ConsoleToMSBuild="true"
-          StandardOutputImportance="low"
-          IgnoreExitCode="true"
-          ContinueOnError="true">
+      WorkingDirectory="$(MSBuildThisFileDirectory)"
+      ConsoleToMSBuild="true"
+      StandardOutputImportance="low"
+      IgnoreExitCode="true"
+      ContinueOnError="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitShortHash" />
     </Exec>
 
+    <!-- Обработка резервных значений в случае сбоя Git -->
     <PropertyGroup Condition="'$(GitExitCode)' != '0' OR '$(GitCommitCount)' == ''">
       <GitCommitCount>0</GitCommitCount>
       <GitShortHash>local</GitShortHash>
     </PropertyGroup>
 
+    <!-- Очистка пробелов -->
     <PropertyGroup>
-      <GitCommitCount>$([System.String]::Copy('$(GitCommitCount)').Trim())</GitCommitCount>
-      <GitShortHash>$([System.String]::Copy('$(GitShortHash)').Trim())</GitShortHash>
+      <GitCommitCount>$(GitCommitCount.Trim())</GitCommitCount>
+      <GitShortHash>$(GitShortHash.Trim())</GitShortHash>
     </PropertyGroup>
 
+    <!-- Запись вычисленных версий в свойства сборки -->
     <PropertyGroup>
       <Version>$(VersionPrefix).$(GitCommitCount)</Version>
       <AssemblyVersion>$(VersionPrefix).$(GitCommitCount).0</AssemblyVersion>
@@ -36,17 +48,22 @@
     </PropertyGroup>
 
     <Message Importance="High" Text="══════════════════════════════════════" />
-    <Message Importance="High" Text="[Git] Build #$(GitCommitCount) ($(GitShortHash))" />
+    <Message Importance="High"
+      Text="[Git] Build #$(GitCommitCount) ($(GitShortHash)) успешно внедрен в сборку" />
     <Message Importance="High" Text="══════════════════════════════════════" />
   </Target>
 
-  <Target Name="SetFallbackVersion" BeforeTargets="CoreCompile;GetAssemblyVersion" Condition="!Exists('.git')">
+  <!-- Резервный таргет: срабатывает, если нет Git репозитория или идет фоновая (Design-Time) сборка
+  в редакторе.
+       Предотвращает ложную пересборку FodyTarget при изменении кода. -->
+  <Target Name="SetFallbackVersion"
+    BeforeTargets="PrepareForBuild;GetAssemblyVersion;GenerateAssemblyInfo"
+    Condition="!Exists('$(MSBuildThisFileDirectory).git') Or '$(DesignTimeBuild)' == 'true'">
     <PropertyGroup>
       <Version>$(VersionPrefix).0</Version>
       <AssemblyVersion>$(VersionPrefix).0.0</AssemblyVersion>
       <FileVersion>$(VersionPrefix).0.0</FileVersion>
       <InformationalVersion>$(VersionPrefix).0+local</InformationalVersion>
     </PropertyGroup>
-    <Message Importance="High" Text="[Git] No repository, using fallback version" />
   </Target>
 </Project>

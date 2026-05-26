@@ -5,6 +5,7 @@ using LMP.Core.Audio.Http;
 using LMP.Core.Services;
 using LMP.Core.Youtube.Videos;
 using LMP.Core.Youtube.Videos.Streams;
+using LMP.Core.Helpers;
 using LMP.Tests.Framework;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,7 +30,7 @@ public static class StreamPipelineTests
         Order = 10, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 60)]
     public static async Task TestStreamResolutionAsync(IServiceProvider services)
     {
-        var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
+        var youtube = services.GetRequiredService<Lazy<YoutubeProvider>>().Value.GetClient();
         var videoId = TestVideoIds[0];
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -68,7 +69,7 @@ public static class StreamPipelineTests
         Order = 20, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 90)]
     public static async Task TestMultiVideoAsync(IServiceProvider services)
     {
-        var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
+        var youtube = services.GetRequiredService<Lazy<YoutubeProvider>>().Value.GetClient();
 
         int success = 0;
         int failed = 0;
@@ -126,7 +127,7 @@ public static class StreamPipelineTests
         Order = 30, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 60)]
     public static async Task TestAudioDownloadAsync(IServiceProvider services)
     {
-        var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
+        var youtube = services.GetRequiredService<Lazy<YoutubeProvider>>().Value.GetClient();
         var videoId = TestVideoIds[0];
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -177,7 +178,7 @@ public static class StreamPipelineTests
     {
         Log.Info($"[Test] Full pipeline for {videoId}...");
 
-        var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
+        var youtube = services.GetRequiredService<Lazy<YoutubeProvider>>().Value.GetClient();
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
@@ -229,7 +230,7 @@ public static class StreamPipelineTests
         var targetItag = config.DebugTargetItag;
         var testDownload = config.DebugTestDownload;
 
-        var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
+        var youtube = services.GetRequiredService<Lazy<YoutubeProvider>>().Value.GetClient();
 
         Log.Info("═══════════════════════════════════════════════════════════════");
         Log.Info($"  DEBUG STREAM: {videoId}");
@@ -294,7 +295,7 @@ public static class StreamPipelineTests
     Order = 62, Group = TestGroups.Pipeline, RequiresNetwork = true, TimeoutSeconds = 120)]
     public static async Task CrossTestPhase3Async(IServiceProvider services)
     {
-        var youtube = services.GetRequiredService<YoutubeProvider>().GetClient();
+        var youtube = services.GetRequiredService<Lazy<YoutubeProvider>>().Value.GetClient();
 
         var videoId = TestConfig.Get().Pipeline.DebugVideoId;
 
@@ -361,15 +362,15 @@ public static class StreamPipelineTests
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
-        var testUrlA = Core.Youtube.Utils.UrlEx.SetQueryParameter(rawUrl, "range", "0-1023");
-        testUrlA = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "rn", "1");
+        var testUrlA = UrlEx.SetQueryParameter(rawUrl, "range", "0-1023");
+        testUrlA = UrlEx.SetQueryParameter(testUrlA, "rn", "1");
         await RunTestWithDetails(client, "A. RAW URL (encrypted n)", testUrlA);
 
-        var testUrlB = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlA, "n");
+        var testUrlB = UrlEx.RemoveQueryParameter(testUrlA, "n");
         await RunTestWithDetails(client, "B. RAW URL (n removed)", testUrlB);
 
         Log.Info("\n[4] Decrypting n-token...");
-        var nToken = Core.Youtube.Utils.UrlEx.TryGetQueryParameterValue(rawUrl, "n");
+        var nToken = UrlEx.TryGetQueryParameterValue(rawUrl, "n");
         Log.Info($"  Encrypted n: {nToken}");
 
         if (!string.IsNullOrEmpty(nToken))
@@ -381,14 +382,14 @@ public static class StreamPipelineTests
                 var decryptedN = await decryptor.DecryptAsync(nToken, cts.Token);
                 Log.Info($"  Decrypted n: {decryptedN}");
 
-                var testUrlC = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrlA, "n", decryptedN);
+                var testUrlC = UrlEx.SetQueryParameter(testUrlA, "n", decryptedN);
                 await RunTestWithDetails(client, "C. RAW URL (n decrypted)", testUrlC);
 
                 var testUrlD = testUrlC;
-                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "ump");
-                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "alr");
-                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "srfvp");
-                testUrlD = Core.Youtube.Utils.UrlEx.RemoveQueryParameter(testUrlD, "pot");
+                testUrlD = UrlEx.RemoveQueryParameter(testUrlD, "ump");
+                testUrlD = UrlEx.RemoveQueryParameter(testUrlD, "alr");
+                testUrlD = UrlEx.RemoveQueryParameter(testUrlD, "srfvp");
+                testUrlD = UrlEx.RemoveQueryParameter(testUrlD, "pot");
                 await RunTestWithDetails(client, "D. Processed URL (как StreamClient)", testUrlD);
             }
             catch (Exception ex)
@@ -408,8 +409,8 @@ public static class StreamPipelineTests
 
             if (stream != null)
             {
-                var pipelineUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(stream.Url, "range", "0-1023");
-                pipelineUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(pipelineUrl, "rn", "1");
+                var pipelineUrl = UrlEx.SetQueryParameter(stream.Url, "range", "0-1023");
+                pipelineUrl = UrlEx.SetQueryParameter(pipelineUrl, "rn", "1");
                 await RunTestWithDetails(client, "E. StreamClient pipeline URL", pipelineUrl);
 
                 Log.Info("\n[6] Diff: RAW vs Pipeline URL:");
@@ -426,8 +427,8 @@ public static class StreamPipelineTests
 
     private static void CompareUrls(string rawUrl, string processedUrl)
     {
-        var rawParams = Core.Youtube.Utils.UrlEx.GetQueryParameters(rawUrl);
-        var procParams = Core.Youtube.Utils.UrlEx.GetQueryParameters(processedUrl);
+        var rawParams = UrlEx.GetQueryParameters(rawUrl);
+        var procParams = UrlEx.GetQueryParameters(processedUrl);
 
         var allKeys = rawParams.Keys.Union(procParams.Keys).Order();
         int diffCount = 0;
@@ -455,7 +456,7 @@ public static class StreamPipelineTests
         Log.Info($"  Path: {uri.AbsolutePath}");
         Log.Info($"  URL length: {url.Length} chars");
 
-        var queryParams = Core.Youtube.Utils.UrlEx.GetQueryParameters(url);
+        var queryParams = UrlEx.GetQueryParameters(url);
 
         Log.Info($"\n  Query parameters ({queryParams.Count}):");
 
@@ -524,8 +525,8 @@ public static class StreamPipelineTests
 
     private static async Task TestStreamDownloadAsync(string url, CancellationToken ct)
     {
-        var testUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(url, "range", "0-1023");
-        testUrl = Core.Youtube.Utils.UrlEx.SetQueryParameter(testUrl, "rn", "1");
+        var testUrl = UrlEx.SetQueryParameter(url, "range", "0-1023");
+        testUrl = UrlEx.SetQueryParameter(testUrl, "rn", "1");
 
         using var handler = new HttpClientHandler
         {

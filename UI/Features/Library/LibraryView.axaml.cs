@@ -1,0 +1,11 @@
+﻿using Avalonia.Controls;
+
+namespace LMP.UI.Features.Library;
+
+public partial class LibraryView : UserControl
+{
+    public LibraryView()
+    {
+        InitializeComponent();
+    }
+}

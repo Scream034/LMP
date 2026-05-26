@@ -5,8 +5,9 @@ using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
-using LMP.Core.Youtube.Utils.Extensions;
+using LMP.Core.Helpers.Extensions;
 using LMP.Core.Youtube.Videos.ClosedCaptions;
+using LMP.Core.Helpers;
 
 namespace LMP.Core.Youtube.Videos.Streams;
 

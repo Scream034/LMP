@@ -1,6 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:svm="using:LMP.Features.Shared"
+    xmlns:svm="using:LMP.UI.Features.Shared"
     xmlns:ctrl="using:LMP.UI.Controls"
     xmlns:ir="using:Avalonia.Controls"
     x:Class="LMP.UI.Controls.TrackListControl"

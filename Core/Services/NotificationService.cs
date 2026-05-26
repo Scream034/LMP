@@ -171,8 +171,7 @@ public sealed class NotificationService : ReactiveObject, IDisposable
     public static async Task ShowOsNotificationAsync(
         string title,
         string message,
-        NotificationSeverity severity = NotificationSeverity.Info,
-        CancellationToken ct = default)
+        NotificationSeverity severity = NotificationSeverity.Info)
     {
         await OsNotificationHelper.ShowAsync(title, message, severity);
     }

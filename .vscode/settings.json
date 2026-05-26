@@ -1,14 +1,16 @@
 {
     "files.exclude": {
-        "bin/": true,
-        "obj/": true,
+        "**/bin/": true,
+        "**/obj/": true,
         "publish/": true,
         "publish-dev/": true,
         "**/.git": true,
         "**/.svn": true,
         "**/.hg": true,
         "**/.DS_Store": true,
-        "**/Thumbs.db": true
+        "**/Thumbs.db": true,
+        "FodyWeavers.xsd": true,
+        "packages.lock.json": true
     },
     "[bat]": {
         "files.encoding": "utf8bom"
@@ -17,11 +19,18 @@
     "terminal.integrated.profiles.windows": {
         "Command Prompt": {
             "path": "C:\\Windows\\System32\\cmd.exe",
-            "args": ["/k", "chcp 65001 >nul"]
+            "args": [
+                "/k",
+                "chcp 65001 >nul"
+            ]
         },
         "PowerShell": {
             "source": "PowerShell",
             "icon": "terminal-powershell"
         }
+    },
+    "terminal.integrated.automationProfile.windows": {
+        "path": "C:\\Windows\\System32\\cmd.exe",
+        "args": []
     }
 }

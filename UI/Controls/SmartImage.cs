@@ -200,7 +200,7 @@ public static class SmartImage
     private static async Task LoadHttpAsync(Image image, string url, int decodeWidth, CancellationToken ct)
     {
         // Ленивая инициализация: GetService — словарный lookup, не нужен на каждый вызов
-        _imageCache ??= Program.Services.GetService<ImageCacheService>();
+        _imageCache ??= AppEntry.Services.GetService<ImageCacheService>();
         if (_imageCache == null) return;
 
         var bitmap = await _imageCache.GetImageAsync(url, decodeWidth, ct);

@@ -1,0 +1,58 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.UI.Features.Home"
+    xmlns:controls="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Features.Home.HomeView"
+    x:DataType="vm:HomeViewModel">
+
+    <Grid RowDefinitions="Auto, *">
+
+        <!-- HEADER AREA -->
+        <StackPanel Grid.Row="0" Margin="24,16,24,8">
+
+            <TextBlock Text="{Binding Greeting}"
+                FontSize="28" FontWeight="Bold"
+                Margin="0,0,0,12"
+                Foreground="{DynamicResource TextPrimaryBrush}" />
+
+            <ListBox ItemsSource="{Binding Categories}"
+                SelectedItem="{Binding SelectedCategory}"
+                Background="Transparent"
+                Margin="0,0,0,12"
+                ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                Classes="chip-list">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="0" />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CategoryItem">
+                        <TextBlock Text="{Binding Name}"
+                            FontWeight="SemiBold"
+                            FontSize="13" />
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <controls:FilterBar
+                FilterText="{Binding FilterQuery}"
+                Watermark="{Binding L[Search_Placeholder]}" />
+
+        </StackPanel>
+
+        <!-- MAIN CONTENT -->
+        <ScrollViewer Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            UseLayoutRounding="True">
+            <controls:TrackListControl
+                Margin="24,12,24,0"
+                Items="{Binding Items}"
+                IsLoading="{Binding IsLoading}"
+                EnableReordering="{Binding CanReorderItems}"
+                MoveItemCommand="{Binding MoveItemCommand}" />
+        </ScrollViewer>
+
+    </Grid>
+</UserControl>

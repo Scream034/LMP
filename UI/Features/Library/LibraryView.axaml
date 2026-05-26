@@ -1,0 +1,344 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.UI.Features.Library"
+    xmlns:local="using:LMP.UI.Converters"
+    xmlns:controls="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Features.Library.LibraryView"
+    x:DataType="vm:LibraryViewModel"
+    x:Name="LibraryRoot">
+
+    <Grid RowDefinitions="Auto, Auto, *">
+
+        <!-- Row 0: Stats + Actions -->
+        <Grid Grid.Row="0" ColumnDefinitions="*, Auto" Margin="24,20,24,4">
+
+            <!-- Stats -->
+            <Border IsVisible="{Binding !IsSyncing}"
+                Opacity="{Binding IsStatsVisible, Converter={StaticResource BoolToOpacity}}">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.4"
+                            Easing="CubicEaseOut" />
+                    </Transitions>
+                </Border.Transitions>
+                <StackPanel Spacing="6" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="20">
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                            ToolTip.Tip="{Binding L[Library_Tip_PlaylistCount], FallbackValue=''}">
+                            <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                                Width="16" Height="16"
+                                Foreground="{DynamicResource AccentBrush}" />
+                            <TextBlock Text="{Binding PlaylistCountText}"
+                                FontSize="13" FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                            ToolTip.Tip="{Binding L[Library_Tip_TrackCount], FallbackValue=''}">
+                            <PathIcon Data="{StaticResource Icon.MusicNote}"
+                                Width="16" Height="16"
+                                Foreground="{DynamicResource TextMutedBrush}" />
+                            <TextBlock Text="{Binding TotalTracksText}"
+                                FontSize="13"
+                                Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6"
+                            ToolTip.Tip="{Binding L[Library_Tip_TotalDuration], FallbackValue=''}">
+                            <PathIcon Data="{StaticResource Icon.ClockOutline}"
+                                Width="16" Height="16"
+                                Foreground="{DynamicResource TextMutedBrush}" />
+                            <TextBlock Text="{Binding TotalDurationText}"
+                                FontSize="13"
+                                Foreground="{DynamicResource TextSecondaryBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="20">
+                        <TextBlock Text="{Binding AvgTrackDurationText}"
+                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
+                            ToolTip.Tip="{Binding L[Library_Tip_AvgTrack], FallbackValue=''}" />
+                        <TextBlock Text="{Binding AvgPlaylistDurationText}"
+                            FontSize="11" Foreground="{DynamicResource TextMutedBrush}"
+                            ToolTip.Tip="{Binding L[Library_Tip_AvgPlaylist], FallbackValue=''}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Sync status text -->
+            <TextBlock Text="{Binding SyncStatus}"
+                FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                IsVisible="{Binding IsSyncing}" VerticalAlignment="Center" />
+
+            <!-- Actions -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                VerticalAlignment="Center">
+                <Button Command="{Binding SyncAccountPlaylistsCommand}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Library_SyncYoutube], FallbackValue=''}"
+                    Width="36" Height="36">
+                    <Panel Width="22" Height="22">
+                        <!-- Idle: CloudSync -->
+                        <PathIcon Data="{StaticResource Icon.CloudSync}"
+                            Width="22" Height="22"
+                            IsVisible="{Binding !IsSyncing}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <!-- Syncing: пульсирующий Cloud -->
+                        <Panel IsVisible="{Binding IsSyncing}" Width="22" Height="22">
+                            <Panel>
+                                <Border Width="22" Height="22" CornerRadius="11"
+                                    Background="{DynamicResource AccentBrush}" />
+                                <PathIcon Data="{StaticResource Icon.Cloud}"
+                                    Width="14" Height="14"
+                                    Foreground="{DynamicResource TextDarkBrush}"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Panel>
+                            <Panel Classes="cloud-crossfade-overlay">
+                                <Border Width="22" Height="22" CornerRadius="11"
+                                    Background="{DynamicResource BgSecondaryBrush}" />
+                                <PathIcon Data="{StaticResource Icon.Cloud}"
+                                    Width="14" Height="14"
+                                    Foreground="{DynamicResource AccentBrush}"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Panel>
+                        </Panel>
+                    </Panel>
+                </Button>
+
+                <Button Command="{Binding OpenCreateCommand}"
+                    Classes="icon-btn"
+                    ToolTip.Tip="{Binding L[Library_CreatePlaylist], FallbackValue=''}"
+                    IsEnabled="{Binding !IsSyncing}">
+                    <PathIcon Data="{StaticResource Icon.Plus}" Width="20" Height="20" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Row 1: Sync Progress -->
+        <Grid Grid.Row="1" Height="3" Margin="24,0" IsVisible="{Binding IsSyncing}">
+            <Border Background="{DynamicResource BgHighlightBrush}" CornerRadius="1.5" />
+            <Border Background="{DynamicResource AccentBrush}" CornerRadius="1.5"
+                HorizontalAlignment="Left">
+                <Border.Width>
+                    <MultiBinding>
+                        <MultiBinding.Converter>
+                            <local:ProgressToWidthConverter />
+                        </MultiBinding.Converter>
+                        <Binding Path="SyncProgress" />
+                        <Binding Path="$parent[Grid].Bounds.Width" />
+                    </MultiBinding>
+                </Border.Width>
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                    </Transitions>
+                </Border.Transitions>
+            </Border>
+        </Grid>
+
+        <!-- Row 2: Content -->
+        <Panel Grid.Row="2" Margin="0,8,0,0">
+
+            <!-- Skeleton -->
+            <ScrollViewer>
+                <ScrollViewer.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                        <Binding Path="!IsContentReady" />
+                        <Binding Path="IsSyncing" />
+                    </MultiBinding>
+                </ScrollViewer.IsVisible>
+                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="24,16,24,100">
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.7" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.5" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.3" />
+                    <Border Classes="playlist-skeleton skeleton" Margin="10" Opacity="0.2" />
+                </WrapPanel>
+            </ScrollViewer>
+
+            <!-- Main Content -->
+            <ScrollViewer>
+                <ScrollViewer.IsVisible>
+                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                        <Binding Path="IsContentReady" />
+                        <Binding Path="!IsSyncing" />
+                    </MultiBinding>
+                </ScrollViewer.IsVisible>
+                <StackPanel Margin="24,0,24,100">
+
+                    <ItemsControl ItemsSource="{Binding Playlists}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PlaylistCardViewModel">
+                                <Border Classes="playlist-card-inner"
+                                    Classes.visible="{Binding IsVisible}"
+                                    Width="220" Margin="10"
+                                    Tag="{Binding DataContext, ElementName=LibraryRoot}">
+
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem
+                                                Header="{Binding L[Player_Play],
+                                                    FallbackValue='Play'}"
+                                                Command="{Binding PlayCommand}">
+                                                <MenuItem.Icon>
+                                                    <PathIcon Data="{StaticResource Icon.Play}"
+                                                        Width="16" Height="16" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding L[Playlist_Open],
+                                                    FallbackValue='Open'}"
+                                                Command="{Binding OpenCommand}">
+                                                <MenuItem.Icon>
+                                                    <PathIcon
+                                                        Data="{StaticResource Icon.FolderOpen}"
+                                                        Width="16" Height="16" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding L[EditPlaylist_Title],
+                                                    FallbackValue='Edit'}"
+                                                Command="{Binding EditCommand}"
+                                                IsVisible="{Binding CanEdit}">
+                                                <MenuItem.Icon>
+                                                    <PathIcon Data="{StaticResource Icon.Pencil}"
+                                                        Width="16" Height="16" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding L[Queue_AddAll],
+                                                    FallbackValue='Add to queue'}"
+                                                Command="{Binding AddToQueueCommand}">
+                                                <MenuItem.Icon>
+                                                    <PathIcon
+                                                        Data="{StaticResource Icon.PlaylistPlus}"
+                                                        Width="16" Height="16" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem
+                                                Header="{Binding L[Track_CopyLink],
+                                                    FallbackValue='Copy link'}"
+                                                Command="{Binding CopyLinkCommand}">
+                                                <MenuItem.Icon>
+                                                    <PathIcon
+                                                        Data="{StaticResource Icon.LinkVariant}"
+                                                        Width="16" Height="16" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <Separator Classes="menu-separator" />
+                                            <MenuItem
+                                                Header="{Binding L[Button_Delete],
+                                                    FallbackValue='Delete'}"
+                                                Command="{Binding DeleteCommand}"
+                                                IsVisible="{Binding CanDelete}"
+                                                Classes="danger">
+                                                <MenuItem.Icon>
+                                                    <PathIcon Data="{StaticResource Icon.Delete}"
+                                                        Width="16" Height="16" />
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
+
+                                    <Grid RowDefinitions="220, Auto">
+                                        <!-- Cover -->
+                                        <Button Grid.Row="0"
+                                            Command="{Binding OpenCommand}"
+                                            Background="Transparent" BorderThickness="0"
+                                            Padding="0" Cursor="Hand"
+                                            CornerRadius="8,8,0,0" ClipToBounds="True">
+                                            <Panel Width="220" Height="220">
+                                                <Border IsVisible="{Binding IsLikedPlaylist}"
+                                                    Width="220" Height="220">
+                                                    <Border.Background>
+                                                        <LinearGradientBrush StartPoint="50%,0%"
+                                                            EndPoint="50%,100%">
+                                                            <GradientStop
+                                                                Color="{DynamicResource Accent}"
+                                                                Offset="0.0" />
+                                                            <GradientStop
+                                                                Color="{DynamicResource BgElevated}"
+                                                                Offset="1.0" />
+                                                        </LinearGradientBrush>
+                                                    </Border.Background>
+                                                    <PathIcon Data="{StaticResource Icon.Heart}"
+                                                        Width="72" Height="72"
+                                                        Foreground="{DynamicResource AccentButtonTextBrush}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"
+                                                        Opacity="0.9" />
+                                                </Border>
+                                                <Border
+                                                    Background="{DynamicResource BgSkeletonBrush}"
+                                                    IsVisible="{Binding ShowPlaceholder}"
+                                                    Width="220" Height="220">
+                                                    <PathIcon
+                                                        Data="{StaticResource Icon.PlaylistMusic}"
+                                                        Width="72" Height="72"
+                                                        Foreground="{DynamicResource TextMutedBrush}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center" />
+                                                </Border>
+                                                <Image
+                                                    controls:SmartImage.Source="{Binding ThumbnailUrl}"
+                                                    controls:SmartImage.Quality="High"
+                                                    Stretch="UniformToFill"
+                                                    Width="220" Height="220"
+                                                    IsVisible="{Binding HasThumbnail}" />
+                                            </Panel>
+                                        </Button>
+
+                                        <!-- Info -->
+                                        <Button Grid.Row="1"
+                                            Command="{Binding OpenCommand}"
+                                            Background="Transparent" BorderThickness="0"
+                                            Padding="14,12"
+                                            HorizontalContentAlignment="Left"
+                                            Cursor="Hand">
+                                            <StackPanel MaxWidth="192">
+                                                <TextBlock Text="{Binding Name}"
+                                                    FontWeight="SemiBold" FontSize="14"
+                                                    TextWrapping="Wrap" MaxLines="2"
+                                                    TextTrimming="CharacterEllipsis" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6"
+                                                    Margin="0,4,0,0">
+                                                    <TextBlock Text="{Binding FormattedTrackCount}"
+                                                        FontSize="12"
+                                                        Foreground="{DynamicResource TextMutedBrush}" />
+                                                    <PathIcon
+                                                        Data="{StaticResource Icon.CloudCheck}"
+                                                        Width="13" Height="13"
+                                                        Foreground="{DynamicResource TextMutedBrush}"
+                                                        IsVisible="{Binding IsSynced}"
+                                                        ToolTip.Tip="{Binding L[Library_CloudSyncTooltip],
+                                                            FallbackValue='',
+                                                            TargetNullValue=''}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Empty state -->
+                    <StackPanel IsVisible="{Binding !Playlists.Count}"
+                        HorizontalAlignment="Center" Margin="0,60">
+                        <PathIcon Data="{StaticResource Icon.PlaylistMusic}"
+                            Width="64" Height="64"
+                            Foreground="{DynamicResource TextMutedBrush}"
+                            HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding L[Library_Empty], FallbackValue=''}"
+                            FontSize="16"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
+                            HorizontalAlignment="Center" Margin="0,16,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Panel>
+    </Grid>
+</UserControl>

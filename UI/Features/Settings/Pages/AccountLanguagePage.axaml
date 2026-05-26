@@ -1,0 +1,74 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:LMP.UI.Features.Settings"
+    xmlns:ui="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Features.Settings.Pages.AccountLanguagePage"
+    x:DataType="vm:SettingsViewModel"
+    x:CompileBindings="True">
+
+    <!--
+        DataContext = SettingsViewModel (установлен родительским DataTemplate).
+        Все биндинги — прямые, без Owner.* префикса.
+    -->
+    <StackPanel Margin="32,24">
+        <Grid ColumnDefinitions="Auto, *" Margin="0,0,0,16">
+            <PathIcon Grid.Column="0" Data="{StaticResource Icon.Account}"
+                Width="20" Height="20" VerticalAlignment="Center"
+                Foreground="{DynamicResource AccentBrush}" />
+            <TextBlock Grid.Column="1" Classes="h2"
+                Text="{Binding L[Settings_Account_Language]}"
+                VerticalAlignment="Center" Margin="8,0,0,0" />
+        </Grid>
+
+        <Border Classes="card">
+            <StackPanel Spacing="20">
+
+                <!-- Account info -->
+                <Grid ColumnDefinitions="Auto, *, Auto">
+                    <Border Width="64" Height="64" CornerRadius="32"
+                        ClipToBounds="True" Margin="0,0,20,0"
+                        Background="{DynamicResource BgHighlightBrush}">
+                        <Panel>
+                            <PathIcon Data="{StaticResource Icon.Account}"
+                                Width="36" Height="36"
+                                IsVisible="{Binding AccountAvatarUrl,
+                                                  Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                            <Image ui:SmartImage.Source="{Binding AccountAvatarUrl}"
+                                ui:SmartImage.Quality="Low"
+                                Stretch="UniformToFill"
+                                IsVisible="{Binding AccountAvatarUrl,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </Panel>
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding AccountName}" FontWeight="Bold" FontSize="18" />
+                        <TextBlock Text="{Binding AccountSubtitle}"
+                            Foreground="{DynamicResource TextSecondaryBrush}"
+                            Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
+                        <Button Classes="primary-btn accent-base"
+                            Content="{Binding L[Auth_Login]}"
+                            Command="{Binding LoginCommand}"
+                            IsVisible="{Binding !IsAuthenticated}" />
+                        <Button Content="{Binding L[Auth_Logout]}"
+                            Command="{Binding LogoutCommand}"
+                            IsVisible="{Binding IsAuthenticated}" />
+                    </StackPanel>
+                </Grid>
+
+                <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
+
+                <!-- Language -->
+                <Grid ColumnDefinitions="*, Auto">
+                    <TextBlock Classes="label" Text="{Binding L[Settings_Language]}" />
+                    <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding Languages}"
+                        SelectedItem="{Binding SelectedLanguage}"
+                        MinWidth="200" />
+                </Grid>
+
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

@@ -7,7 +7,7 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceInclude Source="/Core/Converters/AppConverters.axaml" />
+                <ResourceInclude Source="/UI/Converters/AppConverters.axaml" />
                 <ResourceInclude Source="avares://LMP/UI/Theme/Icons.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

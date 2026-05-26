@@ -1,0 +1,30 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:notifications="using:LMP.UI.Features.Notifications"
+    x:Class="LMP.UI.Features.Notifications.NotificationButton"
+    x:DataType="notifications:NotificationButtonViewModel">
+
+    <Button Classes="ctrl-btn"
+        Command="{Binding TogglePanelCommand}"
+        ToolTip.Tip="{Binding L[Nav_Notifications]}">
+        <Panel>
+            <PathIcon Data="{StaticResource Icon.Bell}"
+                Width="15" Height="15"
+                Foreground="{DynamicResource TextMutedBrush}" />
+            <Border IsVisible="{Binding HasUnread}"
+                Background="{DynamicResource AccentBrush}"
+                CornerRadius="6"
+                MinWidth="13" Height="13"
+                Padding="3,0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,-4,-4,0">
+                <TextBlock Text="{Binding UnreadCountText}"
+                    FontSize="8" FontWeight="Bold"
+                    Foreground="{DynamicResource AccentButtonTextBrush}"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center" />
+            </Border>
+        </Panel>
+    </Button>
+</UserControl>
