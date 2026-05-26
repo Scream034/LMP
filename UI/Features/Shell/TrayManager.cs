@@ -1,7 +1,5 @@
 #if WINDOWS
 using System.Runtime.InteropServices;
-using LMP.Core.Helpers;
-using LMP.Core.Services;
 
 namespace LMP.UI.Features.Shell;
 

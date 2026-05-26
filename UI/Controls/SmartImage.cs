@@ -3,7 +3,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
-using LMP.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LMP.UI.Controls;

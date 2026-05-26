@@ -4,7 +4,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using DynamicData;
 using Microsoft.Extensions.DependencyInjection;
-using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 

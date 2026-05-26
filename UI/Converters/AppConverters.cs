@@ -1,6 +1,5 @@
 ﻿using Avalonia.Data.Converters;
 using Avalonia.Media;
-using LMP.Core.Models;
 using System.Globalization;
 using Avalonia.Platform;
 using Avalonia.Media.Imaging;

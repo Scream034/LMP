@@ -2,7 +2,6 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
-using LMP.Core.Models;
 
 namespace LMP.UI.Services;
 

@@ -1,9 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
-using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using LMP.Core.Helpers;
 using System.Reactive.Linq;
 
 namespace LMP.UI.ViewModels;

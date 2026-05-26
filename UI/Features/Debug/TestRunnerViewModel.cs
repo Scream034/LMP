@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Text;
 using Avalonia.Threading;
-using LMP.Core.ViewModels;
 using LMP.Tests.Framework;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;

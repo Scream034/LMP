@@ -1,20 +1,15 @@
 using System.Reactive;
-using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.UI.Features.Shared;
 using LMP.Core.Audio.Helpers;
-using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
 using LMP.Core.Audio.Decoders;
 using LMP.Core.Audio.Backends;
-using LMP.Core.Helpers;
 
 namespace LMP.UI.Features.Debug;
 

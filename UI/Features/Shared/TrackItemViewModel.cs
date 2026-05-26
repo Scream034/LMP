@@ -1,12 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Windows.Input;
-using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
-using LMP.Core.Audio;
-using LMP.Core.Helpers;
 
 namespace LMP.UI.Features.Shared;
 

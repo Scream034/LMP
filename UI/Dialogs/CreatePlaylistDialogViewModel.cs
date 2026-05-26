@@ -1,5 +1,4 @@
 using System.Reactive;
-using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 

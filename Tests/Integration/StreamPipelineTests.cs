@@ -2,10 +2,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using LMP.Core.Audio.Http;
-using LMP.Core.Services;
 using LMP.Core.Youtube.Videos;
 using LMP.Core.Youtube.Videos.Streams;
-using LMP.Core.Helpers;
 using LMP.Tests.Framework;
 using Microsoft.Extensions.DependencyInjection;
 

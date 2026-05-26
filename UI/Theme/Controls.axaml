@@ -562,4 +562,22 @@
             </Animation>
         </Style.Animations>
     </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- SLIDER                                                              -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+    <Style Selector="Slider">
+        <Setter Property="Background" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Slider /template/ Thumb /template/ Border">
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
 </Styles>

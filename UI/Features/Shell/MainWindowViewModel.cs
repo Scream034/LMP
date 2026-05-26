@@ -2,12 +2,10 @@
 using System.Reactive.Linq;
 using System.Windows.Input;
 using Microsoft.Extensions.DependencyInjection;
-using LMP.Core.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Diagnostics;
 using LMP.UI.Features.Player;
-using LMP.Core.ViewModels;
 using LMP.UI.Features.Search;
 using LMP.UI.Features.Home;
 using LMP.UI.Features.Library;
@@ -15,7 +13,6 @@ using LMP.UI.Features.Settings;
 using LMP.UI.Features.Playlist;
 using LMP.UI.Features.Notifications;
 using System.Runtime;
-using LMP.Core.Models;
 
 namespace LMP.UI.Features.Shell;
 

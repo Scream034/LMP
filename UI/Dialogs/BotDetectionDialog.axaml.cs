@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
-using LMP.Core.Services;
 using ReactiveUI;
 using System.Reactive;
 

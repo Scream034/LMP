@@ -2,9 +2,6 @@ using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Media.Imaging;
-using LMP.Core.Models;
-using LMP.Core.ViewModels;
-using LMP.UI.Services;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 

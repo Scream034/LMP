@@ -1,7 +1,4 @@
-﻿using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
-using LMP.UI.Features.Shell;
+﻿using LMP.UI.Features.Shell;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
@@ -10,7 +7,6 @@ using System.Reactive.Linq;
 using LMP.Core.Youtube.Search;
 using LMP.UI.Dialogs;
 using Avalonia.Threading;
-using LMP.Core.Helpers;
 using LMP.Core.Helpers.Extensions;
 
 namespace LMP.UI.Features.Library;

@@ -1,7 +1,4 @@
 using System.Reactive;
-using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
 using ReactiveUI;
 using Notification = LMP.Core.Models.Notification;
 

@@ -1,8 +1,5 @@
 ﻿using System.Reactive;
 using System.Reactive.Linq;
-using LMP.Core.Helpers;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 

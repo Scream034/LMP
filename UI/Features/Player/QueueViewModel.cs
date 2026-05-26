@@ -1,8 +1,4 @@
-﻿using LMP.Core.Helpers;
-using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
-using LMP.UI.Features.Shared;
+﻿using LMP.UI.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;

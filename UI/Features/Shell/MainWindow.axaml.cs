@@ -7,10 +7,6 @@ using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.VisualTree;
-using LMP.Core.Helpers;
-using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 

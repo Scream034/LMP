@@ -1,6 +1,4 @@
-﻿using LMP.Core.Services;
-using LMP.Core.ViewModels;
-using LMP.Core.Youtube.Search;
+﻿using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;

@@ -1,6 +1,5 @@
 using Avalonia.Threading;
 using LMP.Core.Exceptions;
-using LMP.Core.Models;
 using LMP.Core.Youtube.Exceptions;
 
 namespace LMP.UI.Services;

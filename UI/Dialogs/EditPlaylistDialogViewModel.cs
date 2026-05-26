@@ -1,7 +1,4 @@
 using System.Reactive;
-using LMP.UI.Models;
-using LMP.Core.Models;
-using LMP.Core.ViewModels;
 using ReactiveUI;
 
 namespace LMP.UI.Dialogs;

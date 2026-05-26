@@ -1,6 +1,5 @@
 ﻿using LMP.Core.Data;
 using LMP.Core.Data.Repositories;
-using LMP.Core.Services;
 using LMP.UI.Features.Home;
 using LMP.UI.Features.Library;
 using LMP.UI.Features.Player;
@@ -19,7 +18,6 @@ using LMP.Core.Audio.Http;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.UI.Features.Notifications;
-using LMP.Core.Models;
 using ReactiveUI.Avalonia;
 
 namespace LMP;

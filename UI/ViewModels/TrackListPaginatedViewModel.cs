@@ -1,7 +1,4 @@
 using System.Reactive.Linq;
-using LMP.Core.Helpers;
-using LMP.Core.Models;
-using LMP.UI.Services;
 using LMP.UI.Features.Shared;
 using ReactiveUI;
 

@@ -1,7 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
-using LMP.Core.Services;
 using LMP.Core.Youtube.Exceptions;
 using ReactiveUI;
 using System.Reactive;

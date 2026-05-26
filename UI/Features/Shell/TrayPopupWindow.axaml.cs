@@ -4,8 +4,6 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
-using LMP.Core.Models;
-using LMP.Core.Services;
 
 namespace LMP.UI.Features.Shell;
 

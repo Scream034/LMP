@@ -1,10 +1,5 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Media;
-using LMP.Core.Audio;
-using LMP.Core.Helpers;
-using LMP.Core.Models;
-using LMP.Core.Services;
-using LMP.Core.ViewModels;
 using LMP.UI.Features.Shell;
 using LMP.UI.Features.Shared;
 using ReactiveUI;

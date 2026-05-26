@@ -4,13 +4,9 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using LMP.UI.Features.Shell;
-using LMP.Core.Services;
-using LMP.Core.Models;
 using AsyncImageLoader;
-using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 using System.Diagnostics;
-using LMP.Core.Helpers;
 
 
 #if DEBUG
