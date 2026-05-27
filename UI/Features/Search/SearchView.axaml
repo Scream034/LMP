@@ -104,26 +104,25 @@
             </StackPanel>
 
             <ItemsControl ItemsSource="{Binding RecentSearches}"
-                Margin="0,4,0,0" IsVisible="{Binding !IsOfflineMode}"
-                DataContext="{Binding}">
+                Margin="0,4,0,0" IsVisible="{Binding !IsOfflineMode}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <WrapPanel Orientation="Horizontal" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="x:String">
+                    <DataTemplate x:DataType="vm:SearchHistoryItem">
                         <Border Classes="search-chip" Margin="0,0,6,6">
                             <Grid ColumnDefinitions="Auto, Auto">
                                 <Button Grid.Column="0" Classes="search-chip-text"
-                                    Content="{Binding}"
-                                    Command="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).HistoryClickCommand}"
-                                    CommandParameter="{Binding}" />
+                                    Content="{Binding Query}"
+                                    Command="{Binding Owner.HistoryClickCommand}"
+                                    CommandParameter="{Binding Query}" />
                                 <!-- Recent searches chip close button -->
                                 <Button Grid.Column="1" Classes="search-chip-close"
-                                    Command="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).RemoveHistoryCommand}"
-                                    CommandParameter="{Binding}"
-                                    ToolTip.Tip="{Binding #SearchRoot.((vm:SearchViewModel)DataContext).L[Common_Remove]}">
+                                    Command="{Binding Owner.RemoveHistoryCommand}"
+                                    CommandParameter="{Binding Query}"
+                                    ToolTip.Tip="{Binding Owner.L[Common_Remove]}">
                                     <PathIcon Data="{StaticResource Icon.Close}" Width="12"
                                         Height="12" />
                                 </Button>

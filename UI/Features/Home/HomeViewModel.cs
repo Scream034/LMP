@@ -8,11 +8,6 @@ namespace LMP.UI.Features.Home;
 
 /// <summary>
 /// ViewModel главного экрана. Категории + поиск через YouTube с кэшированием.
-/// Smart Parent (трек-активность, прогресс загрузки) унаследован от TrackListReorderableViewModel.
-///
-/// <para><b>Reorderable вместо Paginated:</b> список YouTube-треков загружается целиком
-/// за один запрос, после чего пользователь может перетаскивать треки локально.
-/// VirtualizingStackPanel справляется с ~100 элементами без InfiniteScroll.</para>
 /// </summary>
 public sealed class HomeViewModel : TrackListReorderableViewModel
 {
@@ -32,21 +27,17 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
     private string _currentQuery = "";
     private CancellationTokenSource? _categoryCts;
     private bool _isDisposed;
+    private bool _isDataLoaded; // Признак того, что данные уже лежат в кэше ОЗУ
 
     #endregion
 
     #region Properties
 
-    [Reactive] public bool IsContentReady { get; private set; }
     [Reactive] public string Greeting { get; private set; } = string.Empty;
     [Reactive] public CategoryItem? SelectedCategory { get; set; }
 
     public ObservableCollection<CategoryItem> Categories { get; } = [];
 
-    /// <summary>
-    /// Перетаскивание доступно только без активного фильтра.
-    /// С фильтром визуальные индексы расходятся с мастер-списком.
-    /// </summary>
     public bool CanReorderItems => CanReorder;
 
     #endregion
@@ -98,7 +89,7 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
         this.WhenAnyValue(x => x.SelectedCategory)
             .WhereNotNull()
             .Skip(1)
-            .Where(_ => IsContentReady)
+            .Where(_ => !IsLoading) // Использовать IsLoading базового класса
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(async _ => await LoadTracksAsync())
             .DisposeWith(Disposables);
@@ -108,16 +99,19 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
 
     #region Navigation
 
-    /// <summary>
-    /// Вызывается из MainWindowViewModel после CrossFade-анимации.
-    /// Первая тяжёлая загрузка запускается здесь, не в конструкторе.
-    /// </summary>
     public override async Task OnNavigatedToAsync()
     {
         if (_isDisposed) return;
 
-        await LoadTracksAsync();
-        IsContentReady = true;
+        // Если данные уже в памяти, загрузку не запускаем — базовый класс 
+        // автоматически переключит IsLoading в false по окончании перехода.
+        if (!_isDataLoaded)
+        {
+            await LoadTracksAsync();
+            _isDataLoaded = true;
+        }
+
+        await base.OnNavigatedToAsync(); // Запуск базового перехватчика
     }
 
     #endregion
@@ -130,11 +124,6 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
         _ = LibService.AddToRecentlyPlayedAsync(track);
     }
 
-    /// <summary>
-    /// Загрузка треков по ID-списку используется ReorderableViewModel при
-    /// восстановлении состояния. Для Home треки берём из SearchCacheService
-    /// по текущему запросу — они не хранятся в LibraryService постоянно.
-    /// </summary>
     protected override async Task<List<TrackInfo>> LoadTracksAsync(
         IEnumerable<string> ids, CancellationToken ct)
     {
@@ -240,19 +229,14 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
     {
         var key = DateTime.Now.Hour switch
         {
-            >= 0 and < 5  => "Home_Greeting_Night",
+            >= 0 and < 5 => "Home_Greeting_Night",
             >= 5 and < 12 => "Home_Greeting_Morning",
             >= 12 and < 18 => "Home_Greeting_Afternoon",
-            _              => "Home_Greeting_Evening"
+            _ => "Home_Greeting_Evening"
         };
         Greeting = SL[key];
     }
 
-    /// <summary>
-    /// In-place обновление имён категорий.
-    /// Clear() + Add() даёт 14 CollectionChanged → сброс SelectedCategory → лишний Load.
-    /// In-place: только PropertyChanged на отдельных полях, порядок и ссылки сохранены.
-    /// </summary>
     private void InitializeCategories()
     {
         ReadOnlySpan<(string key, string fallback, string query, bool special)> defs =

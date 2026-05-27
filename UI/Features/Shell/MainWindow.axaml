@@ -294,15 +294,16 @@
         <Border Grid.Row="1" Background="{DynamicResource BgPrimaryBrush}" ClipToBounds="True">
             <Panel>
                 <!--
-                    DataTemplates резолвятся из Window.DataTemplates через resource lookup.
-                    Промежуточный ContentControl убран: устраняет лишний слой ValueStore,
-                    StyleInstance[], DynamicResourceExpression которые не отсоединялись
-                    корректно при CrossFade и держали старое визуальное дерево живым.
+                    Композитный переход (GPU Accelerated).
+                    Анимация Fade и Slide выполняется параллельно на Render-потоке.
+                    Разгружает UI-поток и убирает микро-статтеры при переключении.
                 -->
                 <TransitioningContentControl Content="{Binding CurrentPage}"
                     IsTransitionReversed="False">
                     <TransitioningContentControl.PageTransition>
-                        <CrossFade Duration="0:0:0.2" />
+                        <CompositePageTransition>
+                            <CrossFade Duration="0:0:0.2" />
+                        </CompositePageTransition>
                     </TransitioningContentControl.PageTransition>
                 </TransitioningContentControl>
 

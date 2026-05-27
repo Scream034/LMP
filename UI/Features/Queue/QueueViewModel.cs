@@ -1,4 +1,5 @@
-﻿using LMP.UI.Features.Shared;
+﻿using Avalonia.Collections;
+using LMP.UI.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
@@ -48,11 +49,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
     [Reactive] public bool CanReorderItems { get; private set; } = true;
     [Reactive] public string FilterQuery { get; set; } = string.Empty;
 
-    /// <summary>
-    /// BatchObservableCollection: атомарная замена через ReplaceAll даёт
-    /// 1 Reset-событие вместо N Add/Remove при фильтрации большой очереди.
-    /// </summary>
-    public BatchObservableCollection<TrackItemViewModel> QueueItems { get; } = [];
+    public AvaloniaList<TrackItemViewModel> QueueItems { get; } = [];
 
     #endregion
 
@@ -298,12 +295,12 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
             }
         }
 
-        QueueItems.ReplaceAll(newItems);
+        QueueItems.Clear();
+        QueueItems.InsertRange(0, newItems);
 
         IsEmpty = _masterQueue.Count == 0;
         IsFilterEmpty = !IsEmpty && hasFilter && QueueItems.Count == 0;
 
-        // После rebuild восстанавливаем активное состояние через единственный путь.
         UpdatePlaybackState(_audio.CurrentTrack, _audio.IsPlaying);
     }
 

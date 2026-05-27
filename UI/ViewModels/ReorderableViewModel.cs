@@ -3,17 +3,15 @@ using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive.Linq;
+using LMP.UI.Features.Shell;
+using Avalonia.Collections; // Добавлено
 
 namespace LMP.UI.ViewModels;
 
 /// <summary>
 /// Базовый ViewModel для списков треков с виртуализацией, фильтрацией и перетаскиванием.
-/// 
-/// Пагинация намеренно удалена: VirtualizingStackPanel создаёт только ~15-20 контейнеров
-/// независимо от размера коллекции, поэтому загрузка всех данных сразу дешевле и проще
-/// чем батчинг с InfiniteScroll.
 /// </summary>
-public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase, IFilterable
+public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase, IFilterable, ISmoothTransitionViewModel
     where TViewModel : class, IDisposable
     where TSource : notnull
 {
@@ -21,62 +19,48 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     protected readonly LibraryService LibService;
 
-    // Мастер-список всех ID в правильном порядке (source of truth для порядка).
     private List<string> _masterIds = [];
     private readonly Dictionary<string, TSource> _sources = [];
     private readonly Dictionary<string, TViewModel> _vmCache = [];
-
-    /// <summary>
-    /// Обратный индекс VM → ID для O(1) поиска идентификатора по экземпляру ViewModel.
-    /// Без него <see cref="GetVmId"/> требовал O(n) обход всего _vmCache.
-    /// Поддерживается атомарно вместе с _vmCache.
-    /// </summary>
-    private readonly Dictionary<TViewModel, string> _vmToId =
-        new(ReferenceEqualityComparer.Instance);
-
-    /// <summary>
-    /// Переиспользуемый буфер для <see cref="RebuildVisibleItems"/>.
-    /// Избегает аллокации List на каждый вызов фильтра (горячий путь при наборе текста).
-    /// </summary>
+    private readonly Dictionary<TViewModel, string> _vmToId = new(ReferenceEqualityComparer.Instance);
     private List<TViewModel> _rebuildBuffer = [];
 
     private CancellationTokenSource? _loadCts;
     private bool _isDisposed;
 
+    // Поля автоматического перехватчика переходов
+    private bool _isDataLoading = true;
+    private bool _isTransitioning;
+
     #endregion
 
     #region Properties
 
-    [Reactive] public bool IsLoading { get; protected set; }
-
     /// <summary>
-    /// Текущий запрос фильтра. Изменение дебаунсируется в конструкторе (150ms)
-    /// перед вызовом <see cref="RebuildVisibleItems"/> — защита UI-потока от перегрузки
-    /// при быстром наборе текста.
+    /// Управляет видимостью списка. Вычисляет итоговое состояние:
+    /// скелетон показывается если грузятся данные ИЛИ идет анимация перехода.
     /// </summary>
+    public bool IsLoading
+    {
+        get => _isDataLoading || _isTransitioning;
+        protected set
+        {
+            if (_isDataLoading == value) return;
+            _isDataLoading = value;
+            this.RaisePropertyChanged(nameof(IsLoading));
+        }
+    }
+
     public string FilterQuery
     {
         get;
         set => this.RaiseAndSetIfChanged(ref field, value);
     } = string.Empty;
 
-    /// <summary>
-    /// Видимый список треков. BatchObservableCollection позволяет атомарно заменить
-    /// всё содержимое через <see cref="BatchObservableCollection{T}.ReplaceAll"/>
-    /// (1×Reset вместо N×Add/Remove), что критично при фильтрации больших списков.
-    ///
-    /// <para>Одиночные операции <c>Move</c> и <c>Remove</c> (drag-and-drop, удаление трека)
-    /// вызываются напрямую через унаследованные методы ObservableCollection — без батчинга,
-    /// с немедленной UI-реакцией.</para>
-    /// </summary>
-    public BatchObservableCollection<TViewModel> Items { get; } = [];
+    public AvaloniaList<TViewModel> Items { get; } = [];
 
     protected int TotalCount => _masterIds.Count;
 
-    /// <summary>
-    /// Сортировка и перетаскивание доступны только при отсутствии фильтра.
-    /// С фильтром индексы видимых элементов не совпадают с мастер-списком.
-    /// </summary>
     public bool CanReorder => string.IsNullOrWhiteSpace(FilterQuery);
 
     #endregion
@@ -87,10 +71,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
     {
         LibService = AppEntry.Services.GetRequiredService<LibraryService>();
 
-        // Debounce фильтра: 150ms после последнего keystroke → rebuild на UI-потоке.
-        // ObserveOn(Main) обязателен: Throttle переключает на TaskpoolScheduler,
-        // а RebuildVisibleItems обращается к _masterIds/_sources/_vmCache (не thread-safe)
-        // и вызывает Items.ReplaceAll (UI-операция).
         this.WhenAnyValue(static x => x.FilterQuery)
             .Throttle(TimeSpan.FromMilliseconds(150))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -100,27 +80,41 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #endregion
 
+    #region ISmoothTransitionViewModel
+
+    /// <inheritdoc />
+    public virtual void PrepareForTransition()
+    {
+        _isTransitioning = true;
+        this.RaisePropertyChanged(nameof(IsLoading));
+    }
+
+    #endregion
+
+    #region Navigation Lifecycle
+
+    public override async Task OnNavigatedToAsync()
+    {
+        _isTransitioning = false;
+        this.RaisePropertyChanged(nameof(IsLoading));
+
+        await base.OnNavigatedToAsync();
+    }
+
+    #endregion
+
     #region Abstract Methods
 
     protected abstract string GetItemId(TSource item);
     protected abstract TViewModel CreateViewModel(TSource item);
     protected abstract bool MatchesFilter(TSource item, string query);
-
-    /// <summary>
-    /// Загрузка данных по списку ID. Реализуется в наследнике (БД, сеть и т.д.).
-    /// </summary>
     protected abstract Task<List<TSource>> LoadItemsByIdsAsync(IEnumerable<string> ids, CancellationToken ct);
-
     protected virtual Task SaveMoveAsync(int fromIndex, int toIndex, CancellationToken ct) => Task.CompletedTask;
 
     #endregion
 
     #region Initialization
 
-    /// <summary>
-    /// Инициализация по списку ID: загружает все данные одним запросом, затем строит Items.
-    /// Skeleton-first: IsLoading управляется снаружи до вызова этого метода.
-    /// </summary>
     protected async Task InitializeAsync(List<string> allIds, CancellationToken ct = default)
     {
         if (_isDisposed) return;
@@ -154,9 +148,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         }
     }
 
-    /// <summary>
-    /// Инициализация с уже загруженными данными (например, из кэша).
-    /// </summary>
     protected void InitializeWithData(IEnumerable<TSource> items)
     {
         if (_isDisposed) return;
@@ -206,20 +197,11 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         SyncVisibleItems(_rebuildBuffer);
     }
 
-    /// <summary>
-    /// Атомарно заменяет видимый список через 1×Reset-событие.
-    /// Заменяет предыдущую in-place логику (N×Add/Remove/Move) — при фильтрации
-    /// пользователь ожидает полного обновления списка, а не точечных изменений.
-    ///
-    /// <para><b>Почему Reset безопасен здесь:</b> в отличие от Replace-операции
-    /// (Avalonia issue #7593), Reset корректно обрабатывается ItemsRepeater —
-    /// полная ревиртуализация без anchor-артефактов.</para>
-    ///
-    /// <para><b>Move и Remove не затронуты:</b> drag-and-drop (<see cref="MoveItemAsync"/>)
-    /// и удаление (<see cref="RemoveItemLocally"/>) вызывают одиночные операции
-    /// ObservableCollection напрямую — их батчить не нужно.</para>
-    /// </summary>
-    private void SyncVisibleItems(List<TViewModel> newItems) => Items.ReplaceAll(newItems);
+    private void SyncVisibleItems(List<TViewModel> newItems)
+    {
+        Items.Clear();
+        Items.InsertRange(0, newItems);
+    }
 
     #endregion
 
@@ -232,7 +214,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         var movingId = GetVmId(Items[oldIndex]);
         if (string.IsNullOrEmpty(movingId)) return;
 
-        // Синхронизируем мастер-список и видимый список атомарно
         int masterOld = _masterIds.IndexOf(movingId);
         int masterNew = GetMasterIndexForVisualTarget(newIndex, oldIndex);
 
@@ -253,24 +234,30 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         if (string.IsNullOrEmpty(movingId)) return;
 
         int masterOld = _masterIds.IndexOf(movingId);
+        int masterNew = GetMasterIndexForVisualTarget(newIndex, oldIndex);
 
-        _masterIds.RemoveAt(oldIndex);
-        _masterIds.Insert(newIndex, movingId);
-        Items.Move(oldIndex, newIndex);
-
-        try
+        if (masterOld >= 0 && masterNew >= 0 && masterOld != masterNew)
         {
-            await SaveMoveAsync(masterOld, newIndex, CancellationToken.None);
-            Log.Info("[Reorderable] Move saved to DB");
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[Reorderable] Save move failed: {ex.Message}");
+            // Исправлено: перемещение во внутреннем мастер-списке по точным вычисленным индексам
+            _masterIds.RemoveAt(masterOld);
+            _masterIds.Insert(masterNew, movingId);
+            Items.Move(oldIndex, newIndex);
 
-            // Rollback при ошибке
-            _masterIds.RemoveAt(newIndex);
-            _masterIds.Insert(oldIndex, movingId);
-            Items.Move(newIndex, oldIndex);
+            try
+            {
+                // Исправлено: передача корректных индексов уровня базы данных (masterNew вместо newIndex)
+                await SaveMoveAsync(masterOld, masterNew, CancellationToken.None);
+                Log.Info("[Reorderable] Move saved to DB");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[Reorderable] Save move failed: {ex.Message}");
+
+                // Исправлено: корректный откат изменений в мастер-списке при сбое БД
+                _masterIds.RemoveAt(masterNew);
+                _masterIds.Insert(masterOld, movingId);
+                Items.Move(newIndex, oldIndex);
+            }
         }
     }
 
@@ -289,8 +276,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private int GetMasterIndexForVisualTarget(int visualTarget, int visualSource)
     {
-        // При наличии скрытых (отфильтрованных) элементов визуальный индекс
-        // не равен мастер-индексу — пересчитываем через ID видимого элемента.
         if (visualTarget >= Items.Count) return _masterIds.Count - 1;
         var targetId = GetVmId(Items[visualTarget]);
         return string.IsNullOrEmpty(targetId) ? visualTarget : _masterIds.IndexOf(targetId);
@@ -307,10 +292,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     protected List<string> GetAllIds() => [.. _masterIds];
 
-    /// <summary>
-    /// O(1) поиск ID по экземпляру ViewModel через обратный индекс.
-    /// Ранее — O(n) полный обход _vmCache.Values с ReferenceEquals.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private string GetVmId(TViewModel vm) =>
         _vmToId.TryGetValue(vm, out var id) ? id : string.Empty;
@@ -322,9 +303,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         _loadCts = null;
     }
 
-    /// <summary>
-    /// Диспозит все VM в кэше и очищает оба словаря (_vmCache + _vmToId) атомарно.
-    /// </summary>
     private void DisposeAndClearVmCache()
     {
         foreach (var vm in _vmCache.Values)
@@ -337,15 +315,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #region Local Mutations
 
-    /// <summary>
-    /// Удаляет элемент из всех внутренних структур без полного rebuild.
-    /// O(n) по _masterIds (List.Remove), O(1) по словарям и ObservableCollection.Remove.
-    /// 
-    /// <para><b>VM не диспозится:</b> экземпляр может быть shared через
-    /// <see cref="TrackViewModelFactory"/> (WeakReference cache).
-    /// Dispose произойдёт при GC или при полном Dispose ReorderableViewModel.</para>
-    /// </summary>
-    /// <returns>true если элемент был найден и удалён.</returns>
     protected bool RemoveItemLocally(string id)
     {
         if (string.IsNullOrEmpty(id)) return false;

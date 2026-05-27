@@ -34,7 +34,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int FallbackPositionIntervalMs = 500;
     private const int ShuffleAnimationDurationMs = 500;
     private const int SpeedUpdateIntervalMs = 1000;
-    private const int PositionChangePrecisionMs = 100;
 
     /// <summary>Таймаут, после которого состояние Reset считается зависшим (сек).</summary>
     private const int StaleResetTimeoutSec = 3;

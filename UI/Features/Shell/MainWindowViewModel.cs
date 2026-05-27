@@ -20,6 +20,7 @@ namespace LMP.UI.Features.Shell;
 public class MainWindowViewModel : ViewModelBase
 {
     private readonly IServiceProvider _services;
+    private readonly Dictionary<string, ViewModelBase> _pageCache = new(StringComparer.Ordinal);
 
     // ═══ VERSION INFO ═══
     [Reactive] public bool IsVersionInfoVisible { get; set; } = true;
@@ -49,9 +50,6 @@ public class MainWindowViewModel : ViewModelBase
     [Reactive] public ToastOverlayViewModel ToastOverlay { get; private set; }
 
     // ═══ DIALOG HOST ═══
-    /// <summary>
-    /// Контейнер для overlay-диалогов (над контентом, под TopBar).
-    /// </summary>
     [Reactive] public DialogHostViewModel DialogHost { get; private set; }
 
     private const int DeferredLoadDelayMs = 180;
@@ -64,7 +62,7 @@ public class MainWindowViewModel : ViewModelBase
         NotificationButtonViewModel notificationButton,
         NotificationPanelViewModel notificationPanel,
         ToastOverlayViewModel toastOverlay,
-        DialogHostViewModel dialogHost) // ← Добавить параметр
+        DialogHostViewModel dialogHost)
     {
         Log.Info("MainWindowViewModel constructor started.");
 
@@ -73,7 +71,7 @@ public class MainWindowViewModel : ViewModelBase
         NotificationButton = notificationButton;
         NotificationPanel = notificationPanel;
         ToastOverlay = toastOverlay;
-        DialogHost = dialogHost; // ← Сохранить
+        DialogHost = dialogHost;
 
         UpdateCommitsDisplay();
 
@@ -90,7 +88,6 @@ public class MainWindowViewModel : ViewModelBase
 
         OpenGitHubCommand = CreateCommand(ReactiveCommand.Create(OpenGitHub));
 
-        // Навигация заблокирована если IsNavigationLocked ИЛИ есть активный диалог
         var canNavigate = this.WhenAnyValue(
             x => x.IsNavigationLocked,
             x => x.DialogHost.HasActiveDialog,
@@ -161,39 +158,108 @@ public class MainWindowViewModel : ViewModelBase
         var oldPage = CurrentPage;
         var oldPageName = CurrentPageName;
 
-        ViewModelBase? newPage = pageName switch
+        if (oldPage is ISmoothTransitionViewModel smoothOldPage)
         {
-            "Home" => _services.GetRequiredService<HomeViewModel>(),
-            "Search" => _services.GetRequiredService<SearchViewModel>(),
-            "Library" => _services.GetRequiredService<LibraryViewModel>(),
-            "Settings" => _services.GetRequiredService<SettingsViewModel>(),
-            "Queue" => _services.GetRequiredService<QueueViewModel>(),
-            _ => null
-        };
-
-        if (newPage == null)
-        {
-            Log.Warn($"[Navigation] Unknown page: {pageName}");
-            return;
+            smoothOldPage.PrepareForTransition();
         }
 
-        // Принудительно разрываем ссылку TCC на старый контент.
-        // TransitioningContentControl хранит _lastPresenter с предыдущим визуальным
-        // деревом — если CrossFade не очистил его, старый View живёт вечно.
-        // null → newPage создаёт "пустой" переход, после которого _lastPresenter
-        // содержит null-контент, а не SettingsView с 200+ контролами.
-        CurrentPage = null;
+        if (!_pageCache.TryGetValue(pageName, out var newPage))
+        {
+            newPage = pageName switch
+            {
+                "Home" => _services.GetRequiredService<HomeViewModel>(),
+                "Search" => _services.GetRequiredService<SearchViewModel>(),
+                "Library" => _services.GetRequiredService<LibraryViewModel>(),
+                "Settings" => _services.GetRequiredService<SettingsViewModel>(),
+                "Queue" => _services.GetRequiredService<QueueViewModel>(),
+                _ => null
+            };
+
+            if (newPage == null)
+            {
+                Log.Warn($"[Navigation] Unknown page: {pageName}");
+                return;
+            }
+
+            _pageCache[pageName] = newPage;
+        }
+
+        if (newPage is ISmoothTransitionViewModel smoothNewPage)
+        {
+            smoothNewPage.PrepareForTransition();
+        }
+
         CurrentPage = newPage;
         CurrentPageName = pageName;
 
         sw.Stop();
-        Log.Info($"Page '{pageName}' VM created in {sw.ElapsedMilliseconds}ms, scheduling deferred init...");
+        Log.Info($"Page '{pageName}' ready in {sw.ElapsedMilliseconds}ms, scheduling deferred init...");
 
         _ = DeferredInitAsync(newPage, pageName);
 
         if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
         {
-            _ = DisposePageDelayedAsync(disposable, oldPageName);
+            if (!_pageCache.ContainsKey(oldPageName))
+            {
+                _ = DisposePageDelayedAsync(disposable, oldPageName);
+            }
+        }
+    }
+
+    public void NavigateToPlaylist(string playlistId)
+    {
+        if (IsNavigationLocked || DialogHost.HasActiveDialog) return;
+
+        Log.Info($"Navigating to Playlist: {playlistId}");
+
+        var oldPage = CurrentPage;
+        var oldPageName = CurrentPageName;
+
+        if (oldPage is ISmoothTransitionViewModel smoothOldPage)
+        {
+            smoothOldPage.PrepareForTransition();
+        }
+
+        // Кэшируем страницу плейлиста, чтобы избежать утечек, дублирования инстансов и багов с Dispose
+        if (!_pageCache.TryGetValue("Playlist", out var playlistPage) || playlistPage is not PlaylistViewModel playlistVM)
+        {
+            playlistVM = _services.GetRequiredService<PlaylistViewModel>();
+            _pageCache["Playlist"] = playlistVM;
+        }
+
+        if (playlistVM is ISmoothTransitionViewModel smoothPlaylistPage)
+        {
+            smoothPlaylistPage.PrepareForTransition();
+        }
+
+        // Изменение контента напрямую без присвоения null исключает сбой анимации
+        CurrentPage = playlistVM;
+        CurrentPageName = "Playlist";
+
+        if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
+        {
+            if (!_pageCache.ContainsKey(oldPageName))
+            {
+                _ = DisposePageDelayedAsync(disposable, oldPageName);
+            }
+        }
+
+        // Важно: Запускаем отложенную инициализацию, которая вызовет OnNavigatedToAsync и сбросит _isTransitioning в false
+        _ = DeferredInitAsync(playlistVM, "Playlist");
+
+        // Запуск асинхронного метода на UI-потоке. Метод сам уступит управление при await.
+        _ = LoadPlaylistSafeAsync(playlistVM, playlistId);
+    }
+
+    private async Task LoadPlaylistSafeAsync(PlaylistViewModel vm, string playlistId)
+    {
+        try
+        {
+            await vm.LoadPlaylistAsync(playlistId);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Navigation] Playlist load failed: {ex.Message}");
         }
     }
 
@@ -223,7 +289,7 @@ public class MainWindowViewModel : ViewModelBase
 
     private async Task DisposePageDelayedAsync(IDisposable page, string pageName)
     {
-        await Task.Delay(200);
+        await Task.Delay(256);
 
         try
         {
@@ -237,56 +303,6 @@ public class MainWindowViewModel : ViewModelBase
 
         _services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
         _services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
-
-        if (pageName is "Search" or "Library" or "Home")
-        {
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
-        }
-    }
-
-    /// <summary>
-    /// Навигация к плейлисту.
-    ///
-    /// <para><b>FIX диспозал независим от загрузки:</b> старая страница
-    /// диспозится через фиксированный <see cref="DisposePageDelayedAsync"/> delay,
-    /// не дожидаясь завершения LoadPlaylistAsync новой.
-    /// Это устраняет накопление zombie PlaylistVM при быстрых кликах:
-    /// каждая пред. страница диспозится через ~200ms после навигации,
-    /// независимо от того, сколько грузится новая.</para>
-    /// </summary>
-    public void NavigateToPlaylist(string playlistId)
-    {
-        if (IsNavigationLocked || DialogHost.HasActiveDialog) return;
-
-        Log.Info($"Navigating to Playlist: {playlistId}");
-
-        var oldPage = CurrentPage;
-        var oldPageName = CurrentPageName;
-
-        var playlistVM = _services.GetRequiredService<PlaylistViewModel>();
-
-        // Разрыв ссылки _lastPresenter (см. комментарий в Navigate)
-        CurrentPage = null;
-        CurrentPage = playlistVM;
-        CurrentPageName = "Playlist";
-
-        if (oldPage is IDisposable disposable && !string.IsNullOrEmpty(oldPageName))
-        {
-            _ = DisposePageDelayedAsync(disposable, oldPageName);
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await playlistVM.LoadPlaylistAsync(playlistId);
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"[Navigation] Playlist load failed: {ex.Message}");
-            }
-        });
     }
 
     private static void OpenGitHub()

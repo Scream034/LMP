@@ -22,7 +22,7 @@ public partial class TrackListControl : UserControl
     /// <summary>
     /// Фиксированная высота строки трека — O(1) hit-test при drag-and-drop.
     /// </summary>
-    private const double ItemHeight = 60.0;
+    private const double ItemHeight = 62.0;
 
     /// <summary>
     /// Минимальное смещение в пикселях для начала drag.
@@ -261,6 +261,7 @@ public partial class TrackListControl : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             _scrollViewer = this.FindAncestorOfType<ScrollViewer>();
+            Log.Debug($"[TrackList] Attached. ScrollViewer found: {_scrollViewer != null}");
 
             if (_scrollViewer != null && EnableSnapScroll)
             {
@@ -285,6 +286,7 @@ public partial class TrackListControl : UserControl
         _repeater = null;
         _scrollViewer = null;
         _lastHighlightedItem = null;
+        Log.Debug("[TrackList] Detached from visual tree.");
     }
 
     #endregion
@@ -346,11 +348,92 @@ public partial class TrackListControl : UserControl
 
     #endregion
 
+    #region Drag & Drop Helpers (Координаты с выводом отладочной информации)
+
+    /// <summary>
+    /// Безопасно вычисляет положение курсора мыши относительно начала <see cref="ItemsRepeater"/>,
+    /// используя систему координат стабильного <see cref="ScrollViewer"/>. Выводит подробный лог.
+    /// </summary>
+    private Point GetSafePositionInRepeater(DragEventArgs e, string context)
+    {
+        if (_repeater == null)
+        {
+            Log.Debug($"[{context}] GetSafePositionInRepeater: _repeater is null!");
+            return default;
+        }
+
+        var rawPos = e.GetPosition(_repeater);
+        var scrollViewer = _scrollViewer ?? this.FindAncestorOfType<ScrollViewer>();
+
+        Log.Debug($"[{context}] === Safe Position Calc Started ===");
+        Log.Debug($"[{context}] Raw e.GetPosition(_repeater): X={rawPos.X:F1}, Y={rawPos.Y:F1}");
+
+        if (scrollViewer != null)
+        {
+            var posInScrollViewer = e.GetPosition(scrollViewer);
+            var repeaterOrigin = _repeater.TranslatePoint(new Point(0, 0), scrollViewer);
+            var offset = scrollViewer.Offset;
+
+            Log.Debug($"[{context}] ScrollViewer.Offset.Y: {offset.Y:F1}");
+            Log.Debug($"[{context}] Pointer pos in ScrollViewer: X={posInScrollViewer.X:F1}, Y={posInScrollViewer.Y:F1}");
+
+            if (repeaterOrigin.HasValue)
+            {
+                Log.Debug($"[{context}] _repeater origin inside ScrollViewer: X={repeaterOrigin.Value.X:F1}, Y={repeaterOrigin.Value.Y:F1}");
+                var calculated = new Point(
+                    posInScrollViewer.X - repeaterOrigin.Value.X,
+                    posInScrollViewer.Y - repeaterOrigin.Value.Y);
+                Log.Debug($"[{context}] Calculated Safe Position: X={calculated.X:F1}, Y={calculated.Y:F1} (Diff with raw Y: {calculated.Y - rawPos.Y:F1})");
+                return calculated;
+            }
+            else
+            {
+                Log.Warn($"[{context}] _repeater.TranslatePoint returned NULL. Origin cannot be translated.");
+            }
+        }
+        else
+        {
+            Log.Warn($"[{context}] ScrollViewer not found. Using fallback raw position.");
+        }
+
+        return rawPos;
+    }
+
+    /// <summary>
+    /// Безопасно вычисляет Y-координату мыши относительно конкретного элемента списка с подробным логированием.
+    /// </summary>
+    private double GetSafeElementRelativeY(DragEventArgs e, Control element, Point safePosInRepeater, int idx, string context)
+    {
+        var scrollViewer = _scrollViewer ?? this.FindAncestorOfType<ScrollViewer>();
+        Log.Debug($"[{context}] GetSafeElementRelativeY for item index={idx}");
+
+        if (scrollViewer != null)
+        {
+            var posInScrollViewer = e.GetPosition(scrollViewer);
+            var elementOrigin = element.TranslatePoint(new Point(0, 0), scrollViewer);
+            if (elementOrigin.HasValue)
+            {
+                double calculatedRelY = posInScrollViewer.Y - elementOrigin.Value.Y;
+                Log.Debug($"[{context}] posInScrollViewer.Y={posInScrollViewer.Y:F1}, elementOrigin.Y={elementOrigin.Value.Y:F1} -> calculatedRelY={calculatedRelY:F1}");
+                return calculatedRelY;
+            }
+            else
+            {
+                Log.Warn($"[{context}] element.TranslatePoint returned NULL for item index={idx}");
+            }
+        }
+
+        double fallbackRelY = safePosInRepeater.Y - (idx * ItemHeight);
+        Log.Debug($"[{context}] Fallback calculation used: safePosInRepeater.Y={safePosInRepeater.Y:F1} - (idx*{ItemHeight}) -> fallbackRelY={fallbackRelY:F1}");
+        return fallbackRelY;
+    }
+
+    #endregion
+
     #region Drag & Drop
 
     /// <summary>
     /// O(1) индекс элемента по позиции Y.
-    /// Все строки фиксированной высоты <see cref="ItemHeight"/> — деление без итерации.
     /// </summary>
     private int GetItemIndexFromPosition(Point positionInRepeater)
     {
@@ -370,7 +453,11 @@ public partial class TrackListControl : UserControl
         _dragPressedArgs = e;
 
         if (_repeater != null)
-            _dragSourceIndex = GetItemIndexFromPosition(e.GetPosition(_repeater));
+        {
+            var repeaterPos = e.GetPosition(_repeater);
+            _dragSourceIndex = GetItemIndexFromPosition(repeaterPos);
+            Log.Debug($"[PointerPressed] Pressed at repeater: X={repeaterPos.X:F1}, Y={repeaterPos.Y:F1}. Calculated Source Index: {_dragSourceIndex}");
+        }
     }
 
     private async void OnItemPointerMoved(object? sender, PointerEventArgs e)
@@ -385,15 +472,28 @@ public partial class TrackListControl : UserControl
         if (deltaX < DragThreshold && deltaY < DragThreshold) return;
 
         long heldMs = Environment.TickCount64 - _dragPressTimestamp;
-        if (heldMs < DragMinHoldMs) return;
+        if (heldMs < DragMinHoldMs)
+        {
+            Log.Debug($"[PointerMoved] Drag threshold met but hold time too short ({heldMs}ms < {DragMinHoldMs}ms). Drag aborted.");
+            return;
+        }
 
         if (sender is not Control source) return;
 
         _isDragging = true;
+        Log.Info($"[PointerMoved] Starting drag-and-drop process from source index: {_dragSourceIndex}");
         using var dragData = new DragDataTransfer(_dragSourceIndex);
         source.Classes.Add("dragging");
 
-        try { await DragDrop.DoDragDropAsync(_dragPressedArgs, dragData, DragDropEffects.Move); }
+        try 
+        { 
+            var result = await DragDrop.DoDragDropAsync(_dragPressedArgs, dragData, DragDropEffects.Move); 
+            Log.Info($"[PointerMoved] DoDragDropAsync completed. Result: {result}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[PointerMoved] Error during DoDragDropAsync: {ex.Message}");
+        }
         finally
         {
             source.Classes.Remove("dragging");
@@ -409,11 +509,13 @@ public partial class TrackListControl : UserControl
         if (e.InitialPressMouseButton == MouseButton.Right &&
             sender is Control ctl && ctl.DataContext is TrackItemViewModel vm)
         {
+            Log.Debug($"[PointerReleased] Right-click detected on item: {vm.Title}");
             ShowSharedFlyout(ctl, vm, showAtPointer: true);
             e.Handled = true;
             return;
         }
 
+        Log.Debug("[PointerReleased] Mouse button released. Resetting drag parameters.");
         _isDragging = false;
         _dragSourceIndex = -1;
         _dragPressedArgs = null;
@@ -431,28 +533,42 @@ public partial class TrackListControl : UserControl
         e.DragEffects = DragDropEffects.Move;
         if (_repeater == null) return;
 
-        var pos = e.GetPosition(_repeater);
+        Log.Debug("[DragOver] OnDragOver triggered.");
+
+        // Получаем безопасные координаты с подробным логом вычислений
+        var pos = GetSafePositionInRepeater(e, "DragOver");
         int idx = GetItemIndexFromPosition(pos);
         var overItem = idx >= 0 ? _repeater.TryGetElement(idx) : null;
 
+        Log.Debug($"[DragOver] Hovered visual element index calculated: {idx}. Element found: {overItem != null}");
+
         if (_lastHighlightedItem != null && _lastHighlightedItem != overItem)
         {
+            Log.Debug($"[DragOver] Removing drag highlights from previous item: {_lastHighlightedItem.DataContext}");
             _lastHighlightedItem.Classes.Remove("insert-top");
             _lastHighlightedItem.Classes.Remove("insert-bottom");
         }
 
-        if (overItem == null) return;
+        if (overItem == null)
+        {
+            Log.Debug("[DragOver] overItem is null (no row under calculated coordinate), exiting OnDragOver.");
+            return;
+        }
         _lastHighlightedItem = overItem;
 
-        var relY = pos.Y - _repeater.Bounds.Position.Y - (idx * ItemHeight);
+        // Вычисляем координату внутри самой строки (0..60px)
+        double relY = GetSafeElementRelativeY(e, overItem, pos, idx, "DragOver");
+        Log.Debug($"[DragOver] Element relative position relY: {relY:F1}px (Row Height: {ItemHeight}px)");
 
         if (relY < ItemHeight / 2)
         {
+            Log.Debug($"[DragOver] relY < ItemHeight/2 ({ItemHeight / 2}). Visual line: TOP.");
             overItem.Classes.Add("insert-top");
             overItem.Classes.Remove("insert-bottom");
         }
         else
         {
+            Log.Debug($"[DragOver] relY >= ItemHeight/2 ({ItemHeight / 2}). Visual line: BOTTOM.");
             overItem.Classes.Remove("insert-top");
             overItem.Classes.Add("insert-bottom");
         }
@@ -462,26 +578,46 @@ public partial class TrackListControl : UserControl
 
     private void OnDragLeave(object? sender, RoutedEventArgs e)
     {
+        Log.Debug("[DragLeave] OnDragLeave triggered. Stopping timers & cleaning styles.");
         CleanupDragStyles();
         _autoScrollTimer?.Stop();
     }
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
+        Log.Info("[Drop] OnDrop event received.");
         CleanupDragStyles();
         _autoScrollTimer?.Stop();
 
-        if (!EnableReordering || !HasTrackIndexData(e) || _repeater == null) return;
+        if (!EnableReordering || !HasTrackIndexData(e) || _repeater == null)
+        {
+            Log.Warn($"[Drop] Drop aborted. EnableReordering={EnableReordering}, HasTrackData={HasTrackIndexData(e)}, RepeaterExists={_repeater != null}");
+            return;
+        }
 
         int oldIndex = GetTrackIndex(e);
+        Log.Info($"[Drop] Extracted oldIndex from drag payload: {oldIndex}");
         if (oldIndex < 0) return;
 
         int newIndex = CalculateDropIndex(e, oldIndex);
+        Log.Info($"[Drop] Final calculated target index (newIndex): {newIndex}");
 
-        if (_repeater.ItemsSource is ICollection col &&
-            newIndex >= 0 && oldIndex != newIndex && newIndex < col.Count)
+        if (_repeater.ItemsSource is ICollection col)
         {
-            MoveItemCommand?.Execute((oldIndex, newIndex));
+            Log.Debug($"[Drop] Source collection count: {col.Count}");
+            if (newIndex >= 0 && oldIndex != newIndex && newIndex < col.Count)
+            {
+                Log.Info($"[Drop] Executing MoveItemCommand: moving track from {oldIndex} to {newIndex}");
+                MoveItemCommand?.Execute((oldIndex, newIndex));
+            }
+            else
+            {
+                Log.Warn($"[Drop] Move rejected. Verification failed (newIndex out of bounds or oldIndex == newIndex).");
+            }
+        }
+        else
+        {
+            Log.Error("[Drop] ItemsSource is not ICollection!");
         }
     }
 
@@ -506,23 +642,49 @@ public partial class TrackListControl : UserControl
 
     private int CalculateDropIndex(DragEventArgs e, int oldIndex)
     {
-        if (_repeater == null) return -1;
+        if (_repeater == null)
+        {
+            Log.Warn("[DropIndex] _repeater is null in CalculateDropIndex!");
+            return -1;
+        }
 
-        var pos = e.GetPosition(_repeater);
+        Log.Debug($"[DropIndex] Calculating target index for oldIndex: {oldIndex}");
+
+        // Точное и безопасное вычисление координат с логом
+        var pos = GetSafePositionInRepeater(e, "DropIndex");
         int idx = GetItemIndexFromPosition(pos);
 
+        Log.Debug($"[DropIndex] Calculated raw index from safe coordinates: {idx}");
+
         if (idx < 0)
-            return _repeater.ItemsSource is ICollection c ? c.Count - 1 : -1;
+        {
+            int fallback = _repeater.ItemsSource is ICollection c ? c.Count - 1 : -1;
+            Log.Debug($"[DropIndex] Calculated index is out of bounds (<0). Falling back to bottom of list: {fallback}");
+            return fallback;
+        }
 
         var targetElement = _repeater.TryGetElement(idx);
-        var relY = targetElement != null ? e.GetPosition(targetElement).Y : pos.Y - (idx * ItemHeight);
+        double relY = targetElement != null 
+            ? GetSafeElementRelativeY(e, targetElement, pos, idx, "DropIndex") 
+            : pos.Y - (idx * ItemHeight);
+
+        Log.Debug($"[DropIndex] Target row element resolved: {targetElement != null}. relY: {relY:F1}px");
 
         int target = relY > ItemHeight / 2 ? idx + 1 : idx;
-        if (oldIndex < target) target--;
+        Log.Debug($"[DropIndex] Temp target before drag source index adjustment: {target}");
 
-        return _repeater.ItemsSource is ICollection col
+        if (oldIndex < target)
+        {
+            target--;
+            Log.Debug($"[DropIndex] oldIndex < target ({oldIndex} < {target + 1}). Adjusted target to: {target}");
+        }
+
+        int finalClamp = _repeater.ItemsSource is ICollection col
             ? Math.Clamp(target, 0, col.Count - 1)
             : target;
+
+        Log.Debug($"[DropIndex] Target index after clamping: {finalClamp}");
+        return finalClamp;
     }
 
     private static bool HasTrackIndexData(DragEventArgs e)
@@ -545,6 +707,7 @@ public partial class TrackListControl : UserControl
     private void CleanupDragStyles()
     {
         if (_lastHighlightedItem == null) return;
+        Log.Debug($"[Cleanup] Resetting visual highlight from item: {_lastHighlightedItem.DataContext}");
         _lastHighlightedItem.Classes.Remove("insert-top");
         _lastHighlightedItem.Classes.Remove("insert-bottom");
         _lastHighlightedItem = null;
@@ -637,75 +800,26 @@ public partial class TrackListControl : UserControl
     }
 
     #endregion
+
+    #region Smooth Snap Scroll Helper
+
     /// <summary>
     /// Выравнивает позицию ScrollViewer по целочисленной сетке высоты трека
     /// с velocity-based ballistics и time-based ease-out cubic анимацией.
-    ///
-    /// <para><b>Ballistics (Enhanced Scroll Precision):</b></para>
-    /// <para>Количество треков на тик зависит от скорости вращения колеса — интервала
-    /// между последовательными wheel-событиями. Медленно = 1 трек (точность),
-    /// быстро = до MaxTracksPerTick (навигация). Кривая степенная, не линейная —
-    /// ощущение аналогично Windows Enhanced Pointer Precision.</para>
-    ///
-    /// <para><b>Накопление:</b> при удержании колеса target накапливается от предыдущего
-    /// значения, анимация плавно "подхватывается" без рывка.</para>
-    ///
-    /// <para><b>Integer pixel rendering:</b> _targetOffset всегда snap-aligned (целый пиксель).
-    /// Промежуточные lerp-кадры используют дробные px — TextOptions.BaselinePixelAlignment=Unaligned
-    /// на ItemsRepeater компенсирует sub-pixel text rendering.</para>
     /// </summary>
     private sealed class SnapScrollHelper : IDisposable
     {
         #region Constants
 
-        /// <summary>
-        /// Порог дельты колеса для различения мыши и тачпада.
-        /// Mouse wheel: |delta| ≈ 1.0–3.0. Touchpad: |delta| ≈ 0.05–0.3.
-        /// </summary>
         private const double TouchpadDeltaThreshold = 0.5;
-
-        /// <summary>
-        /// Минимальное количество треков на тик — при очень медленном скролле.
-        /// 1 трек = максимальная точность, ощущение контроля.
-        /// </summary>
         private const double MinTracksPerTick = 1.0;
-
-        /// <summary>
-        /// Максимальное количество треков на тик — при очень быстром скролле.
-        /// </summary>
         private const double MaxTracksPerTick = 6.0;
-
-        /// <summary>
-        /// Интервал между тиками (мс) при котором используется MinTracksPerTick.
-        /// Больше этого значения = пользователь скроллит медленно и точно.
-        /// </summary>
         private const double SlowTickIntervalMs = 300.0;
-
-        /// <summary>
-        /// Интервал между тиками (мс) при котором используется MaxTracksPerTick.
-        /// Меньше этого значения = пользователь скроллит быстро.
-        /// </summary>
         private const double FastTickIntervalMs = 30.0;
-
-        /// <summary>
-        /// Коэффициент степени кривой баллистики.
-        /// 0.5 = √ (квадратный корень) — плавный рост, не слишком агрессивный.
-        /// Аналогично формуле BetterTouchTool: output = input × (1 + strength × √(|input|/4)).
-        /// </summary>
         private const double BallisticsCurveExponent = 0.5;
-
-        /// <summary>Базовая длительность анимации (мс) для шага в 3 трека.</summary>
         private const double BaseAnimDurationMs = 130.0;
-
-        /// <summary>Минимальная длительность анимации — для коротких шагов (1 трек).</summary>
         private const double MinAnimDurationMs = 60.0;
-
-        /// <summary>Максимальная длительность анимации — для длинных шагов (6 треков).</summary>
         private const double MaxAnimDurationMs = 200.0;
-
-        /// <summary>
-        /// Порог расстояния до maxOffset при котором snap заменяется точным maxOffset.
-        /// </summary>
         private const double BottomSnapEpsilon = 0.5;
 
         #endregion
@@ -719,9 +833,7 @@ public partial class TrackListControl : UserControl
         private long _animStartTime;
         private long _animDurationActual;
 
-        /// <summary>Timestamp последнего wheel-события для вычисления velocity.</summary>
         private long _lastWheelTime;
-
         private bool _isAnimating;
         private bool _disposed;
 
@@ -754,17 +866,14 @@ public partial class TrackListControl : UserControl
             double maxOffset = Math.Max(0, _sv.Extent.Height - _sv.Viewport.Height);
             if (maxOffset <= 0) return;
 
-            // ═══ BALLISTICS: velocity-based tracks per tick ═══
             long now = Environment.TickCount64;
             double intervalMs = Math.Clamp(now - _lastWheelTime, 1, SlowTickIntervalMs);
             _lastWheelTime = now;
 
             double tracksPerTick = ComputeTracksPerTick(intervalMs);
-
             double direction = Math.Sign(-e.Delta.Y);
             double step = direction * _itemHeight * tracksPerTick;
 
-            // Накапливаем от текущего target если анимация уже идёт
             double baseOffset = _isAnimating ? _targetOffset : _sv.Offset.Y;
             double raw = Math.Clamp(baseOffset + step, 0, maxOffset);
 
@@ -775,7 +884,6 @@ public partial class TrackListControl : UserControl
             else
                 _targetOffset = SnapToGrid(raw, direction);
 
-            // Адаптивная длительность: пропорционально реальной дистанции
             double distance = Math.Abs(_targetOffset - _sv.Offset.Y);
             double referenceStep = _itemHeight * 3.0;
             _animDurationActual = (long)Math.Clamp(
@@ -786,35 +894,15 @@ public partial class TrackListControl : UserControl
             StartAnim();
         }
 
-        /// <summary>
-        /// Вычисляет количество треков на тик по velocity-кривой.
-        ///
-        /// <para>Кривая степенная (exponent=0.5, т.е. √):
-        /// быстрый рост в начале (медленный → средний scroll),
-        /// плавный выход к MaxTracksPerTick при высокой скорости.
-        /// Это соответствует поведению Windows Enhanced Pointer Precision.</para>
-        ///
-        /// <para>intervalMs → нормализуем в [0..1] где 0=быстро, 1=медленно →
-        /// применяем обратную степенную кривую → интерполируем треки.</para>
-        /// </summary>
         private static double ComputeTracksPerTick(double intervalMs)
         {
-            // t=0 → быстро (MaxTracks), t=1 → медленно (MinTracks)
             double t = Math.Clamp(
                 (intervalMs - FastTickIntervalMs) / (SlowTickIntervalMs - FastTickIntervalMs),
                 0.0, 1.0);
-
-            // Степенная кривая: √t даёт быстрый рост при малых t (высокая скорость),
-            // плавный выход при больших t (низкая скорость)
             double curved = Math.Pow(t, BallisticsCurveExponent);
-
             return MinTracksPerTick + (MaxTracksPerTick - MinTracksPerTick) * (1.0 - curved);
         }
 
-        /// <summary>
-        /// Кадр time-based анимации с ease-out cubic.
-        /// Прогресс по реальному времени — не зависит от fps.
-        /// </summary>
         private void OnAnimTick(object? sender, EventArgs e)
         {
             double elapsed = (Environment.TickCount64 - _animStartTime) / (double)_animDurationActual;
@@ -829,10 +917,6 @@ public partial class TrackListControl : UserControl
             SetOffset(_animStartOffset + (_targetOffset - _animStartOffset) * EaseOutCubic(elapsed));
         }
 
-        /// <summary>
-        /// Запускает или перезапускает анимацию от текущей визуальной позиции.
-        /// Перезапуск при новом wheel-событии во время анимации — плавное «подхватывание».
-        /// </summary>
         private void StartAnim()
         {
             _animStartOffset = _sv.Offset.Y;
@@ -850,14 +934,8 @@ public partial class TrackListControl : UserControl
             _animTimer.Stop();
         }
 
-        /// <summary>Ease-out cubic: f(t) = 1 - (1-t)³</summary>
         private static double EaseOutCubic(double t) => 1.0 - Math.Pow(1.0 - t, 3.0);
 
-        /// <summary>
-        /// Направление-зависимый snap:
-        /// вниз → Ceiling (всегда доходим до следующей границы),
-        /// вверх → Floor (не перепрыгиваем назад).
-        /// </summary>
         private double SnapToGrid(double offset, double direction) =>
             direction > 0
                 ? Math.Ceiling(offset / _itemHeight) * _itemHeight
@@ -875,4 +953,6 @@ public partial class TrackListControl : UserControl
             _sv.RemoveHandler(PointerWheelChangedEvent, OnWheel);
         }
     }
+
+    #endregion
 }

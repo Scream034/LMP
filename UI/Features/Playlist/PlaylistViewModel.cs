@@ -10,26 +10,12 @@ using LMP.UI.Dialogs;
 using Microsoft.Extensions.DependencyInjection;
 using Avalonia.Threading;
 
-
 namespace LMP.UI.Features.Playlist;
 
 /// <summary>
 /// ViewModel экрана плейлиста.
-/// Наследует <see cref="TrackListReorderableViewModel"/> — поддерживает drag-and-drop,
-/// фиксированный порядок, Smart Parent (активный трек, прогресс загрузки).
-///
-/// <para><b>Gradient Header:</b> цвет вычисляется из обложки через DominantColorService,
-/// кэшируется в <c>ComputedColor</c>. CustomColor имеет приоритет.</para>
-///
-/// <para><b>Liked Playlist:</b> источник — лайкнутые треки, редактирование отключено.</para>
-///
-/// <para><b>Cloud Playlist:</b> синхронизация через PlaylistSyncService,
-/// защита от двойного запуска через Interlocked gate.</para>
-///
-/// <para><b>Локальные мутации</b> (move/remove) дебаунсируют OnDataChanged
-/// чтобы избежать повторного reload после собственной операции.</para>
 /// </summary>
-public sealed class PlaylistViewModel : TrackListReorderableViewModel
+public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTransitionViewModel
 {
     #region Fields
 
@@ -64,7 +50,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     [Reactive] public string PlaylistName { get; private set; } = string.Empty;
     [Reactive] public string? ThumbnailUrl { get; private set; }
 
-    /// <summary>Описание плейлиста. Отображается в хедере под названием.</summary>
     [Reactive] public string? Description { get; private set; }
 
     [Reactive] public int TrackCount { get; private set; }
@@ -81,11 +66,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     [Reactive] public bool IsSyncing { get; private set; }
     [Reactive] public bool CanReorderItems { get; private set; }
 
-    /// <summary>
-    /// YouTube URL плейлиста для CopyLinkButton.
-    /// Для Liked Playlist — специальный системный ID "LL".
-    /// Null если плейлист не привязан к YouTube.
-    /// </summary>
     public string? PlaylistYoutubeUrl =>
         IsLikedPlaylist && _auth.IsAuthenticated
             ? "https://www.youtube.com/playlist?list=LL"
@@ -98,11 +78,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
     public string FormattedTrackCount =>
         LocalizationService.Instance.GetPlural("Playlist_TracksCount", TrackCount);
 
-    /// <summary>
-    /// Высота хедера плейлиста, управляемая GridSplitter (TwoWay).
-    /// Зажата в [<see cref="HeaderHeightMin"/>, <see cref="HeaderHeightMax"/>].
-    /// Сохраняется в Settings при изменении.
-    /// </summary>
     public GridLength HeaderHeight
     {
         get => _headerHeight;
@@ -118,15 +93,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
     private GridLength _headerHeight;
 
-    /// <summary>
-    /// Минимальная высота хедера: padding(48) + title×2(100) + desc×2(44) +
-    /// stats(36) + buttons(48) + margins(24) ≈ 300px. Floor 280px с запасом.
-    /// </summary>
     private const double HeaderHeightMin = 280;
-
-    /// <summary>
-    /// Максимальная высота хедера: предотвращает скрытие треков при случайном растягивании.
-    /// </summary>
     private const double HeaderHeightMax = 400;
 
     #endregion
@@ -284,6 +251,16 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
     #endregion
 
+    #region ISmoothTransitionViewModel
+
+    public override void PrepareForTransition()
+    {
+        base.PrepareForTransition();
+        IsLoading = true;
+    }
+
+    #endregion
+
     #region Lifecycle
 
     protected override void OnSuspend()
@@ -303,11 +280,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
     #region TrackListReorderableViewModel Implementation
 
-    /// <summary>
-    /// Переопределяем CreateViewModel для настройки контекстных действий VM:
-    /// RemoveFromPlaylistAction, StartRadioAction, SourceContextId, IsPlaylistContext.
-    /// Базовая логика (SetActive при создании) вызывается через base.
-    /// </summary>
     protected override TrackItemViewModel CreateViewModel(TrackInfo item)
     {
         var vm = base.CreateViewModel(item);
@@ -322,7 +294,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             _lastLocalMutationTime = DateTime.Now;
             InvalidateAllTracksCache();
 
-            // O(1) UI: убираем строку без полного re-render.
             RemoveItemLocally(t.Id);
 
             TrackCount = Math.Max(0, TrackCount - 1);
@@ -336,8 +307,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
                 FormatDuration();
             }
 
-            // DB + YouTube sync в фоне. OnDataChanged будет проигнорирован
-            // благодаря _lastLocalMutationTime debounce.
             await _manager.RemoveTrackFromPlaylistAsync(_currentPlaylistId, t.Id);
         };
 
@@ -346,19 +315,12 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         return vm;
     }
 
-    /// <summary>
-    /// Загружает треки плейлиста по списку ID.
-    /// ReorderableViewModel вызывает этот метод при инициализации.
-    /// </summary>
     protected override async Task<List<TrackInfo>> LoadTracksAsync(
         IEnumerable<string> ids, CancellationToken ct)
     {
         return await LibService.GetPlaylistTracksAsync(_currentPlaylistId, ct);
     }
 
-    /// <summary>
-    /// Сохраняет новый порядок в БД после drag-and-drop.
-    /// </summary>
     protected override async Task SaveMoveAsync(
         int fromMasterIndex, int toMasterIndex, CancellationToken ct)
     {
@@ -367,10 +329,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         Log.Info("[Playlist] Move saved");
     }
 
-    /// <summary>
-    /// Запускает воспроизведение конкретного трека из плейлиста.
-    /// Формирует полную очередь, выключает авто-shuffle через PlayerControlService.
-    /// </summary>
     protected override void OnPlay(TrackInfo track)
     {
         _ = PlayFromPlaylistAsync(track);
@@ -380,12 +338,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
     #region Public API
 
-    /// <summary>
-    /// Загружает плейлист по паттерну Skeleton-First:
-    /// 1. Мгновенно выставляет заголовок и IsLoading=true (0мс отклик UI).
-    /// 2. В фоне грузит треки из БД.
-    /// 3. Снимает IsLoading — скелетоны заменяются треками.
-    /// </summary>
     public async Task LoadPlaylistAsync(string playlistId)
     {
         _currentPlaylistId = playlistId;
@@ -393,61 +345,56 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
         IsLoading = true;
 
-        var playlist = await LibService.GetPlaylistAsync(playlistId);
-        if (playlist is null)
+        try
         {
-            IsLoading = false;
-            return;
+            var playlist = await LibService.GetPlaylistAsync(playlistId);
+            if (playlist is null)
+            {
+                return;
+            }
+
+            _currentPlaylist = playlist;
+
+            PlaylistName = playlist.Name;
+            ThumbnailUrl = playlist.ThumbnailUrl;
+            Description = playlist.Description;
+            CanEdit = playlist.IsEditable;
+            IsLikedPlaylist = playlistId == LibraryService.LikedPlaylistId;
+            IsCloud = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
+            this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
+            HasYoutubeLink = PlaylistYoutubeUrl is not null;
+            IsReadOnly = !playlist.IsEditable;
+
+            var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
+            TrackCount = allIds.Count;
+            this.RaisePropertyChanged(nameof(FormattedTrackCount));
+
+            TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
+            FormatDuration();
+            this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
+
+            await InitializeAsync(allIds);
+
+            _ = LoadHeaderGradientAsync();
+            _ = HydrateCacheStatusInBackgroundAsync();
+
+            UpdateIsPlayingThisPlaylist();
         }
-
-        _currentPlaylist = playlist;
-
-        PlaylistName = playlist.Name;
-        ThumbnailUrl = playlist.ThumbnailUrl;
-        Description = playlist.Description;
-        CanEdit = playlist.IsEditable;
-        IsLikedPlaylist = playlistId == LibraryService.LikedPlaylistId;
-        IsCloud = playlist.IsFromAccount || (IsLikedPlaylist && _auth.IsAuthenticated);
-        this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
-        HasYoutubeLink = PlaylistYoutubeUrl is not null;
-        IsReadOnly = !playlist.IsEditable;
-
-        var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
-        TrackCount = allIds.Count;
-        this.RaisePropertyChanged(nameof(FormattedTrackCount));
-
-        TotalDuration = await LibService.GetPlaylistTotalDurationAsync(playlistId);
-        FormatDuration();
-        this.RaisePropertyChanged(nameof(PlaylistYoutubeUrl));
-
-        await InitializeAsync(allIds);
-
-        IsLoading = false;
-
-        _ = LoadHeaderGradientAsync();
-        _ = HydrateCacheStatusInBackgroundAsync();
-
-        UpdateIsPlayingThisPlaylist();
+        catch (Exception ex)
+        {
+            Log.Error($"[Playlist] Error loading playlist '{playlistId}': {ex.Message}");
+        }
+        finally
+        {
+            // Блок гарантирует сокрытие скелетона и появление разметки даже при сбое
+            IsLoading = false;
+        }
     }
 
     #endregion
 
     #region Private Helpers
 
-    /// <summary>
-    /// Реактивная подписка: IsPlayingThisPlaylist обновляется при любом изменении
-    /// источника или состояния воспроизведения — без полного перезапуска LoadPlaylistAsync.
-    ///
-    /// <para><b>Условие:</b> плейлист считается "воспроизводящимся" если:
-    /// <list type="bullet">
-    ///   <item>Именно он является источником текущей очереди (ActivePlaylistId совпадает)</item>
-    ///   <item>И состояние — Playing ИЛИ Paused (не Stopped)</item>
-    /// </list></para>
-    ///
-    /// <para><b>ObserveOn до CombineLatest:</b> оба source-observable переводятся на
-    /// MainThread ДО соединения — CombineLatest-проекция и все downstream-цепочки
-    /// гарантированно живут в UI-потоке, исключая cross-thread CanExecuteChanged.</para>
-    /// </summary>
     private void SubscribeToPlaybackSource()
     {
         _playerControl.ActivePlaylistIdObservable
@@ -461,11 +408,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             .DisposeWith(Disposables);
     }
 
-    /// <summary>
-    /// Синхронное обновление IsPlayingThisPlaylist по текущему состоянию сервиса.
-    /// Вызывается после LoadPlaylistAsync когда _currentPlaylistId меняется,
-    /// т.к. подписка из конструктора использует замкнутое поле — не retriggers автоматически.
-    /// </summary>
     private void UpdateIsPlayingThisPlaylist()
     {
         IsPlayingThisPlaylist =
@@ -512,7 +454,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
 
         if (IsPlayingThisPlaylist)
         {
-            // Toggle: пауза если играет, продолжение если на паузе
             await _playerControl.PlayPauseAsync();
             return;
         }
@@ -526,10 +467,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         await Audio.StartQueueAsync(allTracks, allTracks[0]);
     }
 
-    /// <summary>
-    /// Разовый shuffle треков плейлиста (не включает авто-shuffle).
-    /// Fisher-Yates для честного перемешивания.
-    /// </summary>
     private async Task ShufflePlayAsync()
     {
         if (TrackCount == 0) return;
@@ -597,11 +534,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             await LoadPlaylistAsync(_currentPlaylistId);
     }
 
-    /// <summary>
-    /// Синхронизация с YouTube. Защита от двойного запуска через Interlocked gate.
-    /// Для Liked playlist — SyncLikedTracksAsync.
-    /// Для остальных — PlaylistSyncService с диалогом опций.
-    /// </summary>
     private async Task RefreshPlaylistAsync()
     {
         if (!IsCloud) return;
@@ -685,10 +617,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
         }
     }
 
-    /// <summary>
-    /// Копирует ссылку на плейлист и показывает toast через CopyHintService.
-    /// Warning-toast если плейлист не привязан к YouTube.
-    /// </summary>
     private async Task CopyPlaylistLinkAsync()
     {
         if (_currentPlaylist?.YoutubeId is not { Length: > 0 } ytId)
@@ -705,10 +633,6 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel
             CopyHintKind.Success);
     }
 
-    /// <summary>
-    /// Загружает градиент хедера с приоритетом:
-    /// CustomColor → ComputedColor → доминантный из обложки → null.
-    /// </summary>
     private async Task LoadHeaderGradientAsync()
     {
         try

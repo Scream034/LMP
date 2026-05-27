@@ -96,10 +96,10 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
             _ => SuspendLevel.None
         };
 
-        // ═══ РАННЯЯ ПРОВЕРКА: тот же уровень — выход ═══
+        // РАННЯЯ ПРОВЕРКА: тот же уровень — выход
         if (_currentLevel == effectiveLevel) return;
 
-        // ═══ ДЕБАУНС: предотвращаем спам ═══
+        // ДЕБАУНС: предотвращаем спам
         var now = DateTime.UtcNow;
         if ((now - _lastLevelChangeTime).TotalMilliseconds < BroadcastDebounceMs)
         {

@@ -6,8 +6,13 @@ using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
-
 namespace LMP.UI.Features.Search;
+
+/// <summary>
+/// Обертка истории поиска для O(1) доступа к командам без поиска по визуальному дереву.
+/// Предотвращает ошибки "Value is null" при анимации затухания.
+/// </summary>
+public sealed record SearchHistoryItem(string Query, SearchViewModel Owner);
 
 /// <summary>
 /// ViewModel экрана поиска треков.
@@ -72,22 +77,16 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     [Reactive] public bool IsOfflineMode { get; private set; }
 
     /// <summary>
-    /// False при первом открытии — страница отрисовывается мгновенно без загрузки данных.
-    /// Устанавливается в true из <see cref="OnNavigatedToAsync"/>.
-    /// </summary>
-    [Reactive] public bool IsInitialized { get; private set; }
-
-    /// <summary>
     /// Кнопка принудительного обновления: видна только при наличии кэшированных результатов.
     /// </summary>
     public bool ShowForceSearchButton =>
         LibService.Settings.EnableSearchCache && IsFromCache && !IsLoading;
 
     /// <summary>
-    /// История поиска. Отдельная коллекция (не прямой биндинг на Settings)
-    /// — предотвращает binding errors при dispose страницы.
+    /// История поиска. Обернута в SearchHistoryItem для предотвращения 
+    /// binding exceptions при teardown'е страницы.
     /// </summary>
-    public ObservableCollection<string> RecentSearches { get; } = [];
+    public ObservableCollection<SearchHistoryItem> RecentSearches { get; } = [];
 
     #endregion
 
@@ -117,7 +116,7 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         _imageCache = imageCache;
 
         foreach (var item in LibService.Settings.SearchHistory)
-            RecentSearches.Add(item);
+            RecentSearches.Add(new SearchHistoryItem(item, this));
 
         var canSearch = this.WhenAnyValue(
             x => x.SearchQuery, x => x.IsLoading,
@@ -145,7 +144,10 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         RemoveHistoryCommand = CreateCommand(ReactiveCommand.Create<string>(q =>
         {
             if (_isDisposed) return;
-            RecentSearches.Remove(q);
+            var itemToRemove = RecentSearches.FirstOrDefault(x => x.Query == q);
+            if (itemToRemove != null)
+                RecentSearches.Remove(itemToRemove);
+
             UpdateHistoryStorage();
         }));
 
@@ -173,6 +175,10 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
                     await ExecuteSearchAsync(forceNetwork: false);
             })
             .DisposeWith(Disposables);
+
+        // Отключаем стартовый скелетон для пустой страницы поиска,
+        // так как базовая VM инициализирует списки со статусом IsLoading = true
+        IsLoading = false;
     }
 
     #endregion
@@ -180,15 +186,14 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     #region Navigation
 
     /// <summary>
-    /// Отмечает страницу готовой — UI переключается со скелетона на рабочее состояние.
-    /// Данные грузятся по запросу пользователя, не здесь.
+    /// Вызывается после завершения анимации перехода.
+    /// Запускает перехватчик из базового класса для плавного отображения контента.
     /// </summary>
-    public override Task OnNavigatedToAsync()
+    public override async Task OnNavigatedToAsync()
     {
-        if (!_isDisposed)
-            IsInitialized = true;
+        if (_isDisposed) return;
 
-        return Task.CompletedTask;
+        await base.OnNavigatedToAsync(); // Запуск базового перехватчика
     }
 
     #endregion
@@ -511,8 +516,12 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     private void AddToHistory(string query)
     {
         if (_isDisposed || string.IsNullOrWhiteSpace(query)) return;
-        RecentSearches.Remove(query);
-        RecentSearches.Insert(0, query);
+
+        var existing = RecentSearches.FirstOrDefault(x => x.Query == query);
+        if (existing != null) RecentSearches.Remove(existing);
+
+        RecentSearches.Insert(0, new SearchHistoryItem(query, this));
+
         while (RecentSearches.Count > 10) RecentSearches.RemoveAt(RecentSearches.Count - 1);
         UpdateHistoryStorage();
     }
@@ -520,7 +529,9 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     private void UpdateHistoryStorage()
     {
         if (_isDisposed) return;
-        LibService.UpdateSettings(s => s.SearchHistory = [.. RecentSearches]);
+        // Извлекаем чистые строки для сохранения в БД
+        var historyStrings = RecentSearches.Select(x => x.Query).ToArray();
+        LibService.UpdateSettings(s => s.SearchHistory = [.. historyStrings]);
     }
 
     #endregion

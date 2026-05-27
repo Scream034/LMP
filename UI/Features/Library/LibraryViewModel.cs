@@ -22,8 +22,10 @@ namespace LMP.UI.Features.Library;
 ///   <item>O(1) запрос длительности вместо N+1</item>
 /// </list>
 /// </summary>
-public sealed class LibraryViewModel : ViewModelBase
+public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 {
+    private const int NavigationDebounceMs = 64;
+
     #region Зависимости
 
     private readonly AudioEngine _audio;
@@ -46,6 +48,10 @@ public sealed class LibraryViewModel : ViewModelBase
     private bool _isDisposed;
     private int _prevPlaylistCount;
     private int _prevTrackCount;
+    /// <summary>
+    /// Локальный признак наличия данных в памяти
+    /// </summary>
+    private bool _isDataLoaded;
 
     #endregion
 
@@ -129,13 +135,34 @@ public sealed class LibraryViewModel : ViewModelBase
 
     #endregion
 
+    #region ISmoothTransitionViewModel
+
+    /// <inheritdoc />
+    public void PrepareForTransition()
+    {
+        IsContentReady = false; // Скрываем тяжелые карточки плейлистов перед переходом
+    }
+
+    #endregion
+
     #region Навигация
 
     public override async Task OnNavigatedToAsync()
     {
         if (_isDisposed) return;
 
+        if (_isDataLoaded)
+        {
+            // Карточки уже в ОЗУ, делаем видимыми без обращения к SQLite
+            IsContentReady = true;
+            return;
+        }
+
+        await Task.Delay(NavigationDebounceMs).ConfigureAwait(false);
+        if (_isDisposed) return;
+
         await LoadPlaylistsAsync();
+        _isDataLoaded = true;
         IsContentReady = true;
     }
 

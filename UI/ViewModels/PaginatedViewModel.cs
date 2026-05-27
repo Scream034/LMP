@@ -6,10 +6,11 @@ using DynamicData;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using LMP.UI.Features.Shell; // Добавлено
 
 namespace LMP.UI.ViewModels;
 
-public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IFilterable
+public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, IFilterable, ISmoothTransitionViewModel
     where TViewModel : IDisposable
     where TSource : notnull
 {
@@ -28,6 +29,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
     private bool _canFetchMore;
     private bool _isDisposed;
 
+    // Поля автоматического перехватчика переходов
+    private bool _isDataLoading = true;
+    private bool _isTransitioning;
+
     #endregion
 
     #region Properties
@@ -37,7 +42,21 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         : 20;
     protected virtual int PrefetchThreshold => 10;
 
-    [Reactive] public bool IsLoading { get; protected set; }
+    /// <summary>
+    /// Управляет видимостью списка. Вычисляет итоговое состояние:
+    /// скелетон показывается если грузятся данные ИЛИ идет анимация перехода.
+    /// </summary>
+    public bool IsLoading
+    {
+        get => _isDataLoading || _isTransitioning;
+        protected set
+        {
+            if (_isDataLoading == value) return;
+            _isDataLoading = value;
+            this.RaisePropertyChanged(nameof(IsLoading));
+        }
+    }
+
     [Reactive] public bool IsLoadingMore { get; protected set; }
     [Reactive] public bool IsFetchingFromNetwork { get; protected set; }
     [Reactive] public bool HasMoreItems { get; protected set; }
@@ -83,7 +102,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             x => x.HasMoreItems,
             (more, init, net, hasMore) => !more && !init && !net && hasMore);
 
-        // Используем CreateCommand из базового класса
         LoadMoreCommand = CreateCommand(ReactiveCommand.CreateFromTask(async _ => await LoadNextBatchAsync(), canLoadMore));
 
         _sourceList.Connect()
@@ -106,6 +124,29 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         this.WhenAnyValue(x => x.FilterQuery)
             .Subscribe(_ => _consecutiveEmptyLoads = 0)
             .DisposeWith(_dynamicDataSubscriptions);
+    }
+
+    #endregion
+
+    #region ISmoothTransitionViewModel
+
+    /// <inheritdoc />
+    public virtual void PrepareForTransition()
+    {
+        _isTransitioning = true;
+        this.RaisePropertyChanged(nameof(IsLoading));
+    }
+
+    #endregion
+
+    #region Navigation Lifecycle
+
+    public override async Task OnNavigatedToAsync()
+    {
+        _isTransitioning = false;
+        this.RaisePropertyChanged(nameof(IsLoading));
+
+        await base.OnNavigatedToAsync();
     }
 
     #endregion
@@ -278,11 +319,6 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
             CancelLoading();
             _dynamicDataSubscriptions.Dispose();
 
-            // Разрыв GC-root цепочки
-            // TrackItemVM.Dispose() отписывается от Track.PropertyChanged,
-            // без этого: TrackRegistry._pinned → TrackInfo.PropertyChanged
-            //   → TrackItemVM._onPlay → PageVM (удерживает весь граф).
-            // _items — ReadOnlyObservableCollection, итерируем до Dispose SourceList.
             foreach (var item in _items)
             {
                 if (item is IDisposable d)

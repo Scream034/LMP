@@ -6,6 +6,7 @@ using Avalonia.Threading;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Youtube.Utils;
+using LMP.UI.Features.Shell;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -39,8 +40,10 @@ public enum ImageCachePreset { Custom, Low, Medium, High }
 /// Все страницы получают DataContext = этот VM напрямую (без Owner.*).
 /// </para>
 /// </summary>
-public sealed class SettingsViewModel : ViewModelBase, IDisposable
+public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTransitionViewModel
 {
+    private const int NavigationDebounceMs = 128;
+
     private readonly LibraryService _library;
     private readonly TrackRegistry _registry;
     private readonly SearchCacheService _searchCache;
@@ -55,6 +58,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
     private bool _isUpdatingPreset;
     private bool _isLoadingSettings;
     private bool _isDisposed;
+    /// <summary>
+    /// Локальный признак наличия данных в памяти
+    /// </summary>
+    private bool _isDataLoaded;
 
     /// <summary>
     /// Признак готовности контента.
@@ -431,19 +438,27 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
     }
 
+    /// <inheritdoc />
+    public void PrepareForTransition()
+    {
+        IsContentReady = false; // Скрываем тяжелый сайдбар и страницы настроек
+    }
+
     /// <summary>
     /// Вызывается при переходе на страницу настроек.
-    /// <para>
-    /// Порядок: короткая задержка → инициализация списков → загрузка настроек →
-    /// статистика → подписки → выбор первой секции → <see cref="IsContentReady"/> = true.
-    /// Задержка 50ms нужна чтобы skeleton успел отрендериться до тяжёлой синхронной работы.
-    /// </para>
     /// </summary>
     public override async Task OnNavigatedToAsync()
     {
         if (_isDisposed) return;
 
-        await Task.Delay(50).ConfigureAwait(false);
+        if (_isDataLoaded)
+        {
+            // Настройки и локализация уже в памяти, мгновенно открываем UI
+            IsContentReady = true;
+            return;
+        }
+
+        await Task.Delay(NavigationDebounceMs).ConfigureAwait(false);
         if (_isDisposed) return;
 
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -453,12 +468,12 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable
             UpdateCacheStats();
             SetupSubscriptions();
 
-            // Выбираем первую секцию — страница отрендерится лениво после IsContentReady
             SelectedSidebarItem ??= SidebarItems.FirstOrDefault();
 
             if (IsAuthenticated && _auth.State.UserName == "Guest")
                 _ = FetchUserProfileQuietlyAsync();
 
+            _isDataLoaded = true;
             IsContentReady = true;
         });
 

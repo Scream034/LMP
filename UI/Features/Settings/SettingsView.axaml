@@ -7,7 +7,7 @@
 
     <!--
         UserControl.Styles полностью убраны.
-        Все стили сайдбара живут в UI/Theme/Buttons.axaml → ListBox.nav-sidebar.
+        Все стили сайдбара живут in UI/Theme/Buttons.axaml → ListBox.nav-sidebar.
         Это обеспечивает единый визуальный язык с nav-tab из MainWindow
         и устраняет дублирование ~70 строк стилей.
     -->
@@ -47,7 +47,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Account_Language]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -61,7 +61,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Network]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -75,7 +75,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Storage_Data]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -89,7 +89,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Memory]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -103,7 +103,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Appearance]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -117,7 +117,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Audio]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -131,7 +131,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_Playback]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -145,7 +145,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_WindowBehavior]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
@@ -159,7 +159,7 @@
                                     VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Owner.L[Settings_General]}"
                                     VerticalAlignment="Center"
-                                    IsVisible="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).IsSidebarExpanded}" />
+                                    IsVisible="{Binding Owner.IsSidebarExpanded}" />
                             </StackPanel>
                         </DataTemplate>
 
