@@ -1,7 +1,6 @@
 <Project>
   <!-- Таргет для сборки метаданных из Git. 
-       Выполняется как для Debug, так и для Release, но только во время РЕАЛЬНОЙ сборки (не фоновой в
-  редакторе) -->
+       Выполняется как для Debug, так и для Release, но только во время РЕАЛЬНОЙ сборки (не фоновой в редакторе) -->
   <Target Name="SetGitVersionInfo"
     BeforeTargets="PrepareForBuild;GetAssemblyVersion;GenerateAssemblyInfo"
     Condition="Exists('$(MSBuildThisFileDirectory).git') And '$(DesignTimeBuild)' != 'true'">
@@ -41,10 +40,11 @@
 
     <!-- Запись вычисленных версий в свойства сборки -->
     <PropertyGroup>
-      <Version>$(VersionPrefix).$(GitCommitCount)</Version>
-      <AssemblyVersion>$(VersionPrefix).$(GitCommitCount).0</AssemblyVersion>
-      <FileVersion>$(VersionPrefix).$(GitCommitCount).0</FileVersion>
-      <InformationalVersion>$(VersionPrefix).$(GitCommitCount)+$(GitShortHash)</InformationalVersion>
+      <Version>$(VersionMajor).$(VersionMinor).$(GitCommitCount)</Version>
+      <Version Condition="'$(VersionSuffix)' != ''">$(Version)-$(VersionSuffix)</Version>
+      <AssemblyVersion>$(VersionMajor).$(VersionMinor).$(GitCommitCount).0</AssemblyVersion>
+      <FileVersion>$(VersionMajor).$(VersionMinor).$(GitCommitCount).0</FileVersion>
+      <InformationalVersion>$(VersionMajor).$(VersionMinor).$(GitCommitCount)+$(GitShortHash)</InformationalVersion>
     </PropertyGroup>
 
     <Message Importance="High" Text="══════════════════════════════════════" />
@@ -53,17 +53,16 @@
     <Message Importance="High" Text="══════════════════════════════════════" />
   </Target>
 
-  <!-- Резервный таргет: срабатывает, если нет Git репозитория или идет фоновая (Design-Time) сборка
-  в редакторе.
-       Предотвращает ложную пересборку FodyTarget при изменении кода. -->
+  <!-- Резервный таргет: срабатывает, если нет Git репозитория или идет фоновая (Design-Time) сборка в редакторе. -->
   <Target Name="SetFallbackVersion"
     BeforeTargets="PrepareForBuild;GetAssemblyVersion;GenerateAssemblyInfo"
     Condition="!Exists('$(MSBuildThisFileDirectory).git') Or '$(DesignTimeBuild)' == 'true'">
     <PropertyGroup>
-      <Version>$(VersionPrefix).0</Version>
-      <AssemblyVersion>$(VersionPrefix).0.0</AssemblyVersion>
-      <FileVersion>$(VersionPrefix).0.0</FileVersion>
-      <InformationalVersion>$(VersionPrefix).0+local</InformationalVersion>
+      <Version>$(VersionMajor).$(VersionMinor).0</Version>
+      <Version Condition="'$(VersionSuffix)' != ''">$(Version)-$(VersionSuffix)</Version>
+      <AssemblyVersion>$(VersionMajor).$(VersionMinor).0.0</AssemblyVersion>
+      <FileVersion>$(VersionMajor).$(VersionMinor).0.0</FileVersion>
+      <InformationalVersion>$(VersionMajor).$(VersionMinor).0+local</InformationalVersion>
     </PropertyGroup>
   </Target>
 </Project>

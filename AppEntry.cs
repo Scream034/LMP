@@ -19,6 +19,7 @@ using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Bridge.Common;
 using LMP.UI.Features.Notifications;
 using ReactiveUI.Avalonia;
+using LMP.UI.Features.Queue;
 
 namespace LMP;
 

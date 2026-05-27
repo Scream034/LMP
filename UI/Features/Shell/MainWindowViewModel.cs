@@ -13,6 +13,7 @@ using LMP.UI.Features.Settings;
 using LMP.UI.Features.Playlist;
 using LMP.UI.Features.Notifications;
 using System.Runtime;
+using LMP.UI.Features.Queue;
 
 namespace LMP.UI.Features.Shell;
 

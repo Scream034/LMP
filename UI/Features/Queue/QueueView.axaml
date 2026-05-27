@@ -1,8 +1,8 @@
 <UserControl xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:LMP.UI.Features.Player"
+    xmlns:vm="using:LMP.UI.Features.Queue"
     xmlns:controls="using:LMP.UI.Controls"
-    x:Class="LMP.UI.Features.Player.QueueView"
+    x:Class="LMP.UI.Features.Queue.QueueView"
     x:DataType="vm:QueueViewModel">
 
     <Grid>

@@ -30,9 +30,40 @@ if %ERRORLEVEL% NEQ 0 (
     if "!GIT_HASH!"=="" set GIT_HASH=local
 )
 
-:: Формируем строки версии в точном соответствии с Directory.Build.targets
-set VERSION=1.0.!COMMIT_COUNT!
-set FULL_VERSION=1.0.!COMMIT_COUNT!+!GIT_HASH!
+:: Динамическое чтение мажорной и минорной версий из Directory.Build.props
+set "VERSION_MAJOR="
+set "VERSION_MINOR="
+set "VERSION_PREFIX="
+
+if exist Directory.Build.props (
+    for /f "tokens=2 delims=>< " %%a in ('type Directory.Build.props ^| find "VersionMajor"') do set "VERSION_MAJOR=%%a"
+    for /f "tokens=2 delims=>< " %%a in ('type Directory.Build.props ^| find "VersionMinor"') do set "VERSION_MINOR=%%a"
+    for /f "tokens=2 delims=>< " %%a in ('type Directory.Build.props ^| find "VersionPrefix"') do set "VERSION_PREFIX=%%a"
+)
+
+:: Очистка возможных пробелов в значениях
+if defined VERSION_MAJOR set "VERSION_MAJOR=!VERSION_MAJOR: =!"
+if defined VERSION_MINOR set "VERSION_MINOR=!VERSION_MINOR: =!"
+if defined VERSION_PREFIX set "VERSION_PREFIX=!VERSION_PREFIX: =!"
+
+:: Формируем базовый префикс версии
+set "VER_PREF="
+if defined VERSION_MAJOR (
+    if defined VERSION_MINOR (
+        set "VER_PREF=!VERSION_MAJOR!.!VERSION_MINOR!"
+    )
+)
+if "!VER_PREF!"=="" (
+    if defined VERSION_PREFIX (
+        set "VER_PREF=!VERSION_PREFIX!"
+    ) else (
+        set "VER_PREF=0.0"
+    )
+)
+
+:: Формируем строки версии в соответствии с Directory.Build.targets
+set VERSION=!VER_PREF!.!COMMIT_COUNT!
+set FULL_VERSION=!VER_PREF!.!COMMIT_COUNT!+!GIT_HASH!
 
 echo Mode: %MODE%
 echo Version: v!VERSION!

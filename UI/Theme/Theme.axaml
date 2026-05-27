@@ -7,7 +7,7 @@
     <StyleInclude Source="avares://LMP/UI/Theme/Controls.axaml" />
     <StyleInclude Source="avares://LMP/UI/Theme/AppComponents.axaml" />
     <!-- PlayerBarStyles ПОСЛЕ AppComponents — переопределяет vol-* стили -->
-    <StyleInclude Source="avares://LMP/UI/Theme/PlayerBarStyles.axaml" />
+    <StyleInclude Source="avares://LMP/UI/Features/Player/PlayerBarStyles.axaml" />
 
     <Style>
         <Style.Resources>

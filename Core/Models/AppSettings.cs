@@ -327,7 +327,6 @@ public sealed class AppSettings
     public NotificationSettings Notifications { get; set; } = new();
 
     // === Search ===
-    public string LastSearchQuery { get; set; } = "";
     public List<string> SearchHistory { get; set; } = [];
 
     /// <summary>

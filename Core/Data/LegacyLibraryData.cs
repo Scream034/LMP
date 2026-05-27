@@ -53,7 +53,6 @@ internal sealed class LegacyLibraryData
     public List<string>? LikedTrackIds { get; set; }
     public List<string>? RecentlyPlayedIds { get; set; }
     public List<string>? SearchHistory { get; set; }
-    public string LastSearchQuery { get; set; } = "";
     public string? FakeAccountChannelUrl { get; set; }
     
     // Audio

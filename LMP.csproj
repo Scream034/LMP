@@ -62,9 +62,6 @@
     <!-- Подавляем предупреждение о дублирующихся типах из-за Fody-weavers -->
     <NoWarn>$(NoWarn);CS0436</NoWarn>
 
-    <!-- Базовая версия; полная формируется в Directory.Build.targets через Git -->
-    <VersionPrefix>1.0</VersionPrefix>
-
     <!-- Lock-файл обязателен для cache: true в GitHub Actions CI -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>

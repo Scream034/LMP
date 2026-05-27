@@ -8,6 +8,7 @@
     xmlns:settingsV="using:LMP.UI.Features.Settings"
     xmlns:playlistV="using:LMP.UI.Features.Playlist"
     xmlns:playerV="using:LMP.UI.Features.Player"
+    xmlns:queueV="using:LMP.UI.Features.Queue"
     xmlns:playerBarV="using:LMP.UI.Features.Player"
     x:Class="LMP.UI.Features.Shell.MainWindow"
     x:DataType="shell:MainWindowViewModel"
@@ -43,8 +44,8 @@
         <DataTemplate DataType="{x:Type playlistV:PlaylistViewModel}">
             <playlistV:PlaylistView />
         </DataTemplate>
-        <DataTemplate DataType="{x:Type playerV:QueueViewModel}">
-            <playerV:QueueView />
+        <DataTemplate DataType="{x:Type queueV:QueueViewModel}">
+            <queueV:QueueView />
         </DataTemplate>
     </Window.DataTemplates>
 

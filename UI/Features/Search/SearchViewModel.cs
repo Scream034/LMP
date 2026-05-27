@@ -104,13 +104,13 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     #region Constructor
 
     public SearchViewModel(
-        AudioEngine audio,
-        DownloadService downloads,
-        TrackViewModelFactory vmFactory,
-        YoutubeProvider youtube,
-        SearchCacheService searchCache,
-        ImageCacheService imageCache)
-        : base(audio, downloads, vmFactory)
+      AudioEngine audio,
+      DownloadService downloads,
+      TrackViewModelFactory vmFactory,
+      YoutubeProvider youtube,
+      SearchCacheService searchCache,
+      ImageCacheService imageCache)
+      : base(audio, downloads, vmFactory)
     {
         _youtube = youtube;
         _searchCache = searchCache;
@@ -173,9 +173,6 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
                     await ExecuteSearchAsync(forceNetwork: false);
             })
             .DisposeWith(Disposables);
-
-        if (!string.IsNullOrEmpty(LibService.Settings.LastSearchQuery))
-            SearchQuery = LibService.Settings.LastSearchQuery;
     }
 
     #endregion
@@ -333,7 +330,6 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
 
             try
             {
-                LibService.UpdateSettings(s => s.LastSearchQuery = _currentQuery);
                 AddToHistory(_currentQuery);
             }
             catch (Exception ex)

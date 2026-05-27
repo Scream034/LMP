@@ -1,7 +1,7 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 
-namespace LMP.UI.Features.Player;
+namespace LMP.UI.Features.Queue;
 
 public partial class QueueView : UserControl
 {

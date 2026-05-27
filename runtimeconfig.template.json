@@ -6,6 +6,6 @@
     "System.GC.Concurrent": true,
     "System.GC.Server": false,
     "System.Threading.ThreadPool.MinThreads": 2,
-    "System.Threading.ThreadPool.MaxThreads": 16
+    "System.Threading.ThreadPool.MaxThreads": 8
   }
 }

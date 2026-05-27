@@ -222,7 +222,6 @@ public sealed class LibraryService : IAsyncDisposable
         EnableSearchCache = d.EnableSearchCache,
         SearchCacheTtlMinutes = d.SearchCacheTtlMinutes,
         PlaylistHeaderHeight = d.PlaylistHeaderHeight,
-        LastSearchQuery = d.LastSearchQuery,
         SearchHistory = d.SearchHistory ?? []
     };
 

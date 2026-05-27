@@ -5,7 +5,7 @@ using System.Reactive;
 
 using System.Reactive.Linq;
 
-namespace LMP.UI.Features.Player;
+namespace LMP.UI.Features.Queue;
 
 /// <summary>
 /// ViewModel панели очереди воспроизведения.
