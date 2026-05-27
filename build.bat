@@ -17,7 +17,8 @@ set PAUSE=1
 if /i "%2"=="nopause" set PAUSE=0
 if /i "%MODE%"=="" set MODE=debug
 
-:: Git версия
+:: Получение версии из Git только для информационного вывода в консоль.
+:: Основное версионирование контролируется через Directory.Build.targets.
 where git >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     set COMMIT_COUNT=0
@@ -29,9 +30,9 @@ if %ERRORLEVEL% NEQ 0 (
     if "!GIT_HASH!"=="" set GIT_HASH=local
 )
 
-:: Версия без 1.0. — просто номер коммита
-set VERSION=!COMMIT_COUNT!
-set FULL_VERSION=!COMMIT_COUNT!-!GIT_HASH!
+:: Формируем строки версии в точном соответствии с Directory.Build.targets
+set VERSION=1.0.!COMMIT_COUNT!
+set FULL_VERSION=1.0.!COMMIT_COUNT!+!GIT_HASH!
 
 echo Mode: %MODE%
 echo Version: v!VERSION!
@@ -56,16 +57,12 @@ goto :SUCCESS
 
 :DEBUG
 echo Building Debug (Full Solution)...
-dotnet build LMP.sln -c Debug ^
-    -p:Version=!VERSION! ^
-    -p:InformationalVersion=!FULL_VERSION!
+dotnet build LMP.sln -c Debug
 goto :CHECK
 
 :OPTIMIZED
 echo Building Optimized Debug (Full Solution)...
 dotnet build LMP.sln -c Debug ^
-    -p:Version=!VERSION! ^
-    -p:InformationalVersion=!FULL_VERSION!-opt ^
     -p:Optimize=true ^
     -p:DebugType=embedded
 goto :CHECK
@@ -82,7 +79,6 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo Building Release (Full Solution)...
 dotnet build LMP.sln -c Release ^
-    -p:Version=!VERSION! ^
     -p:DebugType=None ^
     -p:DebugSymbols=false
 goto :CHECK
@@ -93,7 +89,6 @@ echo Publishing self-contained Release...
 if exist "publish" rmdir /s /q "publish"
 
 dotnet publish LMP.csproj -c Release -r win-x64 --self-contained true ^
-    -p:Version=!VERSION! ^
     -p:PublishSingleFile=true ^
     -p:PublishReadyToRun=true ^
     -p:IncludeNativeLibrariesForSelfExtract=true ^
@@ -122,12 +117,13 @@ echo Cleaning all project folders recursively...
 if exist "publish" rmdir /s /q "publish"
 del /q "*.7z" 2>nul
 
-:: Рекурсивный поиск и безопасное удаление всех вложенных папок bin и obj
+:: Рекурсивный поиск и безопасное удаление всех папок bin и obj на всех уровнях вложенности.
+:: Пакет packages.lock.json умышленно игнорируется, так как он зафиксирован в Git.
 echo Finding and removing all nested bin and obj folders...
-for /f "delims=" %%i in ('dir /b /s /ad bin obj 2^>nul') do (
-    if exist "%%i" (
-        echo Deleting: %%i
-        rmdir /s /q "%%i"
+for /d /r . %%d in (bin,obj) do (
+    if exist "%%d" (
+        echo Deleting: %%d
+        rmdir /s /q "%%d"
     )
 )
 

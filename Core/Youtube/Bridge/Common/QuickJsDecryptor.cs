@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -7,15 +8,49 @@ namespace LMP.Core.Youtube.Bridge.Common;
 /// Обеспечивает выполнение обходных алгоритмов YouTube на сверхбыстром нативном движке QuickJS-NG.
 /// Полностью исключает выделение объектов в управляемой куче .NET при дешифрации.
 /// </summary>
-public static unsafe class QuickJsDecryptor
+public static unsafe partial class QuickJsDecryptor
 {
     private const string LibName = "quickjs_bridge";
 
-    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern byte* qjs_decrypt_token(byte* script, byte* functionName, byte* challenge);
+    /// <summary>
+    /// Статический конструктор гарантирует выполнение настройки резолвера 
+    /// ровно один раз перед первым вызовом любого члена класса.
+    /// Полностью устраняет предупреждение CA2255.
+    /// </summary>
+    static QuickJsDecryptor()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(QuickJsDecryptor).Assembly, (libraryName, assembly, searchPath) =>
+        {
+            if (libraryName == LibName)
+            {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                
+                string extension = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ".dll" :
+                                   RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? ".dylib" : ".so";
 
-    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void qjs_free_string(byte* str);
+                // Теперь ищем в изолированной от UI-ресурсов папке Native
+                var localPath = Path.Combine(baseDir, "Native", $"{LibName}{extension}");
+                
+                if (File.Exists(localPath))
+                {
+                    if (NativeLibrary.TryLoad(localPath, out IntPtr handle))
+                    {
+                        return handle;
+                    }
+                }
+            }
+
+            return IntPtr.Zero;
+        });
+    }
+
+    [LibraryImport(LibName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial byte* qjs_decrypt_token(byte* script, byte* functionName, byte* challenge);
+
+    [LibraryImport(LibName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial void qjs_free_string(byte* str);
 
     /// <summary>
     /// Выполняет дешифрацию токена/подписи на нативном движке QuickJS-NG.

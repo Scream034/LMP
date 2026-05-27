@@ -10,7 +10,7 @@
         "**/.DS_Store": true,
         "**/Thumbs.db": true,
         "FodyWeavers.xsd": true,
-        "packages.lock.json": true
+        "**/packages.lock.json": true
     },
     "[bat]": {
         "files.encoding": "utf8bom"

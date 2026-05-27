@@ -47,6 +47,9 @@
     <RootNamespace>LMP</RootNamespace>
     <AssemblyName>LMP</AssemblyName>
 
+    <!-- Исключаем папки субпроектов из корневого проекта на уровне файловой системы .NET -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);Core/**;SharpJaad.AAC/**</DefaultItemExcludes>
+
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
 
@@ -124,23 +127,15 @@
 
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 
-    <DefaultItemExcludes>$(DefaultItemExcludes);UI\Features\Debug\**;Tests\**;Tools\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);UI/Features/Debug/**;Tests/**;Tools/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
-  <!-- Исключаем папки суб-проектов. Всё остальное в корне собирается автоматически! -->
-  <ItemGroup>
-    <Compile Remove="Core\**" />
-    <Compile Remove="SharpJaad.AAC\**" />
-    <None Include="Core\**" />
-    <None Include="SharpJaad.AAC\**" />
-  </ItemGroup>
-
   <ItemGroup Label="File Includes/Excludes">
-    <AvaloniaResource Include="Assets\**" />
+    <AvaloniaResource Include="Assets/**" />
     <Content Include="Assets/app.ico" />
   </ItemGroup>
 
@@ -155,7 +150,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="quickjs_bridge.dll">
+    <None Include="Native/quickjs_bridge.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <!-- Указываем компилятору упаковать DLL внутрь SingleFile EXE -->
@@ -186,7 +181,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="Core\LMP.Core.csproj" />
+    <ProjectReference Include="Core/LMP.Core.csproj" />
   </ItemGroup>
 
 </Project>
