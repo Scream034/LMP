@@ -995,19 +995,16 @@ public partial class MainWindow : Window
 
         _ = Task.Run(async () =>
         {
-            try
-            {
-                await Task.Delay(delay, token);
-                if (token.IsCancellationRequested) return;
+            // Используем безопасный метод ожидания без генерации исключений
+            bool completedNormal = await DelayNoThrowAsync(delay, token);
+            if (!completedNormal) return; // Была отмена, выходим
 
-                var now = DateTime.UtcNow;
-                if ((now - _lastCleanupTime).TotalMilliseconds < MinCleanupIntervalMs)
-                    return;
+            var now = DateTime.UtcNow;
+            if ((now - _lastCleanupTime).TotalMilliseconds < MinCleanupIntervalMs)
+                return;
 
-                _lastCleanupTime = now;
-                MemoryCleanupHelper.PerformCleanup(aggressive: false);
-            }
-            catch (OperationCanceledException) { /* expected */ }
+            _lastCleanupTime = now;
+            MemoryCleanupHelper.PerformCleanup(aggressive: false);
         });
     }
 
@@ -1018,6 +1015,37 @@ public partial class MainWindow : Window
         _cleanupCts.Cancel();
         _cleanupCts.Dispose();
         _cleanupCts = null;
+    }
+
+    /// <summary>
+    /// Выполняет асинхронное ожидание, которое завершается либо по истечении времени,
+    /// либо при отмене токена, без выбрасывания исключений (zero-exception).
+    /// </summary>
+    /// <param name="delay">Время ожидания.</param>
+    /// <param name="token">Токен отмены.</param>
+    /// <returns>True — если ожидание завершилось штатно; False — если была запрошена отмена.</returns>
+    private static async Task<bool> DelayNoThrowAsync(TimeSpan delay, CancellationToken token)
+    {
+        if (token.IsCancellationRequested)
+            return false;
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Регистрируем коллбек отмены, который переведет задачу в состояние завершения с результатом false
+        using (token.Register(static state =>
+               {
+                   ((TaskCompletionSource<bool>)state!).TrySetResult(false);
+               }, tcs))
+        {
+            // Запускаем нативный таймер без передачи токена, чтобы он гарантированно не выбрасывал исключений
+            var delayTask = Task.Delay(delay, CancellationToken.None);
+
+            // Ждем, что наступит раньше — таймер или отмена токена
+            var completedTask = await Task.WhenAny(delayTask, tcs.Task).ConfigureAwait(false);
+
+            // Если первым завершился таймер, возвращаем true
+            return completedTask == delayTask;
+        }
     }
 
     #endregion

@@ -2,6 +2,8 @@
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -266,7 +268,7 @@ public partial class TrackListControl : UserControl
             if (_scrollViewer != null && EnableSnapScroll)
             {
                 _snapScroll?.Dispose();
-                _snapScroll = new SnapScrollHelper(_scrollViewer, ItemHeight);
+                _snapScroll = new SnapScrollHelper(_scrollViewer);
             }
         }, DispatcherPriority.Loaded);
 
@@ -319,7 +321,7 @@ public partial class TrackListControl : UserControl
             if (_scrollViewer == null) return;
             _snapScroll?.Dispose();
             _snapScroll = change.GetNewValue<bool>()
-                ? new SnapScrollHelper(_scrollViewer, ItemHeight)
+                ? new SnapScrollHelper(_scrollViewer)
                 : null;
         }
     }
@@ -485,9 +487,9 @@ public partial class TrackListControl : UserControl
         using var dragData = new DragDataTransfer(_dragSourceIndex);
         source.Classes.Add("dragging");
 
-        try 
-        { 
-            var result = await DragDrop.DoDragDropAsync(_dragPressedArgs, dragData, DragDropEffects.Move); 
+        try
+        {
+            var result = await DragDrop.DoDragDropAsync(_dragPressedArgs, dragData, DragDropEffects.Move);
             Log.Info($"[PointerMoved] DoDragDropAsync completed. Result: {result}");
         }
         catch (Exception ex)
@@ -664,8 +666,8 @@ public partial class TrackListControl : UserControl
         }
 
         var targetElement = _repeater.TryGetElement(idx);
-        double relY = targetElement != null 
-            ? GetSafeElementRelativeY(e, targetElement, pos, idx, "DropIndex") 
+        double relY = targetElement != null
+            ? GetSafeElementRelativeY(e, targetElement, pos, idx, "DropIndex")
             : pos.Y - (idx * ItemHeight);
 
         Log.Debug($"[DropIndex] Target row element resolved: {targetElement != null}. relY: {relY:F1}px");
@@ -804,153 +806,245 @@ public partial class TrackListControl : UserControl
     #region Smooth Snap Scroll Helper
 
     /// <summary>
-    /// Выравнивает позицию ScrollViewer по целочисленной сетке высоты трека
-    /// с velocity-based ballistics и time-based ease-out cubic анимацией.
+    /// Обеспечивает ультра-плавную интерполяцию прокрутки ScrollViewer.
+    /// Поддерживает как прокрутку колесиком (с накоплением), так и плавное «догоняние» 
+    /// при кликах по треку скроллбара и нажатиях клавиш (PageUp/PageDown, стрелки).
+    /// Автоматически отключается при ручном перетаскивании ползунка мыши, исключая лаги.
     /// </summary>
     private sealed class SnapScrollHelper : IDisposable
     {
         #region Constants
 
-        private const double TouchpadDeltaThreshold = 0.5;
-        private const double MinTracksPerTick = 1.0;
-        private const double MaxTracksPerTick = 6.0;
-        private const double SlowTickIntervalMs = 300.0;
-        private const double FastTickIntervalMs = 30.0;
-        private const double BallisticsCurveExponent = 0.5;
-        private const double BaseAnimDurationMs = 130.0;
-        private const double MinAnimDurationMs = 60.0;
-        private const double MaxAnimDurationMs = 200.0;
-        private const double BottomSnapEpsilon = 0.5;
+        private const double ScrollStep = 130.0;    // Дистанция прокрутки за один щелчок мыши (в пикселях)
+        private const double Smoothness = 16.0;    // Коэффициент жесткости анимации LERP (скорость доводки)
+        private const double Epsilon = 0.5;         // Минимальный порог остановки кадровой анимации (в пикселях)
 
         #endregion
 
+        #region Fields
+
         private readonly ScrollViewer _sv;
-        private readonly double _itemHeight;
-        private readonly DispatcherTimer _animTimer;
+        private ScrollBar? _verticalScrollBar;
 
-        private double _targetOffset;
-        private double _animStartOffset;
-        private long _animStartTime;
-        private long _animDurationActual;
-
-        private long _lastWheelTime;
+        private double _targetY;
+        private double _currentY;
         private bool _isAnimating;
+        private bool _isUpdatingOffset;
+        private bool _isDraggingScrollbar;
         private bool _disposed;
+        private DateTime _lastTickTime;
 
-        public SnapScrollHelper(ScrollViewer sv, double itemHeight)
+        #endregion
+
+        /// <summary>
+        /// Инициализирует новый экземпляр помощника плавной прокрутки.
+        /// </summary>
+        /// <param name="sv">Целевой ScrollViewer.</param>
+        /// <param name="itemHeight">Параметр высоты элемента (сохранено для совместимости сигнатуры конструктора).</param>
+        public SnapScrollHelper(ScrollViewer sv)
         {
             _sv = sv;
-            _itemHeight = itemHeight;
-            _targetOffset = sv.Offset.Y;
-            _lastWheelTime = Environment.TickCount64;
+            _currentY = sv.Offset.Y;
+            _targetY = _currentY;
 
+            // Перехватываем колесико мыши на стадии туннелирования (до системного скачка)
             sv.AddHandler(
                 PointerWheelChangedEvent,
                 OnWheel,
                 RoutingStrategies.Tunnel,
                 handledEventsToo: false);
 
-            _animTimer = new DispatcherTimer(DispatcherPriority.Render)
-            {
-                Interval = TimeSpan.FromMilliseconds(16)
-            };
-            _animTimer.Tick += OnAnimTick;
+            // Слушаем нативные изменения скролла
+            sv.ScrollChanged += OnScrollChanged;
+
+            // Пытаемся найти нативный вертикальный скроллбар ScrollViewer-а
+            Dispatcher.UIThread.Post(InitializeScrollBar, DispatcherPriority.Loaded);
         }
 
+        private void InitializeScrollBar()
+        {
+            if (_disposed) return;
+
+            // Стандартное имя скроллбара в шаблоне ScrollViewer
+            _verticalScrollBar = _sv.GetTemplateDescendants().OfType<ScrollBar>().FirstOrDefault(x => x.Name == "PART_VerticalScrollBar");
+
+            // Запасной вариант: поиск по визуальному дереву
+            _verticalScrollBar ??= _sv.FindDescendantOfType<ScrollBar>();
+
+            if (_verticalScrollBar != null)
+            {
+                // Подписываемся на события скроллбара
+                _verticalScrollBar.Scroll += OnScrollBarScroll;
+
+                // Дополнительный страховочный обработчик отпускания мыши
+                _verticalScrollBar.AddHandler(
+                    PointerReleasedEvent,
+                    OnScrollBarPointerReleased,
+                    RoutingStrategies.Bubble,
+                    handledEventsToo: true);
+            }
+        }
+
+        /// <summary>
+        /// Событие нативной прокрутки скроллбара. Позволяет вычленить перетаскивание мывой.
+        /// </summary>
+        private void OnScrollBarScroll(object? sender, ScrollEventArgs e)
+        {
+            if (e.ScrollEventType == ScrollEventType.ThumbTrack)
+            {
+                // Пользователь физически тащит ползунок скроллбара.
+                // Мгновенно отключаем сглаживание и синхронизируем координаты, убирая лаги.
+                _isDraggingScrollbar = true;
+                _currentY = e.NewValue;
+                _targetY = e.NewValue;
+            }
+            else
+            {
+                // Любые другие клики (по стрелкам скроллбара или по пустому треку) должны быть плавными.
+                _isDraggingScrollbar = false;
+            }
+        }
+
+        /// <summary>
+        /// Страховочный сброс состояния перетаскивания при отпускании левой кнопки мыши.
+        /// </summary>
+        private void OnScrollBarPointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            _isDraggingScrollbar = false;
+        }
+
+        /// <summary>
+        /// Обработчик колесика мыши.
+        /// </summary>
         private void OnWheel(object? sender, PointerWheelEventArgs e)
         {
-            if (Math.Abs(e.Delta.Y) < TouchpadDeltaThreshold) return;
+            if (e.Delta.Y == 0 || _isDraggingScrollbar) return;
 
-            e.Handled = true;
+            e.Handled = true; // Блокируем нативный мгновенный скачок колеса
 
-            double maxOffset = Math.Max(0, _sv.Extent.Height - _sv.Viewport.Height);
-            if (maxOffset <= 0) return;
+            double maxScroll = GetMaxScrollY();
+            if (maxScroll <= 0) return;
 
-            long now = Environment.TickCount64;
-            double intervalMs = Math.Clamp(now - _lastWheelTime, 1, SlowTickIntervalMs);
-            _lastWheelTime = now;
+            double direction = -Math.Sign(e.Delta.Y);
+            _targetY = Math.Clamp(_targetY + direction * ScrollStep, 0, maxScroll);
 
-            double tracksPerTick = ComputeTracksPerTick(intervalMs);
-            double direction = Math.Sign(-e.Delta.Y);
-            double step = direction * _itemHeight * tracksPerTick;
-
-            double baseOffset = _isAnimating ? _targetOffset : _sv.Offset.Y;
-            double raw = Math.Clamp(baseOffset + step, 0, maxOffset);
-
-            if (raw >= maxOffset - BottomSnapEpsilon)
-                _targetOffset = maxOffset;
-            else if (raw <= BottomSnapEpsilon)
-                _targetOffset = 0;
-            else
-                _targetOffset = SnapToGrid(raw, direction);
-
-            double distance = Math.Abs(_targetOffset - _sv.Offset.Y);
-            double referenceStep = _itemHeight * 3.0;
-            _animDurationActual = (long)Math.Clamp(
-                BaseAnimDurationMs * (distance / referenceStep),
-                MinAnimDurationMs,
-                MaxAnimDurationMs);
-
-            StartAnim();
+            StartAnimation();
         }
 
-        private static double ComputeTracksPerTick(double intervalMs)
+        /// <summary>
+        /// Обработчик любых внешних изменений смещения (клавиши, клики по треку скроллбара).
+        /// </summary>
+        private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
         {
-            double t = Math.Clamp(
-                (intervalMs - FastTickIntervalMs) / (SlowTickIntervalMs - FastTickIntervalMs),
-                0.0, 1.0);
-            double curved = Math.Pow(t, BallisticsCurveExponent);
-            return MinTracksPerTick + (MaxTracksPerTick - MinTracksPerTick) * (1.0 - curved);
-        }
+            if (_isUpdatingOffset || _disposed) return;
 
-        private void OnAnimTick(object? sender, EventArgs e)
-        {
-            double elapsed = (Environment.TickCount64 - _animStartTime) / (double)_animDurationActual;
+            double nativeY = _sv.Offset.Y;
 
-            if (elapsed >= 1.0)
+            // Если ползунок тащат вручную — сглаживание выключено, просто следим за позицией
+            if (_isDraggingScrollbar)
             {
-                SetOffset(_targetOffset);
-                StopAnim();
+                _currentY = nativeY;
+                _targetY = nativeY;
                 return;
             }
 
-            SetOffset(_animStartOffset + (_targetOffset - _animStartOffset) * EaseOutCubic(elapsed));
+            // Если произошло внешнее дискретное изменение (PageUp/Down, клик по треку, стрелки клавиатуры)
+            if (Math.Abs(nativeY - _currentY) > Epsilon)
+            {
+                double maxScroll = GetMaxScrollY();
+
+                _currentY = Math.Min(_currentY, maxScroll);
+                _targetY = Math.Clamp(nativeY, 0, maxScroll);
+
+                // Мгновенно откатываем скролл назад на плавную позицию до отрисовки кадра
+                ApplyOffset(_currentY);
+
+                // Запускаем анимацию скольжения к новой цели
+                StartAnimation();
+            }
         }
 
-        private void StartAnim()
+        /// <summary>
+        /// Кадровый тик анимации. Синхронизируется с частотой развертки монитора (60/120/144+ Гц).
+        /// </summary>
+        private void OnAnimationFrame(TimeSpan elapsed)
         {
-            _animStartOffset = _sv.Offset.Y;
-            _animStartTime = Environment.TickCount64;
+            if (!_isAnimating || _disposed || _isDraggingScrollbar) return;
 
-            if (_isAnimating) return;
+            // Вычисляем реальный дельта-тайм кадра
+            var now = DateTime.UtcNow;
+            double dt = (now - _lastTickTime).TotalSeconds;
+            _lastTickTime = now;
+
+            // Защита от зависаний системы
+            if (dt > 0.1) dt = 0.1;
+
+            double maxScroll = GetMaxScrollY();
+            _targetY = Math.Clamp(_targetY, 0, maxScroll);
+
+            // Если цель достигнута — останавливаемся
+            if (Math.Abs(_targetY - _currentY) < Epsilon)
+            {
+                _currentY = _targetY;
+                ApplyOffset(_currentY);
+                StopAnimation();
+                return;
+            }
+
+            // Frame-rate independent LERP формула
+            double factor = 1.0 - Math.Exp(-Smoothness * dt);
+            _currentY = _currentY + (_targetY - _currentY) * factor;
+
+            ApplyOffset(_currentY);
+
+            // Запрашиваем следующий кадр у Avalonia
+            TopLevel.GetTopLevel(_sv)?.RequestAnimationFrame(OnAnimationFrame);
+        }
+
+        private void StartAnimation()
+        {
+            if (_isAnimating || _isDraggingScrollbar) return;
 
             _isAnimating = true;
-            _animTimer.Start();
+            _lastTickTime = DateTime.UtcNow;
+
+            TopLevel.GetTopLevel(_sv)?.RequestAnimationFrame(OnAnimationFrame);
         }
 
-        private void StopAnim()
+        private void StopAnimation()
         {
             _isAnimating = false;
-            _animTimer.Stop();
         }
 
-        private static double EaseOutCubic(double t) => 1.0 - Math.Pow(1.0 - t, 3.0);
+        private double GetMaxScrollY()
+        {
+            return Math.Max(0, _sv.Extent.Height - _sv.Viewport.Height);
+        }
 
-        private double SnapToGrid(double offset, double direction) =>
-            direction > 0
-                ? Math.Ceiling(offset / _itemHeight) * _itemHeight
-                : Math.Floor(offset / _itemHeight) * _itemHeight;
-
-        private void SetOffset(double y) =>
+        private void ApplyOffset(double y)
+        {
+            _isUpdatingOffset = true;
             _sv.Offset = new Vector(_sv.Offset.X, y);
+            _isUpdatingOffset = false;
+        }
 
+        /// <summary>
+        /// Освобождает занятые ресурсы и отписывается от событий.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
 
-            _animTimer.Stop();
+            _isAnimating = false;
             _sv.RemoveHandler(PointerWheelChangedEvent, OnWheel);
+            _sv.ScrollChanged -= OnScrollChanged;
+
+            if (_verticalScrollBar != null)
+            {
+                _verticalScrollBar.Scroll -= OnScrollBarScroll;
+                _verticalScrollBar.RemoveHandler(PointerReleasedEvent, OnScrollBarPointerReleased);
+            }
         }
     }
 
