@@ -185,6 +185,18 @@ public partial class TrackListControl : UserControl
         set => SetValue(IsQueueContextProperty, value);
     }
 
+    /// <summary>
+    /// Прямое свойство вычисления видимости футера без использования MultiBinding-конвертеров.
+    /// </summary>
+    public static readonly DirectProperty<TrackListControl, bool> IsLoaderOrFooterVisibleProperty =
+        AvaloniaProperty.RegisterDirect<TrackListControl, bool>(
+            nameof(IsLoaderOrFooterVisible), static o => o.IsLoaderOrFooterVisible);
+
+    /// <summary>
+    /// Возвращает истину, если отображается индикатор дозагрузки либо плашка конца списка.
+    /// </summary>
+    public bool IsLoaderOrFooterVisible => IsLoadingMore || IsFooterVisible;
+
     #endregion
 
     #region Direct Properties
@@ -323,6 +335,12 @@ public partial class TrackListControl : UserControl
             _snapScroll = change.GetNewValue<bool>()
                 ? new SnapScrollHelper(_scrollViewer)
                 : null;
+        }
+
+        // Синхронно обновляем вычисляемую видимость контейнера футера при изменении зависимых свойств
+        if (change.Property == IsLoadingMoreProperty || change.Property == IsFooterVisibleProperty)
+        {
+            RaisePropertyChanged(IsLoaderOrFooterVisibleProperty, !IsLoaderOrFooterVisible, IsLoaderOrFooterVisible);
         }
     }
 

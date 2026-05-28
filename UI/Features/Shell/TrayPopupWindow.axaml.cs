@@ -1,9 +1,12 @@
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using ReactiveUI;
 
 namespace LMP.UI.Features.Shell;
 
@@ -17,6 +20,7 @@ namespace LMP.UI.Features.Shell;
 ///   <item>Секция громкости поддерживает скролл колесиком (PointerWheelChanged)</item>
 ///   <item>Текст и иконка кнопки Show/Hide меняются в зависимости от видимости главного окна</item>
 ///   <item>Все тексты локализованы и обновляются при каждом показе</item>
+///   <item>Поддерживает реактивные подписки на состояние плеера в момент отображения</item>
 /// </list>
 /// </summary>
 public partial class TrayPopupWindow : Window
@@ -36,6 +40,12 @@ public partial class TrayPopupWindow : Window
     /// Используется для корректного текста/иконки кнопки Show/Hide.
     /// </summary>
     private bool _lastKnownWindowVisible;
+
+    /// <summary>
+    /// Пакет подписок на изменение состояния плеера. 
+    /// Активен исключительно во время показа всплывающего окна.
+    /// </summary>
+    private CompositeDisposable? _disposables;
 
     // ═══ UI контролы ═══
     private Border? _trackInfoSection;
@@ -324,6 +334,76 @@ public partial class TrayPopupWindow : Window
 
     #endregion
 
+    #region Reactive Subscriptions
+
+    /// <summary>
+    /// Подписывается на реактивные изменения состояния плеера.
+    /// Запускается только во время видимости всплывающего окна.
+    /// </summary>
+    private void SubscribeToPlayerChanges()
+    {
+        _disposables?.Dispose();
+        _disposables = new CompositeDisposable();
+
+        if (_playerControl == null) return;
+
+        var L = LocalizationService.Instance;
+
+        // 1. Статус воспроизведения (Воспроизведение / Пауза)
+        _playerControl.PlaybackStateObservable
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(state =>
+            {
+                UpdatePlayPauseButton(state.IsPlaying, L);
+            })
+            .DisposeWith(_disposables);
+
+        // 2. Текущий трек и метаданные (также управляет доступностью кнопок)
+        _playerControl.CurrentTrackObservable
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(track =>
+            {
+                bool hasTrack = track != null;
+                UpdateTrackInfo(track, hasTrack);
+
+                SetEnabled(_playPauseButton, hasTrack);
+                SetEnabled(_nextButton, hasTrack);
+                SetEnabled(_prevButton, hasTrack);
+                SetEnabled(_repeatButton, hasTrack);
+            })
+            .DisposeWith(_disposables);
+
+        // 3. Режим повтора треков
+        _playerControl.RepeatModeObservable
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(mode =>
+            {
+                UpdateRepeatButton(mode, L);
+            })
+            .DisposeWith(_disposables);
+
+        // 4. Громкость звука
+        _playerControl.VolumeObservable
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ =>
+            {
+                UpdateVolumeDisplay();
+            })
+            .DisposeWith(_disposables);
+    }
+
+    /// <summary>
+    /// Отписывается от изменений состояния плеера для предотвращения утечек памяти 
+    /// и исключения лишней нагрузки на CPU при скрытом окне.
+    /// </summary>
+    private void UnsubscribeFromPlayerChanges()
+    {
+        _disposables?.Dispose();
+        _disposables = null;
+    }
+
+    #endregion
+
     #region Show / Position
 
     /// <summary>
@@ -371,10 +451,18 @@ public partial class TrayPopupWindow : Window
 
         Show();
         Activate();
+
+        // Активируем подписки в момент реального открытия окна
+        SubscribeToPlayerChanges();
     }
 
     /// <summary>Скрывает popup (light-dismiss).</summary>
-    private void HidePopup() => Hide();
+    private void HidePopup()
+    {
+        // Отписываемся от событий сразу при скрытии окна для экономии ресурсов
+        UnsubscribeFromPlayerChanges();
+        Hide();
+    }
 
     #endregion
 
@@ -389,8 +477,10 @@ public partial class TrayPopupWindow : Window
     private async void OnPlayPauseClick(object? sender, RoutedEventArgs e)
     {
         if (_playerControl == null) return;
+        
+        // Синхронный вызов UpdateState удален — обновление произойдет автоматически 
+        // через реактивную подписку по факту смены состояния в движке.
         await _playerControl.PlayPauseAsync();
-        UpdateState(_lastKnownWindowVisible);
     }
 
     private async void OnNextClick(object? sender, RoutedEventArgs e)
@@ -407,8 +497,8 @@ public partial class TrayPopupWindow : Window
 
     private void OnRepeatClick(object? sender, RoutedEventArgs e)
     {
+        // Синхронный вызов UpdateState удален — состояние обновится реактивно.
         _playerControl?.ToggleRepeat();
-        UpdateState(_lastKnownWindowVisible);
     }
 
     private void OnQueueClick(object? sender, RoutedEventArgs e)
@@ -465,6 +555,19 @@ public partial class TrayPopupWindow : Window
             return;
         }
         base.OnKeyDown(e);
+    }
+
+    #endregion
+
+    #region Window Lifecycle
+
+    /// <summary>
+    /// Гарантирует отписку от всех событий при физическом закрытии/уничтожении окна.
+    /// </summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        UnsubscribeFromPlayerChanges();
+        base.OnClosed(e);
     }
 
     #endregion

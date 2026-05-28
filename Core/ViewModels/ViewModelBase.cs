@@ -77,7 +77,8 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
     ///   <item>None: активное окно — resume</item>
     /// </list>
     /// 
-    /// <para><b>Дебаунс:</b> Игнорирует повторные вызовы в течение 300ms.</para>
+    /// <para><b>Дебаунс:</b> Игнорирует повторные вызовы в течение 300ms для предотвращения спама,
+    /// кроме критических переходов в трей (Hard) и полного восстановления активности (None).</para>
     /// </summary>
     /// <param name="level">Новый уровень suspend</param>
     /// <param name="forceOptimize">
@@ -99,12 +100,17 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
         // РАННЯЯ ПРОВЕРКА: тот же уровень — выход
         if (_currentLevel == effectiveLevel) return;
 
-        // ДЕБАУНС: предотвращаем спам
+        // ДЕБАУНС: предотвращаем спам при циклической потере фокуса.
         var now = DateTime.UtcNow;
         if ((now - _lastLevelChangeTime).TotalMilliseconds < BroadcastDebounceMs)
         {
-            // Исключение: Hard всегда применяется немедленно (tray)
-            if (effectiveLevel != SuspendLevel.Hard)
+            // <remarks>
+            // Переход в активное состояние (None) или жесткий уход в трей (Hard) 
+            // должны применяться мгновенно. Если дебаунсить активацию (None), 
+            // при быстром развертывании окна UI-слой останется в состоянии "заморозки" (без таймеров),
+            // хотя само приложение визуально будет доступно пользователю.
+            // </remarks>
+            if (effectiveLevel != SuspendLevel.Hard && effectiveLevel != SuspendLevel.None)
             {
                 Log.Debug($"[Lifecycle] Broadcast debounced: {_currentLevel} → {effectiveLevel}");
                 return;

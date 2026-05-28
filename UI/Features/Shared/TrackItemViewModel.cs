@@ -93,11 +93,16 @@ public sealed class TrackItemViewModel : ViewModelBase
     public bool ShowAddToQueue => !IsQueueContext;
 
     /// <summary>
-    /// Замена MultiBinding BoolConverters.And в AXAML.
-    /// Вычисляется в VM — zero runtime reflection при рециклировании контейнера.
-    /// Обновляется через OnTrackPropertyChanged при смене IsCached/IsDownloaded.
+    /// Флаг отображения иконки скачанного трека.
+    /// Исключает наложение на прогресс-бар при активной загрузке.
     /// </summary>
-    public bool ShowCachedIcon => Track.IsCached && !Track.IsDownloaded;
+    public bool ShowDownloadedIcon => Track.IsDownloaded && !IsDownloading;
+
+    /// <summary>
+    /// Замена MultiBinding в AXAML. Вычисляется на стороне VM без аллокаций.
+    /// Исключает наложение на прогресс-бар при активной загрузке.
+    /// </summary>
+    public bool ShowCachedIcon => Track.IsCached && !Track.IsDownloaded && !IsDownloading;
 
     public string DownloadStatusText
     {
@@ -177,6 +182,7 @@ public sealed class TrackItemViewModel : ViewModelBase
                 }
                 this.RaisePropertyChanged(nameof(IsDownloaded));
                 this.RaisePropertyChanged(nameof(DownloadStatusText));
+                this.RaisePropertyChanged(nameof(ShowDownloadedIcon));
                 this.RaisePropertyChanged(nameof(ShowCachedIcon));
                 break;
 
@@ -231,10 +237,13 @@ public sealed class TrackItemViewModel : ViewModelBase
         IsDownloading = isDownloading;
         DownloadProgress = isDownloading ? progress : 0f;
 
+        // Явно обновляем триггеры видимости элементов без участия конвертеров
+        this.RaisePropertyChanged(nameof(ShowDownloadedIcon));
+        this.RaisePropertyChanged(nameof(ShowCachedIcon));
+
         if (!isDownloading)
         {
             this.RaisePropertyChanged(nameof(DownloadStatusText));
-            this.RaisePropertyChanged(nameof(ShowCachedIcon));
         }
     }
 
