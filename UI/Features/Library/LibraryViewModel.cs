@@ -852,6 +852,8 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
     #region Фабрика карточек
 
+    #region Фабрика карточек
+
     private PlaylistCardViewModel CreatePlaylistCardVm(
      Core.Models.Playlist playlist, int trackCount)
     {
@@ -863,7 +865,8 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
             addToQueueAction: async (p) =>
             {
                 var tracks = await _library.GetPlaylistTracksAsync(p.Id);
-                _audio.EnqueueRange(tracks);
+                // Использование централизованного метода с фильтрацией и показом хинтов
+                _audio.EnqueuePlaylistWithNotification(tracks, p.Name);
             },
             playAction: async (p) =>
             {
@@ -874,6 +877,8 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
             onDelete: DeletePlaylistAsync,
             onEdit: EditPlaylistFromCardAsync);
     }
+
+    #endregion
 
     #endregion
 

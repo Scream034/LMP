@@ -201,11 +201,13 @@
   "EditPlaylist_CopyFailed": "Failed to create copy: {0}",
   "Playlist_CreatingCopy": "Creating copy...",
   "Playlist_CopySuffix": "copy",
-
   "AddToPlaylist_Title": "Add to Playlist",
   "AddToPlaylist_Selected": "Selected: {0}",
   "AddToPlaylist_NoneSelected": "None selected",
   "AddToPlaylist_SearchHint": "Search playlists...",
+  "Playlist_AddedWithDuplicatesSkipped": "Added {0}, skipped {1} duplicates",
+  "Playlist_AddedToQueue": "Added {0} to queue",
+  "Playlist_AllAlreadyInQueue": "All tracks already in queue",
 
   "CoverPicker_Tab": "From tracks",
   "CoverPicker_SelectTracks": "Select 1-4 covers for mosaic",

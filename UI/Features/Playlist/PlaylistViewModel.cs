@@ -199,7 +199,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             ReactiveCommand.CreateFromTask(MergePlaylistAsync, canEdit));
 
         AddToQueueCommand = CreateCommand(
-            ReactiveCommand.Create(() => Audio.EnqueueRange(GetLoadedItemsSnapshot()), hasTracks));
+            ReactiveCommand.Create(EnqueueUniquePlaylistTracks, hasTracks));
 
         MoveItemCommand = CreateCommand(
             ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(async tuple =>
@@ -758,6 +758,18 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
                 ok ? SL["Dialog_Success"] : SL["Dialog_Error_Title"],
                 ok ? SL["Merge_Success_Msg"] : SL["Merge_Error_Msg"]);
         }
+    }
+
+    /// <summary>
+    /// Добавляет в очередь воспроизведения только уникальные треки из текущего плейлиста.
+    /// Делегирует выполнение общему расширению AudioEngine.
+    /// </summary>
+    private void EnqueueUniquePlaylistTracks()
+    {
+        var tracks = GetLoadedItemsSnapshot();
+        if (tracks.Count == 0) return;
+
+        Audio.EnqueuePlaylistWithNotification(tracks, PlaylistName);
     }
 
     #endregion

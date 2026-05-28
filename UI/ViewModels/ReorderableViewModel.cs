@@ -4,7 +4,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive.Linq;
 using LMP.UI.Features.Shell;
-using Avalonia.Collections; // Добавлено
+using Avalonia.Collections;
 
 namespace LMP.UI.ViewModels;
 
@@ -21,14 +21,16 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private List<string> _masterIds = [];
     private readonly Dictionary<string, TSource> _sources = [];
-    private readonly Dictionary<string, TViewModel> _vmCache = [];
-    private readonly Dictionary<TViewModel, string> _vmToId = new(ReferenceEqualityComparer.Instance);
+    
+    // Переведено в protected для доступа из UpdateMasterData и производных VM
+    protected readonly Dictionary<string, TViewModel> _vmCache = [];
+    protected readonly Dictionary<TViewModel, string> _vmToId = new(ReferenceEqualityComparer.Instance);
+    
     private List<TViewModel> _rebuildBuffer = [];
 
     private CancellationTokenSource? _loadCts;
     private bool _isDisposed;
 
-    // Поля автоматического перехватчика переходов
     private bool _isDataLoading = true;
     private bool _isTransitioning;
 
@@ -36,10 +38,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #region Properties
 
-    /// <summary>
-    /// Управляет видимостью списка. Вычисляет итоговое состояние:
-    /// скелетон показывается если грузятся данные ИЛИ идет анимация перехода.
-    /// </summary>
     public bool IsLoading
     {
         get => _isDataLoading || _isTransitioning;
@@ -72,6 +70,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         LibService = AppEntry.Services.GetRequiredService<LibraryService>();
 
         this.WhenAnyValue(static x => x.FilterQuery)
+            .Skip(1) // Оптимизация: пропускаем стартовую пустую строку, так как инициализация происходит явно
             .Throttle(TimeSpan.FromMilliseconds(150))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => RebuildVisibleItems())
@@ -82,7 +81,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #region ISmoothTransitionViewModel
 
-    /// <inheritdoc />
     public virtual void PrepareForTransition()
     {
         _isTransitioning = true;
@@ -148,21 +146,79 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         }
     }
 
+    /// <summary>
+    /// Инициализирует модель готовыми данными.
+    /// Переписан на вызов UpdateMasterData для сохранения VM-кэша и предотвращения мерцания.
+    /// </summary>
     protected void InitializeWithData(IEnumerable<TSource> items)
+    {
+        UpdateMasterData(items);
+    }
+
+    /// <summary>
+    /// Инкрементально обновляет мастер-данные без полной инвалидации кэша ViewModel.
+    /// Вычисляет разницу и удаляет из кэша только отсутствующие элементы.
+    /// </summary>
+    protected void UpdateMasterData(IEnumerable<TSource> items)
     {
         if (_isDisposed) return;
 
+        var list = items.ToList();
+
+        // Быстрая проверка на идентичность мастер-списка по ID для экономии CPU
+        bool changed = list.Count != _masterIds.Count;
+        if (!changed)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (GetItemId(list[i]) != _masterIds[i])
+                {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        if (!changed) return;
+
         CancelLoading();
 
-        var list = items.ToList();
         _masterIds = [.. list.Select(GetItemId)];
-
         _sources.Clear();
-        foreach (var item in list)
-            _sources[GetItemId(item)] = item;
 
-        DisposeAndClearVmCache();
-        Items.Clear();
+        var usedIds = new HashSet<string>(_masterIds.Count, StringComparer.Ordinal);
+        foreach (var item in list)
+        {
+            var id = GetItemId(item);
+            _sources[id] = item;
+            usedIds.Add(id);
+        }
+
+        // Выборочно удаляем из кэша только старые неиспользуемые ViewModel
+        if (usedIds.Count < _vmCache.Count)
+        {
+            List<string>? toRemove = null;
+            foreach (var id in _vmCache.Keys)
+            {
+                if (!usedIds.Contains(id))
+                {
+                    toRemove ??= new List<string>(_vmCache.Count - usedIds.Count);
+                    toRemove.Add(id);
+                }
+            }
+
+            if (toRemove is not null)
+            {
+                foreach (var id in toRemove)
+                {
+                    if (_vmCache.Remove(id, out var vm))
+                    {
+                        _vmToId.Remove(vm);
+                        vm.Dispose();
+                    }
+                }
+            }
+        }
 
         RebuildVisibleItems();
     }
@@ -171,7 +227,8 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #region Filtering
 
-    protected void RebuildVisibleItems()
+    // Сделан виртуальным для возможности кастомной постобработки в наследниках
+    protected virtual void RebuildVisibleItems()
     {
         var query = FilterQuery;
 
@@ -199,8 +256,25 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private void SyncVisibleItems(List<TViewModel> newItems)
     {
-        Items.Clear();
-        Items.InsertRange(0, newItems);
+        // Оптимизация мерцания: обновляем коллекцию только если ее состав или порядок изменился
+        bool itemsChanged = Items.Count != newItems.Count;
+        if (!itemsChanged)
+        {
+            for (int i = 0; i < newItems.Count; i++)
+            {
+                if (Items[i] != newItems[i])
+                {
+                    itemsChanged = true;
+                    break;
+                }
+            }
+        }
+
+        if (itemsChanged)
+        {
+            Items.Clear();
+            Items.InsertRange(0, newItems);
+        }
     }
 
     #endregion
@@ -238,14 +312,12 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
         if (masterOld >= 0 && masterNew >= 0 && masterOld != masterNew)
         {
-            // Исправлено: перемещение во внутреннем мастер-списке по точным вычисленным индексам
             _masterIds.RemoveAt(masterOld);
             _masterIds.Insert(masterNew, movingId);
             Items.Move(oldIndex, newIndex);
 
             try
             {
-                // Исправлено: передача корректных индексов уровня базы данных (masterNew вместо newIndex)
                 await SaveMoveAsync(masterOld, masterNew, CancellationToken.None);
                 Log.Info("[Reorderable] Move saved to DB");
             }
@@ -253,7 +325,6 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
             {
                 Log.Error($"[Reorderable] Save move failed: {ex.Message}");
 
-                // Исправлено: корректный откат изменений в мастер-списке при сбое БД
                 _masterIds.RemoveAt(masterNew);
                 _masterIds.Insert(masterOld, movingId);
                 Items.Move(newIndex, oldIndex);

@@ -3,35 +3,24 @@ using LMP.UI.Features.Shared;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System.Reactive;
-
 using System.Reactive.Linq;
 
 namespace LMP.UI.Features.Queue;
 
 /// <summary>
 /// ViewModel панели очереди воспроизведения.
-/// Не наследует TrackListPaginatedViewModel — очередь управляется AudioEngine,
-/// а не загружается постранично. Имеет собственный VM-кэш изолированный от factory.
-///
-/// <para><b>Smart Parent:</b> реализован напрямую через _vmCache[id],
-/// а не через TrackViewModelFactory.TryGet — очередные VM создаются через
-/// factory.CreateForQueue и намеренно не попадают в общий factory-кэш.</para>
+/// Наследует TrackListReorderableViewModel для полного устранения дублирования кода.
+/// Использует изолированный кэш базового класса и инкрементальные обновления.
 /// </summary>
-public sealed class QueueViewModel : ViewModelBase, IFilterable
+public sealed class QueueViewModel : TrackListReorderableViewModel
 {
     #region Fields
 
-    private readonly AudioEngine _audio;
     private readonly DownloadService _downloads;
-    private readonly TrackViewModelFactory _vmFactory;
     private readonly DialogService _dialog;
     private readonly MusicLibraryManager _manager;
     private readonly LibraryService _library;
 
-    private readonly Dictionary<string, TrackItemViewModel> _vmCache = [];
-    private List<TrackInfo> _masterQueue = [];
-
-    private TrackItemViewModel? _currentActiveVm;
     private bool _isMovingInternally;
     private volatile bool _isSuspended;
     private bool _isDisposed;
@@ -47,9 +36,11 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
     [Reactive] public bool IsFilterEmpty { get; private set; }
 
     [Reactive] public bool CanReorderItems { get; private set; } = true;
-    [Reactive] public string FilterQuery { get; set; } = string.Empty;
 
-    public AvaloniaList<TrackItemViewModel> QueueItems { get; } = [];
+    /// <summary>
+    /// Псевдоним для Items, сохраняющий совместимость с биндингом в QueueView.axaml.
+    /// </summary>
+    public AvaloniaList<TrackItemViewModel> QueueItems => Items;
 
     #endregion
 
@@ -73,279 +64,132 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
         MusicLibraryManager manager,
         LibraryService library,
         TrackViewModelFactory vmFactory)
+        : base(audio, downloads, vmFactory)
     {
-        _audio = audio;
         _downloads = downloads;
         _dialog = dialog;
         _manager = manager;
         _library = library;
-        _vmFactory = vmFactory;
 
         ClearQueueCommand = CreateCommand(
-            ReactiveCommand.Create(() => _audio.ClearQueue()));
+            ReactiveCommand.Create(() => Audio.ClearQueue()));
 
         ShuffleQueueCommand = CreateCommand(
-            ReactiveCommand.Create(() => _audio.ShuffleQueue()));
+            ReactiveCommand.Create(() => Audio.ShuffleQueue()));
 
         DownloadAllCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            foreach (var item in QueueItems.Where(static x => !x.IsDownloading))
+            foreach (var item in Items.Where(static x => !x.IsDownloading))
                 _downloads.StartDownload(item.Track);
         }));
 
         RemoveTrackCommand = CreateCommand(
-            ReactiveCommand.Create<TrackItemViewModel>(item => _audio.RemoveFromQueue(item.Track)));
+            ReactiveCommand.Create<TrackItemViewModel>(item => Audio.RemoveFromQueue(item.Track)));
 
         MoveItemCommand = CreateCommand(
-            ReactiveCommand.Create<(int oldIndex, int newIndex)>(
-                t => { if (CanReorderItems) MoveItem(t.oldIndex, t.newIndex); }));
+            ReactiveCommand.CreateFromTask<(int oldIndex, int newIndex)>(
+                t => CanReorderItems ? MoveItemAsync(t.oldIndex, t.newIndex) : Task.CompletedTask));
 
         SaveQueueToPlaylistCommand = CreateCommand(ReactiveCommand.CreateFromTask(
             SaveQueueToPlaylistAsync,
             this.WhenAnyValue(x => x.IsEmpty, static empty => !empty)));
 
-        SubscribeToAudioEngine();
-        SubscribeToDownloadService();
-        SubscribeToFilter();
+        // Подписка на изменение состава очереди в AudioEngine
+        Observable.FromEvent(
+                h => Audio.OnQueueChanged += h,
+                h => Audio.OnQueueChanged -= h)
+            .Throttle(TimeSpan.FromMilliseconds(80))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ =>
+            {
+                if (!_isMovingInternally && !_isSuspended)
+                    RefreshFromAudioEngine();
+            })
+            .DisposeWith(Disposables);
 
         RefreshFromAudioEngine();
     }
 
     #endregion
 
-    #region Smart Parent Subscriptions
-
-    private void SubscribeToAudioEngine()
-    {
-        Observable.FromEvent(
-                h => _audio.OnQueueChanged += h,
-                h => _audio.OnQueueChanged -= h)
-            .Throttle(TimeSpan.FromMilliseconds(80))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                if (!_isMovingInternally)
-                    RefreshFromAudioEngine();
-            })
-            .DisposeWith(Disposables);
-
-        // Идентично TrackListReorderableViewModel: только SetActive, никакого Rebuild.
-        Observable.FromEvent<Action<TrackInfo?>, TrackInfo?>(
-                h => _audio.OnTrackChanged += h,
-                h => _audio.OnTrackChanged -= h)
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(t =>
-            {
-                if (!_isSuspended) UpdatePlaybackState(t, _audio.IsPlaying);
-            })
-            .DisposeWith(Disposables);
-
-        Observable.FromEvent<Action<bool, bool>, (bool isPlaying, bool isPaused)>(
-                h => (a, b) => h((a, b)),
-                h => _audio.OnPlaybackStateChanged += h,
-                h => _audio.OnPlaybackStateChanged -= h)
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(x =>
-            {
-                if (!_isSuspended) UpdatePlaybackState(_audio.CurrentTrack, x.isPlaying);
-            })
-            .DisposeWith(Disposables);
-    }
-
-    private void SubscribeToDownloadService()
-    {
-        Observable.FromEvent<Action<string, float>, (string id, float progress)>(
-                h => (id, p) => h((id, p)),
-                h => _downloads.OnProgress += h,
-                h => _downloads.OnProgress -= h)
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(x =>
-            {
-                if (!_isSuspended) _vmCache.GetValueOrDefault(x.id)?.SetDownloadState(true, x.progress);
-            })
-            .DisposeWith(Disposables);
-
-        Observable.FromEvent<Action<string, bool, string?>, (string id, bool ok, string? path)>(
-                h => (id, ok, path) => h((id, ok, path)),
-                h => _downloads.OnCompleted += h,
-                h => _downloads.OnCompleted -= h)
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(x =>
-            {
-                if (!_isSuspended) _vmCache.GetValueOrDefault(x.id)?.SetDownloadState(false, 0f);
-            })
-            .DisposeWith(Disposables);
-    }
-
-    private void SubscribeToFilter()
-    {
-        this.WhenAnyValue(x => x.FilterQuery)
-            .Throttle(TimeSpan.FromMilliseconds(200))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ =>
-            {
-                CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);
-                RebuildVisibleItems();
-            })
-            .DisposeWith(Disposables);
-    }
-
-    #endregion
-
-    #region Smart Parent Updates — O(1)
+    #region Overrides
 
     /// <summary>
-    /// O(1): lookup через _vmCache по ID.
-    /// Идентично паттерну в TrackListReorderableViewModel.UpdatePlaybackState.
-    /// Единственная точка управления SetActive — никакого дублирования в Rebuild.
+    /// Перестраивает видимый список и динамически обновляет статусы пустоты и фильтрации.
     /// </summary>
-    private void UpdatePlaybackState(TrackInfo? currentTrack, bool isPlaying)
+    protected override void RebuildVisibleItems()
     {
-        if (_currentActiveVm != null && _currentActiveVm.Id != currentTrack?.Id)
+        CanReorderItems = string.IsNullOrWhiteSpace(FilterQuery);
+        base.RebuildVisibleItems();
+
+        IsEmpty = TotalCount == 0;
+        IsFilterEmpty = !IsEmpty && !string.IsNullOrWhiteSpace(FilterQuery) && Items.Count == 0;
+    }
+
+    /// <summary>
+    /// Фабрикует изолированные VM специально для контекста очереди воспроизведения.
+    /// </summary>
+    protected override TrackItemViewModel CreateViewModel(TrackInfo track)
+    {
+        var vm = VmFactory.CreateForQueue(track, PlayFromQueue);
+
+        if (Audio.CurrentTrack?.Id == track.Id)
         {
-            _currentActiveVm.SetActive(false, false);
-            _currentActiveVm = null;
+            vm.SetActive(true, Audio.IsPlaying);
+            CurrentActiveVm = vm;
         }
 
-        if (currentTrack is null) return;
+        return vm;
+    }
 
-        _currentActiveVm ??= _vmCache.GetValueOrDefault(currentTrack.Id);
-        _currentActiveVm?.SetActive(true, isPlaying);
+    /// <summary>
+    /// Оповещает AudioEngine о внутреннем перетаскивании элемента.
+    /// </summary>
+    protected override Task SaveMoveAsync(int fromIndex, int toIndex, CancellationToken ct)
+    {
+        try
+        {
+            _isMovingInternally = true;
+            Audio.MoveQueueItem(fromIndex, toIndex);
+        }
+        finally
+        {
+            _isMovingInternally = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override void OnPlay(TrackInfo track) => PlayFromQueue(track);
+
+    protected override Task<List<TrackInfo>> LoadTracksAsync(IEnumerable<string> ids, CancellationToken ct)
+    {
+        // Очередь не поддерживает загрузку по ID, так как данные хранятся прямо в памяти AudioEngine.
+        return Task.FromResult(Audio.Queue.ToList());
     }
 
     #endregion
 
     #region Queue Management
 
-    /// <summary>
-    /// Обновляет очередь из AudioEngine только если изменился состав треков.
-    /// Guard по ID-списку предотвращает полный rebuild при смене трека/паузе —
-    /// в этих случаях AudioEngine может стрельнуть OnQueueChanged, но состав не меняется.
-    /// </summary>
     private void RefreshFromAudioEngine()
     {
-        var newQueue = _audio.Queue.ToList();
-
-        bool contentChanged = newQueue.Count != _masterQueue.Count;
-        if (!contentChanged)
-        {
-            for (int i = 0; i < newQueue.Count; i++)
-            {
-                if (newQueue[i].Id != _masterQueue[i].Id)
-                {
-                    contentChanged = true;
-                    break;
-                }
-            }
-        }
-
-        if (!contentChanged) return;
-
-        _masterQueue = newQueue;
-        RebuildVisibleItems();
+        // Используем эффективный инкрементальный UpdateMasterData из ReorderableViewModel
+        UpdateMasterData(Audio.Queue);
     }
 
-    /// <summary>
-    /// Перестраивает видимый список с учётом фильтра.
-    /// SetActive намеренно отсутствует — активное состояние управляется исключительно
-    /// через UpdatePlaybackState (O(1) lookup), как в TrackListReorderableViewModel.
-    /// </summary>
-    private void RebuildVisibleItems()
-    {
-        var query = FilterQuery;
-        bool hasFilter = !string.IsNullOrWhiteSpace(query);
-
-        var newItems = new List<TrackItemViewModel>(_masterQueue.Count);
-        var usedIds = new HashSet<string>(_masterQueue.Count, StringComparer.Ordinal);
-
-        foreach (var track in _masterQueue)
-        {
-            if (hasFilter && !TrackFilters.MatchesTitleOrAuthor(track, query))
-                continue;
-
-            if (!_vmCache.TryGetValue(track.Id, out var vm))
-            {
-                vm = _vmFactory.CreateForQueue(track, PlayFromQueue);
-                _vmCache[track.Id] = vm;
-            }
-
-            newItems.Add(vm);
-            usedIds.Add(track.Id);
-        }
-
-        if (usedIds.Count < _vmCache.Count)
-        {
-            List<string>? toRemove = null;
-            foreach (var kvp in _vmCache)
-            {
-                if (!usedIds.Contains(kvp.Key))
-                {
-                    toRemove ??= new List<string>(_vmCache.Count - usedIds.Count);
-                    toRemove.Add(kvp.Key);
-                }
-            }
-
-            if (toRemove is not null)
-            {
-                foreach (var key in toRemove)
-                {
-                    _vmCache[key].Dispose();
-                    _vmCache.Remove(key);
-                }
-            }
-        }
-
-        QueueItems.Clear();
-        QueueItems.InsertRange(0, newItems);
-
-        IsEmpty = _masterQueue.Count == 0;
-        IsFilterEmpty = !IsEmpty && hasFilter && QueueItems.Count == 0;
-
-        UpdatePlaybackState(_audio.CurrentTrack, _audio.IsPlaying);
-    }
-
-    private void MoveItem(int oldIdx, int newIdx)
-    {
-        if (oldIdx == newIdx
-            || oldIdx < 0 || oldIdx >= QueueItems.Count
-            || newIdx < 0 || newIdx >= QueueItems.Count)
-            return;
-
-        if (!string.IsNullOrWhiteSpace(FilterQuery))
-        {
-            Log.Warn("[Queue] Cannot reorder with active filter");
-            return;
-        }
-
-        var movingTrack = QueueItems[oldIdx].Track;
-
-        try
-        {
-            _isMovingInternally = true;
-            QueueItems.Move(oldIdx, newIdx);
-            _masterQueue.RemoveAt(oldIdx);
-            _masterQueue.Insert(newIdx, movingTrack);
-            _audio.MoveQueueItem(oldIdx, newIdx);
-        }
-        finally
-        {
-            _isMovingInternally = false;
-        }
-    }
-
-    private void PlayFromQueue(TrackInfo track) => _ = _audio.PlayTrackAsync(track);
+    private void PlayFromQueue(TrackInfo track) => _ = Audio.PlayTrackAsync(track);
 
     #endregion
 
     #region Lifecycle (Suspend/Resume)
 
-    protected override void OnSuspend()
+    protected override void OnSuspend(SuspendLevel level)
     {
         _isSuspended = true;
         Log.Debug("[QueueVM] Suspended");
     }
 
-    protected override void OnResume()
+    protected override void OnResume(SuspendLevel previousLevel)
     {
         _isSuspended = false;
         RefreshFromAudioEngine();
@@ -358,17 +202,18 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
 
     private async Task SaveQueueToPlaylistAsync()
     {
-        if (_masterQueue.Count == 0) return;
+        var tracks = GetLoadedItemsSnapshot();
+        if (tracks.Count == 0) return;
 
         var result = await _dialog.ShowCreatePlaylistDialogAsync();
         if (result is null || string.IsNullOrWhiteSpace(result.Name)) return;
 
         var playlist = await _library.CreatePlaylistAsync(result.Name.Trim());
 
-        foreach (var track in _masterQueue)
+        foreach (var track in tracks)
             await _manager.AddTrackToPlaylistAsync(playlist.Id, track);
 
-        Log.Info($"[Queue] Saved {_masterQueue.Count} tracks to playlist '{result.Name}'");
+        Log.Info($"[Queue] Saved {tracks.Count} tracks to playlist '{result.Name}'");
     }
 
     #endregion
@@ -382,12 +227,7 @@ public sealed class QueueViewModel : ViewModelBase, IFilterable
         if (disposing)
         {
             Log.Debug("[QueueVM] Disposing");
-
-            foreach (var vm in _vmCache.Values)
-                vm.Dispose();
-
-            _vmCache.Clear();
-            QueueItems.Clear();
+            // Базовый класс ReorderableViewModel автоматически очистит Items и утилизирует VM кэш.
         }
 
         base.Dispose(disposing);

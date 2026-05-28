@@ -170,6 +170,9 @@
   "Playlist_SyncSuccess_Details": "↓ {0} локально  ↑ {1} в облако  ✗ {2}/{3} удалено",
   "Playlist_CopyLink_NotLinked": "Привяжите плейлист к YouTube чтобы получить ссылку",
   "Playlist_LinkCopied": "Ссылка скопирована!",
+  "Playlist_AddedWithDuplicatesSkipped": "Добавлено {0}, пропущено {1} дубликатов",
+  "Playlist_AddedToQueue": "Добавлено {0} в очередь",
+  "Playlist_AllAlreadyInQueue": "Все треки уже в очереди",
 
   "EditPlaylist_Title": "Редактировать плейлист",
   "EditPlaylist_Name": "Название",

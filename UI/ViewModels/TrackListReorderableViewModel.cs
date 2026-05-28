@@ -8,10 +8,6 @@ namespace LMP.UI.ViewModels;
 /// Абстрактный базовый класс для экранов с переупорядочиваемым списком треков (Playlist и т.п.).
 /// Фиксирует generic-параметры ReorderableViewModel на (TrackInfo, TrackItemViewModel)
 /// и добавляет тот же Smart Parent паттерн что и <see cref="TrackListPaginatedViewModel"/>.
-///
-/// <para><b>Отличие от TrackListPaginatedViewModel:</b> наследует ReorderableViewModel —
-/// поддерживает drag-and-drop, мастер-список ID, фиксированный порядок.
-/// Пагинация и InfiniteScroll отсутствуют намеренно: данные плейлиста известны заранее.</para>
 /// </summary>
 public abstract class TrackListReorderableViewModel
     : ReorderableViewModel<TrackInfo, TrackItemViewModel>
@@ -22,7 +18,8 @@ public abstract class TrackListReorderableViewModel
     protected readonly DownloadService Downloads;
     protected readonly TrackViewModelFactory VmFactory;
 
-    private TrackItemViewModel? _currentActiveVm;
+    // Изменено с private на protected для прямого доступа из QueueViewModel
+    protected TrackItemViewModel? CurrentActiveVm;
 
     #endregion
 
@@ -70,16 +67,16 @@ public abstract class TrackListReorderableViewModel
     /// </summary>
     private void UpdatePlaybackState(TrackInfo? currentTrack, bool isPlaying)
     {
-        if (_currentActiveVm != null && _currentActiveVm.Id != currentTrack?.Id)
+        if (CurrentActiveVm != null && CurrentActiveVm.Id != currentTrack?.Id)
         {
-            _currentActiveVm.SetActive(false, false);
-            _currentActiveVm = null;
+            CurrentActiveVm.SetActive(false, false);
+            CurrentActiveVm = null;
         }
 
         if (currentTrack is null) return;
 
-        _currentActiveVm ??= GetCachedVm(currentTrack.Id);
-        _currentActiveVm?.SetActive(true, isPlaying);
+        CurrentActiveVm ??= GetCachedVm(currentTrack.Id);
+        CurrentActiveVm?.SetActive(true, isPlaying);
     }
 
     #endregion
@@ -116,8 +113,7 @@ public abstract class TrackListReorderableViewModel
 
     /// <summary>
     /// Создаёт VM через factory с привязкой <see cref="OnPlay"/> и начальным активным состоянием.
-    /// Не sealed: наследники могут переопределить для дополнительной настройки VM
-    /// (например, RemoveFromPlaylistAction, SourceContextId).
+    /// Не sealed: наследники могут переопределить для дополнительной настройки VM.
     /// </summary>
     protected override TrackItemViewModel CreateViewModel(TrackInfo track)
     {
@@ -126,7 +122,7 @@ public abstract class TrackListReorderableViewModel
         if (Audio.CurrentTrack?.Id == track.Id)
         {
             vm.SetActive(true, Audio.IsPlaying);
-            _currentActiveVm = vm;
+            CurrentActiveVm = vm;
         }
 
         return vm;

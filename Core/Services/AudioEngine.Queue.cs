@@ -27,6 +27,61 @@ public sealed partial class AudioEngine
 
     #region Public API
 
+    /// <summary>
+    /// Добавляет в очередь диапазон треков, отфильтровывая дубликаты.
+    /// Если очередь была пуста, автоматически запускает проигрывание первого добавленного трека.
+    /// </summary>
+    /// <param name="tracks">Список добавляемых треков.</param>
+    /// <returns>Количество фактически добавленных уникальных треков.</returns>
+    public int EnqueueRangeUnique(IEnumerable<TrackInfo> tracks)
+    {
+        int addedCount = 0;
+        TrackInfo? playbackTrack = null;
+        bool shouldAutoplay = false;
+
+        lock (_queueLock)
+        {
+            var existingIds = _queue.Select(static t => t.Id).ToHashSet(StringComparer.Ordinal);
+            var unique = new List<TrackInfo>();
+
+            foreach (var track in tracks)
+            {
+                if (existingIds.Add(track.Id))
+                {
+                    unique.Add(track);
+                    addedCount++;
+                }
+            }
+
+            if (unique.Count > 0)
+            {
+                _queue.AddRange(unique);
+                InvalidateQueueSnapshot();
+
+                if (CurrentTrack == null && !IsPlaying && !IsLoading)
+                {
+                    _currentIndex = _queue.Count - unique.Count; // Позиционируемся на первый из новых
+                    playbackTrack = _queue[_currentIndex];
+                    shouldAutoplay = true;
+                }
+            }
+        }
+
+        if (addedCount > 0)
+        {
+            RaiseOnUI(() => OnQueueChanged?.Invoke());
+
+            if (shouldAutoplay && playbackTrack != null)
+            {
+                ResetSealedFailedTrack();
+                int session = BeginNewSession();
+                _ = PlayTrackCoreAsync(playbackTrack, session, GetSessionToken());
+            }
+        }
+
+        return addedCount;
+    }
+
     public void Enqueue(TrackInfo track)
     {
         TrackInfo? playbackTrack = null;
