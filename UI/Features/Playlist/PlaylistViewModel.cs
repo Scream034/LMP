@@ -43,6 +43,8 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     private volatile bool _isSuspended;
     private int _syncInProgressGate;
 
+    private HashSet<string>? _playlistTrackIds;
+
     #endregion
 
     #region Properties
@@ -92,9 +94,27 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
     }
 
     private GridLength _headerHeight;
-
     private const double HeaderHeightMin = 280;
     private const double HeaderHeightMax = 400;
+
+    /// <summary>Очередь "чистая" — запущена из этого плейлиста и не изменялась сторонними треками.</summary>
+    [Reactive] public bool IsQueuePure { get; private set; }
+
+    /// <summary>Очередь "чистая" и прямо сейчас активно проигрывается (для анимации эквалайзера).</summary>
+    [Reactive] public bool IsPlayingPure { get; private set; }
+
+    /// <summary>Динамическая подсказка для кнопки-трансформера.</summary>
+    public string PlayButtonTooltip
+    {
+        get
+        {
+            if (IsQueuePure)
+            {
+                return IsPlayingPure ? (SL["Player_Pause"] ?? "Pause") : (SL["Player_Play"] ?? "Play");
+            }
+            return SL["Playlist_PlayAll"] ?? "Play (replace queue)";
+        }
+    }
 
     #endregion
 
@@ -293,6 +313,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
             _lastLocalMutationTime = DateTime.Now;
             InvalidateAllTracksCache();
+            _playlistTrackIds?.Remove(t.Id); // Синхронно поддерживаем чистоту кэша
 
             RemoveItemLocally(t.Id);
 
@@ -366,6 +387,7 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
             IsReadOnly = !playlist.IsEditable;
 
             var allIds = await LibService.GetPlaylistTrackIdsAsync(playlistId);
+            _playlistTrackIds = new HashSet<string>(allIds, StringComparer.Ordinal);
             TrackCount = allIds.Count;
             this.RaisePropertyChanged(nameof(FormattedTrackCount));
 
@@ -395,24 +417,74 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     #region Private Helpers
 
+    /// <summary>
+    /// Настраивает реактивную подписку на состояние аудио-движка для умного морфинга кнопки.
+    /// </summary>
     private void SubscribeToPlaybackSource()
     {
-        _playerControl.ActivePlaylistIdObservable
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .CombineLatest(
-                _playerControl.PlaybackStateObservable
-                    .ObserveOn(RxSchedulers.MainThreadScheduler),
-                (id, state) => id == _currentPlaylistId && (state.IsPlaying || state.IsPaused))
-            .DistinctUntilChanged()
-            .Subscribe(v => IsPlayingThisPlaylist = v)
-            .DisposeWith(Disposables);
+        Observable.CombineLatest(
+            _playerControl.ActivePlaylistIdObservable,
+            _playerControl.PlaybackStateObservable,
+            _playerControl.QueueCountObservable,
+            (activeId, state, qCount) => new { activeId, state.IsPlaying, qCount })
+        .ObserveOn(RxSchedulers.MainThreadScheduler)
+        .Subscribe(data =>
+        {
+            bool isActivePlaylist = data.activeId == _currentPlaylistId;
+            IsPlayingThisPlaylist = isActivePlaylist;
+
+            if (isActivePlaylist)
+            {
+                IsQueuePure = CheckQueuePurity();
+            }
+            else
+            {
+                IsQueuePure = false;
+            }
+
+            IsPlayingPure = IsQueuePure && data.IsPlaying;
+            this.RaisePropertyChanged(nameof(PlayButtonTooltip));
+        })
+        .DisposeWith(Disposables);
+    }
+
+    /// <summary>
+    /// Сверяет текущую очередь плеера с эталоном плейлиста за O(N).
+    /// </summary>
+    private bool CheckQueuePurity()
+    {
+        if (_playlistTrackIds == null) return false;
+
+        var queue = Audio.Queue;
+
+        // Быстрый отсев: если кто-то удалил/добавил трек, количество не совпадет
+        if (queue.Count != TrackCount) return false;
+
+        // Если количества совпадают, проверяем, нет ли "чужих" треков
+        for (int i = 0; i < queue.Count; i++)
+        {
+            if (!_playlistTrackIds.Contains(queue[i].Id))
+                return false;
+        }
+
+        return true;
     }
 
     private void UpdateIsPlayingThisPlaylist()
     {
-        IsPlayingThisPlaylist =
-            _playerControl.ActivePlaylistId == _currentPlaylistId
-            && (_playerControl.IsPlaying || _playerControl.IsPaused);
+        IsPlayingThisPlaylist = _playerControl.ActivePlaylistId == _currentPlaylistId;
+
+        if (IsPlayingThisPlaylist)
+        {
+            IsQueuePure = CheckQueuePurity();
+            IsPlayingPure = IsQueuePure && _playerControl.IsPlaying;
+        }
+        else
+        {
+            IsQueuePure = false;
+            IsPlayingPure = false;
+        }
+        this.RaisePropertyChanged(nameof(PlayButtonTooltip));
     }
 
     private async Task<List<TrackInfo>> GetAllTracksAsync()
@@ -448,23 +520,30 @@ public sealed class PlaylistViewModel : TrackListReorderableViewModel, ISmoothTr
 
     #region Command Implementations
 
+    /// <summary>
+    /// Обрабатывает нажатие умной кнопки (Трансформера).
+    /// <para>Чистая очередь -> мягкий Play/Pause.</para>
+    /// <para>Измененная очередь / Другой источник -> Полный сброс и перезапуск плейлиста.</para>
+    /// </summary>
     private async Task PlayAllAsync()
     {
         if (TrackCount == 0) return;
 
-        if (IsPlayingThisPlaylist)
+        if (IsQueuePure)
         {
-            await _playerControl.PlayPauseAsync();
+            // Очередь чистая: работаем как стандартная кнопка Play/Pause
+            await _playerControl.PlayPauseAsync().ConfigureAwait(false);
             return;
         }
 
-        var allTracks = await GetAllTracksAsync();
+        // Очередь грязная (или активен другой плейлист): полностью стираем очередь и начинаем заново
+        var allTracks = await GetAllTracksAsync().ConfigureAwait(false);
         if (allTracks.Count == 0) return;
 
         _playerControl.SetShuffleEnabled(false);
         _playerControl.SetActivePlaylistId(_currentPlaylistId);
         IsShuffleActive = false;
-        await Audio.StartQueueAsync(allTracks, allTracks[0]);
+        await Audio.StartQueueAsync(allTracks, allTracks[0]).ConfigureAwait(false);
     }
 
     private async Task ShufflePlayAsync()

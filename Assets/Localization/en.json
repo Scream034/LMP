@@ -170,6 +170,7 @@
   "Playlist_SyncSuccess_Details": "↓ {0} local  ↑ {1} cloud  ✗ {2}/{3} removed",
   "Playlist_CopyLink_NotLinked": "Link to YouTube to get a shareable URL",
   "Playlist_LinkCopied": "Link copied!",
+  "Playlist_PlayAll": "Play (replace queue)",
 
   "EditPlaylist_Title": "Edit Playlist",
   "EditPlaylist_Name": "Name",

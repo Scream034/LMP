@@ -27,7 +27,6 @@
             <Setter Property="Opacity" Value="0.9" />
         </Style>
 
-        <!-- Fade-in for playlist content -->
         <Style Selector="Grid.playlist-content">
             <Setter Property="Opacity" Value="0" />
             <Setter Property="Transitions">
@@ -38,6 +37,169 @@
         </Style>
         <Style Selector="Grid.playlist-content.loaded">
             <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <Style Selector="Button.playlist-main-btn">
+            <Setter Property="Width" Value="48" />
+            <Setter Property="Height" Value="48" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1"
+                        Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.playlist-main-btn:pointerover">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+
+        <Style Selector="Button.playlist-main-btn:pressed">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="RenderTransform" Value="scale(0.88)" />
+        </Style>
+
+        <!-- Active Playing State: Glowing/Pulse Breathing Animation (Smooth and subtle) -->
+        <Style Selector="Button.playlist-main-btn.is-playing">
+            <Style.Animations>
+                <Animation Duration="0:0:1.8" IterationCount="Infinite"
+                    PlaybackDirection="Alternate" Easing="SineEaseInOut" FillMode="Both">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.6" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- Dynamic transitions specifically for PathIcon (SAFE) -->
+        <Style Selector="Button.playlist-main-btn PathIcon.state-replace">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                    <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Hover on non-playing PathIcon -> Accent Color -->
+        <Style Selector="Button.playlist-main-btn:pointerover PathIcon.state-replace">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Active playing PathIcon -> Accent Color -->
+        <Style Selector="Button.playlist-main-btn.is-playing PathIcon.state-replace">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Dynamic transitions specifically for StackPanel (SAFE - NO Foreground!) -->
+        <Style Selector="Button.playlist-main-btn StackPanel.state-pure">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- STATE 1: PURE (Equalizer) -->
+        <Style Selector="Button.playlist-main-btn.is-pure StackPanel.state-pure">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- STATE 2: DIRTY / NOT ACTIVE (PlaylistPlay Icon) -->
+        <Style Selector="Button.playlist-main-btn:not(.is-pure) PathIcon.state-replace">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- Equalizer Bars Base (Stopped / Paused State) -->
+        <Style Selector="Border.eq-bar">
+            <Setter Property="Width" Value="4" />
+            <Setter Property="Height" Value="5" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Background" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Height" Duration="0:0:0.4" Easing="CubicEaseOut" />
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <!-- Hover on Equalizer Bars -> Accent Color -->
+        <Style Selector="Button.playlist-main-btn:pointerover Border.eq-bar">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Active Playing Equalizer Bars -> Accent Color -->
+        <Style Selector="Button.playlist-main-btn.is-playing Border.eq-bar">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Animations when Playing (Taller and thicker for 48px footprint) -->
+        <Style Selector="Button.playlist-main-btn.is-playing Border.eq-bar.b1">
+            <Style.Animations>
+                <Animation Duration="0:0:0.5" IterationCount="Infinite"
+                    PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Height" Value="6" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Height" Value="22" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Button.playlist-main-btn.is-playing Border.eq-bar.b2">
+            <Style.Animations>
+                <Animation Duration="0:0:0.7" IterationCount="Infinite"
+                    PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Height" Value="26" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Height" Value="6" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Button.playlist-main-btn.is-playing Border.eq-bar.b3">
+            <Style.Animations>
+                <Animation Duration="0:0:0.6" IterationCount="Infinite"
+                    PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Height" Value="8" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Height" Value="20" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <Style Selector="Button.playlist-main-btn.is-playing Border.eq-bar.b4">
+            <Style.Animations>
+                <Animation Duration="0:0:0.55" IterationCount="Infinite"
+                    PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Height" Value="18" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Height" Value="6" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
         </Style>
     </UserControl.Styles>
 
@@ -209,17 +371,30 @@
                     Orientation="Horizontal" Spacing="12"
                     VerticalAlignment="Center">
 
-                    <Button Classes="playback-btn-main accent-base"
+                    <!-- Смарт-кнопка -->
+                    <Button Classes="playlist-main-btn"
+                        Classes.is-pure="{Binding IsQueuePure}"
+                        Classes.is-playing="{Binding IsPlayingPure}"
                         Command="{Binding PlayAllCommand}"
-                        Width="48" Height="48" CornerRadius="24"
-                        ToolTip.Tip="{Binding L[Player_Play]}">
+                        ToolTip.Tip="{Binding PlayButtonTooltip}">
                         <Panel>
-                            <PathIcon Data="{StaticResource Icon.Play}"
-                                Width="26" Height="26"
-                                IsVisible="{Binding !IsPlayingThisPlaylist}" />
-                            <PathIcon Data="{StaticResource Icon.Pause}"
-                                Width="26" Height="26"
-                                IsVisible="{Binding IsPlayingThisPlaylist}" />
+                            <!-- Иконка Заменить очередь / Начать играть (IsQueuePure == false) -->
+                            <PathIcon Data="{StaticResource Icon.PlaylistPlay}"
+                                Width="28" Height="28"
+                                Classes="state-replace" />
+
+                            <!-- Эквалайзер (IsQueuePure == true) -->
+                            <StackPanel Classes="state-pure"
+                                Orientation="Horizontal"
+                                Spacing="4"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Height="28">
+                                <Border Classes="eq-bar b1" />
+                                <Border Classes="eq-bar b2" />
+                                <Border Classes="eq-bar b3" />
+                                <Border Classes="eq-bar b4" />
+                            </StackPanel>
                         </Panel>
                     </Button>
 
