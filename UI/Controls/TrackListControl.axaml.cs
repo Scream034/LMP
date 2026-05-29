@@ -467,6 +467,21 @@ public partial class TrackListControl : UserControl
         if (!EnableReordering) return;
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
 
+        // Фикс: Игнорируем запуск перетаскивания, если клик произошел по интерактивным элементам (кнопкам Play, Like, More)
+        if (e.Source is Visual visual)
+        {
+            var parent = visual;
+            while (parent != null && parent != this)
+            {
+                if (parent is Button)
+                {
+                    Log.Debug("[PointerPressed] Clicked on button inside track row, skipping drag initialization.");
+                    return;
+                }
+                parent = parent.GetVisualParent();
+            }
+        }
+
         _dragStartPoint = e.GetPosition(null);
         _dragPressTimestamp = Environment.TickCount64;
         _isDragging = false;

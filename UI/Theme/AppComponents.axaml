@@ -99,13 +99,34 @@
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
+    <!-- КНОПКА ОБЛОЖКИ (Скругление и обрезка без лишних Border-оберток)      -->
     <Style Selector="Button.cover-btn">
         <Setter Property="Padding" Value="0" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="CornerRadius" Value="6" />
-        <Setter Property="ClipToBounds" Value="True" />
         <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="Button">
+                <Border Background="{TemplateBinding Background}"
+                    CornerRadius="{TemplateBinding CornerRadius}"
+                    ClipToBounds="True">
+                    <ContentPresenter Name="PART_ContentPresenter"
+                        Content="{TemplateBinding Content}"
+                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                        HorizontalContentAlignment="Stretch"
+                        VerticalContentAlignment="Stretch" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- Переключение геометрии иконки Play/Pause -->
+    <Style Selector="Button.cover-btn PathIcon">
+        <Setter Property="Data" Value="{StaticResource Icon.Play}" />
+    </Style>
+    <Style Selector="Button.cover-btn PathIcon.playing">
+        <Setter Property="Data" Value="{StaticResource Icon.Pause}" />
     </Style>
 
     <Style Selector="Button.cover-btn Border.cover-overlay">
@@ -139,18 +160,7 @@
         <Setter Property="RenderTransform" Value="scale(0.9)" />
     </Style>
 
-    <Style Selector="Button.like-btn PathIcon">
-        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
-            </Transitions>
-        </Setter>
-    </Style>
-    <Style Selector="Button.like-btn.is-liked PathIcon">
-        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-    </Style>
-
+    <!-- КНОПКА ЛАЙКА (Анимации + Подмена иконки Heart/HeartOutline)        -->
     <Style Selector="Button.like-btn">
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="RenderTransform" Value="scale(1)" />
@@ -172,6 +182,20 @@
                     Easing="BackEaseOut" />
             </Transitions>
         </Setter>
+    </Style>
+
+    <Style Selector="Button.like-btn PathIcon">
+        <Setter Property="Data" Value="{StaticResource Icon.HeartOutline}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="0:0:0.2" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.like-btn.is-liked PathIcon">
+        <Setter Property="Data" Value="{StaticResource Icon.Heart}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
 
     <Style Selector="Button.more-btn, Button.remove-btn">

@@ -103,17 +103,19 @@
                         PointerMoved="OnItemPointerMoved"
                         PointerReleased="OnItemPointerReleased">
 
-                        <Panel Background="Transparent" IsHitTestVisible="True">
+                        <!-- Колонки: Обложка, Текст(тянется), Иконки кэша, Лайк, Длительность/Опции(совмещенный слот) -->
+                        <Grid ColumnDefinitions="Auto, *, Auto, Auto, 56">
 
-                            <Button Classes="cover-btn"
+                            <!-- COL 0: ОБЛОЖКА / КНОПКА PLAY -->
+                            <Button Grid.Column="0"
+                                Classes="cover-btn"
                                 Width="44" Height="44"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Center"
                                 Margin="8,0,0,0"
+                                VerticalAlignment="Center"
                                 Background="{DynamicResource BgSkeletonBrush}"
                                 Command="{Binding PlayCommand}"
                                 ToolTip.Tip="{Binding L[Player_Play]}">
-                                <Grid>
+                                <Panel>
                                     <Image Stretch="UniformToFill"
                                         RenderOptions.BitmapInterpolationMode="LowQuality"
                                         ctrl:SmartImage.Source="{Binding ThumbnailUrl}"
@@ -123,31 +125,21 @@
                                     <Border Classes="cover-overlay"
                                         Background="{DynamicResource BgOverlayBrush}"
                                         IsHitTestVisible="False">
-                                        <Panel>
-                                            <PathIcon Width="24" Height="24"
-                                                Foreground="{DynamicResource TextPrimaryBrush}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center"
-                                                Data="{StaticResource Icon.Pause}"
-                                                IsVisible="{Binding IsPlaying}" />
-                                            <PathIcon Width="24" Height="24"
-                                                Foreground="{DynamicResource TextPrimaryBrush}"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center"
-                                                Data="{StaticResource Icon.Play}"
-                                                IsVisible="{Binding !IsPlaying}" />
-                                        </Panel>
+                                        <PathIcon Width="24" Height="24"
+                                            Classes.playing="{Binding IsPlaying}"
+                                            Foreground="{DynamicResource TextPrimaryBrush}"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center" />
                                     </Border>
-                                </Grid>
+                                </Panel>
                             </Button>
 
-                            <!-- TITLE + AUTHOR -->
-                            <StackPanel Orientation="Vertical"
-                                HorizontalAlignment="Stretch"
+                            <!-- COL 1: НАЗВАНИЕ + АВТОР -->
+                            <StackPanel Grid.Column="1"
+                                Orientation="Vertical"
                                 VerticalAlignment="Center"
-                                Margin="64,0,108,0"
+                                Margin="12,0"
                                 Spacing="2"
-                                UseLayoutRounding="False"
                                 IsHitTestVisible="False">
                                 <TextBlock
                                     Text="{Binding Title}"
@@ -163,12 +155,11 @@
                                     FontSize="12" />
                             </StackPanel>
 
-                            <!-- STATUS ICON & PROGRESS -->
-                            <Panel
+                            <!-- COL 2: СТАТУС КЭША / ЗАГРУЗКА -->
+                            <Panel Grid.Column="2"
                                 Width="32" Height="16"
-                                HorizontalAlignment="Right"
                                 VerticalAlignment="Center"
-                                Margin="0,0,76,0"
+                                Margin="6,0"
                                 IsHitTestVisible="False">
 
                                 <PathIcon
@@ -210,26 +201,20 @@
                                 </Border>
                             </Panel>
 
-                            <!-- LIKE BUTTON -->
-                            <Button Classes="icon-btn like-btn"
+                            <!-- COL 3: ЛАЙК (Иконка подменяется стилем) -->
+                            <Button Grid.Column="3"
+                                Classes="icon-btn like-btn"
                                 Classes.is-liked="{Binding IsLiked}"
                                 Width="28" Height="28"
-                                HorizontalAlignment="Right"
                                 VerticalAlignment="Center"
-                                Margin="0,0,48,0"
+                                Margin="6,0"
                                 Command="{Binding ToggleLikeCommand}"
                                 ToolTip.Tip="{Binding L[Track_ToggleLike]}">
-                                <Panel IsHitTestVisible="False">
-                                    <PathIcon Width="16" Height="16"
-                                        Data="{StaticResource Icon.Heart}"
-                                        IsVisible="{Binding IsLiked}" />
-                                    <PathIcon Width="16" Height="16"
-                                        Data="{StaticResource Icon.HeartOutline}"
-                                        IsVisible="{Binding !IsLiked}" />
-                                </Panel>
+                                <PathIcon Width="16" Height="16" IsHitTestVisible="False" />
                             </Button>
 
-                            <TextBlock
+                            <!-- COL 4: ВРЕМЯ И ОПЦИИ (Лежат в одном слоте и замещают друг друга при наведении) -->
+                            <TextBlock Grid.Column="4"
                                 Classes="duration-text"
                                 Width="46"
                                 HorizontalAlignment="Right"
@@ -241,7 +226,7 @@
                                 Text="{Binding FormattedDuration}"
                                 IsHitTestVisible="False" />
 
-                            <Button
+                            <Button Grid.Column="4"
                                 Classes="icon-btn more-btn"
                                 Width="32" Height="32"
                                 HorizontalAlignment="Right"
@@ -254,7 +239,7 @@
                                     Data="{StaticResource Icon.DotsHorizontal}" />
                             </Button>
 
-                        </Panel>
+                        </Grid>
                     </Border>
                 </DataTemplate>
             </ir:ItemsRepeater.ItemTemplate>
