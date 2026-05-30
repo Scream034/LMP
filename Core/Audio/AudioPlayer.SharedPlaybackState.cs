@@ -9,6 +9,7 @@ public partial class AudioPlayer
     private sealed class SharedPlaybackState
     {
         private long _baseSamples;
+        private int _bufferedSamples;
         private long _baseTimestamp;
         private int _sampleRate;
         private int _channels;
@@ -19,9 +20,10 @@ public partial class AudioPlayer
         /// <summary>
         /// Атомарно обновляет базовые показатели физического воспроизведения.
         /// </summary>
-        public void Update(long baseSamples, int sampleRate, int channels, bool isPlaying, long durationMs)
+        public void Update(long baseSamples, int bufferedSamples, int sampleRate, int channels, bool isPlaying, long durationMs)
         {
             Interlocked.Exchange(ref _baseSamples, baseSamples);
+            Interlocked.Exchange(ref _bufferedSamples, bufferedSamples);
             Interlocked.Exchange(ref _baseTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
             Interlocked.Exchange(ref _sampleRate, sampleRate);
             Interlocked.Exchange(ref _channels, channels);
@@ -35,6 +37,7 @@ public partial class AudioPlayer
         public TimeSpan GetCurrentPosition()
         {
             long baseSamples = Interlocked.Read(ref _baseSamples);
+            int bufferedSamples = Volatile.Read(ref _bufferedSamples);
             long baseTimestamp = Interlocked.Read(ref _baseTimestamp);
             int sampleRate = Volatile.Read(ref _sampleRate);
             int channels = Volatile.Read(ref _channels);
@@ -44,6 +47,7 @@ public partial class AudioPlayer
             if (sampleRate <= 0 || channels <= 0) return TimeSpan.Zero;
 
             double baseSeconds = (double)baseSamples / (sampleRate * channels);
+            double maxExtrapolation = baseSeconds + ((double)bufferedSamples / (sampleRate * channels));
             double maxSeconds = durationMs / 1000.0;
 
             if (!isPlaying)
@@ -57,10 +61,14 @@ public partial class AudioPlayer
             double elapsedSeconds = (double)(currentTimestamp - baseTimestamp) / System.Diagnostics.Stopwatch.Frequency;
             double extrapolated = baseSeconds + elapsedSeconds;
 
+            // HARD CLAMP: Prevent slider ghosting during network starvation.
+            // Extrapolation cannot exceed the amount of actual audio data resident in hardware buffer.
+            if (extrapolated > maxExtrapolation) extrapolated = maxExtrapolation;
+
             if (extrapolated > maxSeconds) extrapolated = maxSeconds;
             if (extrapolated < 0.0) extrapolated = 0.0;
 
-            // Защита от микро-прыжков времени назад из-за погрешностей системного таймера (Clock Jitter Guard)
+            // Clock Jitter Guard
             if (extrapolated < _lastReturnedSeconds && extrapolated >= _lastReturnedSeconds - 0.2)
             {
                 extrapolated = _lastReturnedSeconds;

@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using LMP.Core.Youtube.Bridge.Common;
 
 namespace LMP.Core.Youtube.Bridge;
@@ -10,7 +9,7 @@ internal partial class PlayerSource(string content)
 {
     /// <summary>
     /// Извлекает SignatureTimestamp (sts) из кода плеера.
-    /// Сама дешифрация подписи теперь полностью делегирована SigCipherDecryptor.
+    /// Переиспользует оптимизированный парсер регулярных выражений из YoutubeAstSolver.
     /// </summary>
     public CipherManifest? CipherManifest
     {
@@ -18,14 +17,13 @@ internal partial class PlayerSource(string content)
         {
             try
             {
-                var stsMatch = SignatureTimestampRegex().Match(content);
-                if (!stsMatch.Success)
+                var signatureTimestamp = YoutubeAstSolver.ExtractSts(content);
+                if (signatureTimestamp == "1337")
                 {
-                    Log.Debug("[PlayerSource] SignatureTimestamp not found");
+                    Log.Debug("[PlayerSource] SignatureTimestamp not found (fallback returned)");
                     return null;
                 }
 
-                var signatureTimestamp = stsMatch.Groups[1].Value;
                 return new CipherManifest(signatureTimestamp);
             }
             catch (Exception ex)
@@ -35,12 +33,4 @@ internal partial class PlayerSource(string content)
             }
         }
     }
-
-    [GeneratedRegex(@"(?:signatureTimestamp|sts)\s*[:=]\s*(\d+)", RegexOptions.Compiled)]
-    private static partial Regex SignatureTimestampRegex();
-
-    /// <summary>
-    /// Парсит исходный код плеера.
-    /// </summary>
-    public static PlayerSource Parse(string raw) => new(raw);
 }

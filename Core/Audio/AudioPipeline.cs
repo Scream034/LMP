@@ -23,7 +23,6 @@ public sealed class AudioPipeline : IAsyncDisposable
     private const int BufferFullDelayMs = 5;
     private const int DrainMinDelayMs = 50;
     private const int DrainMaxDelayMs = 500;
-    private const int WaitBufferDelayMs = 10;
     private const int HResultFileNotFound = unchecked((int)0x80070002);
     private const int HResultPathNotFound = unchecked((int)0x80070003);
     /// <summary>
@@ -794,44 +793,6 @@ public sealed class AudioPipeline : IAsyncDisposable
         if (positionMs < 0) return false;
 
         return positionMs + PrematureEndToleranceMs < durationMs;
-    }
-
-    /// <summary>
-    /// Проверяет, был ли resync в парсере контейнера источника.
-    /// </summary>
-    private bool SourceParserHadResync()
-    {
-        try
-        {
-            // LocalFileSource
-            if (_source is Sources.LocalFileSource localSrc)
-            {
-                return localSrc.Parser is Parsers.WebMContainerParser w && w.ResyncOccurred;
-            }
-            // CachingStreamSource
-            if (_source is Sources.CachingStreamSource cachingSrc)
-            {
-                return cachingSrc.Parser is Parsers.WebMContainerParser w && w.ResyncOccurred;
-            }
-        }
-        catch { }
-        return false;
-    }
-
-    /// <summary>
-    /// Создаёт диагностическое исключение для premature EOF.
-    /// </summary>
-    /// <returns>
-    /// Исключение с подробным описанием позиции, длительности и типа источника.
-    /// </returns>
-    private InvalidDataException CreatePrematureEndOfStreamException()
-    {
-        long positionMs = _source.PositionMs;
-        long durationMs = _streamInfo.DurationMs;
-
-        return new InvalidDataException(
-            $"Premature end of stream: pos={positionMs}ms/{durationMs}ms, " +
-            $"codec={_source.Codec}, source={_source.GetType().Name}");
     }
 
     #endregion

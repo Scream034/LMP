@@ -140,6 +140,12 @@ public sealed partial class CachingStreamSource : IAudioSource
     private string _currentUrl;
     private int _backgroundChunksLoaded;
 
+    /// <summary>
+    /// Holds the last exception captured during a chunk download attempt.
+    /// Used to diagnose early warnings on retry thresholds.
+    /// </summary>
+    private Exception? _lastDownloadException;
+
     // ── State flags ──
     private volatile bool _initialized;
     private volatile bool _disposed;
@@ -215,6 +221,22 @@ public sealed partial class CachingStreamSource : IAudioSource
         return IsChunkAvailable(targetChunk);
     }
 
+    /// <summary>
+    /// Global event triggered when an audio source encounters non-fatal network issues (e.g., slow download or retries).
+    /// </summary>
+    public static event Action<string, Exception>? OnSourceWarning;
+
+    private void RaiseSourceWarning(int chunkIndex, Exception ex)
+    {
+        try
+        {
+            OnSourceWarning?.Invoke(_trackId, ex);
+        }
+        catch (Exception logEx)
+        {
+            Log.Warn($"[CachingSource] Failed to raise warning event: {logEx.Message}");
+        }
+    }
     #endregion
 
     #region Constructor

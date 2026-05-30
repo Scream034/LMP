@@ -108,11 +108,6 @@ public class MusicClient(HttpClient http)
         }
     }
 
-    public void SetVisitorData(string visitorData) =>
-        _controller.VisitorData = visitorData;
-
-    public string GetVisitorData() => _controller.VisitorData;
-
     #region Track Actions
 
     public async Task LikeTrackAsync(

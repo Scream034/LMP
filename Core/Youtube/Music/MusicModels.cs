@@ -3,6 +3,7 @@ using System.Text.Json;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Helpers.Extensions;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Music;
 
@@ -219,9 +220,7 @@ internal sealed class MusicBrowseResponse
 
         if (id == null) return null;
 
-        // Extract setVideoId for playlist track removal
         var setVideoId = playlistItemData?.GetPropertyOrNull("setVideoId")?.GetStringOrNull();
-
         var flexCols = json.GetPropertyOrNull("flexColumns");
 
         var title = flexCols?.GetArrayElementOrNull(0)
@@ -254,7 +253,6 @@ internal sealed class MusicBrowseResponse
                         ?.GetPropertyOrNull("browseEndpointContextMusicConfig")
                         ?.GetPropertyOrNull("pageType")?.GetStringOrNull();
 
-                    // Поддерживаем как официальных артистов, так и пользовательские каналы
                     if (pageType is "MUSIC_PAGE_TYPE_ARTIST" or "MUSIC_PAGE_TYPE_USER_CHANNEL")
                         author = text;
                     else if (pageType == "MUSIC_PAGE_TYPE_ALBUM")
@@ -275,9 +273,9 @@ internal sealed class MusicBrowseResponse
             ?.GetFirstArrayElementOrNull()
             ?.GetPropertyOrNull("text")?.GetStringOrNull();
 
-        TimeSpan? duration = null;
-        if (durationText != null)
-            TryParseDurationFast(durationText, out duration);
+        TimeSpan? duration = durationText != null
+            ? YoutubeClientUtils.DurationParser.Parse(durationText)
+            : null;
 
         var thumbs = ExtractThumbnails(
             json.GetPropertyOrNull("thumbnail")
@@ -380,46 +378,6 @@ internal sealed class MusicBrowseResponse
             result[idx++] = new Thumbnail(td.Url ?? "", new Resolution(td.Width ?? 0, td.Height ?? 0));
         }
         return result;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void TryParseDurationFast(string text, out TimeSpan? duration)
-    {
-        var span = text.AsSpan();
-        int colonCount = 0;
-        int firstColon = -1, secondColon = -1;
-
-        for (int i = 0; i < span.Length; i++)
-        {
-            if (span[i] == ':')
-            {
-                colonCount++;
-                if (colonCount == 1) firstColon = i;
-                else if (colonCount == 2) secondColon = i;
-            }
-        }
-
-        if (colonCount == 1 && firstColon > 0)
-        {
-            if (int.TryParse(span[..firstColon], out var m) &&
-                int.TryParse(span[(firstColon + 1)..], out var s))
-            {
-                duration = new TimeSpan(0, m, s);
-                return;
-            }
-        }
-        else if (colonCount == 2 && firstColon > 0 && secondColon > firstColon)
-        {
-            if (int.TryParse(span[..firstColon], out var h) &&
-                int.TryParse(span[(firstColon + 1)..secondColon], out var m) &&
-                int.TryParse(span[(secondColon + 1)..], out var s))
-            {
-                duration = new TimeSpan(h, m, s);
-                return;
-            }
-        }
-
-        duration = null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

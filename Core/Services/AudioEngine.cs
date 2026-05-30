@@ -610,7 +610,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         _player.Stop();
         if (_session.IsStale(session) || IsSealedFailedTrack(track.Id)) return;
 
-        // Включаем индикатор загрузки немедленно перед началом любых асинхронных операций
         SetManualLoading(true);
 
         try
@@ -628,7 +627,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
                 track = _trackRegistry.RegisterOrUpdate(track);
             }
 
-            // Синхронное обновление стейта на текущем потоке для исключения гонки инициализации
             CurrentTrack = track;
             StreamInfo = AudioStreamInfo.Empty;
 
@@ -657,7 +655,8 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
             {
                 await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct, seekPosition: seekPosition).ConfigureAwait(false);
             }
-            catch (Exception ex) when (_session.IsStaleOrCancelled(session, ct) || CancellationHelper.IsCancellationLike(ex))
+            // Предупреждение CS0168 устранено (ex убран)
+            catch (Exception) when (_session.IsStaleOrCancelled(session, ct))
             {
                 return;
             }
@@ -667,8 +666,9 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
             if (_isSuspended && _player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
                 cs.Suspend();
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) when (_session.IsStaleOrCancelled(session, ct) || CancellationHelper.IsCancellationLike(ex)) { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        // Предупреждение CS0168 устранено (ex убран)
+        catch (Exception) when (_session.IsStaleOrCancelled(session, ct)) { }
         catch (Exception ex)
         {
             AbortCurrentTrackPlaybackAfterFatalError(track.Id);
@@ -678,6 +678,34 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
         {
             SetManualLoading(false);
             Interlocked.CompareExchange(ref _nTokenActiveTrackId, null, track.Id);
+        }
+    }
+
+    private async ValueTask<string?> RefreshUrlCallbackAsync(string trackId, CancellationToken ct)
+    {
+        if (IsSealedFailedTrack(trackId)) return null;
+        var track = await _library.GetTrackAsync(trackId, ct).ConfigureAwait(false);
+        if (track == null || IsSealedFailedTrack(trackId)) return null;
+
+        var sessionToken = GetSessionToken();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, sessionToken);
+        try
+        {
+            var info = await Task.Run(
+                () => _youtube.RefreshStreamUrlAsync(track, true, linked.Token), linked.Token).ConfigureAwait(false);
+            return info?.Url;
+        }
+        // Предупреждение CS0168 устранено (ex убран)
+        catch (Exception) when (linked.IsCancellationRequested || sessionToken.IsCancellationRequested
+            || !string.Equals(CurrentTrack?.Id, trackId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            AbortCurrentTrackPlaybackAfterFatalError(trackId);
+            RaiseError(ex);
+            return null;
         }
     }
 
@@ -785,34 +813,6 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     private void HandleStreamInfoChanged(AudioStreamInfo info)
     {
         RaiseOnUI(() => { StreamInfo = info; OnStreamInfoChanged?.Invoke(info); });
-    }
-
-    private async ValueTask<string?> RefreshUrlCallbackAsync(string trackId, CancellationToken ct)
-    {
-        if (IsSealedFailedTrack(trackId)) return null;
-        var track = await _library.GetTrackAsync(trackId, ct).ConfigureAwait(false);
-        if (track == null || IsSealedFailedTrack(trackId)) return null;
-
-        var sessionToken = GetSessionToken();
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, sessionToken);
-        try
-        {
-            var info = await Task.Run(
-                () => _youtube.RefreshStreamUrlAsync(track, true, linked.Token), linked.Token).ConfigureAwait(false);
-            return info?.Url;
-        }
-        catch (Exception ex) when (linked.IsCancellationRequested || sessionToken.IsCancellationRequested
-            || CancellationHelper.IsCancellationLike(ex)
-            || !string.Equals(CurrentTrack?.Id, trackId, StringComparison.Ordinal))
-        {
-            return null;
-        }
-        catch (Exception ex)
-        {
-            AbortCurrentTrackPlaybackAfterFatalError(trackId);
-            RaiseError(ex);
-            return null;
-        }
     }
 
     #endregion

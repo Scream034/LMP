@@ -302,9 +302,17 @@ public sealed partial class CachingStreamSource
                     case ChunkDownloadResult.NetworkError:
                         int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
                         Log.Warn($"[CachingSource] Chunk {index}: network retry {attempt + 1}/{maxAttempts}, delay={delay}ms");
+
+                        // Fire a non-blocking warning toast exactly at the halfway point of retries
+                        if (attempt == maxAttempts / 2)
+                        {
+                            var warningException = _lastDownloadException
+                                ?? new TimeoutException($"Slow connection: Chunk download taking longer than expected (Attempt {attempt + 1}/{maxAttempts}).");
+                            RaiseSourceWarning(index, warningException);
+                        }
+
                         await Task.Delay(delay, ct).ConfigureAwait(false);
                         continue;
-
                     case ChunkDownloadResult.SlotTimeout:
                         await Task.Delay(200, ct).ConfigureAwait(false);
                         continue;
@@ -338,7 +346,9 @@ public sealed partial class CachingStreamSource
             chunkIndex: index,
             consecutiveFailures: Volatile.Read(ref _consecutive403Count),
             reason: ChunkDownloadFailureReason.MaxRetriesExceeded,
-            trackId: _trackId);
+            trackId: _trackId,
+            httpStatusCode: null,
+            innerException: _lastDownloadException ?? new TimeoutException("Connection timed out."));
     }
 
     /// <summary>
@@ -577,21 +587,12 @@ public sealed partial class CachingStreamSource
 
             try
             {
-                // 4: ct вместо CancellationToken.None
-                // CancellationToken.None → HTTP читает до таймаута (~30с) даже при stop/seek/dispose.
-                // За это время decoder CTS успевает отмениться → 1 видит ct=true → break.
-                // С явным ct: чтение прерывается мгновенно → TCE долетает до 1
-                // ДО отмены decoder CTS → retry срабатывает корректно.
                 using var contentStream = await response.Content
                     .ReadAsStreamAsync(ct).ConfigureAwait(false);
 
                 actualLength = await ReadStreamFullyAsync(
                     contentStream, memoryOwner.Memory[..expectedBytes], ct).ConfigureAwait(false);
             }
-            // ODE от SslStream при cancel во время чтения
-            // При epoch reset (seek) ct отменяется → HttpResponseMessage dispose'ит
-            // content stream → SslStream.ReadAsyncInternal бросает ODE.
-            // Семантически это та же отмена что и OCE — пробрасываем как OCE.
             catch (ObjectDisposedException)
             {
                 memoryOwner.Dispose();
@@ -599,13 +600,12 @@ public sealed partial class CachingStreamSource
             }
             catch (OperationCanceledException)
             {
-                // Пробрасываем: EnsureChunkAsync обработает как Cancelled.
-                // НЕ логируем — это нормальный путь при seek/stop.
                 memoryOwner.Dispose();
                 throw;
             }
             catch (Exception ex) when (ct.IsCancellationRequested || _disposed || ex is IOException || ex is System.Net.Sockets.SocketException)
             {
+                _lastDownloadException = ex;
                 memoryOwner.Dispose();
                 if (ct.IsCancellationRequested || _disposed) return ChunkDownloadResult.Cancelled;
 
@@ -614,6 +614,7 @@ public sealed partial class CachingStreamSource
             }
             catch (Exception ex)
             {
+                _lastDownloadException = ex;
                 memoryOwner.Dispose();
                 Log.Warn($"[CachingSource] Chunk {index} read error: {ex.Message}");
                 return ChunkDownloadResult.NetworkError;

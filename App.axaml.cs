@@ -87,19 +87,19 @@ public partial class App : Application
             _splash?.SetProgress(5);
             _splash?.UpdateStatus(L["Splash_Initializing"]);
 
-            // ─── Audio Cache ───
+            // Audio Cache
             _splash?.UpdateStatus(L["Splash_InitAudioCache"]);
             var audioCacheManager = await Task.Run(() =>
                 AppEntry.Services.GetRequiredService<AudioCacheManager>());
             AudioSourceFactory.InitializeGlobalCache(audioCacheManager);
             _splash?.SetProgress(20);
 
-            // ─── Memory Monitor ───
+            // Memory Monitor
             MemoryCleanupHelper.StartAutoCleanup();
             Log.Info("[Startup] Memory auto-cleanup scheduled");
             _splash?.SetProgress(25);
 
-            // ─── Library Service ───
+            // Library Service
             _splash?.UpdateStatus(L["Splash_LoadingLibrary"]);
             var library = AppEntry.Services.GetRequiredService<LibraryService>();
             await Task.Run(async () => await library.InitializeAsync());
@@ -147,7 +147,7 @@ public partial class App : Application
             Log.Info("[Startup] PlaybackErrorOrchestrator ready");
             _splash?.SetProgress(60);
 
-            // ─── Image Cache ───
+            // Image Cache
             _splash?.UpdateStatus(L["Splash_PreparingImages"]);
             var imageCache = await Task.Run(() =>
                 AppEntry.Services.GetRequiredService<ImageCacheService>());
@@ -161,13 +161,26 @@ public partial class App : Application
 
             _splash?.SetProgress(70);
 
-            // ─── YouTube Provider ───
+            // YouTube Provider
             _splash?.UpdateStatus(L["Splash_ConnectingYouTube"]);
             var youtube = AppEntry.Services.GetRequiredService<Lazy<YoutubeProvider>>();
-            await Task.Run(async () => await youtube.Value.InitializeAsync());
+
+            // Запускаем инициализацию без await, чтобы не блокировать Splash Screen (особенно при DPI-блокировках)
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await youtube.Value.InitializeAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"[YouTube] Background init failed: {ex.Message}");
+                }
+            });
+
             _splash?.SetProgress(80);
 
-            // ─── Create Main Window ───
+            // Create Main Window
             _splash?.UpdateStatus(L["Splash_BuildingInterface"]);
             MainWindow? mainWindow = null;
             await Dispatcher.UIThread.InvokeAsync(() =>
@@ -177,7 +190,7 @@ public partial class App : Application
             });
             _splash?.SetProgress(93);
 
-            // ─── Ready! ───
+            // Ready!
             _splash?.UpdateStatus(L["Splash_Ready"]);
             _splash?.SetProgress(100);
 
@@ -192,7 +205,7 @@ public partial class App : Application
                 await Task.Delay(remaining);
             }
 
-            // ─── Switch Windows ───
+            // Switch Windows
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 desktop.MainWindow = mainWindow;
@@ -203,7 +216,7 @@ public partial class App : Application
 
             Log.Info($"Main window ready. Total splash time: {stopwatch.ElapsedMilliseconds}ms");
 
-            // ─── Post-Startup GC Compaction ───
+            // Post-Startup GC Compaction
             // Сборка мусора с уплотнением кучи после завершения тяжелой фазы инициализации приложения.
             // Возвращает неиспользуемую память (Gen 0/1/2) операционной системе.
             _ = Task.Run(async () =>
@@ -214,7 +227,7 @@ public partial class App : Application
                 Log.Info("[Memory] Post-startup GC compaction complete. Cold memory reclaimed.");
             });
 
-            // ─── Shutdown Handler ───
+            // Shutdown Handler
             desktop.ShutdownRequested += async (_, _) =>
             {
                 try

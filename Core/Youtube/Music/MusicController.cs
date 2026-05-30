@@ -23,9 +23,7 @@ internal class MusicController(HttpClient http)
 
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
 
-    public string VisitorData { get; set; } = "";
-
-    private void WriteContext(Utf8JsonWriter writer)
+    private static void WriteContext(Utf8JsonWriter writer)
     {
         writer.WritePropertyName(Utf8Context);
         writer.WriteStartObject();
@@ -37,8 +35,10 @@ internal class MusicController(HttpClient http)
         writer.WriteString(Utf8Hl, YoutubeHttpHandler.GetHl());
         writer.WriteString(Utf8Gl, YoutubeHttpHandler.GetGl());
 
-        if (!string.IsNullOrEmpty(VisitorData))
-            writer.WriteString(Utf8VisitorData, VisitorData);
+        // Читаем глобальный VisitorData напрямую
+        var visitorData = YoutubeClientUtils.VisitorData;
+        if (!string.IsNullOrEmpty(visitorData))
+            writer.WriteString(Utf8VisitorData, visitorData);
         else
             writer.WriteNull(Utf8VisitorData);
 
@@ -51,27 +51,29 @@ internal class MusicController(HttpClient http)
         writer.WriteEndObject(); // context
     }
 
-    private void UpdateVisitorData(JsonElement root)
+    private static void UpdateVisitorData(JsonElement root)
     {
         var newVisitorData = root.GetPropertyOrNull("responseContext")
             ?.GetPropertyOrNull("visitorData")
             ?.GetStringOrNull();
 
-        if (!string.IsNullOrWhiteSpace(newVisitorData) && newVisitorData != VisitorData)
+        // Обновляем глобальный VisitorData напрямую
+        if (!string.IsNullOrWhiteSpace(newVisitorData) && newVisitorData != YoutubeClientUtils.VisitorData)
         {
-            VisitorData = newVisitorData;
+            YoutubeClientUtils.VisitorData = newVisitorData;
         }
     }
 
-    private void AttachVisitorDataToRequest(HttpRequestMessage request)
+    private static void AttachVisitorDataToRequest(HttpRequestMessage request)
     {
-        if (!string.IsNullOrEmpty(VisitorData))
+        var visitorData = YoutubeClientUtils.VisitorData;
+        if (!string.IsNullOrEmpty(visitorData))
         {
-            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, VisitorData);
+            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
         }
     }
 
-    private HttpContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
+    private static HttpContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
     {
         var bufferWriter = new ArrayBufferWriter<byte>(512);
         using (var writer = new Utf8JsonWriter(bufferWriter))

@@ -108,7 +108,7 @@ public sealed record StreamingConfig
         public const int DownloadSlotTimeoutMs = 800;
 
         // Retry / Resilience
-        public const int MaxNetworkRetries = 4;
+        public const int MaxNetworkRetries = 3;
         public const int NetworkRetryBaseDelayMs = 800;
         public const bool UseExponentialBackoff = true;
         public const int Max403BeforeCircuitBreak = 3;

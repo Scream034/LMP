@@ -86,24 +86,21 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             var pipeline = _activePipeline;
             if (pipeline == null) return TimeSpan.Zero;
 
-            // Читаем сырое (дискретное) количество проигранных сэмплов непосредственно из звуковой карты.
-            // Значение обновляется драйвером скачкообразно в среднем раз в 50-100мс.
-            long played = Math.Max(0, pipeline.PlayedSamples - pipeline.BackendBufferedSamples);
+            int bufferedSamples = pipeline.BackendBufferedSamples;
+            long played = Math.Max(0, pipeline.PlayedSamples - bufferedSamples);
 
-            // Если физическое положение изменилось (пришёл новый блок звука от звуковой карты),
-            // мы фиксируем это как новый опорный ориентир в разделяемой памяти.
             if (played != _lastRawPlayedSamples)
             {
                 _lastRawPlayedSamples = played;
                 _sharedState.Update(
                     played,
+                    bufferedSamples, // <-- Transferring hardware buffer constraint
                     pipeline.SampleRate,
                     pipeline.Channels,
                     _state == PlayerState.Playing,
                     (long)Duration.TotalMilliseconds);
             }
 
-            // Наносекундный lock-free расчёт точного времени на основе Stopwatch.GetTimestamp()
             return _sharedState.GetCurrentPosition();
         }
     }

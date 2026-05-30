@@ -181,20 +181,20 @@ internal partial class SearchResponse
                 case "videoRenderer":
                 case "shortsLockupViewModel":
                 case "reelItemRenderer":
-                {
-                    var videoData = new VideoData(prop.Value, isYtm: false);
-                    if (!string.IsNullOrEmpty(videoData.Id))
-                        videos.Add(videoData);
-                    return;
-                }
+                    {
+                        var videoData = new VideoData(prop.Value, isYtm: false);
+                        if (!string.IsNullOrEmpty(videoData.Id))
+                            videos.Add(videoData);
+                        return;
+                    }
 
                 case "lockupViewModel":
-                {
-                    var contentId = prop.Value.GetPropertyOrNull("contentId")?.GetStringOrNull();
-                    if (!string.IsNullOrEmpty(contentId) && IsPlaylistId(contentId))
-                        playlists.Add(new PlaylistData(prop.Value));
-                    return;
-                }
+                    {
+                        var contentId = prop.Value.GetPropertyOrNull("contentId")?.GetStringOrNull();
+                        if (!string.IsNullOrEmpty(contentId) && IsPlaylistId(contentId))
+                            playlists.Add(new PlaylistData(prop.Value));
+                        return;
+                    }
 
                 case "playlistRenderer":
                     playlists.Add(new PlaylistData(prop.Value));
@@ -542,7 +542,8 @@ internal partial class SearchResponse
                     var text = run.GetPropertyOrNull("text")?.GetStringOrNull();
                     if (text != null && text.Contains(':') && !text.Contains('•'))
                     {
-                        if (TryParseDuration(text, out var ts)) return ts;
+                        var ts = YoutubeClientUtils.DurationParser.Parse(text);
+                        if (ts.HasValue) return ts;
                     }
                 }
                 return null;
@@ -551,7 +552,7 @@ internal partial class SearchResponse
             var textDuration = content.GetPropertyOrNull("lengthText")
                 ?.GetPropertyOrNull("simpleText")?.GetStringOrNull();
 
-            return textDuration != null && TryParseDuration(textDuration, out var d) ? d : null;
+            return textDuration != null ? YoutubeClientUtils.DurationParser.Parse(textDuration) : null;
         }
 
         public IReadOnlyList<ThumbnailData> Thumbnails
@@ -693,10 +694,6 @@ internal partial class SearchResponse
 
         private static readonly string[] DurationFormats =
             [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"];
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryParseDuration(string text, out TimeSpan timeSpan) =>
-            TimeSpan.TryParseExact(text, DurationFormats, CultureInfo.InvariantCulture, out timeSpan);
     }
 
     internal sealed class PlaylistData

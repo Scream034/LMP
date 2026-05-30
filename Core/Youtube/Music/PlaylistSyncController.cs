@@ -33,8 +33,6 @@ internal sealed class PlaylistSyncController(HttpClient http)
     private static readonly byte[] Utf8User = "user"u8.ToArray();
     private static readonly byte[] Utf8VisitorData = "visitorData"u8.ToArray();
 
-    public string VisitorData { get; set; } = "";
-
     #region Context Writers
 
     /// <summary>
@@ -62,7 +60,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
     /// <summary>
     /// WEB_REMIX context for YouTube Music browse requests.
     /// </summary>
-    private void WriteWebRemixContext(Utf8JsonWriter writer)
+    private static void WriteWebRemixContext(Utf8JsonWriter writer)
     {
         writer.WritePropertyName(Utf8Context);
         writer.WriteStartObject();
@@ -74,8 +72,9 @@ internal sealed class PlaylistSyncController(HttpClient http)
         writer.WriteString(Utf8Hl, YoutubeHttpHandler.GetHl());
         writer.WriteString(Utf8Gl, YoutubeHttpHandler.GetGl());
 
-        if (!string.IsNullOrEmpty(VisitorData))
-            writer.WriteString(Utf8VisitorData, VisitorData);
+        var visitorData = YoutubeClientUtils.VisitorData;
+        if (!string.IsNullOrEmpty(visitorData))
+            writer.WriteString(Utf8VisitorData, visitorData);
         else
             writer.WriteNull(Utf8VisitorData);
 
@@ -92,7 +91,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
 
     #region HTTP
 
-    private static HttpContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
+    private static ByteArrayContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
     {
         var bufferWriter = new ArrayBufferWriter<byte>(512);
         using (var writer = new Utf8JsonWriter(bufferWriter))
@@ -134,8 +133,9 @@ internal sealed class PlaylistSyncController(HttpClient http)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{MusicApiUrl}/{endpoint}");
 
-        if (!string.IsNullOrEmpty(VisitorData))
-            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, VisitorData);
+        var visitorData = YoutubeClientUtils.VisitorData;
+        if (!string.IsNullOrEmpty(visitorData))
+            request.Options.Set(YoutubeHttpHandler.VisitorDataKey, visitorData);
 
         request.Content = CreateJsonContent(writer =>
         {
@@ -154,8 +154,8 @@ internal sealed class PlaylistSyncController(HttpClient http)
             ?.GetPropertyOrNull("visitorData")
             ?.GetStringOrNull();
 
-        if (!string.IsNullOrWhiteSpace(freshVisitorData))
-            VisitorData = freshVisitorData;
+        if (!string.IsNullOrWhiteSpace(freshVisitorData) && freshVisitorData != YoutubeClientUtils.VisitorData)
+            YoutubeClientUtils.VisitorData = freshVisitorData;
 
         return root;
     }

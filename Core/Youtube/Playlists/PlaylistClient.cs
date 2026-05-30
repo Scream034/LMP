@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Playlists;
 
@@ -9,19 +10,24 @@ public class PlaylistClient(HttpClient http)
 {
     private readonly PlaylistController _controller = new(http);
 
+    /// <summary>
+    /// Возвращает метаданные плейлиста.
+    /// </summary>
     public async ValueTask<Playlist> GetAsync(
         PlaylistId playlistId,
-        CancellationToken cancellationToken = default
-    )
+        CancellationToken cancellationToken = default)
     {
         var response = await _controller.GetPlaylistResponseAsync(playlistId, cancellationToken);
 
         var title = response.Title ?? throw new YoutubeExplodeException("Failed to extract playlist title.");
         var channelTitle = response.Author;
 
-        var bestThumb = response.Thumbnails
+        // Переведено на zero-alloc ThumbnailResolver
+        var domainThumbs = response.Thumbnails
             .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-            .TryGetWithHighestResolution()?.Url;
+            .ToList();
+
+        var bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(domainThumbs);
 
         return new Playlist
         {
@@ -35,10 +41,12 @@ public class PlaylistClient(HttpClient http)
         };
     }
 
+    /// <summary>
+    /// Асинхронно получает видеоролики плейлиста батчами.
+    /// </summary>
     public async IAsyncEnumerable<Batch<TrackInfo>> GetVideoBatchesAsync(
         PlaylistId playlistId,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default
-    )
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var encounteredIds = new HashSet<string>();
         string? continuationToken = null;
@@ -51,7 +59,6 @@ public class PlaylistClient(HttpClient http)
 
             if (isFirstRequest)
             {
-                // Первый запрос через browse
                 var browseResponse = await _controller.GetPlaylistBrowseResponseAsync(
                     playlistId,
                     cancellationToken
@@ -66,7 +73,6 @@ public class PlaylistClient(HttpClient http)
             }
             else if (!string.IsNullOrEmpty(continuationToken))
             {
-                // Последующие запросы через continuation
                 var contResponse = await _controller.GetPlaylistContinuationAsync(
                     continuationToken,
                     visitorData,
@@ -94,13 +100,10 @@ public class PlaylistClient(HttpClient http)
                 if (!encounteredIds.Add(videoId)) continue;
 
                 var title = videoData.Title ?? "";
-                // Используем локализацию
                 var author = videoData.Author ?? Services.LocalizationService.Instance["Track_UnknownAuthor"];
 
-                var bestThumb = videoData.Thumbnails
-                    .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-                    .TryGetWithHighestResolution()?.Url
-                    ?? $"https://i.ytimg.com/vi/{videoId}/mqdefault.jpg";
+                // Вызов ThumbnailResolver.GetBestUrl вместо множественных вызовов Select/TryGetWithHighestResolution
+                var bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId);
 
                 bool isMusic = DetectIfMusic(title, author, videoData.Duration);
 
@@ -124,7 +127,6 @@ public class PlaylistClient(HttpClient http)
                 yield return Batch.Create(batch);
             }
 
-            // Если нет continuation и batch пустой - выходим
             if (string.IsNullOrEmpty(continuationToken) && batch.Count == 0)
             {
                 break;

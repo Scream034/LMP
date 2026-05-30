@@ -3,6 +3,7 @@ using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Youtube.Exceptions;
+using LMP.Core.Youtube.Utils;
 using LMP.Core.Youtube.Videos.Streams;
 
 namespace LMP.Core.Youtube.Videos;
@@ -26,6 +27,9 @@ public sealed class VideoClient
         Streams = new StreamClient(http, nTokenDecryptor, sigCipherDecryptor, isAuthenticatedCheck);
     }
 
+    /// <summary>
+    /// Возвращает метаданные трека по его идентификатору.
+    /// </summary>
     public async ValueTask<TrackInfo> GetAsync(
         VideoId videoId,
         CancellationToken cancellationToken = default)
@@ -40,10 +44,8 @@ public sealed class VideoClient
         var channelId = playerResponse.ChannelId
                         ?? throw new YoutubeExplodeException("Failed to extract video channel ID.");
 
-        var thumb = playerResponse.Thumbnails
-            .Select(t => new Thumbnail(t.Url!, new Resolution(t.Width ?? 0, t.Height ?? 0)))
-            .Concat(Thumbnail.GetDefaultSet(videoId))
-            .TryGetWithHighestResolution()?.Url;
+        // Извлечение превью в один zero-alloc вызов без аллокации LINQ цепочек
+        var thumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(playerResponse.Thumbnails, videoId.Value);
 
         return new TrackInfo
         {
@@ -52,7 +54,7 @@ public sealed class VideoClient
             Author = channelTitle,
             ChannelId = channelId,
             Duration = playerResponse.Duration ?? TimeSpan.Zero,
-            ThumbnailUrl = thumb ?? "",
+            ThumbnailUrl = thumb,
             Url = $"https://www.youtube.com/watch?v={videoId}",
             IsMusic = playerResponse.IsMusic,
         };

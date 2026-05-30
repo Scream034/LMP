@@ -1,105 +1,211 @@
 using LMP.Core.Models;
 using LMP.Core.Helpers;
+using LMP.Core.Audio.Http;
+using LMP.Core.Services;
+using System.Threading;
+using LMP.Core.Helpers.Extensions;
+using System.Globalization;
+using System.Runtime.CompilerServices;
 
 namespace LMP.Core.Youtube.Utils;
 
 public static class YoutubeClientUtils
 {
-    public static YoutubeClientProfile CurrentProfile { get; set; } = YoutubeClientProfile.WebRemix;
+  public static YoutubeClientProfile CurrentProfile { get; set; } = YoutubeClientProfile.WebRemix;
 
-    // User-Agents
-    public const string UaVr = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)";
-    public const string UaTv = "Mozilla/5.0 (PlayStation; PlayStation 4/12.02) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15";
-    public const string UaWeb = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
-    public const string UaWebRemix = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
-    public const string UaAndroidMusic = "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US; Pixel 8 Pro; Build/AP2A.240805.005)";
-    public const string UaIos = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)";
+  private static string _visitorData = "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D";
+  private static Task<string>? _fetchTask;
+  private static CookieAuthService? _authService;
+  private static readonly Lock _visitorDataLock = new();
 
-    public static string UserAgent => CurrentProfile switch
+  /// <summary>
+  /// Инициализирует статический провайдер кук авторизации для VisitorData.
+  /// </summary>
+  public static void Initialize(CookieAuthService authService)
+  {
+    _authService = authService;
+  }
+
+  /// <summary>
+  /// Единый, глобально синхронизированный токен VisitorData для всех клиентов YouTube.
+  /// Предотвращает дублирующие сетевые запросы к sw.js_data на горячих путях воспроизведения.
+  /// </summary>
+  public static string VisitorData
+  {
+    get
     {
-        YoutubeClientProfile.AndroidVR => UaVr,
-        YoutubeClientProfile.TV => UaTv,
-        YoutubeClientProfile.Web => UaWeb,
-        YoutubeClientProfile.WebRemix => UaWebRemix,
-        _ => UaWebRemix
-    };
+      lock (_visitorDataLock) return _visitorData;
+    }
+    set
+    {
+      if (string.IsNullOrWhiteSpace(value)) return;
+      lock (_visitorDataLock) _visitorData = value;
+    }
+  }
 
-    public static bool RequiresAuth => CurrentProfile is YoutubeClientProfile.Web or YoutubeClientProfile.WebRemix;
+  /// <summary>
+  /// Гарантирует наличие свежего VisitorData. Если он равен дефолтному
+  /// или принудительно затребовано обновление — запускает фоновый/синхронный
+  /// сетевой запрос к sw.js_data с ограничением таймаута в 5 секунд.
+  /// </summary>
+  public static Task<string> EnsureVisitorDataAsync(bool forceRefresh = false, CancellationToken ct = default)
+  {
+    lock (_visitorDataLock)
+    {
+      if (!forceRefresh && _visitorData != "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D")
+      {
+        return Task.FromResult(_visitorData);
+      }
 
-    /// <summary>
-    /// Порядок клиентов для стримов.
-    /// 
-    /// <para><b>ANDROID_VR первый</b> — не требует PO Token (pot), нет лимита на Range requests.
-    /// WEB_REMIX требует pot для скачивания более ~1MB без авторизации.</para>
-    /// 
-    /// <para><b>WEB_REMIX</b> используется как fallback только если пользователь авторизован
-    /// (с siu=1 лимит снимается). См. <see cref="GetStreamFallbackClients"/>.</para>
-    /// </summary>
-    public static readonly string[] StreamFallbackClientsDefault =
-    [
-        "ANDROID_VR",     // Основной — без pot, без sig, без лимита
+      if (_fetchTask != null && !forceRefresh)
+      {
+        return _fetchTask;
+      }
+
+      _fetchTask = FetchVisitorDataInternalAsync(ct);
+      return _fetchTask;
+    }
+  }
+
+  private static async Task<string> FetchVisitorDataInternalAsync(CancellationToken ct)
+  {
+    try
+    {
+      using var request = new HttpRequestMessage(HttpMethod.Get, "https://music.youtube.com/sw.js_data");
+      request.Headers.UserAgent.ParseAdd(UaWeb);
+
+      // Используем локально инициализированную ссылку на CookieAuthService
+      var cookies = _authService?.GetCookieHeader();
+      if (!string.IsNullOrEmpty(cookies))
+      {
+        request.Headers.Add("Cookie", cookies);
+      }
+
+      using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+      cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+      using var response = await SharedHttpClient.Instance.SendAsync(
+          request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+      response.EnsureSuccessStatusCode();
+
+      var jsonStr = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+      if (jsonStr.StartsWith(")]}'"))
+        jsonStr = jsonStr[4..];
+
+      var json = Json.Parse(jsonStr);
+      var value = json[0][2][0][0][13].GetStringOrNull();
+
+      if (!string.IsNullOrWhiteSpace(value))
+      {
+        lock (_visitorDataLock)
+        {
+          _visitorData = value;
+        }
+        return value;
+      }
+    }
+    catch (Exception ex)
+    {
+      Logger.Log.Warn($"[YoutubeClientUtils] Failed to fetch visitor data from network: {ex.Message}. Falling back to default.");
+    }
+
+    return _visitorData;
+  }
+
+  // User-Agents
+  public const string UaVr = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)";
+  public const string UaTv = "Mozilla/5.0 (PlayStation; PlayStation 4/12.02) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15";
+  public const string UaWeb = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+  public const string UaWebRemix = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+  public const string UaAndroidMusic = "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; en_US; Pixel 8 Pro; Build/AP2A.240805.005)";
+  public const string UaIos = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)";
+
+  public static string UserAgent => CurrentProfile switch
+  {
+    YoutubeClientProfile.AndroidVR => UaVr,
+    YoutubeClientProfile.TV => UaTv,
+    YoutubeClientProfile.Web => UaWeb,
+    YoutubeClientProfile.WebRemix => UaWebRemix,
+    _ => UaWebRemix
+  };
+
+  public static bool RequiresAuth => CurrentProfile is YoutubeClientProfile.Web or YoutubeClientProfile.WebRemix;
+
+  /// <summary>
+  /// Порядок клиентов для стримов.
+  /// 
+  /// <para><b>ANDROID_VR первый</b> — не требует PO Token (pot), нет лимита на Range requests.
+  /// WEB_REMIX требует pot для скачивания более ~1MB без авторизации.</para>
+  /// 
+  /// <para><b>WEB_REMIX</b> используется как fallback только если пользователь авторизован
+  /// (с siu=1 лимит снимается). См. <see cref="GetStreamFallbackClients"/>.</para>
+  /// </summary>
+  public static readonly string[] StreamFallbackClientsDefault =
+  [
+      "ANDROID_VR",     // Основной — без pot, без sig, без лимита
         "ANDROID_MUSIC",  // Fallback
     ];
 
-    /// <summary>
-    /// Клиенты для авторизованных пользователей.
-    /// WEB_REMIX включён потому что с авторизацией pot не нужен.
-    /// </summary>
-    public static readonly string[] StreamFallbackClientsAuth =
-    [
-        "ANDROID_VR",     // Основной — без pot, без sig, без лимита
+  /// <summary>
+  /// Клиенты для авторизованных пользователей.
+  /// WEB_REMIX включён потому что с авторизацией pot не нужен.
+  /// </summary>
+  public static readonly string[] StreamFallbackClientsAuth =
+  [
+      "ANDROID_VR",     // Основной — без pot, без sig, без лимита
         "WEB_REMIX",      // С авторизацией — без лимита (siu=1)
         "ANDROID_MUSIC",  // Fallback
     ];
 
-    /// <summary>
-    /// Возвращает список клиентов для fallback в зависимости от состояния авторизации.
-    /// </summary>
-    /// <param name="isAuthenticated">Авторизован ли пользователь.</param>
-    public static string[] GetStreamFallbackClients(bool isAuthenticated)
-    {
-        return isAuthenticated ? StreamFallbackClientsAuth : StreamFallbackClientsDefault;
-    }
+  /// <summary>
+  /// Возвращает список клиентов для fallback в зависимости от состояния авторизации.
+  /// </summary>
+  /// <param name="isAuthenticated">Авторизован ли пользователь.</param>
+  public static string[] GetStreamFallbackClients(bool isAuthenticated)
+  {
+    return isAuthenticated ? StreamFallbackClientsAuth : StreamFallbackClientsDefault;
+  }
 
-    /// <summary>
-    /// Обратная совместимость — используется где не передаётся auth state.
-    /// Без авторизации по умолчанию.
-    /// </summary>
-    public static string[] StreamFallbackClients => StreamFallbackClientsDefault;
+  /// <summary>
+  /// Обратная совместимость — используется где не передаётся auth state.
+  /// Без авторизации по умолчанию.
+  /// </summary>
+  public static string[] StreamFallbackClients => StreamFallbackClientsDefault;
 
-    /// <summary>
-    /// Клиенты для получения HLS.
-    /// </summary>
-    public static readonly string[] HlsFallbackClients =
-    [
-        "IOS",
+  /// <summary>
+  /// Клиенты для получения HLS.
+  /// </summary>
+  public static readonly string[] HlsFallbackClients =
+  [
+      "IOS",
         "ANDROID_VR",
         "WEB_REMIX"
-    ];
+  ];
 
-    public static string GeneratePlayerContext(string videoId, string? visitorData)
+  public static string GeneratePlayerContext(string videoId, string? visitorData)
+  {
+    return GeneratePlayerContextForClient(
+        CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"),
+        videoId, visitorData);
+  }
+
+  /// <summary>
+  /// Генерирует контекст для конкретного клиента.
+  /// </summary>
+  public static string GeneratePlayerContextForClient(string clientName, string videoId, string? visitorData, string? signatureTimestamp = null)
+  {
+    var hl = YoutubeHttpHandler.GetHl();
+    var gl = YoutubeHttpHandler.GetGl();
+
+    var vidJson = Json.Serialize(videoId);
+    var vdJson = Json.Serialize(visitorData);
+    var hlJson = Json.Serialize(hl);
+    var glJson = Json.Serialize(gl);
+
+    return clientName switch
     {
-        return GeneratePlayerContextForClient(
-            CurrentProfile.ToString().ToUpperInvariant().Replace("WEBREMIX", "WEB_REMIX"),
-            videoId, visitorData);
-    }
-
-    /// <summary>
-    /// Генерирует контекст для конкретного клиента.
-    /// </summary>
-    public static string GeneratePlayerContextForClient(string clientName, string videoId, string? visitorData, string? signatureTimestamp = null)
-    {
-        var hl = YoutubeHttpHandler.GetHl();
-        var gl = YoutubeHttpHandler.GetGl();
-
-        var vidJson = Json.Serialize(videoId);
-        var vdJson = Json.Serialize(visitorData);
-        var hlJson = Json.Serialize(hl);
-        var glJson = Json.Serialize(gl);
-
-        return clientName switch
-        {
-            "WEB_REMIX" => $$"""
+      "WEB_REMIX" => $$"""
             {
               "videoId": {{vidJson}},
               "contentCheckOk": true,
@@ -124,7 +230,7 @@ public static class YoutubeClientUtils
             }
             """,
 
-            "ANDROID_VR" => $$"""
+      "ANDROID_VR" => $$"""
             {
               "videoId": {{vidJson}},
               "contentCheckOk": true,
@@ -148,7 +254,7 @@ public static class YoutubeClientUtils
             }
             """,
 
-            "ANDROID_MUSIC" => $$"""
+      "ANDROID_MUSIC" => $$"""
             {
               "videoId": {{vidJson}},
               "contentCheckOk": true,
@@ -170,7 +276,7 @@ public static class YoutubeClientUtils
             }
             """,
 
-            "WEB" => $$"""
+      "WEB" => $$"""
             {
               "videoId": {{vidJson}},
               "contentCheckOk": true,
@@ -188,7 +294,7 @@ public static class YoutubeClientUtils
             }
             """,
 
-            "IOS" => $$"""
+      "IOS" => $$"""
             {
               "videoId": {{vidJson}},
               "contentCheckOk": true,
@@ -211,7 +317,7 @@ public static class YoutubeClientUtils
             }
             """,
 
-            "TVHTML5_SIMPLY_EMBEDDED_PLAYER" => $$"""
+      "TVHTML5_SIMPLY_EMBEDDED_PLAYER" => $$"""
             {
               "videoId": {{vidJson}},
               "context": {
@@ -238,21 +344,140 @@ public static class YoutubeClientUtils
             }
             """,
 
-            _ => GeneratePlayerContextForClient("WEB_REMIX", videoId, visitorData)
-        };
+      _ => GeneratePlayerContextForClient("WEB_REMIX", videoId, visitorData)
+    };
+  }
+
+  /// <summary>
+  /// Возвращает User-Agent для конкретного клиента.
+  /// </summary>
+  public static string GetUserAgentForClient(string clientName) => clientName switch
+  {
+    "WEB_REMIX" => UaWebRemix,
+    "ANDROID_VR" => UaVr,
+    "ANDROID_MUSIC" => UaAndroidMusic,
+    "WEB" => UaWeb,
+    "IOS" => UaIos,
+    "TVHTML5_SIMPLY_EMBEDDED_PLAYER" => UaTv,
+    _ => UaWebRemix
+  };
+
+  /// <summary>
+  /// Высокопроизводительный парсер длительности медиафайлов YouTube.
+  /// Исключает аллокации строк и оптимизирован под частые форматы времени.
+  /// </summary>
+  public static class DurationParser
+  {
+    private static readonly string[] DurationFormats =
+        [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"];
+
+    /// <summary>
+    /// Выполняет быстрое Span-based чтение и парсинг формата времени.
+    /// </summary>
+    /// <param name="text">Строка времени из API InnerTube.</param>
+    /// <returns>Разобранный интервал времени, либо null.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static TimeSpan? Parse(string? text)
+    {
+      if (string.IsNullOrWhiteSpace(text)) return null;
+
+      var span = text.AsSpan().Trim();
+      int colonCount = 0;
+      int firstColon = -1, secondColon = -1;
+
+      for (int i = 0; i < span.Length; i++)
+      {
+        if (span[i] == ':')
+        {
+          colonCount++;
+          if (colonCount == 1) firstColon = i;
+          else if (colonCount == 2) secondColon = i;
+        }
+      }
+
+      if (colonCount == 1 && firstColon > 0)
+      {
+        if (int.TryParse(span[..firstColon], out var m) &&
+            int.TryParse(span[(firstColon + 1)..], out var s))
+        {
+          return new TimeSpan(0, m, s);
+        }
+      }
+      else if (colonCount == 2 && firstColon > 0 && secondColon > firstColon)
+      {
+        if (int.TryParse(span[..firstColon], out var h) &&
+            int.TryParse(span[(firstColon + 1)..secondColon], out var m) &&
+            int.TryParse(span[(secondColon + 1)..], out var s))
+        {
+          return new TimeSpan(h, m, s);
+        }
+      }
+
+      if (TimeSpan.TryParseExact(text, DurationFormats, CultureInfo.InvariantCulture, out var ts))
+      {
+        return ts;
+      }
+
+      return null;
+    }
+  }
+
+  /// <summary>
+  /// Оптимизированный резолвер превью-изображений YouTube.
+  /// Полностью исключает аллокации замыканий и LINQ-объектов на горячих путях.
+  /// </summary>
+  public static class ThumbnailResolver
+  {
+    /// <summary>
+    /// Возвращает превью лучшего разрешения из коллекции внутренних структур ThumbnailData.
+    /// </summary>
+    /// <remarks>
+    /// Метод объявлен как internal для предотвращения утечки внутреннего типа Bridge.ThumbnailData наружу сборки.
+    /// </remarks>
+    internal static string GetBestUrl(IEnumerable<Bridge.ThumbnailData> thumbnails, string? fallbackVideoId = null)
+    {
+      string? bestUrl = null;
+      int bestArea = -1;
+
+      foreach (var t in thumbnails)
+      {
+        if (t.Url == null) continue;
+        int area = (t.Width ?? 0) * (t.Height ?? 0);
+        if (area > bestArea)
+        {
+          bestArea = area;
+          bestUrl = t.Url;
+        }
+      }
+
+      return bestUrl ?? (fallbackVideoId != null ? $"https://i.ytimg.com/vi/{fallbackVideoId}/mqdefault.jpg" : "");
     }
 
     /// <summary>
-    /// Возвращает User-Agent для конкретного клиента.
+    /// Возвращает превью лучшего разрешения из списка публичных доменных моделей Thumbnail.
     /// </summary>
-    public static string GetUserAgentForClient(string clientName) => clientName switch
+    public static string GetBestUrl(IReadOnlyList<Thumbnail> thumbnails, string? fallbackVideoId = null)
     {
-        "WEB_REMIX" => UaWebRemix,
-        "ANDROID_VR" => UaVr,
-        "ANDROID_MUSIC" => UaAndroidMusic,
-        "WEB" => UaWeb,
-        "IOS" => UaIos,
-        "TVHTML5_SIMPLY_EMBEDDED_PLAYER" => UaTv,
-        _ => UaWebRemix
-    };
+      if (thumbnails.Count == 0)
+      {
+        return fallbackVideoId != null ? $"https://i.ytimg.com/vi/{fallbackVideoId}/mqdefault.jpg" : "";
+      }
+
+      Thumbnail? best = null;
+      int maxArea = -1;
+
+      for (int i = 0; i < thumbnails.Count; i++)
+      {
+        var t = thumbnails[i];
+        int area = t.Resolution.Width * t.Resolution.Height;
+        if (area > maxArea)
+        {
+          maxArea = area;
+          best = t;
+        }
+      }
+
+      return best?.Url ?? (fallbackVideoId != null ? $"https://i.ytimg.com/vi/{fallbackVideoId}/mqdefault.jpg" : "");
+    }
+  }
 }

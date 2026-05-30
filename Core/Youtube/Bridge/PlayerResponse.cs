@@ -44,21 +44,17 @@ internal partial class PlayerResponse(JsonElement content)
             // desktopLegacyAgeGateReason: 1 = age restricted
             if (desktopAgeGateReason == 1 ||
                 reason.Contains("age", StringComparison.OrdinalIgnoreCase) ||
-                reason.Contains("возраст", StringComparison.OrdinalIgnoreCase) ||
-                reason.Contains("confirm your age", StringComparison.OrdinalIgnoreCase) ||
-                reason.Contains("подтвердить возраст", StringComparison.OrdinalIgnoreCase))
+                reason.Contains("confirm", StringComparison.OrdinalIgnoreCase))
             {
                 return LoginRequiredReason.AgeRestricted;
             }
 
-            if (reason.Contains("private", StringComparison.OrdinalIgnoreCase) ||
-                reason.Contains("приватн", StringComparison.OrdinalIgnoreCase))
+            if (reason.Contains("private", StringComparison.OrdinalIgnoreCase))
             {
                 return LoginRequiredReason.Private;
             }
 
             if (reason.Contains("members", StringComparison.OrdinalIgnoreCase) ||
-                reason.Contains("подписчик", StringComparison.OrdinalIgnoreCase) ||
                 reason.Contains("member", StringComparison.OrdinalIgnoreCase))
             {
                 return LoginRequiredReason.MembersOnly;

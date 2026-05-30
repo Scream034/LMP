@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using LMP.Core.Exceptions;
+using LMP.Core.Services;
 using LMP.Core.Youtube.Exceptions;
 
 namespace LMP.UI.Services;
@@ -9,12 +10,6 @@ namespace LMP.UI.Services;
 /// Единый центр принятия решений.
 /// Полностью неблокирующий — использует toast-уведомления вместо модальных диалогов.
 /// </summary>
-/// <remarks>
-/// <para><b>Recovery-first:</b></para>
-/// <para>Для фатальных ошибок playback-flow сначала переводится в корректное состояние
-/// (stop/skip), и только затем выполняется пользовательское уведомление.
-/// Это устраняет гонку между поздними async-продолжениями и UI-обработкой ошибки.</para>
-/// </remarks>
 public sealed class PlaybackErrorOrchestrator : IDisposable
 {
     private readonly YoutubeProvider _youtube;
@@ -29,24 +24,17 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     private static readonly TimeSpan ErrorCacheCleanupInterval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan ErrorDeduplicationWindow = TimeSpan.FromSeconds(10);
 
-    /// <summary>
-    /// Длительность toast для стратегии Dialog.
-    /// </summary>
     private const int DialogToastDurationMs = 8000;
-
-    /// <summary>
-    /// Длительность toast для стратегии ToastAndSkip.
-    /// </summary>
     private const int SkipToastDurationMs = 5000;
 
     private volatile bool _disposed;
 
     public PlaybackErrorOrchestrator(
-        YoutubeProvider youtube,
-        AudioEngine audioEngine,
-        DialogService dialogService,
-        NotificationService notificationService,
-        LibraryService libraryService)
+         YoutubeProvider youtube,
+         AudioEngine audioEngine,
+         DialogService dialogService,
+         NotificationService notificationService,
+         LibraryService libraryService)
     {
         _youtube = youtube ?? throw new ArgumentNullException(nameof(youtube));
         _audioEngine = audioEngine ?? throw new ArgumentNullException(nameof(audioEngine));
@@ -58,41 +46,58 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _audioEngine.OnDeviceLost += HandleDeviceLost;
         _audioEngine.OnDeviceRestored += HandleDeviceRestored;
 
-        Log.Info("[PlaybackErrorOrchestrator] Subscribed to AudioEngine.OnErrorOccurred (handler count verification)");
+        // Subscribe to low-level early-warning network events
+        Core.Audio.Sources.CachingStreamSource.OnSourceWarning += HandleSourceWarning;
+
         Log.Info("[PlaybackErrorOrchestrator] Initialized and ready");
     }
 
     #region Error Handling
 
-    /// <summary>
-    /// Информационное уведомление о потере устройства.
-    /// Показывает toast и OS-уведомление без эскалации как ошибки.
-    /// Плеер уже на паузе — пользователю достаточно нажать Play после reconnect.
-    /// </summary>
-    private void HandleDeviceLost()
+    private void HandleSourceWarning(string trackId, Exception exception)
     {
         if (_disposed) return;
 
-        string errorKey = "device_lost";
-        if (!TryRegisterError(errorKey)) return;
+        // Deduplicate early-warnings to avoid UI clutter
+        string warningKey = $"warning_{trackId}_{exception.GetType().Name}";
+        if (!TryRegisterError(warningKey)) return;
 
+        Log.Warn($"[Orchestrator] Non-fatal stream warning for track {trackId}: {exception.Message}");
+
+        _ = ShowStreamWarningToastAsync();
+    }
+
+    private async Task ShowStreamWarningToastAsync()
+    {
+        try
+        {
+            // Apologize for the delay without premature assumptions about DPI blocking
+            await _notificationService.ShowToastAsync(
+                titleKey: "Notification_PlaybackDelay_Title",
+                messageKey: "Notification_PlaybackDelay_Message",
+                severity: NotificationSeverity.Warning,
+                durationMs: SkipToastDurationMs);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Orchestrator] Failed to show warning toast: {ex.Message}");
+        }
+    }
+
+    private void HandleDeviceLost()
+    {
+        if (_disposed || !TryRegisterError("device_lost")) return;
         Log.Info("[Orchestrator] Device lost — showing informational toast");
-
         _ = ShowDeviceLostToastAsync();
     }
 
-    /// <summary>
-    /// Показывает info-toast о потере устройства и OS-уведомление.
-    /// </summary>
     private async Task ShowDeviceLostToastAsync()
     {
         try
         {
             var L = LocalizationService.Instance;
-            string title = L.Get("Notification_DeviceLost_Title",
-                "Audio device disconnected");
-            string message = L.Get("Notification_DeviceLost_Message",
-                "Playback paused. Connect an audio device and press Play to resume.");
+            string title = L.Get("Notification_DeviceLost_Title", "Audio device disconnected");
+            string message = L.Get("Notification_DeviceLost_Message", "Playback paused. Connect an audio device and press Play to resume.");
 
             await _notificationService.ShowToastAsync(
                 titleKey: "Notification_DeviceLost_Title",
@@ -100,8 +105,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
                 severity: NotificationSeverity.Warning,
                 durationMs: SkipToastDurationMs);
 
-            await NotificationService.ShowOsNotificationAsync(
-                title, message, NotificationSeverity.Warning);
+            await NotificationService.ShowOsNotificationAsync(title, message, NotificationSeverity.Warning);
         }
         catch (Exception ex)
         {
@@ -109,22 +113,13 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         }
     }
 
-    /// <summary>
-    /// Информационное уведомление о восстановлении устройства.
-    /// Показывает success-toast. Воспроизведение уже возобновлено автоматически.
-    /// </summary>
     private void HandleDeviceRestored()
     {
         if (_disposed) return;
-
         Log.Info("[Orchestrator] Device restored — showing success toast");
-
         _ = ShowDeviceRestoredToastAsync();
     }
 
-    /// <summary>
-    /// Показывает success-toast о восстановлении устройства.
-    /// </summary>
     private async Task ShowDeviceRestoredToastAsync()
     {
         try
@@ -144,9 +139,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     private void HandleError(Exception exception)
     {
         if (_disposed) return;
-
         Log.Info($"[Orchestrator] ◆ Received error event: {exception.GetType().Name}: {exception.Message}");
-
         _ = HandleErrorAsync(exception);
     }
 
@@ -154,7 +147,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
     {
         if (_disposed) return;
 
-        if (IsCancellationLike(exception))
+        if (NetworkErrorHelper.IsCancellationLike(exception))
         {
             Log.Debug($"[Orchestrator] Suppressing cancelled error: {exception.GetType().Name}");
             return;
@@ -179,7 +172,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         {
             var actualException = UnwrapException(exception);
 
-            if (actualException is OperationCanceledException)
+            if (actualException is OperationCanceledException oce && NetworkErrorHelper.IsCancellationLike(oce))
             {
                 Log.Debug("[Orchestrator] Suppressing unwrapped cancellation");
                 return;
@@ -191,7 +184,7 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
                 LoginRequiredException loginEx => HandleLoginRequiredAsync(loginEx),
                 StreamUnavailableException streamEx => HandleStreamUnavailableAsync(streamEx),
                 ChunkDownloadFatalException chunkEx => HandleChunkFatalAsync(chunkEx),
-                OperationCanceledException => Task.CompletedTask,
+                OperationCanceledException oce2 when NetworkErrorHelper.IsCancellationLike(oce2) => Task.CompletedTask,
                 _ => HandleGenericErrorAsync(actualException)
             });
         }
@@ -201,68 +194,58 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         }
     }
 
-    /// <summary>
-    /// Определяет, содержит ли исключение признак отмены операции.
-    /// </summary>
-    public static bool IsCancellationLike(Exception? exception)
+    private async Task ShowStreamWarningToastAsync(Exception exception)
     {
-        for (var current = exception; current != null; current = current.InnerException)
+        try
         {
-            if (current is OperationCanceledException or TaskCanceledException)
-                return true;
+            bool isSslFailure = NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception);
+
+            string titleKey = "Notification_PlaybackDelay_Title";
+            string messageKey = isSslFailure ? "Notification_DpiWarning_Message" : "Notification_PlaybackDelay_Message";
+            string? recommendationKey = isSslFailure ? "Recommendation_DpiBlocked" : "Recommendation_CheckNetwork";
+
+            await _notificationService.ShowToastAsync(
+                titleKey: titleKey,
+                messageKey: messageKey,
+                severity: NotificationSeverity.Warning,
+                durationMs: SkipToastDurationMs,
+                recommendationKey: recommendationKey);
         }
-        return false;
+        catch (Exception ex)
+        {
+            Log.Warn($"[Orchestrator] Failed to show warning toast: {ex.Message}");
+        }
     }
 
     #endregion
 
     #region Specific Error Handlers
 
-    /// <summary>
-    /// Подавляет ошибки от устаревших операций, которые уже не относятся к текущему треку.
-    /// </summary>
     private bool IsStalePlaybackError(Exception exception)
     {
         var current = _audioEngine.CurrentTrack;
-        if (current == null)
-            return true;
-
+        if (current == null) return true;
         var currentRaw = current.GetRawIdSpan();
 
         return exception switch
         {
-            StreamUnavailableException stream =>
-                !currentRaw.SequenceEqual(stream.VideoId.AsSpan()),
-
-            LoginRequiredException login =>
-                !currentRaw.SequenceEqual(login.VideoId.AsSpan()),
-
-            ChunkDownloadFatalException chunk =>
-                !string.Equals(current.Id, chunk.TrackId, StringComparison.Ordinal),
-
+            StreamUnavailableException stream => !currentRaw.SequenceEqual(stream.VideoId.AsSpan()),
+            LoginRequiredException login => !currentRaw.SequenceEqual(login.VideoId.AsSpan()),
+            ChunkDownloadFatalException chunk => !string.Equals(current.Id, chunk.TrackId, StringComparison.Ordinal),
             _ => false
         };
     }
 
-    /// <summary>
-    /// Bot Detection — показываем диалог с таймером.
-    /// </summary>
     private async Task HandleBotDetectionAsync(BotDetectionException exception)
     {
         Log.Warn($"[Orchestrator] Bot detection: {exception.FormatRemainingTime()}");
-
         await InvokeOnUIAsync(_audioEngine.Stop);
-
         await _dialogService.ShowBotDetectionCooldownAsync(exception.RemainingCooldown);
     }
 
-    /// <summary>
-    /// Login Required — toast с инструкцией + паузой.
-    /// </summary>
     private async Task HandleLoginRequiredAsync(LoginRequiredException exception)
     {
         Log.Warn($"[Orchestrator] Login required: {exception.Reason} for {exception.VideoId}");
-
         var settings = _libraryService.Settings.Audio;
 
         await InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
@@ -270,294 +253,119 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         if (settings.PlayErrorSound)
             _notificationService.PlayErrorSound();
 
-        var message = GetLoginRequiredMessage(exception);
-        var recommendation = GetRecommendation(exception);
+        var messageKey = GetLoginRequiredMessageKey(exception);
+        var recommendationKey = GetRecommendation(exception);
         var (Id, Title) = GetCurrentTrackInfo();
 
         await _notificationService.ShowPlaybackErrorAsync(
-            LocalizationService.Instance["Error_Playback_Title"],
-            message,
-            Id,
-            Title,
-            null,
-            exception.ToString(),
-            NotificationSeverity.Error,
-            durationMs: DialogToastDurationMs,
-            recommendationKey: recommendation);
+            "Error_Playback_Title", messageKey, Id, Title, null, exception.ToString(),
+            NotificationSeverity.Error, DialogToastDurationMs, recommendationKey);
 
         await NotificationService.ShowOsNotificationAsync(
             LocalizationService.Instance["Error_Playback_Title"],
-            message,
+            LocalizationService.Instance[messageKey],
             NotificationSeverity.Error);
     }
 
-    /// <summary>
-    /// Stream Unavailable — поведение зависит от настроек.
-    /// </summary>
     private async Task HandleStreamUnavailableAsync(StreamUnavailableException exception)
     {
         Log.Error($"[Orchestrator] Stream unavailable: {exception.Reason} for {exception.VideoId}");
-
-        var behavior = GetErrorBehavior();
-        var settings = _libraryService.Settings.Audio;
-        var trackInfo = GetCurrentTrackInfo();
         var attempts = ExtractAttemptsFromException(exception);
-
         var messageKey = GetStreamErrorMessageKey(exception);
-        var recommendationKey = GetRecommendationKey(exception);
-
-        switch (behavior)
-        {
-            case PlaybackErrorBehavior.Dialog:
-                await HandleWithPauseAndToastAsync(
-                    "Error_StreamUnavailable_Title",
-                    messageKey, trackInfo.Id, trackInfo.Title, attempts,
-                    exception.ToString(), settings.PlayErrorSound, recommendationKey);
-                break;
-
-            case PlaybackErrorBehavior.ToastAndSkip:
-                await HandleWithToastAndSkipAsync(
-                    "Error_StreamUnavailable_Title",
-                    messageKey, trackInfo.Id, trackInfo.Title, attempts,
-                    exception.ToString(), settings.PlayErrorSound, recommendationKey);
-                break;
-
-            case PlaybackErrorBehavior.Ignore:
-                await HandleWithSkipOnlyAsync();
-                break;
-        }
-    }
-
-    private static string GetStreamErrorMessageKey(StreamUnavailableException exception)
-    {
-        return exception.Reason switch
-        {
-            StreamUnavailableReason.Forbidden403 => "Error_Stream_Forbidden",
-            StreamUnavailableReason.RegionBlocked => "Error_Stream_RegionBlocked",
-            StreamUnavailableReason.AgeRestricted => "Error_Stream_AgeRestricted",
-            StreamUnavailableReason.Private => "Error_Stream_Private",
-            StreamUnavailableReason.AllClientsFailed => "Error_Stream_AllClientsFailed",
-            StreamUnavailableReason.LiveStream => "Error_Stream_LiveStream",
-            StreamUnavailableReason.Removed => "Error_Stream_Removed",
-            StreamUnavailableReason.PaymentRequired => "Error_Stream_PaymentRequired",
-            _ => "Error_Stream_Unknown"
-        };
-    }
-
-    private string? GetRecommendationKey(Exception exception)
-    {
-        var isAuthenticated = _youtube.AuthService.IsAuthenticated;
-
-        return exception switch
-        {
-            LoginRequiredException login => login.Reason switch
-            {
-                LoginRequiredReason.AgeRestricted => "Recommendation_Login_AgeRestricted",
-                LoginRequiredReason.MembersOnly => "Recommendation_MembersOnly",
-                _ => "Recommendation_Login"
-            },
-
-            StreamUnavailableException stream => stream.Reason switch
-            {
-                StreamUnavailableReason.Forbidden403 => isAuthenticated ? "Recommendation_ChangeClient" : "Recommendation_Login_403",
-                StreamUnavailableReason.AllClientsFailed => isAuthenticated ? "Recommendation_AllClientsFailed_Auth" : "Recommendation_Login_403",
-                StreamUnavailableReason.RegionBlocked => "Recommendation_UseVPN",
-                StreamUnavailableReason.AgeRestricted => "Recommendation_Login_AgeRestricted",
-                StreamUnavailableReason.Private => "Recommendation_Private",
-                StreamUnavailableReason.Removed => "Recommendation_Removed",
-                StreamUnavailableReason.PaymentRequired => "Recommendation_Payment",
-                StreamUnavailableReason.LiveStream => "Recommendation_LiveStream",
-                _ => "Recommendation_ContactDev"
-            },
-
-            ChunkDownloadFatalException chunk => chunk.Reason switch
-            {
-                ChunkDownloadFailureReason.Forbidden403 => isAuthenticated ? "Recommendation_ChangeClient" : "Recommendation_Login_403",
-                ChunkDownloadFailureReason.NetworkError => "Recommendation_CheckNetwork",
-                ChunkDownloadFailureReason.UmpFormat => "Recommendation_ChangeClient",
-                _ => "Recommendation_ContactDev"
-            },
-
-            _ => null
-        };
+        await DispatchPlaybackErrorAsync(exception, messageKey, attempts);
     }
 
     private async Task HandleChunkFatalAsync(ChunkDownloadFatalException exception)
     {
         Log.Error($"[Orchestrator] Chunk fatal: {exception.Reason} at chunk {exception.ChunkIndex}");
-
-        var behavior = GetErrorBehavior();
-        var settings = _libraryService.Settings.Audio;
-        var (Id, Title) = GetCurrentTrackInfo();
-        var message = GetChunkErrorMessage(exception);
-        var recommendation = GetRecommendation(exception);
-
-        var attempts = new List<AttemptRecord>
-        {
-            new(
-                $"Chunk {exception.ChunkIndex}",
-                false,
-                $"{exception.Reason}: {exception.Message}",
-                DateTime.UtcNow)
+        var attempts = new List<AttemptRecord> {
+            new($"Chunk {exception.ChunkIndex}", false, $"{exception.Reason}: {exception.Message}", DateTime.UtcNow)
         };
-
-        switch (behavior)
-        {
-            case PlaybackErrorBehavior.Dialog:
-                await HandleWithPauseAndToastAsync(
-                    LocalizationService.Instance["Error_Playback_Title"],
-                    message, Id, Title, attempts,
-                    exception.ToString(), settings.PlayErrorSound, recommendation);
-                break;
-
-            case PlaybackErrorBehavior.ToastAndSkip:
-                await HandleWithToastAndSkipAsync(
-                    LocalizationService.Instance["Error_Playback_Title"],
-                    message, Id, Title, attempts,
-                    exception.ToString(), settings.PlayErrorSound, recommendation);
-                break;
-
-            case PlaybackErrorBehavior.Ignore:
-                await HandleWithSkipOnlyAsync();
-                break;
-        }
+        var messageKey = GetChunkErrorMessageKey(exception);
+        await DispatchPlaybackErrorAsync(exception, messageKey, attempts);
     }
 
-    /// <summary>
-    /// Generic Error — для неизвестных типов ошибок.
-    /// </summary>
     private async Task HandleGenericErrorAsync(Exception exception)
     {
         Log.Error($"[Orchestrator] Generic error: {exception.Message}");
-
-        var behavior = GetErrorBehavior();
-        var settings = _libraryService.Settings.Audio;
-        var (Id, Title) = GetCurrentTrackInfo();
-
-        await RecoverFromFatalPlaybackErrorAsync();
-
-        if (behavior != PlaybackErrorBehavior.Ignore)
-        {
-            if (settings.PlayErrorSound)
-                _notificationService.PlayErrorSound();
-
-            await _notificationService.ShowPlaybackErrorAsync(
-                LocalizationService.Instance["Error_Playback_Title"],
-                exception.Message,
-                Id,
-                Title,
-                null,
-                exception.ToString(),
-                NotificationSeverity.Error);
-
-            await NotificationService.ShowOsNotificationAsync(
-                LocalizationService.Instance["Error_Playback_Title"],
-                exception.Message,
-                NotificationSeverity.Error);
-        }
+        await DispatchPlaybackErrorAsync(exception, exception.Message, null);
     }
 
     #endregion
 
-    #region Behavior Strategies
+    #region Behavior Strategies (Deduplicated)
 
     /// <summary>
-    /// Выполняет recovery после фатальной ошибки воспроизведения.
-    /// Для очереди длиной 1 используется terminal-stop path.
+    /// Универсальный диспетчер, обрабатывающий поведение на основе настроек `PlaybackErrorBehavior`.
+    /// Полностью устраняет дублирование между типами ошибок.
     /// </summary>
+    private async Task DispatchPlaybackErrorAsync(
+        Exception exception,
+        string messageOrKey,
+        List<AttemptRecord>? attempts = null)
+    {
+        var behavior = _libraryService.Settings.Audio.CriticalErrorBehavior;
+
+        if (behavior == PlaybackErrorBehavior.Ignore)
+        {
+            Log.Debug("[Orchestrator] Ignoring error, applying fatal recovery");
+            await RecoverFromFatalPlaybackErrorAsync();
+            return;
+        }
+
+        var settings = _libraryService.Settings.Audio;
+        var (trackId, trackTitle) = GetCurrentTrackInfo();
+
+        bool isSslFailure = NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception);
+        string finalMessageOrKey = isSslFailure ? "Error_SslHandshake_Failed" : messageOrKey;
+
+        string? recommendationKey = isSslFailure
+            ? "Recommendation_DpiBlocked"
+            : GetRecommendation(exception);
+
+        if (behavior == PlaybackErrorBehavior.Dialog)
+            await PauseOrStopForDialogAsync();
+        else
+            await RecoverFromFatalPlaybackErrorAsync();
+
+        if (settings.PlayErrorSound)
+            _notificationService.PlayErrorSound();
+
+        // Playback failure is ALWAYS shown as a critical Error (red toast) to the user.
+        var severity = NotificationSeverity.Error;
+        int duration = behavior == PlaybackErrorBehavior.Dialog ? DialogToastDurationMs : SkipToastDurationMs;
+
+        // Показ внутреннего тоста
+        await _notificationService.ShowPlaybackErrorAsync(
+            "Error_Playback_Title", finalMessageOrKey, trackId, trackTitle, attempts, exception.ToString(),
+            severity, durationMs: duration, recommendationKey: recommendationKey);
+
+        // Показ системного уведомления (переводим на лету)
+        string localizedTitle = LocalizationService.Instance["Error_Playback_Title"];
+        string localizedMessage = finalMessageOrKey.StartsWith("Error_")
+            ? LocalizationService.Instance[finalMessageOrKey]
+            : finalMessageOrKey;
+
+        await NotificationService.ShowOsNotificationAsync(localizedTitle, localizedMessage, severity);
+    }
+
     private Task RecoverFromFatalPlaybackErrorAsync()
     {
         if (_audioEngine.Queue.Count <= 1)
             return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
-
         return InvokeOnUIAsync(() => _audioEngine.PlayNextAsync());
     }
 
-    /// <summary>
-    /// Для стратегии Dialog: при очереди длиной 1 выполняется terminal-stop,
-    /// иначе воспроизведение ставится на паузу.
-    /// </summary>
     private Task PauseOrStopForDialogAsync()
     {
         if (_audioEngine.Queue.Count <= 1)
             return InvokeOnUIAsync(_audioEngine.StopAfterFatalPlaybackError);
-
         return InvokeOnUIAsync(() => _audioEngine.SetPlaybackStateAsync(false));
-    }
-
-    /// <summary>
-    /// Стратегия Dialog: сначала recovery, затем длинный toast.
-    /// </summary>
-    private async Task HandleWithPauseAndToastAsync(
-        string titleKey,
-        string messageKey,
-        string? trackId,
-        string? trackTitle,
-        List<AttemptRecord>? attempts,
-        string? exceptionDetails,
-        bool playSound,
-        string? recommendationKey = null)
-    {
-        await PauseOrStopForDialogAsync();
-
-        if (playSound)
-            _notificationService.PlayErrorSound();
-
-        await _notificationService.ShowPlaybackErrorAsync(
-            titleKey, messageKey, trackId, trackTitle, attempts, exceptionDetails,
-            NotificationSeverity.Error,
-            durationMs: DialogToastDurationMs,
-            recommendationKey: recommendationKey);
-
-        var L = LocalizationService.Instance;
-        await NotificationService.ShowOsNotificationAsync(L[titleKey], L[messageKey], NotificationSeverity.Error);
-    }
-
-    /// <summary>
-    /// Стратегия ToastAndSkip: сначала recovery, затем toast и OS notification.
-    /// </summary>
-    private async Task HandleWithToastAndSkipAsync(
-        string titleKey,
-        string messageKey,
-        string? trackId,
-        string? trackTitle,
-        List<AttemptRecord>? attempts,
-        string? exceptionDetails,
-        bool playSound,
-        string? recommendationKey = null)
-    {
-        await RecoverFromFatalPlaybackErrorAsync();
-
-        if (playSound)
-            _notificationService.PlayErrorSound();
-
-        await _notificationService.ShowPlaybackErrorAsync(
-            titleKey, messageKey, trackId, trackTitle, attempts, exceptionDetails,
-            NotificationSeverity.Warning,
-            durationMs: SkipToastDurationMs,
-            recommendationKey: recommendationKey);
-
-        var L = LocalizationService.Instance;
-        await NotificationService.ShowOsNotificationAsync(L[titleKey], L[messageKey], NotificationSeverity.Warning);
-    }
-
-    /// <summary>
-    /// Стратегия Ignore: только recovery, без уведомлений.
-    /// </summary>
-    private async Task HandleWithSkipOnlyAsync()
-    {
-        Log.Debug("[Orchestrator] Ignoring error, applying fatal recovery");
-        await RecoverFromFatalPlaybackErrorAsync();
     }
 
     #endregion
 
     #region Helpers
-
-    private PlaybackErrorBehavior GetErrorBehavior()
-    {
-        return _libraryService.Settings.Audio.CriticalErrorBehavior;
-    }
 
     private (string Id, string Title) GetCurrentTrackInfo()
     {
@@ -577,30 +385,42 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         ];
     }
 
-    private static string GetChunkErrorMessage(ChunkDownloadFatalException exception)
+    private static string GetChunkErrorMessageKey(ChunkDownloadFatalException exception)
     {
-        var L = LocalizationService.Instance;
-
         return exception.Reason switch
         {
-            ChunkDownloadFailureReason.Forbidden403 => L["Error_Stream_Forbidden"],
-            ChunkDownloadFailureReason.UmpFormat => L["Error_Stream_UmpFormat"],
-            ChunkDownloadFailureReason.MaxRetriesExceeded => L["Error_Stream_MaxRetries"],
-            ChunkDownloadFailureReason.NetworkError => L["Error_Stream_Network"],
-            _ => L["Error_Stream_Unknown"]
+            ChunkDownloadFailureReason.Forbidden403 => "Error_Stream_Forbidden",
+            ChunkDownloadFailureReason.UmpFormat => "Error_Stream_UmpFormat",
+            ChunkDownloadFailureReason.MaxRetriesExceeded => "Error_Stream_MaxRetries",
+            ChunkDownloadFailureReason.NetworkError => "Error_Stream_Network",
+            _ => "Error_Stream_Unknown"
         };
     }
 
-    private static string GetLoginRequiredMessage(LoginRequiredException exception)
+    private static string GetStreamErrorMessageKey(StreamUnavailableException exception)
     {
-        var L = LocalizationService.Instance;
-
         return exception.Reason switch
         {
-            LoginRequiredReason.AgeRestricted => L["Error_Login_AgeRestricted"],
-            LoginRequiredReason.Private => L["Error_Login_Private"],
-            LoginRequiredReason.MembersOnly => L["Error_Login_MembersOnly"],
-            _ => L["Error_Login_Required"]
+            StreamUnavailableReason.Forbidden403 => "Error_Stream_Forbidden",
+            StreamUnavailableReason.RegionBlocked => "Error_Stream_RegionBlocked",
+            StreamUnavailableReason.AgeRestricted => "Error_Stream_AgeRestricted",
+            StreamUnavailableReason.Private => "Error_Stream_Private",
+            StreamUnavailableReason.AllClientsFailed => "Error_Stream_AllClientsFailed",
+            StreamUnavailableReason.LiveStream => "Error_Stream_LiveStream",
+            StreamUnavailableReason.Removed => "Error_Stream_Removed",
+            StreamUnavailableReason.PaymentRequired => "Error_Stream_PaymentRequired",
+            _ => "Error_Stream_Unknown"
+        };
+    }
+
+    private static string GetLoginRequiredMessageKey(LoginRequiredException exception)
+    {
+        return exception.Reason switch
+        {
+            LoginRequiredReason.AgeRestricted => "Error_Login_AgeRestricted",
+            LoginRequiredReason.Private => "Error_Login_Private",
+            LoginRequiredReason.MembersOnly => "Error_Login_MembersOnly",
+            _ => "Error_Login_Required"
         };
     }
 
@@ -627,6 +447,9 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
     private static string GetErrorDeduplicationKey(Exception exception)
     {
+        if (NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception))
+            return "ssl_handshake_failure";
+
         return exception switch
         {
             BotDetectionException => "bot_detection",
@@ -669,98 +492,71 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
 
     private static async Task InvokeOnUIAsync(Action action)
     {
-        if (Dispatcher.UIThread.CheckAccess())
-            action();
-        else
-            await Dispatcher.UIThread.InvokeAsync(action);
+        if (Dispatcher.UIThread.CheckAccess()) action();
+        else await Dispatcher.UIThread.InvokeAsync(action);
     }
 
     private static async Task InvokeOnUIAsync(Func<Task> action)
     {
-        if (Dispatcher.UIThread.CheckAccess())
-            await action();
-        else
-            await Dispatcher.UIThread.InvokeAsync(action);
+        if (Dispatcher.UIThread.CheckAccess()) await action();
+        else await Dispatcher.UIThread.InvokeAsync(action);
     }
 
     #endregion
 
     #region Recommendations
 
-    /// <summary>
-    /// Формирует рекомендацию по исправлению ошибки.
-    /// Учитывает статус авторизации пользователя.
-    /// </summary>
     private string? GetRecommendation(Exception exception)
     {
-        var L = LocalizationService.Instance;
         var isAuthenticated = _youtube.AuthService.IsAuthenticated;
+
+        if (NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception))
+            return "Recommendation_DpiBlocked";
 
         return exception switch
         {
             LoginRequiredException login => login.Reason switch
             {
-                LoginRequiredReason.AgeRestricted => L["Recommendation_Login_AgeRestricted"],
-                LoginRequiredReason.MembersOnly => L["Recommendation_MembersOnly"],
-                _ => L["Recommendation_Login"]
+                LoginRequiredReason.AgeRestricted => "Recommendation_Login_AgeRestricted",
+                LoginRequiredReason.MembersOnly => "Recommendation_MembersOnly",
+                _ => "Recommendation_Login"
             },
-
-            StreamUnavailableException stream => GetStreamRecommendation(stream, isAuthenticated, L),
-
-            ChunkDownloadFatalException chunk => GetChunkRecommendation(chunk, isAuthenticated, L),
-
+            StreamUnavailableException stream => GetStreamRecommendation(stream, isAuthenticated),
+            ChunkDownloadFatalException chunk => GetChunkRecommendation(chunk, isAuthenticated),
             _ => null
         };
     }
 
-    private static string GetStreamRecommendation(
-        StreamUnavailableException stream,
-        bool isAuthenticated,
-        LocalizationService L)
+    private static string GetStreamRecommendation(StreamUnavailableException stream, bool isAuthenticated)
     {
         if (stream.Reason == StreamUnavailableReason.Forbidden403)
-        {
-            return isAuthenticated
-                ? L["Recommendation_ChangeClient"]
-                : L["Recommendation_Login_403"];
-        }
+            return isAuthenticated ? "Recommendation_ChangeClient" : "Recommendation_Login_403";
 
         if (stream.Reason == StreamUnavailableReason.AllClientsFailed)
-        {
-            return isAuthenticated
-                ? L["Recommendation_AllClientsFailed_Auth"]
-                : L["Recommendation_Login_403"];
-        }
+            return isAuthenticated ? "Recommendation_AllClientsFailed_Auth" : "Recommendation_Login_403";
 
         return stream.Reason switch
         {
-            StreamUnavailableReason.RegionBlocked => L["Recommendation_UseVPN"],
-            StreamUnavailableReason.AgeRestricted => L["Recommendation_Login_AgeRestricted"],
-            StreamUnavailableReason.Private => L["Recommendation_Private"],
-            StreamUnavailableReason.Removed => L["Recommendation_Removed"],
-            StreamUnavailableReason.PaymentRequired => L["Recommendation_Payment"],
-            StreamUnavailableReason.LiveStream => L["Recommendation_LiveStream"],
-            _ => L["Recommendation_ContactDev"]
+            StreamUnavailableReason.RegionBlocked => "Recommendation_UseVPN",
+            StreamUnavailableReason.AgeRestricted => "Recommendation_Login_AgeRestricted",
+            StreamUnavailableReason.Private => "Recommendation_Private",
+            StreamUnavailableReason.Removed => "Recommendation_Removed",
+            StreamUnavailableReason.PaymentRequired => "Recommendation_Payment",
+            StreamUnavailableReason.LiveStream => "Recommendation_LiveStream",
+            _ => "Recommendation_ContactDev"
         };
     }
 
-    private static string GetChunkRecommendation(
-        ChunkDownloadFatalException chunk,
-        bool isAuthenticated,
-        LocalizationService L)
+    private static string GetChunkRecommendation(ChunkDownloadFatalException chunk, bool isAuthenticated)
     {
         if (chunk.Reason == ChunkDownloadFailureReason.Forbidden403)
-        {
-            return isAuthenticated
-                ? L["Recommendation_ChangeClient"]
-                : L["Recommendation_Login_403"];
-        }
+            return isAuthenticated ? "Recommendation_ChangeClient" : "Recommendation_Login_403";
 
         return chunk.Reason switch
         {
-            ChunkDownloadFailureReason.NetworkError => L["Recommendation_CheckNetwork"],
-            ChunkDownloadFailureReason.UmpFormat => L["Recommendation_ChangeClient"],
-            _ => L["Recommendation_ContactDev"]
+            ChunkDownloadFailureReason.NetworkError => "Recommendation_CheckNetwork",
+            ChunkDownloadFailureReason.UmpFormat => "Recommendation_ChangeClient",
+            _ => "Recommendation_ContactDev"
         };
     }
 
@@ -777,10 +573,10 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         _audioEngine.OnDeviceLost -= HandleDeviceLost;
         _audioEngine.OnDeviceRestored -= HandleDeviceRestored;
 
-        lock (_recentlyShownErrors)
-        {
-            _recentlyShownErrors.Clear();
-        }
+        // Unsubscribe safely to prevent GC leaks
+        Core.Audio.Sources.CachingStreamSource.OnSourceWarning -= HandleSourceWarning;
+
+        lock (_recentlyShownErrors) _recentlyShownErrors.Clear();
 
         Log.Info("[PlaybackErrorOrchestrator] Disposed");
     }

@@ -3,6 +3,7 @@ using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Helpers.Extensions;
 using static LMP.Core.Youtube.Bridge.SearchResponse;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Search;
 
@@ -62,10 +63,10 @@ public class SearchClient(HttpClient http)
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ProcessVideos(
-        IReadOnlyList<VideoData> videos,
-        List<ISearchResult> batchItems,
-        HashSet<string> encounteredIds,
-        bool isMusicContext)
+         IReadOnlyList<VideoData> videos,
+         List<ISearchResult> batchItems,
+         HashSet<string> encounteredIds,
+         bool isMusicContext)
     {
         for (int i = 0; i < videos.Count; i++)
         {
@@ -76,14 +77,13 @@ public class SearchClient(HttpClient http)
             if (string.IsNullOrEmpty(videoId) || !encounteredIds.Add(videoId))
                 continue;
 
-            string thumbUrl = GetBestThumbnailUrl(videoData.Thumbnails, videoId);
+            string thumbUrl = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId);
             bool isMusic = isMusicContext || videoData.IsMusicItem;
 
             batchItems.Add(new TrackInfo
             {
-                Id = videoId, // TrackInfo setter автоматически добавит префикс
+                Id = videoId,
                 Title = videoData.Title ?? "",
-                // Используем локализацию
                 Author = videoData.Author ?? Services.LocalizationService.Instance["Track_UnknownAuthor"],
                 ChannelId = videoData.ChannelId,
                 Duration = videoData.Duration ?? TimeSpan.Zero,
@@ -110,7 +110,7 @@ public class SearchClient(HttpClient http)
             if (string.IsNullOrEmpty(playlistId) || !encounteredIds.Add(playlistId))
                 continue;
 
-            string? thumbUrl = GetBestThumbnailUrl(playlistData.Thumbnails);
+            string thumbUrl = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(playlistData.Thumbnails);
 
             batchItems.Add(new Playlist
             {
@@ -122,31 +122,6 @@ public class SearchClient(HttpClient http)
                 SyncMode = PlaylistSyncMode.CloudPublic
             });
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string GetBestThumbnailUrl(IReadOnlyList<ThumbnailData> thumbnails, string? fallbackVideoId = null)
-    {
-        string? bestUrl = null;
-        int bestArea = -1;
-
-        for (int i = 0; i < thumbnails.Count; i++)
-        {
-            var t = thumbnails[i];
-            if (t.Url == null) continue;
-
-            int area = (t.Width ?? 0) * (t.Height ?? 0);
-            if (area > bestArea)
-            {
-                bestArea = area;
-                bestUrl = t.Url;
-            }
-        }
-
-        return bestUrl
-            ?? (fallbackVideoId != null
-                ? $"https://i.ytimg.com/vi/{fallbackVideoId}/mqdefault.jpg"
-                : "");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -21,6 +21,7 @@ using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
 using LMP.Core.Helpers;
 using Microsoft.Extensions.DependencyInjection;
+using LMP.Core.Audio.Http;
 
 namespace LMP.Core.Services;
 
@@ -45,6 +46,9 @@ public partial class YoutubeProvider : IDisposable
     private SocketsHttpHandler? _currentHandler;
     private HttpClient? _currentHttpClient;
     private volatile bool _disposed;
+
+    private Task? _initTask;
+    private readonly Lock _initLock = new();
 
     private readonly struct StreamCacheEntry
     {
@@ -92,6 +96,9 @@ public partial class YoutubeProvider : IDisposable
         _nTokenDecryptor = nTokenDecryptor;
         _sigCipherDecryptor = sigCipherDecryptor;
         _userDataService = userDataService;
+
+        // Связываем централизованный утилитный класс с куками сессии
+        YoutubeClientUtils.Initialize(cookieAuth);
 
         _nTokenDecryptor.OnComplexDecryptionStarted += HandleNTokenDecryptionStarted;
 
@@ -193,52 +200,35 @@ public partial class YoutubeProvider : IDisposable
     }
 
     /// <summary>
-    /// Инициализирует провайдер YouTube.
-    /// Прекомпиляция тяжелых движков Jint переведена на ленивый режим (on-demand),
-    /// чтобы разгрузить RAM и CPU во время запуска приложения.
+    /// Инициализирует провайдер YouTube (потокобезопасно, выполняется только 1 раз).
     /// </summary>
-    public async Task InitializeAsync()
+    public Task InitializeAsync()
     {
-        if (AuthService?.IsAuthenticated == true)
+        lock (_initLock)
         {
-            Log.Info("[YouTube] Fetching fresh Visitor Data for auth session...");
-            var visitorData = await FetchVisitorDataAsync();
-
-            _youtube.Music.SetVisitorData(
-                !string.IsNullOrEmpty(visitorData)
-                    ? visitorData
-                    : "CgtsZG1ySnZiQUkSbyiMjuGSBg%3D%3D");
-
-            if (!string.IsNullOrEmpty(visitorData))
-                Log.Info($"[YouTube] Visitor Data synchronized: {visitorData}");
+            _initTask ??= InitializeInternalAsync();
+            return _initTask;
         }
-
-        IsReady = true;
-        NotifyStatus("[YouTube] Initialized");
     }
 
-    private async Task<string?> FetchVisitorDataAsync()
+    private async Task InitializeInternalAsync()
     {
         try
         {
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(YoutubeClientUtils.UaWeb);
+            Log.Info("[YouTube] Initiating lazy background Visitor Data resolution...");
 
-            if (AuthService != null)
-                client.DefaultRequestHeaders.Add("Cookie", AuthService.GetCookieHeader());
-
-            var jsonStr = await client.GetStringAsync("https://music.youtube.com/sw.js_data");
-
-            if (jsonStr.StartsWith(")]}'"))
-                jsonStr = jsonStr[4..];
-
-            var json = Json.Parse(jsonStr);
-            return json[0][2][0][0][13].GetStringOrNull();
+            // YoutubeClientUtils сама получит VisitorData, учтет куки и защитит таймаутом.
+            // Больше не нужно вручную пробрасывать токен в клиент Music.
+            _ = await YoutubeClientUtils.EnsureVisitorDataAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            Log.Warn($"[YouTube] Failed to fetch sw.js_data: {ex.Message}");
-            return null;
+            Log.Warn($"[YouTube] Initialization non-fatal warning: {ex.Message}");
+        }
+        finally
+        {
+            IsReady = true;
+            NotifyStatus("[YouTube] Initialized");
         }
     }
 
@@ -557,8 +547,6 @@ public partial class YoutubeProvider : IDisposable
 
         try
         {
-            _youtube.Sync.VisitorData = _youtube.Music.GetVisitorData();
-
             var data = await _youtube.Sync.GetFullPlaylistDataAsync(youtubePlaylistId, ct);
 
             Log.Info($"[Music] Fetched full playlist data: " +
@@ -588,8 +576,11 @@ public partial class YoutubeProvider : IDisposable
             _sigCipherDecryptor.InvalidateCache();
             _nTokenDecryptor.PlayerManager.Invalidate();
 
-            // Сброс stale STS (аналогично forceRefresh в RefreshStreamUrlAsync) ═══
+            // Сброс stale STS при 403-recovery
             _youtube.Videos.Streams.InvalidateCipherManifest();
+
+            // Принудительно очищаем и пересоздаем VisitorData
+            _ = YoutubeClientUtils.EnsureVisitorDataAsync(forceRefresh: true);
 
             ClearCache();
             Log.Info("[YouTube] Bypass engines successfully reset and ready for clean reload.");
@@ -854,13 +845,13 @@ public partial class YoutubeProvider : IDisposable
         }
     }
 
+    /// <summary>
+    /// Проверяет, вызвана ли ошибка механизмами обнаружения ботов на стороне YouTube.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsBotDetectionError(string error)
     {
-        return error.Contains("bot", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("LOGIN_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("Выполните вход", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("Войдите", StringComparison.OrdinalIgnoreCase);
+        return VideoController.IsBotDetectionError(error);
     }
 
     private async Task<string?> GetHlsManifestAsync(string videoId, CancellationToken ct)
@@ -1378,6 +1369,12 @@ public partial class YoutubeProvider : IDisposable
             }
         }
 
+        /// <summary>
+        /// Получает следующий пакет результатов поиска.
+        /// </summary>
+        /// <param name="count">Размер пакета.</param>
+        /// <param name="ct">Токен отмены операции.</param>
+        /// <returns>Список найденных треков.</returns>
         public async Task<List<TrackInfo>> FetchNextBatchAsync(int count = 50, CancellationToken ct = default)
         {
             if (_disposed || _seenIds.Count >= _maxResults) return [];
@@ -1425,7 +1422,12 @@ public partial class YoutubeProvider : IDisposable
                         }
                     }
                 }
-                catch (OperationCanceledException) { break; }
+                catch (OperationCanceledException)
+                {
+                    // Не замалчиваем отмену задачи. Пробрасываем исключение 
+                    // для корректного завершения асинхронного конвейера.
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     Log.Error($"[SearchSession] Error: {ex.Message}");

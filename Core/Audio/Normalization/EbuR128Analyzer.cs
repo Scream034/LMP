@@ -64,9 +64,6 @@ public sealed class EbuR128Analyzer
     /// <summary>Макс. длительность pre-scan (секунд).</summary>
     private const float MaxScanDurationSeconds = 120f;
 
-    /// <summary>Коэффициент lerp-сглаживания: ~5 chunk'ов (250ms) для 98% конвергенции.</summary>
-    private const float LerpFactor = 0.35f;
-
     #endregion
 
     #region Immutable State

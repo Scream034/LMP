@@ -506,6 +506,8 @@
   "Notification_DeviceLost_Message": "Воспроизведение приостановлено. Подключите устройство и нажмите Play для продолжения.",
   "Notification_DeviceRestored_Title": "Устройство подключено",
   "Notification_DeviceRestored_Message": "Воспроизведение возобновлено автоматически.",
+  "Notification_PlaybackDelay_Title": "Задержка воспроизведения",
+  "Notification_PlaybackDelay_Message": "Воспроизведение задерживается из-за медленного или прерванного соединения. Пожалуйста, подождите...",
 
   "Attempt_Success": "Успешно",
   "Attempt_Failed": "Не удалось",
@@ -523,6 +525,7 @@
   "Recommendation_ContactDev": "Если это продолжается, пожалуйста, свяжитесь с разработчиком.",
   "Recommendation_Login_403": "Войдите в YouTube через Настройки → Аккаунт чтобы получить доступ к этому контенту.",
   "Recommendation_AllClientsFailed_Auth": "Все клиенты не смогли получить доступ. Попробуйте изменить клиент в Настройках → Сеть, или свяжитесь с разработчиком.",
+  "Recommendation_DpiBlocked": "Это обычно вызвано блокировками (DPI) в РФ. Пожалуйста, запустите средство обхода блокировок (например, zapret, GoodbyeDPI) или включите VPN/прокси.",
 
   "Error_CopyDetails": "Скопировать детали",
   "Error_Stream_HlsForbidden": "HLS поток заблокирован (403). Пожалуйста, свяжитесь с разработчиком.",
@@ -551,6 +554,7 @@
   "Error_InvalidThumbnailUrl": "Неверный URL изображения. Обложка не была обновлена.",
   "Error_NoAudioDevice": "Аудиоустройство недоступно. Подключите наушники или колонки и попробуйте снова.",
   "Error_CacheInvalidated": "Кэш трека был удалён. Воспроизведение остановлено.",
+  "Error_SslHandshake_Failed": "Не удалось установить защищённое SSL-соединение с серверами YouTube.",
 
   "Splash_Initializing": "Инициализация...",
   "Splash_InitAudioCache": "Инициализация аудио кэша...",

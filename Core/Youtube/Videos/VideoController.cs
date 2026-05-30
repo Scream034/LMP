@@ -5,6 +5,7 @@ using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Helpers.Extensions;
 using LMP.Core.Helpers;
+using System.Runtime.CompilerServices;
 
 namespace LMP.Core.Youtube.Videos;
 
@@ -89,45 +90,13 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
     #endregion
 
     private readonly PlayerContextManager _playerManager = playerManager;
-    private string? _visitorData;
     private string? _signatureTimestamp;
 
     protected HttpClient Http { get; } = http;
 
-    #region Visitor Data
-
-    private async ValueTask<string> ResolveVisitorDataAsync(CancellationToken cancellationToken = default)
-    {
-        if (!string.IsNullOrWhiteSpace(_visitorData))
-            return _visitorData;
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.Add("User-Agent", YoutubeClientUtils.UaWeb);
-
-        using var response = await Http.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var jsonString = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (jsonString.StartsWith(")]}'"))
-            jsonString = jsonString[4..];
-
-        var json = Json.Parse(jsonString);
-        var value = json[0][2][0][0][13].GetStringOrNull();
-
-        if (string.IsNullOrWhiteSpace(value))
-            throw new YoutubeExplodeException("Failed to resolve visitor data.");
-
-        return _visitorData = value;
-    }
-
-    #endregion
-
-    #region Watch Page
-
     public async ValueTask<VideoWatchPage> GetVideoWatchPageAsync(
-        VideoId videoId,
-        CancellationToken cancellationToken = default)
+     VideoId videoId,
+     CancellationToken cancellationToken = default)
     {
         for (var retriesRemaining = 5; ; retriesRemaining--)
         {
@@ -148,8 +117,6 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
             return watchPage;
         }
     }
-
-    #endregion
 
     #region GetPlayerResponse
 
@@ -181,7 +148,8 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
         Log.Info($"GetPlayerResponse START ({clientName}): {videoId}");
 
-        var visitorData = await ResolveVisitorDataAsync(cancellationToken);
+        // Единая точка разрешения VisitorData с защитой от таймаута и дублирующих сетевых вызовов
+        var visitorData = await YoutubeClientUtils.EnsureVisitorDataAsync(ct: cancellationToken).ConfigureAwait(false);
 
         if (signatureTimestamp == null && clientName is "WEB" or "WEB_REMIX" or "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
         {
@@ -295,6 +263,20 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
 
     #region Bot Detection Tracking
 
+    /// <summary>
+    /// Проверяет, указывает ли сообщение об ошибке плейера на Bot Detection.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsBotDetectionError(string? error)
+    {
+        if (string.IsNullOrEmpty(error)) return false;
+
+        return error.Contains("bot", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("LOGIN_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
+               error.Contains("confirm", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void TrackBotDetection(PlayerResponse response, string videoId)
     {
         if (IsBotDetectionResponse(response))
@@ -327,18 +309,10 @@ internal partial class VideoController(HttpClient http, PlayerContextManager pla
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsBotDetectionResponse(PlayerResponse response)
     {
-        var error = response.PlayabilityError;
-        if (string.IsNullOrEmpty(error)) return false;
-
-        return error.Contains("bot", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("Выполните вход", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("Войдите", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("LOGIN_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("confirm you're not", StringComparison.OrdinalIgnoreCase) ||
-               error.Contains("подтвердить", StringComparison.OrdinalIgnoreCase);
+        return IsBotDetectionError(response.PlayabilityError);
     }
 
     #endregion

@@ -264,7 +264,8 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
                 }
             }
 
-            if (!_searchSession.HasMore)
+            // Если постраничный запрос вернул 0 результатов, принудительно останавливаем дальнейшую пагинацию.
+            if (newTracks.Count == 0 || !_searchSession.HasMore)
                 SetCanFetchMore(false);
 
             return newTracks;
@@ -499,7 +500,9 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
             _ = _imageCache.PrefetchAsync(urls!, ct);
         }
 
-        bool hasMore = session?.HasMore ?? false;
+        // Если первичный поиск вернул 0 результатов, принудительно запрещаем пагинацию 
+        // для предотвращения бесконечного скролл-шторма запросов.
+        bool hasMore = (tracks.Count > 0) && (session?.HasMore ?? false);
         await InitializeItemsAsync(tracks, canFetchMore: hasMore);
 
         HasResults = tracks.Count > 0;
@@ -508,7 +511,6 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         sw.Stop();
         Log.Info($"[Search] {tracks.Count} results in {sw.ElapsedMilliseconds}ms, hasMore={hasMore}");
     }
-
     #endregion
 
     #region History

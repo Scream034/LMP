@@ -18,28 +18,28 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 {
     /// <summary>Версия клиента YouTube Music.</summary>
     public const string MusicClientVersion = "1.20260126.03.00";
-    
+
     /// <summary>Идентификатор клиента YouTube Music.</summary>
     public const string MusicClientName = "67";
-    
+
     /// <summary>Версия клиента YouTube Web.</summary>
     public const string WebClientVersion = "2.20260126.01.00";
-    
+
     /// <summary>Идентификатор клиента YouTube Web.</summary>
     public const string WebClientName = "1";
 
     /// <summary>Origin заголовок для YouTube Music.</summary>
     public const string MusicOrigin = "https://music.youtube.com";
-    
+
     /// <summary>Origin заголовок для основного YouTube.</summary>
     public const string YoutubeOrigin = "https://www.youtube.com";
 
     /// <summary>Ключ параметров для передачи Visitor Data в запросе.</summary>
     public static readonly HttpRequestOptionsKey<string> VisitorDataKey = new("VisitorData");
-    
+
     /// <summary>Ключ параметров, указывающий на контекст запроса плеера.</summary>
     public static readonly HttpRequestOptionsKey<bool> IsPlayerContext = new("IsPlayerContext");
-    
+
     /// <summary>Ключ параметров, указывающий на мобильный или ТВ клиент (без авторизации SAPISIDHASH).</summary>
     public static readonly HttpRequestOptionsKey<bool> IsMobileClient = new("IsMobileClient");
 
@@ -162,9 +162,9 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         // SAPISIDHASH — только для API на доменах *.youtube.com
         bool isYoutubeApi = isYoutubeDomain && request.RequestUri.AbsolutePath.Contains("/youtubei/v1/");
 
-        if (request.Method == HttpMethod.Post && 
-            isYoutubeApi && 
-            !isMobileClient && 
+        if (request.Method == HttpMethod.Post &&
+            isYoutubeApi &&
+            !isMobileClient &&
             authService?.IsAuthenticated == true)
         {
             var origin = isMusic ? MusicOrigin : YoutubeOrigin;
@@ -203,7 +203,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
     {
         if (authService == null || !authService.IsAuthenticated) return null;
 
-        Log.Info("[YouTube] Попытка восстановления сессии через sw.js_data...");
+        Log.Info("[YouTube] Attempting session recovery via sw.js_data...");
 
         try
         {
@@ -241,13 +241,13 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
             if (sessionRefreshed || !string.IsNullOrEmpty(newVisitorData))
             {
-                Log.Info("[YouTube] Сессия успешно восстановлена.");
+                Log.Info("[YouTube] Session successfully recovered.");
                 return newVisitorData;
             }
         }
         catch (Exception ex)
         {
-            Log.Error($"[YouTube] Ошибка восстановления сессии: {ex.Message}");
+            Log.Error($"[YouTube] Session recovery failed: {ex.Message}");
         }
 
         return null;
@@ -255,8 +255,8 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
     /// <inheritdoc/>
     protected override async Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request,
-        CancellationToken cancellationToken)
+       HttpRequestMessage request,
+       CancellationToken cancellationToken)
     {
         for (var i = 0; i < 3; i++)
         {
@@ -273,7 +273,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
                 if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    Log.Warn($"[YouTube] 401 Unauthorized (Попытка {i + 1}).");
+                    Log.Warn($"[YouTube] 401 Unauthorized (Attempt {i + 1}).");
 
                     if (cookiesUpdated)
                     {
@@ -293,21 +293,36 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
                 if ((int)response.StatusCode == 429)
                 {
-                    Log.Warn("[YouTube] 429 Too Many Requests. Ожидание...");
+                    Log.Warn("[YouTube] 429 Too Many Requests. Waiting...");
                     await Task.Delay(2000 + (i * 1000), cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
                 return response;
             }
-            catch (HttpRequestException ex) when (i < 2)
+            catch (Exception ex)
             {
-                Log.Warn($"[YouTube] Сетевая ошибка: {ex.Message}. Повтор...");
-                await Task.Delay(1000 * (i + 1), cancellationToken).ConfigureAwait(false);
+                // Пробрасываем немедленно, если токен был отменён пользователем (например, при Skip)
+                if (cancellationToken.IsCancellationRequested && ex is OperationCanceledException)
+                    throw;
+
+                // Для сетевых ошибок и таймаутов делаем ретрай
+                if (i < 2 && (ex is HttpRequestException || ex is OperationCanceledException || ex is System.IO.IOException))
+                {
+                    Log.Warn($"[YouTube] Network error: {ex.Message}. Retrying {i + 1}...");
+                    try
+                    {
+                        await Task.Delay(1000 * (i + 1), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    continue;
+                }
+
+                throw;
             }
         }
 
-        throw new YoutubeExplodeException("Не удалось выполнить запрос после нескольких попыток.");
+        throw new YoutubeExplodeException("Failed to execute request after multiple attempts.");
     }
 
     /// <summary>

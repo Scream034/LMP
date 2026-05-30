@@ -226,7 +226,7 @@ public partial class StreamUnavailableDialog : Window
     {
         try
         {
-            await UI.Helpers.Clipboard.SetTextAsync(_fullErrorDetails);
+            await Helpers.Clipboard.SetTextAsync(_fullErrorDetails);
 
             // Временно меняем текст кнопки
             var originalText = CopyErrorText;

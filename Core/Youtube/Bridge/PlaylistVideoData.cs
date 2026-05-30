@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using System.Text.Json;
 using LMP.Core.Helpers.Extensions;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Youtube.Bridge;
 
@@ -67,6 +68,9 @@ internal class PlaylistVideoData(JsonElement content)
             ?.GetPropertyOrNull("browseId")
             ?.GetStringOrNull();
 
+    /// <summary>
+    /// Длительность видеоролика.
+    /// </summary>
     public TimeSpan? Duration =>
         content
             .GetPropertyOrNull("lengthSeconds")
@@ -81,16 +85,7 @@ internal class PlaylistVideoData(JsonElement content)
             .GetPropertyOrNull("lengthText")
             ?.GetPropertyOrNull("simpleText")
             ?.GetStringOrNull()
-            ?.Pipe(s =>
-                TimeSpan.TryParseExact(
-                    s,
-                    [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"],
-                    CultureInfo.InvariantCulture,
-                    out var result
-                )
-                    ? result
-                    : (TimeSpan?)null
-            )
+            ?.Pipe(YoutubeClientUtils.DurationParser.Parse)
         ?? content
             .GetPropertyOrNull("lengthText")
             ?.GetPropertyOrNull("runs")
@@ -98,16 +93,7 @@ internal class PlaylistVideoData(JsonElement content)
             ?.Select(j => j.GetPropertyOrNull("text")?.GetStringOrNull())
             .WhereNotNull()
             .Pipe(string.Concat)
-            ?.Pipe(s =>
-                TimeSpan.TryParseExact(
-                    s,
-                    [@"m\:ss", @"mm\:ss", @"h\:mm\:ss", @"hh\:mm\:ss"],
-                    CultureInfo.InvariantCulture,
-                    out var result
-                )
-                    ? result
-                    : (TimeSpan?)null
-            );
+            ?.Pipe(YoutubeClientUtils.DurationParser.Parse);
 
     public IReadOnlyList<ThumbnailData> Thumbnails =>
         content
