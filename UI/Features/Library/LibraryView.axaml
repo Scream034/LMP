@@ -174,17 +174,18 @@
                             <DataTemplate x:DataType="vm:PlaylistCardViewModel">
                                 <Border Classes="playlist-card-inner"
                                     Classes.visible="{Binding IsVisible}"
+                                    Classes.is-active="{Binding IsActive}"
                                     Width="220" Margin="10"
                                     Tag="{Binding DataContext, ElementName=LibraryRoot}">
 
                                     <Border.ContextMenu>
-                                        <ContextMenu>
+                                        <ContextMenu Opened="OnPlaylistContextMenuOpened"
+                                            Closed="OnPlaylistContextMenuClosed">
                                             <MenuItem
-                                                Header="{Binding L[Player_Play],
-                                                    FallbackValue='Play'}"
+                                                Header="{Binding PlayMenuHeader}"
                                                 Command="{Binding PlayCommand}">
                                                 <MenuItem.Icon>
-                                                    <PathIcon Data="{StaticResource Icon.Play}"
+                                                    <PathIcon Data="{Binding PlayMenuIcon}"
                                                         Width="16" Height="16" />
                                                 </MenuItem.Icon>
                                             </MenuItem>

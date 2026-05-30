@@ -2,30 +2,22 @@
 using System.Reactive.Linq;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using LMP.Core.Services;
+using Avalonia.Media;
 
 namespace LMP.UI.Features.Library;
 
 /// <summary>
 /// ViewModel карточки плейлиста в библиотеке.
-///
-/// <para><b>Ответственность:</b></para>
-/// <list type="bullet">
-///   <item>Отображение данных плейлиста (название, обложка, кол-во треков, статус синхронизации)</item>
-///   <item>Команды контекстного меню (открыть, играть, в очередь, редактировать, удалить)</item>
-///   <item>Анимация появления (IsVisible + CSS-transition)</item>
-///   <item>Реактивное обновление при изменении данных через <see cref="UpdateFrom"/></item>
-/// </list>
-///
-/// <para><b>Жизненный цикл:</b></para>
-/// <para>Создаётся в <see cref="LibraryViewModel.CreatePlaylistCardVm"/>,
-/// обновляется через <see cref="UpdateFrom"/>,
-/// удаляется через Dispose при удалении из коллекции.</para>
 /// </summary>
 public sealed class PlaylistCardViewModel : ViewModelBase
 {
     #region Приватные поля
 
     private readonly CookieAuthService _auth;
+    private readonly PlayerControlService _playerControl;
+    private readonly LibraryService _library;
+    private readonly AudioEngine _audio;
 
     private readonly Func<string, Task>? _onDelete;
     private readonly Func<Core.Models.Playlist, Task>? _onEdit;
@@ -33,10 +25,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     private readonly Func<Core.Models.Playlist, Task> _playAction;
     private readonly Action<string> _onOpen;
 
-    /// <summary>
-    /// Обработчик смены языка: обновляет <see cref="FormattedTrackCount"/>
-    /// (склонение зависит от языка).
-    /// </summary>
     private readonly EventHandler<string> _languageChangedHandler;
     private bool _isDisposed;
 
@@ -61,7 +49,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     {
         get
         {
-            // Если это плейлист "Понравившиеся" и пользователь вошел в аккаунт, даём ссылку на системный плейлист LM
             if (IsLikedPlaylist && _auth.IsAuthenticated)
                 return "https://www.youtube.com/playlist?list=LM";
 
@@ -74,10 +61,7 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>Количество треков в плейлисте.</summary>
     [Reactive] public int TrackCount { get; set; }
 
-    /// <summary>
-    /// Плейлист синхронизирован с YouTube Music (реактивное).
-    /// Используется для отображения иконки облачка в UI.
-    /// </summary>
+    /// <summary>Плейлист синхронизирован с YouTube Music (реактивное).</summary>
     [Reactive] public bool IsSynced { get; private set; }
 
     /// <summary>Плейлист хранится локально (включая TwoWaySync).</summary>
@@ -91,20 +75,13 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     public bool CanCopyLink => !string.IsNullOrEmpty(YoutubeUrl);
 
-    /// <summary>
-    /// Можно ли открыть диалог редактирования.
-    /// Liked-плейлист редактируем — обложка, цвет и описание доступны для изменения.
-    /// Только CloudPublic-плейлисты полностью заблокированы.
-    /// </summary>
+    /// <summary>Можно ли открыть диалог редактирования.</summary>
     public bool CanEdit => Playlist.IsEditable;
 
     /// <summary>Это плейлист «Понравившиеся» (специальный UI).</summary>
     public bool IsLikedPlaylist => Playlist.Id == LibraryService.LikedPlaylistId;
 
-    /// <summary>
-    /// Форматированное количество треков с правильным склонением.
-    /// Примеры: "Пусто", "1 трек", "5 треков".
-    /// </summary>
+    /// <summary>Форматированное количество треков с правильным склонением.</summary>
     public string FormattedTrackCount => FormatTrackCount(TrackCount);
 
     /// <summary>Есть обложка для отображения (не пустая и не Liked).</summary>
@@ -113,48 +90,59 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     /// <summary>Показывать placeholder вместо обложки.</summary>
     public bool ShowPlaceholder => string.IsNullOrEmpty(ThumbnailUrl) && !IsLikedPlaylist;
 
-    /// <summary>
-    /// Видимость карточки (для stagger-анимации появления).
-    /// Карточка создаётся с IsVisible=false, затем Show() устанавливает true,
-    /// а CSS-transition делает плавное появление.
-    /// </summary>
+    /// <summary>Активен ли данный плейлист в плеере прямо сейчас.</summary>
+    [Reactive] public bool IsActive { get; private set; }
+
+    /// <summary>Очередь чистая — полностью совпадает с треками этого плейлиста.</summary>
+    [Reactive] public bool IsQueuePure { get; private set; }
+
+    /// <summary>Плейлист сейчас активно играет (эквивалент IsPlayingPure в PlaylistViewModel).</summary>
+    [Reactive] public bool IsPlayingPure { get; private set; }
+
+    /// <summary>Текст для пункта контекстного меню "Воспроизвести / Пауза" с локализацией.</summary>
+    public string PlayMenuHeader => IsPlayingPure
+        ? (LocalizationService.Instance["Player_Pause"] ?? "Pause")
+        : (LocalizationService.Instance["Player_Play"] ?? "Play");
+
+    /// <summary>Геометрия иконки воспроизведения (Play/Pause) для контекстного меню.</summary>
+    public Geometry? PlayMenuIcon
+    {
+        get
+        {
+            var key = IsPlayingPure ? "Icon.Pause" : "Icon.Play";
+            if (Avalonia.Application.Current != null &&
+                Avalonia.Application.Current.TryGetResource(key, null, out var res) &&
+                res is Geometry geo)
+            {
+                return geo;
+            }
+            return null;
+        }
+    }
+
+    /// <summary>Видимость карточки (для stagger-анимации появления).</summary>
     [Reactive] public bool IsVisible { get; set; }
 
     #endregion
 
     #region Команды
 
-    /// <summary>Открыть плейлист (навигация на страницу плейлиста).</summary>
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
-
-    /// <summary>Удалить плейлист (с подтверждением).</summary>
     public ReactiveCommand<Unit, Unit> DeleteCommand { get; }
-
-    /// <summary>Добавить все треки плейлиста в очередь.</summary>
     public ReactiveCommand<Unit, Unit> AddToQueueCommand { get; }
-
-    /// <summary>Воспроизвести плейлист с первого трека.</summary>
     public ReactiveCommand<Unit, Unit> PlayCommand { get; }
-
-    /// <summary>Открыть диалог редактирования плейлиста.</summary>
     public ReactiveCommand<Unit, Unit> EditCommand { get; }
-
-    /// <summary>Скопировать ссылку на плейлист. Используется в ContextMenu (ПКМ).</summary>
     public ReactiveCommand<Unit, Unit> CopyLinkCommand { get; }
 
     #endregion
 
     #region Конструктор
 
-    /// <param name="playlist">Объект плейлиста из БД.</param>
-    /// <param name="trackCount">Количество треков (из JOIN-запроса).</param>
-    /// <param name="onOpen">Callback навигации при открытии.</param>
-    /// <param name="addToQueueAction">Callback добавления в очередь.</param>
-    /// <param name="playAction">Callback воспроизведения.</param>
-    /// <param name="onDelete">Callback удаления (опционально).</param>
-    /// <param name="onEdit">Callback редактирования (опционально).</param>
     public PlaylistCardViewModel(
       CookieAuthService auth,
+      PlayerControlService playerControl,
+      LibraryService library,
+      AudioEngine audio,
       Core.Models.Playlist playlist,
       int trackCount,
       Action<string> onOpen,
@@ -165,6 +153,9 @@ public sealed class PlaylistCardViewModel : ViewModelBase
     {
         Playlist = playlist;
         _auth = auth;
+        _playerControl = playerControl;
+        _library = library;
+        _audio = audio;
         _onOpen = onOpen;
         _addToQueueAction = addToQueueAction;
         _playAction = playAction;
@@ -218,6 +209,81 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             this.WhenAnyValue(x => x.YoutubeUrl, url => !string.IsNullOrEmpty(url))
                 .ObserveOn(RxSchedulers.MainThreadScheduler)));
 
+        // Реактивный трекинг состояния активности и чистоты очереди
+        Observable.CombineLatest(
+            _playerControl.ActivePlaylistIdObservable,
+            _playerControl.PlaybackStateObservable,
+            _playerControl.QueueCountObservable,
+            (activeId, state, qCount) => new { activeId, state.IsPlaying, qCount })
+        .Throttle(TimeSpan.FromMilliseconds(50)) // Дебаунс против спама при быстрой смене треков
+        .ObserveOn(RxSchedulers.MainThreadScheduler)
+        .Subscribe(async data =>
+        {
+            if (_isDisposed) return;
+
+            bool isActive = data.activeId == Id;
+
+            // Если играет другой плейлист — сбрасываем все состояния активности
+            if (!isActive)
+            {
+                IsActive = false;
+                IsQueuePure = false;
+                IsPlayingPure = false;
+                return;
+            }
+
+            // Быстрый отсев: если размеры не совпадают, очередь заведомо "грязная"
+            if (data.qCount != TrackCount)
+            {
+                IsActive = false;
+                IsQueuePure = false;
+                IsPlayingPure = false;
+                return;
+            }
+
+            // Асинхронная проверка чистоты очереди в бэкграунде
+            try
+            {
+                var trackIds = await _library.GetPlaylistTrackIdsAsync(Id);
+                var trackIdSet = new HashSet<string>(trackIds, StringComparer.Ordinal);
+
+                var queue = _audio.Queue;
+                bool isPure = queue.Count == trackIds.Count;
+                if (isPure)
+                {
+                    for (int i = 0; i < queue.Count; i++)
+                    {
+                        if (!trackIdSet.Contains(queue[i].Id))
+                        {
+                            isPure = false;
+                            break;
+                        }
+                    }
+                }
+
+                IsActive = isPure; // Рамка светится и пульсирует только если очередь чистая
+                IsQueuePure = isPure;
+                IsPlayingPure = isPure && data.IsPlaying;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[PlaylistCard] Error checking queue purity: {ex.Message}");
+                IsActive = false;
+                IsQueuePure = false;
+                IsPlayingPure = false;
+            }
+        })
+        .DisposeWith(Disposables);
+
+        // Инвалидация свойств при изменении активности
+        this.WhenAnyValue(x => x.IsPlayingPure)
+            .Subscribe(_ =>
+            {
+                this.RaisePropertyChanged(nameof(PlayMenuHeader));
+                this.RaisePropertyChanged(nameof(PlayMenuIcon));
+            })
+            .DisposeWith(Disposables);
+
         this.WhenAnyValue(x => x.TrackCount)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(FormattedTrackCount)))
             .DisposeWith(Disposables);
@@ -230,7 +296,11 @@ public sealed class PlaylistCardViewModel : ViewModelBase
             })
             .DisposeWith(Disposables);
 
-        _languageChangedHandler = (_, _) => this.RaisePropertyChanged(nameof(FormattedTrackCount));
+        _languageChangedHandler = (_, _) =>
+        {
+            this.RaisePropertyChanged(nameof(FormattedTrackCount));
+            this.RaisePropertyChanged(nameof(PlayMenuHeader));
+        };
         LocalizationService.Instance.LanguageChanged += _languageChangedHandler;
     }
 
@@ -238,22 +308,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     #region Обновление данных
 
-    /// <summary>
-    /// Обновляет все отображаемые данные карточки из свежего объекта плейлиста.
-    ///
-    /// <para><b>Обновляемые поля:</b></para>
-    /// <list type="bullet">
-    ///   <item>Название (<c>Name</c> + <c>StoredName</c>)</item>
-    ///   <item>Количество треков (<c>TrackCount</c>)</item>
-    ///   <item>Обложка (<c>ThumbnailUrl</c> с upscale)</item>
-    ///   <item>Статус синхронизации (<c>IsSynced</c> + <c>SyncMode</c> + <c>YoutubeId</c>)</item>
-    /// </list>
-    ///
-    /// <para><b>Оптимизация:</b> каждое поле обновляется только при реальном изменении,
-    /// чтобы не вызывать лишних уведомлений <c>PropertyChanged</c>.</para>
-    /// </summary>
-    /// <param name="playlist">Свежие данные плейлиста из БД.</param>
-    /// <param name="trackCount">Актуальное количество треков.</param>
     public void UpdateFrom(Core.Models.Playlist playlist, int trackCount)
     {
         if (_isDisposed) return;
@@ -287,10 +341,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     #region Вспомогательные методы
 
-    /// <summary>
-    /// Заменяет URL YouTube-превью на максимальное разрешение.
-    /// <c>hqdefault.jpg</c> (480×360) → <c>maxresdefault.jpg</c> (1280×720).
-    /// </summary>
     private static string? UpscaleThumbnailUrl(string? url)
     {
         if (string.IsNullOrEmpty(url)) return url;
@@ -304,20 +354,12 @@ public sealed class PlaylistCardViewModel : ViewModelBase
         return url;
     }
 
-    /// <summary>
-    /// Форматирует количество треков с правильным склонением.
-    /// Делегирует в <see cref="LocalizationService.GetPlural"/>.
-    /// </summary>
     private static string FormatTrackCount(int count)
     {
         if (count == 0) return LocalizationService.Instance["Playlist_Empty"];
         return LocalizationService.Instance.GetPlural("Playlist_TracksCount", count);
     }
 
-    /// <summary>
-    /// Показывает карточку (устанавливает <see cref="IsVisible"/> = true).
-    /// CSS-transition в LibraryView.axaml обеспечивает плавное появление.
-    /// </summary>
     public void Show()
     {
         if (!_isDisposed)
@@ -328,9 +370,6 @@ public sealed class PlaylistCardViewModel : ViewModelBase
 
     #region Dispose
 
-    /// <summary>
-    /// Отписывается от события смены языка.
-    /// </summary>
     protected override void Dispose(bool disposing)
     {
         if (_isDisposed) return;

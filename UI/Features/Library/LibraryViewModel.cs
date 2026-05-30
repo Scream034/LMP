@@ -37,6 +37,7 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
     private readonly MusicLibraryManager _manager;
     private readonly PlaylistEditService _editService;
     private readonly NotificationService _notifications;
+    private readonly PlayerControlService _playerControl;
 
     #endregion
 
@@ -99,7 +100,8 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         MusicLibraryManager manager,
         AudioEngine audio,
         NotificationService notifications,
-        PlaylistEditService editService)
+        PlaylistEditService editService,
+        PlayerControlService playerControl)
     {
         _audio = audio;
         _library = library;
@@ -110,6 +112,7 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
         _manager = manager;
         _notifications = notifications;
         _editService = editService;
+        _playerControl = playerControl;
 
         IsAuthenticated = _auth.IsAuthenticated;
         _auth.OnAuthStateChanged += OnAuthChanged;
@@ -850,37 +853,64 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
 
     #endregion
 
-    #region Фабрика карточек
-
-    #region Фабрика карточек
-
     private PlaylistCardViewModel CreatePlaylistCardVm(
      Core.Models.Playlist playlist, int trackCount)
     {
         return new PlaylistCardViewModel(
             _auth,
+            _playerControl,
+            _library,
+            _audio,
             playlist,
             trackCount,
             onOpen: _mainWindow.NavigateToPlaylist,
             addToQueueAction: async (p) =>
             {
                 var tracks = await _library.GetPlaylistTracksAsync(p.Id);
-                // Использование централизованного метода с фильтрацией и показом хинтов
                 _audio.EnqueuePlaylistWithNotification(tracks, p.Name);
             },
             playAction: async (p) =>
             {
+                // Умная логика Play/Pause, если плейлист уже воспроизводится в чистом виде
+                bool isActive = _playerControl.ActivePlaylistId == p.Id;
+                if (isActive)
+                {
+                    var queue = _audio.Queue;
+                    var trackIds = await _library.GetPlaylistTrackIdsAsync(p.Id);
+
+                    bool isPure = queue.Count == trackIds.Count;
+                    if (isPure)
+                    {
+                        var queueSet = new HashSet<string>(queue.Select(t => t.Id), StringComparer.Ordinal);
+                        foreach (var id in trackIds)
+                        {
+                            if (!queueSet.Contains(id))
+                            {
+                                isPure = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (isPure)
+                    {
+                        await _playerControl.PlayPauseAsync();
+                        return;
+                    }
+                }
+
+                // Полная очистка очереди и запуск с фиксацией ID плейлиста в плеере
                 var tracks = await _library.GetPlaylistTracksAsync(p.Id);
                 if (tracks.Count > 0)
+                {
+                    _playerControl.SetShuffleEnabled(false);
+                    _playerControl.SetActivePlaylistId(p.Id); // Фиксируем источник для иконок и анимации
                     await _audio.StartQueueAsync(tracks, tracks[0]);
+                }
             },
             onDelete: DeletePlaylistAsync,
             onEdit: EditPlaylistFromCardAsync);
     }
-
-    #endregion
-
-    #endregion
 
     #region Редактирование и удаление
 

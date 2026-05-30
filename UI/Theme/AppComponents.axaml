@@ -389,6 +389,29 @@
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 
+    <!-- Сохраняем акцентную рамку при открытом контекстном меню -->
+    <Style Selector="Border.playlist-card-inner.menu-open">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+
+    <!-- Анимация активного воспроизведения плейлиста (плавное "дыхание") -->
+    <Style Selector="Border.playlist-card-inner.is-active">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Style.Animations>
+            <Animation Duration="0:0:1.8" IterationCount="Infinite"
+                PlaybackDirection="Alternate"
+                Easing="SineEaseInOut"
+                FillMode="Both">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="1.0" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.75" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
     <!-- Обложка плейлиста -->
     <Style Selector="Border.playlist-cover">
         <Setter Property="Height" Value="220" />

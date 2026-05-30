@@ -305,8 +305,8 @@ public partial class MainWindow : Window
         var maximizeIcon = this.FindControl<Border>("MaximizeIcon");
         var restoreIcon = this.FindControl<Grid>("RestoreIcon");
 
-        if (maximizeIcon != null) maximizeIcon.IsVisible = state != WindowState.Maximized;
-        if (restoreIcon != null) restoreIcon.IsVisible = state == WindowState.Maximized;
+        maximizeIcon?.IsVisible = state != WindowState.Maximized;
+        restoreIcon?.IsVisible = state == WindowState.Maximized;
     }
 
     /// <summary>
