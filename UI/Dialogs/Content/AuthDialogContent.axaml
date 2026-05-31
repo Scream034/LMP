@@ -133,8 +133,6 @@
                                 <StackPanel Spacing="6" Margin="0,8,0,0"
                                     HorizontalAlignment="Stretch">
 
-                                    <!-- Логический порядок: Ссылка слева, Путь справа. Делят одну
-                                    строку -->
                                     <Grid ColumnDefinitions="*, *" Margin="0,0,0,6">
                                         <Button Grid.Column="0" Command="{Binding CopyLinkCommand}"
                                             CommandParameter="chrome://extensions/"
@@ -278,6 +276,8 @@
                                         Classes="guide-step" />
                                     <TextBlock Text="{Binding L[Extension_Guide_Firefox_Step4]}"
                                         Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Firefox_Step5]}"
+                                        Classes="guide-step" />
                                     <TextBlock Text="{Binding L[Extension_Guide_Firefox_Warning]}"
                                         Classes="guide-step"
                                         Foreground="{DynamicResource SystemWarnOrangeBrush}"
@@ -330,6 +330,8 @@
                                     <TextBlock Text="{Binding L[Extension_Guide_Opera_Step3]}"
                                         Classes="guide-step" />
                                     <TextBlock Text="{Binding L[Extension_Guide_Opera_Step4]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Opera_Step5]}"
                                         Classes="guide-step" />
                                 </StackPanel>
                             </TabItem>
