@@ -62,12 +62,12 @@
             <!-- DataTemplates для всех типов диалогов -->
             <ContentControl.DataTemplates>
 
-                <!-- ═══ Универсальный диалог выбора ═══ -->
+                <!-- Универсальный диалог выбора -->
                 <DataTemplate DataType="{x:Type dialogs:ChoiceDialogViewModel}">
                     <content:ChoiceDialogContent />
                 </DataTemplate>
 
-                <!-- ═══ ViewModel-based dialogs ═══ -->
+                <!-- ViewModel-based dialogs -->
                 <DataTemplate DataType="{x:Type dialogs:DeletePlaylistDialogViewModel}">
                     <content:DeletePlaylistDialogContent />
                 </DataTemplate>
@@ -90,6 +90,11 @@
 
                 <DataTemplate DataType="{x:Type dialogs:SyncPlaylistDialogViewModel}">
                     <content:SyncPlaylistDialogContent />
+                </DataTemplate>
+
+                <!-- Авторизация (Единый диалог) -->
+                <DataTemplate DataType="{x:Type dialogs:AuthDialogViewModel}">
+                    <content:AuthDialogContent />
                 </DataTemplate>
 
             </ContentControl.DataTemplates>

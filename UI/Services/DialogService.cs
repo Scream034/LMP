@@ -37,6 +37,8 @@ public sealed class DialogService
     private static LocalizationService L => LocalizationService.Instance;
 
     private readonly CookieAuthService _authService;
+    private readonly YoutubeUserDataService _youtubeUserDataService;
+    private readonly LocalAuthServer _localAuthServer;
     private readonly Func<DialogHostViewModel> _getDialogHost;
 
     /// <summary>
@@ -46,7 +48,6 @@ public sealed class DialogService
     private readonly Lock _botDetectionLock = new();
 
     /// <param name="authService">Сервис авторизации — для проверки состояния входа в YouTube.</param>
-    /// <param name="notifications">Сервис уведомлений — для toast-сообщений внутри диалогов синхронизации.</param>
     /// <param name="getDialogHost">
     /// Lazy accessor для DialogHostViewModel.
     /// Используется <c>Func</c> вместо прямой инъекции из-за циклической зависимости:
@@ -54,9 +55,13 @@ public sealed class DialogService
     /// </param>
     public DialogService(
         CookieAuthService authService,
+        YoutubeUserDataService youtubeUserDataService,
+        LocalAuthServer localAuthServer,
         Func<DialogHostViewModel> getDialogHost)
     {
         _authService = authService;
+        _youtubeUserDataService = youtubeUserDataService;
+        _localAuthServer = localAuthServer;
         _getDialogHost = getDialogHost;
     }
 
@@ -101,36 +106,7 @@ public sealed class DialogService
 
     /// <summary>
     /// Универсальный диалог выбора с произвольным набором кнопок и опциональным чекбоксом.
-    /// 
-    /// <para><b>Использование:</b></para>
-    /// <code>
-    /// var result = await dialog.ShowChoiceAsync(
-    ///     title: "Close?",
-    ///     message: "What would you like to do?",
-    ///     options: [
-    ///         new() { Text = "Minimize", Value = CloseAction.MinimizeToTray, IsPrimary = true },
-    ///         new() { Text = "Exit", Value = CloseAction.Exit }
-    ///     ],
-    ///     cancelText: "Cancel",
-    ///     checkBoxText: "Remember my choice");
-    /// 
-    /// if (result != null)
-    /// {
-    ///     var action = result.Value.Value;     // CloseAction
-    ///     var remember = result.Value.IsChecked; // bool
-    /// }
-    /// </code>
     /// </summary>
-    /// <typeparam name="T">Тип значения кнопок.</typeparam>
-    /// <param name="title">Заголовок диалога.</param>
-    /// <param name="message">Текст сообщения (опционально).</param>
-    /// <param name="options">Список кнопок с их значениями.</param>
-    /// <param name="cancelText">Текст кнопки отмены. Null — кнопки Cancel нет.</param>
-    /// <param name="checkBoxText">Текст чекбокса. Null — чекбокс не показывается.</param>
-    /// <returns>
-    /// Результат выбора (Value + IsChecked), или <c>null</c> если пользователь нажал Cancel
-    /// или закрыл диалог иным способом.
-    /// </returns>
     public async Task<ChoiceResult<T>?> ShowChoiceAsync<T>(
         string title,
         string? message,
@@ -147,13 +123,14 @@ public sealed class DialogService
             options: options,
             onResult: (value, isChecked) =>
             {
-                tcs.TrySetResult(new ChoiceResult<T>(value, isChecked));
+                // Сначала инициируем закрытие диалога, предотвращая наложение на новые TCS сессии
                 host.CloseDialog(value);
+                tcs.TrySetResult(new ChoiceResult<T>(value, isChecked));
             },
             onCancel: () =>
             {
-                tcs.TrySetResult(null);
                 host.CloseDialog();
+                tcs.TrySetResult(null);
             },
             cancelText: cancelText,
             checkBoxText: checkBoxText);
@@ -165,6 +142,27 @@ public sealed class DialogService
     #endregion
 
     #region Basic Dialogs (Overlay)
+
+    /// <summary>
+    /// Показывает диалог автоматического скачивания, распаковки и ручной активации расширения LMP Auth.
+    /// </summary>
+    public async Task<bool> ShowExtensionInstallDialogAsync()
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<bool>();
+
+        var vm = new AuthDialogViewModel(_authService, _youtubeUserDataService, _localAuthServer)
+        {
+            OnResult = result =>
+            {
+                host.CloseDialog(result);
+                tcs.TrySetResult(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
+    }
 
     /// <summary>
     /// Показывает диалог подтверждения (Yes/No, OK/Cancel).
@@ -180,8 +178,8 @@ public sealed class DialogService
             title, message, confirmText, cancelText,
             onResult: result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             });
 
         _ = host.ShowAsync<object>(content);
@@ -206,8 +204,8 @@ public sealed class DialogService
             title, message, buttonText,
             onClose: () =>
             {
-                tcs.TrySetResult(null);
                 host.CloseDialog();
+                tcs.TrySetResult(null);
             });
 
         _ = host.ShowAsync<object>(content);
@@ -234,8 +232,8 @@ public sealed class DialogService
             watermark ?? L["Input_Watermark"],
             onResult: result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             });
 
         _ = host.ShowAsync<object>(content);
@@ -317,8 +315,8 @@ public sealed class DialogService
         {
             OnResult = result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             }
         };
 
@@ -339,8 +337,8 @@ public sealed class DialogService
         {
             OnResult = result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             }
         };
 
@@ -365,8 +363,8 @@ public sealed class DialogService
         {
             OnResult = result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             }
         };
 
@@ -401,8 +399,8 @@ public sealed class DialogService
         {
             OnResult = result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             }
         };
 
@@ -430,8 +428,8 @@ public sealed class DialogService
         {
             OnResult = result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             }
         };
 
@@ -452,8 +450,8 @@ public sealed class DialogService
         {
             OnResult = result =>
             {
-                tcs.TrySetResult(result);
                 host.CloseDialog(result);
+                tcs.TrySetResult(result);
             }
         };
 
@@ -562,4 +560,10 @@ public sealed class DialogService
 /// Результат диалога выбора: выбранное значение + состояние чекбокса.
 /// </summary>
 /// <typeparam name="T">Тип выбранного значения.</typeparam>
-public sealed record ChoiceResult<T>(T Value, bool IsChecked);
+public sealed record ChoiceResult<T>(T Value, bool IsChecked)
+{
+    public override string ToString()
+    {
+        return $"Value: {Value}, IsChecked: {IsChecked}";
+    }
+}

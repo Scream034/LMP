@@ -146,7 +146,8 @@
     <Style Selector="Button.accent-base /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-    <Style Selector="Button.accent-base:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="Button.accent-base:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
     <Style Selector="Button.accent-base:pressed /template/ ContentPresenter#PART_ContentPresenter">
@@ -188,30 +189,64 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
 
+    <!-- ═══ PRIMARY ACCENT BUTTON (BORDER ONLY) ═══ -->
     <Style Selector="Button.primary-btn">
-        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextTransparentBrush}" />
-        <Setter Property="BorderThickness" Value="1.5" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="2" />
         <Setter Property="Padding" Value="24,12" />
         <Setter Property="CornerRadius" Value="20" />
         <Setter Property="FontWeight" Value="Bold" />
         <Setter Property="Transitions">
             <Transitions>
-                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <ThicknessTransition Property="BorderThickness" Duration="0:0:0.1" />
+                <ThicknessTransition Property="Padding" Duration="0:0:0.1" />
                 <BrushTransition Property="Background" Duration="0:0:0.15" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
     </Style>
     <Style Selector="Button.primary-btn:pointerover">
-        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="BorderThickness" Value="3" />
+        <Setter Property="Padding" Value="23,11" />
+        <Setter Property="Background" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style
+        Selector="Button.primary-btn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="Button.primary-btn:pressed">
-        <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonTextBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource AccentTransparentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.primary-btn:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+
+    <!-- ═══ INLINE LINK BUTTON ═══ -->
+    <Style Selector="Button.inline-link">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="4,0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.inline-link:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.inline-link /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style
+        Selector="Button.inline-link:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
 
     <Style Selector="Button.sidebar-btn">
@@ -370,7 +405,7 @@
     <Style Selector="Button.playback-btn-main:pressed">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
-    
+
     <!-- Добавлен :disabled стиль для главной кнопки -->
     <Style Selector="Button.playback-btn-main:disabled">
         <Setter Property="Opacity" Value="0.4" />
@@ -380,7 +415,7 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
     </Style>
-    
+
     <Style Selector="Button.playback-btn-main PathIcon">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     </Style>
@@ -545,7 +580,8 @@
     <Style Selector="Button.search-chip-text /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.search-chip-text:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="Button.search-chip-text:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
@@ -574,7 +610,8 @@
     <Style Selector="Button.search-chip-close /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.search-chip-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="Button.search-chip-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
     <Style Selector="Button.search-chip-close PathIcon">
@@ -720,14 +757,17 @@
     <Style Selector="ToggleButton.sync-toggle /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="ToggleButton.sync-toggle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="ToggleButton.sync-toggle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="ToggleButton.sync-toggle:checked /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="ToggleButton.sync-toggle:checked /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
-    <Style Selector="ToggleButton.sync-toggle:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="ToggleButton.sync-toggle:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentButtonTextBrush}" />
     </Style>
@@ -790,7 +830,8 @@
     <Style Selector="Button.ctrl-btn-close /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="Button.ctrl-btn-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Style
+        Selector="Button.ctrl-btn-close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
@@ -897,7 +938,8 @@
     <Style Selector="ListBox.nav-sidebar ListBoxItem:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
-    <Style Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover /template/ ContentPresenter">
+    <Style
+        Selector="ListBox.nav-sidebar ListBoxItem:selected:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>
 </Styles>

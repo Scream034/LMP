@@ -67,18 +67,21 @@ public static class YoutubeClientUtils
     }
   }
 
-  private static async Task<string> FetchVisitorDataInternalAsync(CancellationToken ct)
+  /// <summary>
+  /// Централизованный метод выполнения сетевых запросов к sw.js_data.
+  /// Возвращает VisitorData и новые заголовки кук для сессии.
+  /// </summary>
+  public static async Task<(string? VisitorData, IEnumerable<string>? SetCookieHeaders, bool IsSuccess)> FetchSwDataAsync(
+      string? cookiesHeader, CancellationToken ct)
   {
     try
     {
-      using var request = new HttpRequestMessage(HttpMethod.Get, "https://music.youtube.com/sw.js_data");
+      using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
       request.Headers.UserAgent.ParseAdd(UaWeb);
 
-      // Используем локально инициализированную ссылку на CookieAuthService
-      var cookies = _authService?.GetCookieHeader();
-      if (!string.IsNullOrEmpty(cookies))
+      if (!string.IsNullOrEmpty(cookiesHeader))
       {
-        request.Headers.Add("Cookie", cookies);
+        request.Headers.Add("Cookie", cookiesHeader);
       }
 
       using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -87,7 +90,10 @@ public static class YoutubeClientUtils
       using var response = await SharedHttpClient.Instance.SendAsync(
           request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
 
-      response.EnsureSuccessStatusCode();
+      if (!response.IsSuccessStatusCode)
+      {
+        return (null, null, false);
+      }
 
       var jsonStr = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
       if (jsonStr.StartsWith(")]}'"))
@@ -96,18 +102,34 @@ public static class YoutubeClientUtils
       var json = Json.Parse(jsonStr);
       var value = json[0][2][0][0][13].GetStringOrNull();
 
-      if (!string.IsNullOrWhiteSpace(value))
-      {
-        lock (_visitorDataLock)
-        {
-          _visitorData = value;
-        }
-        return value;
-      }
+      response.Headers.TryGetValues("Set-Cookie", out var setCookies);
+
+      return (value, setCookies, true);
     }
     catch (Exception ex)
     {
-      Logger.Log.Warn($"[YoutubeClientUtils] Failed to fetch visitor data from network: {ex.Message}. Falling back to default.");
+      Logger.Log.Warn($"[YoutubeClientUtils] Failed to fetch sw.js_data: {ex.Message}");
+      return (null, null, false);
+    }
+  }
+
+  private static async Task<string> FetchVisitorDataInternalAsync(CancellationToken ct)
+  {
+    var cookies = _authService?.GetCookieHeader();
+    var (visitorData, setCookies, isSuccess) = await FetchSwDataAsync(cookies, ct).ConfigureAwait(false);
+
+    if (isSuccess && !string.IsNullOrWhiteSpace(visitorData))
+    {
+      if (setCookies != null && _authService != null)
+      {
+        _authService.UpdateCookies(setCookies);
+      }
+
+      lock (_visitorDataLock)
+      {
+        _visitorData = visitorData;
+      }
+      return visitorData;
     }
 
     return _visitorData;

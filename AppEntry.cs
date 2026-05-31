@@ -247,6 +247,7 @@ public sealed class AppEntry
         services.AddSingleton<LibraryService>();
         services.AddSingleton<ThemeManagerService>();
         services.AddSingleton<CookieAuthService>();
+        services.AddSingleton<LocalAuthServer>();
         services.AddSingleton<YoutubeProvider>();
         services.AddTransient(sp => new Lazy<YoutubeProvider>(sp.GetRequiredService<YoutubeProvider>));
         services.AddSingleton<YoutubeUserDataService>();
@@ -257,6 +258,8 @@ public sealed class AppEntry
         services.AddSingleton(sp =>
         {
             var auth = sp.GetRequiredService<CookieAuthService>();
+            var userData = sp.GetRequiredService<YoutubeUserDataService>();
+            var localServer = sp.GetRequiredService<LocalAuthServer>();
 
             // Lazy accessor — избегаем циклической зависимости
             // MainWindowViewModel создаётся позже, чем DialogService
@@ -266,7 +269,7 @@ public sealed class AppEntry
                 return mainWindow.DialogHost;
             }
 
-            return new DialogService(auth, GetDialogHost);
+            return new DialogService(auth, userData, localServer, GetDialogHost);
         });
 
         services.AddSingleton(_ => new PlayerContextManager(SharedHttpClient.Instance));

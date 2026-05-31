@@ -47,7 +47,7 @@
                             Margin="0,4,0,0" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
-                        <Button Classes="primary-btn accent-base"
+                        <Button Classes="primary-btn"
                             Content="{Binding L[Auth_Login]}"
                             Command="{Binding LoginCommand}"
                             IsVisible="{Binding !IsAuthenticated}" />

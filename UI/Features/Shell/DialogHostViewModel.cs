@@ -4,14 +4,7 @@ using ReactiveUI.Fody.Helpers;
 namespace LMP.UI.Features.Shell;
 
 /// <summary>
-/// Контейнер для отображения диалогов поверх контента (но под TopBar и PlayerBar).
-/// 
-/// <para><b>Архитектура:</b></para>
-/// <list type="bullet">
-///   <item>Рендерится в MainWindow над контентом (ZIndex: 900)</item>
-///   <item>TopBar и PlayerBar остаются активными</item>
-///   <item>Навигационные кнопки заблокированы когда диалог открыт</item>
-/// </list>
+/// Контейнер для отображения диалогов поверх контента.
 /// </summary>
 public sealed class DialogHostViewModel : ViewModelBase
 {
@@ -33,15 +26,17 @@ public sealed class DialogHostViewModel : ViewModelBase
     /// </summary>
     public async Task<T?> ShowAsync<T>(object dialogContent)
     {
+        TaskCompletionSource<object?> tcs;
         lock (_lock)
         {
             if (HasActiveDialog)
             {
-                Log.Warn("[DialogHost] Closing previous dialog before showing new one");
+                Log.Warn($"[DialogHost] Closing previous dialog before showing new one. Current: {CurrentDialog?.GetType().Name}, New: {dialogContent.GetType().Name}");
                 _dialogTcs?.TrySetResult(default);
             }
 
             _dialogTcs = new TaskCompletionSource<object?>();
+            tcs = _dialogTcs; // Фиксируем TCS текущей сессии для предотвращения race conditions [2]
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -52,15 +47,22 @@ public sealed class DialogHostViewModel : ViewModelBase
 
         Log.Debug($"[DialogHost] Showing dialog: {dialogContent.GetType().Name}");
 
-        var result = await _dialogTcs.Task;
+        var result = await tcs.Task.ConfigureAwait(false);
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            HasActiveDialog = false;
-            CurrentDialog = null;
+            lock (_lock)
+            {
+                // Сбрасываем визуальное состояние только если за это время не открылся новый диалог
+                if (_dialogTcs == tcs)
+                {
+                    HasActiveDialog = false;
+                    CurrentDialog = null;
+                }
+            }
         });
 
-        Log.Debug($"[DialogHost] Dialog closed with result: {result?.GetType().Name ?? "null"}");
+        Log.Debug($"[DialogHost] Dialog closed: {dialogContent.GetType().Name} with result: {result}");
 
         return result is T typed ? typed : default;
     }

@@ -205,7 +205,7 @@ public sealed class TestRunnerViewModel : ViewModelBase
     {
         var tests = category is not null
             ? AllTests.Where(t => t.Descriptor.Category == category.Value).ToList()
-            : AllTests.ToList();
+            : [.. AllTests];
 
         await RunBatchCoreAsync(tests, category?.ToString() ?? "All");
     }

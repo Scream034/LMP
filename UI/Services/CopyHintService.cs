@@ -21,6 +21,12 @@ public sealed class CopyHintService
     public event Action<string, CopyHintKind, Point?>? HintRequested;
 
     /// <summary>
+    /// Рекомендуемая длительность отображения уведомления в миллисекундах.
+    /// Увеличена до 4.5 секунд для комфортного чтения подробных инструкций пользователем.
+    /// </summary>
+    public int DisplayDurationMs { get; set; } = 4500;
+
+    /// <summary>
     /// Показать toast-уведомление.
     /// </summary>
     /// <param name="text">Текст hint-а.</param>

@@ -20,7 +20,7 @@ public static class AudioEngineExtensions
         IEnumerable<TrackInfo> tracks,
         string playlistName)
     {
-        var trackList = tracks as List<TrackInfo> ?? tracks.ToList();
+        var trackList = tracks as List<TrackInfo> ?? [.. tracks];
         if (trackList.Count == 0) return;
 
         int addedCount = audio.EnqueueRangeUnique(trackList);

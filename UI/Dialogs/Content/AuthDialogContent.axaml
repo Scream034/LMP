@@ -1,0 +1,400 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dialogs="using:LMP.UI.Dialogs"
+    x:Class="LMP.UI.Dialogs.Content.AuthDialogContent"
+    x:DataType="dialogs:AuthDialogViewModel"
+    Width="680">
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.auth-status">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        </Style>
+        <Style Selector="TextBlock.auth-status.error">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        </Style>
+        <Style Selector="TextBlock.guide-step">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <!-- Компактные и плоские вкладки с исправлением перекрытия текста акцентной линией -->
+        <Style Selector="TabItem">
+            <Setter Property="Padding" Value="12,4,12,12" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        </Style>
+        <Style Selector="TabItem:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+
+        <!-- Сдвигаем контент-презентер вверх, чтобы текст не пересекался с подчеркиванием -->
+        <Style Selector="TabItem /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+
+        <!-- Кастомизация акцентной линии Fluent-шаблона для поддержки плавного hover-эффекта -->
+        <Style Selector="TabItem /template/ Border#PART_SelectedPipe">
+            <Setter Property="Background" Value="{DynamicResource AccentBrushTransparent}" />
+            <Setter Property="Height" Value="2" />
+            <Setter Property="Margin" Value="0,0,0,2" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="TabItem:pointerover /template/ Border#PART_SelectedPipe">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0.4" />
+        </Style>
+        <Style Selector="TabItem:selected /template/ Border#PART_SelectedPipe">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="1.0" />
+        </Style>
+
+        <!-- Стилизация динамического статус-бара с подсветкой рамок -->
+        <Style Selector="Border#StatusBorder">
+            <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border#StatusBorder.error">
+            <Setter Property="BorderBrush" Value="{DynamicResource SystemErrorBrush}" />
+        </Style>
+        <Style Selector="Border#StatusBorder.loading">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+    </UserControl.Styles>
+
+    <Border Background="{DynamicResource BgPrimaryBrush}"
+        BorderBrush="{DynamicResource BgHighlightBrush}"
+        BorderThickness="1"
+        CornerRadius="12"
+        Padding="24,20,24,20">
+
+        <StackPanel Spacing="12" HorizontalAlignment="Stretch">
+
+            <!-- 1. Заголовок (Отцентрирован, без крестика) -->
+            <TextBlock Text="{Binding L[Dialog_Login_Title]}"
+                Classes="h2"
+                HorizontalAlignment="Center"
+                Margin="0,0,0,0" />
+
+            <!-- 2. Поле ввода куки на всю ширину (Описания перенесены в статус-бар) -->
+            <TextBox Text="{Binding CookiesText, Mode=TwoWay}"
+                AcceptsReturn="True" Height="80"
+                PlaceholderText="SAPISID=...; __Secure-1PSID=..."
+                CornerRadius="6"
+                HorizontalAlignment="Stretch" />
+
+            <!-- 3. Секция автоматической установки (Плоский Border без заливки, под полем ввода) -->
+            <Border BorderBrush="{DynamicResource BgHighlightBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,14,16,16"
+                HorizontalAlignment="Stretch">
+
+                <StackPanel Spacing="10" HorizontalAlignment="Stretch">
+
+                    <!-- Центрированный заголовок секции, цвет как у остальной программы -->
+                    <TextBlock Text="{Binding L[Extension_Install_Title]}"
+                        FontWeight="SemiBold"
+                        FontSize="14"
+                        Foreground="{DynamicResource TextPrimaryBrush}"
+                        HorizontalAlignment="Center"
+                        Margin="0,0,0,6" />
+
+                    <!-- Кнопка скачивания расширения -->
+                    <Button Content="{Binding L[Dialog_Login_GetExt]}"
+                        Command="{Binding DownloadExtensionCommand}"
+                        Classes="primary-btn"
+                        Padding="0"
+                        Height="38"
+                        CornerRadius="6"
+                        HorizontalAlignment="Stretch"
+                        IsVisible="{Binding !IsExtensionReady}" />
+
+                    <!-- Блок распакованного расширения и вкладок -->
+                    <StackPanel Spacing="10" IsVisible="{Binding IsExtensionReady}"
+                        HorizontalAlignment="Stretch">
+
+                        <TabControl Margin="0,0,0,0" Padding="0" Background="Transparent"
+                            HorizontalAlignment="Stretch">
+
+                            <!-- Вкладка Google Chrome -->
+                            <TabItem Header="{Binding L[Extension_Guide_Chrome_Header]}">
+                                <StackPanel Spacing="6" Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch">
+
+                                    <!-- Логический порядок: Ссылка слева, Путь справа. Делят одну
+                                    строку -->
+                                    <Grid ColumnDefinitions="*, *" Margin="0,0,0,6">
+                                        <Button Grid.Column="0" Command="{Binding CopyLinkCommand}"
+                                            CommandParameter="chrome://extensions/"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="0,0,4,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Link_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Link}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Text="chrome://extensions/" FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Grid.Column="1" Command="{Binding CopyPathCommand}"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="4,0,0,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Install_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Paperclip}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock
+                                                    Text="{Binding L[Extension_Install_CopyButton]}"
+                                                    FontSize="12" FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+
+                                    <TextBlock Text="{Binding L[Extension_Guide_Chrome_Step1]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Chrome_Step2]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Chrome_Step3]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Chrome_Step4]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Chrome_Step5]}"
+                                        Classes="guide-step" />
+                                </StackPanel>
+                            </TabItem>
+
+                            <!-- Вкладка Microsoft Edge -->
+                            <TabItem Header="{Binding L[Extension_Guide_Edge_Header]}">
+                                <StackPanel Spacing="6" Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch">
+
+                                    <Grid ColumnDefinitions="*, *" Margin="0,0,0,6">
+                                        <Button Grid.Column="0" Command="{Binding CopyLinkCommand}"
+                                            CommandParameter="edge://extensions/"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="0,0,4,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Link_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Link}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Text="edge://extensions/" FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Grid.Column="1" Command="{Binding CopyPathCommand}"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="4,0,0,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Install_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Paperclip}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock
+                                                    Text="{Binding L[Extension_Install_CopyButton]}"
+                                                    FontSize="12" FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+
+                                    <TextBlock Text="{Binding L[Extension_Guide_Edge_Step1]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Edge_Step2]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Edge_Step3]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Edge_Step4]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Edge_Step5]}"
+                                        Classes="guide-step" />
+                                </StackPanel>
+                            </TabItem>
+
+                            <!-- Вкладка Firefox -->
+                            <TabItem Header="{Binding L[Extension_Guide_Firefox_Header]}">
+                                <StackPanel Spacing="6" Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch">
+
+                                    <Grid ColumnDefinitions="*, *" Margin="0,0,0,6">
+                                        <Button Grid.Column="0" Command="{Binding CopyLinkCommand}"
+                                            CommandParameter="about:debugging" Classes="ghost-btn"
+                                            Height="32" Padding="0" Margin="0,0,4,0"
+                                            HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Link_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Link}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Text="about:debugging" FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Grid.Column="1" Command="{Binding CopyPathCommand}"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="4,0,0,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Install_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Paperclip}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock
+                                                    Text="{Binding L[Extension_Install_CopyButton]}"
+                                                    FontSize="12" FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+
+                                    <TextBlock Text="{Binding L[Extension_Guide_Firefox_Step1]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Firefox_Step2]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Firefox_Step3]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Firefox_Step4]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Firefox_Warning]}"
+                                        Classes="guide-step"
+                                        Foreground="{DynamicResource SystemWarnOrangeBrush}"
+                                        FontWeight="SemiBold" />
+                                </StackPanel>
+                            </TabItem>
+
+                            <!-- Вкладка Opera / Brave / Yandex -->
+                            <TabItem Header="{Binding L[Extension_Guide_Opera_Header]}">
+                                <StackPanel Spacing="6" Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch">
+
+                                    <Grid ColumnDefinitions="*, *" Margin="0,0,0,6">
+                                        <Button Grid.Column="0" Command="{Binding CopyLinkCommand}"
+                                            CommandParameter="opera://extensions/"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="0,0,4,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Link_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Link}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock Text="opera://extensions/" FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Grid.Column="1" Command="{Binding CopyPathCommand}"
+                                            Classes="ghost-btn" Height="32" Padding="0"
+                                            Margin="4,0,0,0" HorizontalAlignment="Stretch"
+                                            ToolTip.Tip="{Binding L[Extension_Install_CopyTooltip]}">
+                                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                                HorizontalAlignment="Center">
+                                                <PathIcon Data="{StaticResource Icon.Paperclip}"
+                                                    Width="12" Height="12"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                                <TextBlock
+                                                    Text="{Binding L[Extension_Install_CopyButton]}"
+                                                    FontSize="12" FontWeight="SemiBold"
+                                                    Foreground="{DynamicResource AccentBrush}" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+
+                                    <TextBlock Text="{Binding L[Extension_Guide_Opera_Step1]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Opera_Step2]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Opera_Step3]}"
+                                        Classes="guide-step" />
+                                    <TextBlock Text="{Binding L[Extension_Guide_Opera_Step4]}"
+                                        Classes="guide-step" />
+                                </StackPanel>
+                            </TabItem>
+                        </TabControl>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- 4. Панель статуса: Отцентрированная компактная плашка с рамкой (ошибки и индикатор
+            внутри) -->
+            <Border Name="StatusBorder"
+                Background="Transparent"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,10"
+                HorizontalAlignment="Center"
+                Classes.error="{Binding IsError}"
+                Classes.loading="{Binding IsSpinnerActive}">
+
+                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                    <TextBlock Text="{Binding StatusText}"
+                        Classes="auth-status"
+                        Classes.error="{Binding IsError}"
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Center"
+                        FontSize="13"
+                        TextWrapping="Wrap" />
+
+                    <PathIcon Data="{StaticResource Icon.Sync}"
+                        Classes="spinning"
+                        Width="14" Height="14"
+                        Foreground="{DynamicResource AccentBrush}"
+                        VerticalAlignment="Center"
+                        IsVisible="{Binding IsSpinnerActive}" />
+                </StackPanel>
+            </Border>
+
+            <!-- 5. Кнопки действий всегда в самом низу -->
+            <Grid ColumnDefinitions="*, *" Margin="0,4,0,0">
+                <Button Grid.Column="0" Classes="ghost-btn" Content="{Binding L[Common_Cancel]}"
+                    Command="{Binding CloseCommand}" Margin="0,0,6,0" Height="40" Padding="0"
+                    CornerRadius="6" HorizontalAlignment="Stretch" />
+
+                <Button Grid.Column="1" Classes="primary-btn"
+                    Command="{Binding AuthenticateCommand}"
+                    IsEnabled="{Binding !IsAuthenticating}"
+                    Margin="6,0,0,0" Height="40" Padding="0" CornerRadius="6"
+                    HorizontalAlignment="Stretch">
+
+                    <Panel>
+                        <!-- Обычный текст -->
+                        <TextBlock Text="{Binding L[Auth_Login]}"
+                            IsVisible="{Binding !IsAuthenticating}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+
+                        <!-- Текст во время загрузки (Подключение к YouTube...) -->
+                        <TextBlock Text="{Binding L[Splash_ConnectingYouTube]}"
+                            IsVisible="{Binding IsAuthenticating}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+                    </Panel>
+                </Button>
+            </Grid>
+
+        </StackPanel>
+    </Border>
+</UserControl>

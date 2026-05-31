@@ -43,7 +43,7 @@ public static class TestDiscovery
             .GroupBy(t => t.Category)
             .ToDictionary(
                 g => g.Key,
-                g => (IReadOnlyList<TestDescriptor>)g.ToList());
+                g => (IReadOnlyList<TestDescriptor>)[.. g]);
 
     /// <summary>
     /// Возвращает все уникальные тематические группы, обнаруженные в тестах.

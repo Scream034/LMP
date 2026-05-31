@@ -9,8 +9,10 @@ public static class G
     public const string AppId = "LMP";
     public const string AppName = "Lite Music Player";
     public const string GitHubUrl = "https://github.com/Scream034/LMP";
+    public const string GithubExtensionAuthUrl = "https://github.com/Scream034/LMP-Auth";
 
     public static string DisplayGithubUrl => GitHubUrl[8..];
+    public static string AuthExtensionDownloadUrl => GithubExtensionAuthUrl + "/archive/refs/heads/main.zip";
 
     public static class Build
     {
@@ -143,6 +145,7 @@ public static class G
         public static readonly string AudioCache = Path.Combine(Cache, "AudioCache");
         public static readonly string NTokenCache = Path.Combine(Cache, "NToken");
         public static readonly string SigCipherCache = Path.Combine(Cache, "SigCipher");
+        public static readonly string Extension = Path.Combine(Cache, "Extension");
 
         /// <summary>
         /// Папка с тестовыми данными для разных версий плеера.
@@ -189,6 +192,8 @@ public static class G
         /// Хранится в %LOCALAPPDATA%/LMP/test-config.json
         /// </summary>
         public static readonly string TestConfig = Path.Combine(Folder.Cache, "test-config.json");
+    
+        public static readonly string TempAuthExtensionZipFile = Path.Combine(Folder.Cache, "LMP-Auth-main.zip");
     }
 
     public static class Json

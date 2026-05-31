@@ -563,7 +563,7 @@ public static class StreamPipelineTests
         {
             var content = await response.Content.ReadAsByteArrayAsync(ct);
             Log.Info($"  ✓ Downloaded {content.Length} bytes");
-            Log.Info($"  ✓ Magic bytes: {BitConverter.ToString(content.Take(16).ToArray())}");
+            Log.Info($"  ✓ Magic bytes: {BitConverter.ToString([.. content.Take(16)])}");
 
             bool isWebM = content.Length >= 4 &&
                 content[0] == 0x1A && content[1] == 0x45 &&
@@ -612,7 +612,7 @@ public static class StreamPipelineTests
             else if (code is 200 or 206)
             {
                 var bytes = await res.Content.ReadAsByteArrayAsync();
-                Log.Info($"    Got {bytes.Length} bytes, magic: {BitConverter.ToString(bytes.Take(8).ToArray())}");
+                Log.Info($"    Got {bytes.Length} bytes, magic: {BitConverter.ToString([.. bytes.Take(8)])}");
             }
         }
         catch (Exception ex)

@@ -197,7 +197,8 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
     }
 
     /// <summary>
-    /// Попытка асинсохронного обновления/восстановления протухшей сессии авторизации.
+    /// Попытка асинхронного обновления/восстановления протухшей сессии авторизации.
+    /// Переиспользует оптимизированный метод слияния sw.js_data.
     /// </summary>
     private async Task<string?> TryRefreshSessionAsync(CancellationToken ct)
     {
@@ -207,42 +208,23 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
-
-            request.Headers.Add("User-Agent", YoutubeClientUtils.UaWeb);
-            request.Headers.Add("Accept", "application/json");
-            request.Headers.Add("Accept-Language", "ru,en;q=0.9");
-            request.Headers.Add("Cache-Control", "no-cache");
-            request.Headers.Add("Pragma", "no-cache");
-            request.Headers.Add("Priority", "u=1, i");
-            request.Headers.Add("Referer", "https://www.youtube.com/");
-            request.Headers.Add("Sec-Fetch-Dest", "empty");
-            request.Headers.Add("Sec-Fetch-Mode", "cors");
-            request.Headers.Add("Sec-Fetch-Site", "same-origin");
-            request.Headers.Add("sec-ch-ua", "\"Not_A Brand\";v=\"99\", \"Chromium\";v=\"142\"");
-            request.Headers.Add("sec-ch-ua-mobile", "?0");
-            request.Headers.Add("sec-ch-ua-platform", "\"Windows\"");
-            request.Headers.Add("sec-ch-ua-full-version", "\"142.0.0.0\"");
-
             var resurrectionCookies = authService.GetResurrectionCookieHeader();
-            if (!string.IsNullOrEmpty(resurrectionCookies))
-                request.Headers.Add("Cookie", resurrectionCookies);
 
-            var response = await base.SendAsync(request, ct).ConfigureAwait(false);
-            var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            // Переиспользуем централизованную логику
+            var (visitorData, setCookies, isSuccess) = await YoutubeClientUtils.FetchSwDataAsync(
+                resurrectionCookies, ct).ConfigureAwait(false);
 
-            bool sessionRefreshed = false;
-            if (response.Headers.TryGetValues("Set-Cookie", out var newCookies))
-                sessionRefreshed = authService.UpdateCookies(newCookies);
-
-            string? newVisitorData = null;
-            var match = VisitorExtractRegex().Match(content);
-            if (match.Success) newVisitorData = match.Value;
-
-            if (sessionRefreshed || !string.IsNullOrEmpty(newVisitorData))
+            if (isSuccess)
             {
-                Log.Info("[YouTube] Session successfully recovered.");
-                return newVisitorData;
+                bool sessionRefreshed = false;
+                if (setCookies != null)
+                    sessionRefreshed = authService.UpdateCookies(setCookies);
+
+                if (sessionRefreshed || !string.IsNullOrEmpty(visitorData))
+                {
+                    Log.Info("[YouTube] Session successfully recovered.");
+                    return visitorData;
+                }
             }
         }
         catch (Exception ex)

@@ -133,7 +133,7 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
         if (cached is { Count: > 0 })
         {
             var idSet = ids.ToHashSet();
-            return cached.Where(t => idSet.Contains(t.Id)).ToList();
+            return [.. cached.Where(t => idSet.Contains(t.Id))];
         }
 
         return [];

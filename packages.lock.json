@@ -301,6 +301,15 @@
         "resolved": "0.11.4",
         "contentHash": "yZ8+Lgwo+KtRI29TB2mIOEMzV+csMJ+pKZg4YHReAP3vRewWLKKeYfrBDo5FS69rWnEbCfU3sbM+ZEQr+GDLtg=="
       },
+      "Microsoft.Data.Sqlite": {
+        "type": "Transitive",
+        "resolved": "8.0.2",
+        "contentHash": "dbv4HUa1OE5zXkFd5iSV7d+HZJ0ge+4GBiJNX6MXuG0tCGqCkMgh0g7jnLHXPmLY2q7vu5gKSMSraie0fmUACg==",
+        "dependencies": {
+          "Microsoft.Data.Sqlite.Core": "8.0.2",
+          "SQLitePCLRaw.bundle_e_sqlite3": "2.1.6"
+        }
+      },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",
         "resolved": "10.0.2",
@@ -550,6 +559,11 @@
         "resolved": "6.1.0",
         "contentHash": "M5cCC1ZMkZr9jbSQGTHnVkb5TDN67qWCV7AP8TAHdGkvDlu0puT5NzemESNn9+HkYIDpWpocP68/i+/ame2/2w=="
       },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "+TUFINV2q2ifyXauQXRwy4CiBhqvDEDZeVJU7qfxya4aRYOKzVBpN+4acx25VcPB9ywUN6C0n8drWl110PhZEg=="
+      },
       "Xaml.Behaviors.Interactions": {
         "type": "Transitive",
         "resolved": "12.0.0",
@@ -620,14 +634,16 @@
           "Avalonia": "[12.0.3, )",
           "CommunityToolkit.Mvvm": "[8.4.0, )",
           "Concentus": "[2.2.2, )",
-          "LMP.Decoders.AAC": "[0.0.274, )",
+          "LMP.Decoders.AAC": "[1.0.0-dev, )",
+          "Microsoft.Data.Sqlite": "[8.0.2, )",
           "Microsoft.EntityFrameworkCore": "[10.0.2, )",
           "Microsoft.EntityFrameworkCore.Sqlite": "[10.0.2, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.2, )",
           "NAudio": "[2.3.0, )",
           "ReactiveUI": "[23.1.8, )",
           "ReactiveUI.Fody": "[19.5.41, )",
-          "SkiaSharp": "[3.119.4, )"
+          "SkiaSharp": "[3.119.4, )",
+          "System.Security.Cryptography.ProtectedData": "[8.0.0, )"
         }
       },
       "LMP.Decoders.AAC": {

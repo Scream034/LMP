@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
 using Avalonia.Media;
@@ -6,6 +7,7 @@ using Avalonia.Threading;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Youtube.Utils;
+using LMP.UI.Dialogs;
 using LMP.UI.Features.Shell;
 using Microsoft.Extensions.DependencyInjection;
 using ReactiveUI;
@@ -1287,10 +1289,55 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
 
     private async Task LoginAsync()
     {
-        var cookies = await _dialog.ShowInputAsync(SL["Dialog_Login_Title"], SL["Dialog_LoginMessage"]);
-        if (string.IsNullOrWhiteSpace(cookies)) return;
+        // Создаем ViewModel напрямую, инжектируя зависимости
+        var auth = AppEntry.Services.GetRequiredService<CookieAuthService>();
+        var userData = AppEntry.Services.GetRequiredService<YoutubeUserDataService>();
+        var localServer = AppEntry.Services.GetRequiredService<LocalAuthServer>();
 
-        _auth.SaveCookies(cookies.Trim());
+        var authVm = new AuthDialogViewModel(auth, userData, localServer);
+
+        var host = AppEntry.Services.GetRequiredService<DialogHostViewModel>();
+        var tcs = new TaskCompletionSource<bool>();
+
+        authVm.OnResult = result =>
+        {
+            host.CloseDialog(result);
+            tcs.TrySetResult(result);
+        };
+
+        // Показываем единый диалог
+        _ = host.ShowAsync<object>(authVm);
+        var success = await tcs.Task;
+
+        if (success)
+        {
+            IsAuthenticated = _auth.IsAuthenticated;
+            RaiseAccountProperties();
+
+            await _dialog.ShowInfoAsync(SL["Dialog_Success"] ?? "Успех", string.Format(SL["Auth_LoggedInAs"] ?? "Вы вошли как {0}", _auth.State.UserName));
+        }
+    }
+
+    private async Task LoginManualAsync()
+    {
+        var cookies = await _dialog.ShowInputAsync(
+            SL["Dialog_Login_Title"] ?? "Авторизация",
+            SL["Dialog_LoginMessage_Manual"],
+            "SAPISID=...; __Secure-1PSID=...");
+
+        if (string.IsNullOrWhiteSpace(cookies)) return;
+        await ApplyCookiesAsync(cookies);
+    }
+
+    private async Task ApplyCookiesAsync(string cookiesString)
+    {
+        _auth.SaveCookies(cookiesString);
+
+        if (!_auth.IsAuthenticated)
+        {
+            await _dialog.ShowInfoAsync(SL["Dialog_Error"] ?? "Ошибка", "Не найден обязательный параметр SAPISID. Вход не выполнен.");
+            return;
+        }
 
         var (name, email, avatar) = await AppEntry.Services
             .GetRequiredService<YoutubeUserDataService>()
@@ -1300,7 +1347,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         IsAuthenticated = _auth.IsAuthenticated;
         RaiseAccountProperties();
 
-        await _dialog.ShowInfoAsync(SL["Dialog_Success"], string.Format(SL["Auth_LoggedInAs"], name));
+        await _dialog.ShowInfoAsync(SL["Dialog_Success"] ?? "Успех", string.Format(SL["Auth_LoggedInAs"] ?? "Вы вошли как {0}", name));
     }
 
     private async Task LogoutAsync()

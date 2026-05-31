@@ -50,8 +50,8 @@ public partial class MainWindow : Window
     /// </summary>
     public const int ToggleCooldownMs = 1000;
 
-    /// <summary>Длительность отображения Copy Hint (мс).</summary>
-    private const int CopyHintDurationMs = 1800;
+    /// <summary>Длительность отображения Copy Hint (мс), считывается напрямую из синглтона.</summary>
+    private static int CopyHintDurationMs => CopyHintService.Instance.DisplayDurationMs;
 
     /// <summary>Длительность fade-out Copy Hint (мс).</summary>
     private const int CopyHintFadeDurationMs = 150;
@@ -1145,9 +1145,9 @@ public partial class MainWindow : Window
 
         if (cursorPosition is not { } cursor)
         {
-            // Fallback: центр-низ
+            // Fallback: центр-низ (аккуратный докинг без гигантского отступа)
             Canvas.SetLeft(_copyHintOverlay, Math.Max(margin, (canvasW - hintW) * 0.5));
-            Canvas.SetTop(_copyHintOverlay, Math.Max(margin, canvasH - hintH - 120));
+            Canvas.SetTop(_copyHintOverlay, Math.Max(margin, canvasH - hintH - 40));
             return;
         }
 

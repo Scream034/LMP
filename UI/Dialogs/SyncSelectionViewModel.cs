@@ -233,12 +233,12 @@ public sealed class SyncSelectionViewModel : ViewModelBase
 
         if (string.IsNullOrEmpty(query))
         {
-            desired = _allItems.OrderByDescending(x => x.HasConflict).ToList();
+            desired = [.. _allItems.OrderByDescending(x => x.HasConflict)];
             foreach (var item in _allItems) item.IsHighlighted = false;
         }
         else
         {
-            desired = _allItems.OrderByDescending(x => IsMatch(x, query)).ThenByDescending(x => x.HasConflict).ToList();
+            desired = [.. _allItems.OrderByDescending(x => IsMatch(x, query)).ThenByDescending(x => x.HasConflict)];
             foreach (var item in _allItems) item.IsHighlighted = IsMatch(item, query);
         }
 

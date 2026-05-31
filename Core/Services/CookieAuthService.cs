@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LMP.Core.Models;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Services;
 
@@ -61,7 +62,7 @@ public partial class CookieAuthService
         LoadCookies();
         LoadAuthData();
         UpdateStateAuthStatus();
-        
+
         // Миграция: удалить старый файл рядом с exe если существует
         MigrateLegacyAuthFile();
     }
@@ -75,19 +76,19 @@ public partial class CookieAuthService
         try
         {
             var legacyPath = Path.Combine(AppContext.BaseDirectory, "auth.json");
-            
+
             if (!File.Exists(legacyPath)) return;
-            
+
             // Если новый файл не существует или пустой — копируем старый
             if (!File.Exists(_authDataPath) || new FileInfo(_authDataPath).Length == 0)
             {
                 File.Copy(legacyPath, _authDataPath, overwrite: true);
                 Log.Info($"[Auth] Migrated auth.json from exe folder to {_authDataPath}");
-                
+
                 // Перезагружаем данные из нового расположения
                 LoadAuthData();
             }
-            
+
             // Удаляем старый файл
             File.Delete(legacyPath);
             Log.Info("[Auth] Deleted legacy auth.json from exe folder");
@@ -188,13 +189,9 @@ public partial class CookieAuthService
     }
 
     /// <summary>
-    /// Лёгкая проверка валидности сессии через HTTP запрос к YouTube Music.
-    /// Не бросает исключений — возвращает результат проверки.
+    /// Лёгкая проверка валидности сессии через единую точку входа sw.js_data на YouTube.
+    /// Исключает создание сторонних инстансов HttpClient и утечки сокетов.
     /// </summary>
-    /// <returns>
-    /// true  — сессия валидна (или нет сети — оптимистичный подход)
-    /// false — куки точно протухли (HTTP 401/403 от Google)
-    /// </returns>
     public async Task<(bool IsValid, string? Error)> ValidateSessionAsync()
     {
         if (!IsAuthenticated)
@@ -202,52 +199,29 @@ public partial class CookieAuthService
 
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-            client.DefaultRequestHeaders.Add("Cookie", GetCookieHeader());
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            var cookiesHeader = GetCookieHeader();
 
-            // Лёгкий запрос к YouTube Music sw.js_data — возвращает visitor data
-            var response = await client.GetAsync("https://music.youtube.com/sw.js_data");
+            // Используем единый централизованный метод из YoutubeClientUtils
+            var (visitorData, setCookies, isSuccess) = await YoutubeClientUtils.FetchSwDataAsync(
+                cookiesHeader, default).ConfigureAwait(false);
 
-            if (response.IsSuccessStatusCode)
+            if (isSuccess && !string.IsNullOrEmpty(visitorData))
             {
-                var body = await response.Content.ReadAsStringAsync();
-                // Если тело содержит данные — сессия валидна
-                if (body.Length > 10)
+                if (setCookies != null)
                 {
-                    Log.Info("[Auth] Session validated successfully");
-                    return (true, null);
+                    UpdateCookies(setCookies);
                 }
+                Log.Info("[Auth] Session validated successfully");
+                return (true, null);
             }
 
-            // 401/403 — куки протухли
-            if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized
-                or System.Net.HttpStatusCode.Forbidden)
-            {
-                Log.Warn($"[Auth] Session invalid: HTTP {(int)response.StatusCode}");
-                return (false, $"HTTP {(int)response.StatusCode}");
-            }
-
-            // Другие ошибки — оптимистично считаем что сессия ок (проблема сети?)
-            Log.Warn($"[Auth] Validation ambiguous: HTTP {(int)response.StatusCode}");
-            return (true, null);
-        }
-        catch (HttpRequestException ex)
-        {
-            // Нет сети — не паникуем, используем кэшированный профиль
-            Log.Info($"[Auth] Network unavailable during validation: {ex.Message}");
-            return (true, null); // Оптимистичный подход
-        }
-        catch (TaskCanceledException)
-        {
-            Log.Info("[Auth] Session validation timed out");
-            return (true, null); // Оптимистичный подход
+            Log.Warn("[Auth] Session invalid: sw.js_data request failed");
+            return (false, "Validation failed");
         }
         catch (Exception ex)
         {
             Log.Error($"[Auth] Validation error: {ex.Message}");
-            return (true, null); // При сомнениях — не ломаем UX
+            return (true, null); // Оптимистичный подход
         }
     }
 

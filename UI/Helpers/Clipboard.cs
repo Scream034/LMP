@@ -1,6 +1,7 @@
 ﻿using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input.Platform;
+using Avalonia.Threading;
 
 namespace LMP.UI.Helpers;
 
@@ -55,27 +56,39 @@ public static class Clipboard
     {
         try
         {
-            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            if (Dispatcher.UIThread.CheckAccess())
             {
-                var window = desktop.MainWindow;
-                if (window?.Clipboard != null)
-                {
-                    await window.Clipboard.SetTextAsync(text);
-                    Log.Debug($"[Clipboard] Copied {text.Length} chars");
-                }
-                else
-                {
-                    Log.Warn("[Clipboard] MainWindow or Clipboard is null");
-                }
+                await SetTextInternalAsync(text);
             }
             else
             {
-                Log.Warn("[Clipboard] Application lifetime is not desktop");
+                await Dispatcher.UIThread.InvokeAsync(() => SetTextInternalAsync(text));
             }
         }
         catch (Exception ex)
         {
             Log.Error($"[Clipboard] SetTextAsync failed: {ex.Message}");
+        }
+    }
+
+    private static async Task SetTextInternalAsync(string text)
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            var window = desktop.MainWindow;
+            if (window?.Clipboard != null)
+            {
+                await window.Clipboard.SetTextAsync(text);
+                Log.Debug($"[Clipboard] Copied {text.Length} chars");
+            }
+            else
+            {
+                Log.Warn("[Clipboard] MainWindow or Clipboard is null");
+            }
+        }
+        else
+        {
+            Log.Warn("[Clipboard] Application lifetime is not desktop");
         }
     }
 
@@ -92,13 +105,13 @@ public static class Clipboard
     {
         try
         {
-            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            if (Dispatcher.UIThread.CheckAccess())
             {
-                var window = desktop.MainWindow;
-                if (window?.Clipboard != null)
-                {
-                    return await window.Clipboard.TryGetTextAsync();
-                }
+                return await GetTextInternalAsync();
+            }
+            else
+            {
+                return await Dispatcher.UIThread.InvokeAsync(GetTextInternalAsync);
             }
         }
         catch (Exception ex)
@@ -106,6 +119,19 @@ public static class Clipboard
             Log.Error($"[Clipboard] GetTextAsync failed: {ex.Message}");
         }
 
+        return null;
+    }
+
+    private static async Task<string?> GetTextInternalAsync()
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            var window = desktop.MainWindow;
+            if (window?.Clipboard != null)
+            {
+                return await window.Clipboard.TryGetTextAsync();
+            }
+        }
         return null;
     }
 }
