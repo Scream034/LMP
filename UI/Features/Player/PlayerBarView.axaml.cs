@@ -13,7 +13,11 @@ public partial class PlayerBarView : UserControl
 {
     private static class LayoutConstants
     {
-        public const double SeekThumbRadius = 7.0;
+        /// <summary>
+        /// Половина ширины прямоугольного бегунка таймлайна (3px / 2 = 1.5px).
+        /// Исключает размытие границ и субпиксельное смещение при отрисовке.
+        /// </summary>
+        public const double SeekThumbHalfWidth = 1.5;
         public const double SeekCursorHalfWidth = 1.0;
         public const double SeekPreviewCursorHalfWidth = 1.5;
 
@@ -59,6 +63,12 @@ public partial class PlayerBarView : UserControl
     private TranslateTransform? _seekCursorTranslate;
     private TranslateTransform? _seekTooltipTranslate;
 
+    /// <summary>
+    /// Трансформация смещения для подсказки отмены перемещения.
+    /// Позволяет перемещать подсказку вслед за курсором мыши на аппаратном уровне.
+    /// </summary>
+    private TranslateTransform? _seekHintTranslate;
+
     private double _lastEnginePosition = -1.0;
     private double _anchorPosition;
     private TimeSpan _anchorFrameTime;
@@ -88,6 +98,9 @@ public partial class PlayerBarView : UserControl
 
         _seekTooltipTranslate = new TranslateTransform();
         SeekTooltip.RenderTransform = _seekTooltipTranslate;
+
+        _seekHintTranslate = new TranslateTransform();
+        SeekHint.RenderTransform = _seekHintTranslate;
 
         ApplySliderReset();
     }
@@ -230,6 +243,11 @@ public partial class PlayerBarView : UserControl
         SeekRangeSpan.Opacity = 0;
         SeekTooltip.Opacity = 0;
 
+        if (_seekHintTranslate != null)
+        {
+            _seekHintTranslate.X = LayoutConstants.RenderTransformResetValue;
+        }
+
         SparkContainer.IsVisible = true;
     }
 
@@ -331,7 +349,7 @@ public partial class PlayerBarView : UserControl
         _playingGlowTranslate!.X = offset;
 
         double position = width * ratio;
-        _seekThumbTranslate!.X = position - LayoutConstants.SeekThumbRadius;
+        _seekThumbTranslate!.X = position - LayoutConstants.SeekThumbHalfWidth;
         _seekCursorTranslate!.X = position - LayoutConstants.SeekCursorHalfWidth;
     }
 
@@ -463,6 +481,9 @@ public partial class PlayerBarView : UserControl
 
     #region Seek Visual Helpers
 
+    /// <summary>
+    /// Обновляет положение и текстовое наполнение временного тултипа.
+    /// </summary>
     private void UpdateSeekTooltip(double x, double seconds)
     {
         double width = SeekTooltip.Bounds.Width > 0.0 ? SeekTooltip.Bounds.Width : LayoutConstants.DefaultTooltipWidth;
@@ -474,6 +495,17 @@ public partial class PlayerBarView : UserControl
             : time.ToString(@"m\:ss");
     }
 
+    /// <summary>
+    /// Центрирует и перемещает подсказку отмены вслед за курсором мыши.
+    /// </summary>
+    /// <param name="x">Текущая координата курсора по оси X.</param>
+    private void UpdateSeekHintPosition(double x)
+    {
+        if (_seekHintTranslate is null) return;
+        double width = SeekHint.Bounds.Width > 0.0 ? SeekHint.Bounds.Width : LayoutConstants.DefaultHintWidth;
+        _seekHintTranslate.X = x - width / 2.0;
+    }
+
     private void UpdateSeekPreview(double x)
         => Canvas.SetLeft(SeekPreviewCursor, x - LayoutConstants.SeekPreviewCursorHalfWidth);
 
@@ -483,17 +515,26 @@ public partial class PlayerBarView : UserControl
 
     /// <summary>
     /// Отображает центрированную подсказку отмены перемотки.
-    /// Благодаря авторазметке Grid, позиционирование происходит аппаратно и плавно.
+    /// Если указан параметр <paramref name="autoHideMs"/>, автоматически скрывает её по таймеру.
     /// </summary>
-    private void ShowSeekHint(string text, int autoHideMs)
+    /// <param name="text">Текст подсказки.</param>
+    /// <param name="autoHideMs">Таймаут в миллисекундах. Если null — подсказка остается видимой постоянно.</param>
+    private void ShowSeekHint(string text, int? autoHideMs = null)
     {
         SeekHintText.Text = text;
         SeekHint.IsVisible = true;
 
-        _seekHintDisposable.Disposable = Observable
-            .Timer(TimeSpan.FromMilliseconds(autoHideMs))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => SeekHint.IsVisible = false);
+        if (autoHideMs.HasValue)
+        {
+            _seekHintDisposable.Disposable = Observable
+                .Timer(TimeSpan.FromMilliseconds(autoHideMs.Value))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => SeekHint.IsVisible = false);
+        }
+        else
+        {
+            _seekHintDisposable.Disposable = null;
+        }
     }
 
     private void HideSeekHint()
@@ -541,6 +582,7 @@ public partial class PlayerBarView : UserControl
         double seconds = ratio * vm.DurationSeconds;
 
         UpdateSeekTooltip(x, seconds);
+        UpdateSeekHintPosition(x);
         _currentPreviewRatio = ratio;
 
         if (_isDraggingSeek)
@@ -595,15 +637,16 @@ public partial class PlayerBarView : UserControl
         ShowSeekPreview();
         UpdateSeekPreview(x);
         UpdateSeekTooltip(x, _seekDragRatio * vm.DurationSeconds);
+        UpdateSeekHintPosition(x);
 
         SeekTooltip.Opacity = 1;
         SeekRangeSpan.Opacity = 1; // Зажигаем рельсы при нажатии
 
         EnsureRafRunning();
 
+        // Отображение подсказки отмены БЕЗ таймаута автоматического скрытия
         ShowSeekHint(
-            vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel"),
-            LayoutConstants.SeekHintAutoHideMs);
+            vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel"));
     }
 
     private void OnSeekAreaReleased(object? sender, PointerReleasedEventArgs e)
@@ -661,18 +704,21 @@ public partial class PlayerBarView : UserControl
             if (_currentViewModel is { } vm)
             {
                 vm.CancelSeek();
+                // Показ уведомления об отмене с коротким автоскрытием (2 секунды)
                 ShowSeekHint(
                     vm.L.Get("Seek_Cancelled", "Seek cancelled"),
-                    200);
+                    2000);
 
                 ApplySeekFromEngine(vm);
             }
         }
-
-        SeekTooltip.Opacity = 0;
-        SeekRangeSpan.Opacity = 0;
-        HideSeekPreview();
-        _currentPreviewRatio = null;
+        else
+        {
+            SeekTooltip.Opacity = 0;
+            SeekRangeSpan.Opacity = 0;
+            HideSeekPreview();
+            _currentPreviewRatio = null;
+        }
     }
 
     #endregion

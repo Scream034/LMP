@@ -39,7 +39,8 @@
         <Setter Property="RenderTransform" Value="scaleY(2.0)" />
     </Style>
 
-    <Style Selector="Grid.seek-container Ellipse.slider-thumb">
+    <!-- СТИЛИЗАЦИЯ ПРЯМОУГОЛЬНОГО БЕГУНКА -->
+    <Style Selector="Grid.seek-container Border.slider-thumb">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="Transitions">
@@ -48,13 +49,13 @@
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Grid.seek-container:pointerover Ellipse.slider-thumb">
+    <Style Selector="Grid.seek-container:pointerover Border.slider-thumb">
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <Style Selector="Grid.seek-container.dragging Ellipse.slider-thumb">
+    <Style Selector="Grid.seek-container.dragging Border.slider-thumb">
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <Style Selector="Ellipse.slider-thumb.hidden">
+    <Style Selector="Border.slider-thumb.hidden">
         <Setter Property="Opacity" Value="0" />
         <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
@@ -87,7 +88,7 @@
         <Setter Property="Opacity" Value="0.7" />
     </Style>
 
-    <!-- ИСПРАВЛЕНИЕ XAMLX CRASH: Заменяем <Transitions /> на Value="{x:Null}" -->
+    <!-- ИСПРАВЛЕНИЕ XAMLX CRASH -->
     <Style Selector="Border.progress-bar">
         <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
@@ -220,5 +221,44 @@
     <Style Selector="Border.mode-hint.visible">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="RenderTransform" Value="translateY(0)" />
+    </Style>
+
+    <!-- СТИЛИЗАЦИЯ FLYOUT И ВЫБОРА ФОРМАТА (КОНЦЕПЦИЯ BORDER-ONLY) -->
+    <Style Selector="FlyoutPresenter">
+        <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="4" />
+    </Style>
+
+    <Style Selector="Button.format-item-btn">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+                <BrushTransition Property="Foreground" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.format-item-btn:pointerover">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button.format-item-btn:pressed">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.format-item-btn.active">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
 </Styles>

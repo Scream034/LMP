@@ -989,48 +989,27 @@ public partial class YoutubeProvider : IDisposable
         };
     }
 
-    public async Task<List<StreamOption>> GetStreamOptionsAsync(string videoId)
+    /// <summary>
+    /// Возвращает список доступных форматов стрима для указанного видео с поддержкой отмены операции.
+    /// Исключает устаревшие HLS-манифесты и возвращает только физические аудиопотоки.
+    /// </summary>
+    /// <param name="videoId">Идентификатор видео YouTube.</param>
+    /// <param name="ct">Токен отмены операции.</param>
+    /// <returns>Список доступных вариантов стрима.</returns>
+    public async Task<List<StreamOption>> GetStreamOptionsAsync(string videoId, CancellationToken ct = default)
     {
         if (!IsReady || string.IsNullOrWhiteSpace(videoId)) return [];
 
         try
         {
-            var track = _trackRegistry.TryGet($"yt_{videoId}");
-            if (track?.IsHlsOnly == true)
-            {
-                return
-                [
-                    new StreamOption
-                {
-                    Container = "m3u8",
-                    Bitrate = 128,
-                    Codec = "HLS (Adaptive)",
-                    SizeMb = 0,
-                    IsActive = true
-                }
-                ];
-            }
-
             var vId = VideoId.Parse(videoId);
-            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId);
+            var manifest = await _youtube.Videos.Streams.GetManifestAsync(vId, ct);
 
             var audioStreams = manifest.GetAudioOnlyStreams()
                 .OrderByDescending(s => s.Bitrate)
                 .ToList();
 
-            if (audioStreams.Count == 0)
-            {
-                return
-                [
-                    new StreamOption
-                {
-                    Container = "m3u8",
-                    Bitrate = 128,
-                    Codec = "HLS (Adaptive)",
-                    SizeMb = 0
-                }
-                ];
-            }
+            if (audioStreams.Count == 0) return [];
 
             var result = new List<StreamOption>(audioStreams.Count);
             for (int i = 0; i < audioStreams.Count; i++)
@@ -1049,17 +1028,7 @@ public partial class YoutubeProvider : IDisposable
         catch (Exception ex)
         {
             Log.Error($"[YouTube] GetStreamOptions error: {ex.Message}");
-
-            return
-            [
-                new StreamOption
-                {
-                    Container = "m3u8",
-                    Bitrate = 128,
-                    Codec = "HLS (Adaptive)",
-                    SizeMb = 0
-                }
-            ];
+            throw; // Пробрасываем для обработки во ViewModel
         }
     }
 

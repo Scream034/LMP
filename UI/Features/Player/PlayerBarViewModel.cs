@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Media;
+using LMP.Core.Youtube.Exceptions;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
@@ -67,16 +68,18 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region Fields
 
-    // Инициализация заглушкой null! защищает от предупреждений компилятора CS8618 и CS0649
-    // при наличии дополнительных беспараметрических конструкторов (например, для дизайнера).
     private readonly AudioEngine _audio = null!;
     private readonly LibraryService _library = null!;
     private readonly YoutubeProvider _youtube = null!;
     private readonly MusicLibraryManager _musicManager = null!;
     private readonly PlayerControlService _playerControl = null!;
+    private readonly NotificationService _notificationService = null!;
 
     private readonly Subject<Unit> _nextSubject = new();
     private readonly Subject<Unit> _prevSubject = new();
+
+    private readonly HashSet<string> _restrictedTracks = [];
+    private CancellationTokenSource? _formatsCts;
 
     private CompositeDisposable? _heavySubscriptions;
 
@@ -107,6 +110,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     [Reactive] public bool IsLiked { get; private set; }
     [Reactive] public bool IsNavigating { get; private set; }
     [Reactive] public bool IsTrackResetting { get; private set; }
+    [Reactive] public bool IsFormatsLoading { get; private set; }
 
     public string? CurrentTrackUrl => CurrentTrack?.Url;
 
@@ -325,17 +329,20 @@ public sealed class PlayerBarViewModel : ViewModelBase
         LibraryService library,
         YoutubeProvider youtube,
         MusicLibraryManager musicManager,
-        PlayerControlService playerControl)
+        PlayerControlService playerControl,
+        NotificationService notificationService)
     {
         _audio = audio;
         _library = library;
         _youtube = youtube;
         _musicManager = musicManager;
         _playerControl = playerControl;
+        _notificationService = notificationService;
 
         Log.Debug("[PlayerBar] Created, initializing...");
 
         LocalizationService.Instance.LanguageChanged += OnLanguageChanged;
+        _youtube.AuthService.OnAuthStateChanged += ClearRestrictedTracksCache;
 
         InitializeFromSettings();
         SetupCommands();
@@ -886,6 +893,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 AvailableFormats.Clear();
                 _pendingStreamInfoTrackId = track.Id;
 
+                CancelFormatsLoading();
                 BeginTrackReset();
 
                 Duration = track.Duration;
@@ -914,6 +922,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void ResetToNoTrack()
     {
+        CancelFormatsLoading();
         _pendingStreamInfoTrackId = null;
         _lastDownloadedBytes = 0;
         _lastValidStreamInfo = "";
@@ -1265,42 +1274,179 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         if (CurrentTrack == null) return;
 
+        // Если мы уже выяснили в этой сессии, что трек требует авторизации — не шлём лишний запрос в сеть
+        if (_restrictedTracks.Contains(CurrentTrack.Id))
+        {
+            await HandleMissingFormatsNotificationAsync(
+                new LoginRequiredException(
+                    "Cached authorization restriction",
+                    CurrentTrack.Id.Replace("yt_", ""),
+                    _youtube.AuthService.IsAuthenticated ? LoginRequiredReason.Unknown : LoginRequiredReason.AgeRestricted),
+                "Cached authorization requirement");
+            AvailableFormats.Clear();
+            return;
+        }
+
+        CancelFormatsLoading();
+        _formatsCts = new CancellationTokenSource();
+        var token = _formatsCts.Token;
+
+        IsFormatsLoading = true;
+        List<StreamOption> formats = [];
+        bool hasError = false;
+        string? errorMessage = null;
+        Exception? caughtException = null;
+
         try
         {
             string videoId = CurrentTrack.Id.Replace("yt_", "");
-            var formats = await _youtube.GetStreamOptionsAsync(videoId);
-            var (currentFormat, currentBitrate, _) = _audio.GetCurrentStreamInfo();
-
-            var cache = AudioSourceFactory.GlobalCache;
-            var cachedFormats = cache?.GetCachedFormats(CurrentTrack.Id) ?? [];
-
-            AvailableFormats.Clear();
-
-            int normalizedCurrentBitrate = AudioConstants.NormalizeBitrate(currentBitrate);
-
-            foreach (var f in formats)
-            {
-                int normalizedFormatBitrate = AudioConstants.NormalizeBitrate((int)f.Bitrate);
-
-                f.IsDownloaded = cachedFormats.Any(cached =>
-                {
-                    int normalizedCachedBitrate = AudioConstants.NormalizeBitrate(cached.Bitrate);
-                    return string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
-                           normalizedFormatBitrate == normalizedCachedBitrate;
-                });
-
-                f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
-                             normalizedFormatBitrate == normalizedCurrentBitrate;
-
-                AvailableFormats.Add(f);
-            }
-
-            Log.Debug($"Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
+            formats = await _youtube.GetStreamOptionsAsync(videoId, token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Корректный выход без выброса уведомлений при отмене операции пользователем
+            return;
         }
         catch (Exception ex)
         {
             Log.Error($"LoadFormatsAsync error: {ex.Message}");
+            caughtException = ex;
+            hasError = true;
+            errorMessage = ex.Message;
+
+            // Заносим трек в черный список ограничений авторизации
+            if (ex is LoginRequiredException)
+            {
+                _restrictedTracks.Add(CurrentTrack.Id);
+            }
+            else if (!_youtube.AuthService.IsAuthenticated &&
+                     (ex.Message.Contains("LoginRequired", StringComparison.OrdinalIgnoreCase) ||
+                      ex.Message.Contains("403")))
+            {
+                _restrictedTracks.Add(CurrentTrack.Id);
+            }
+
+            formats = [];
         }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                IsFormatsLoading = false;
+            }
+        }
+
+        if (token.IsCancellationRequested) return;
+
+        var (currentFormat, currentBitrate, _) = _audio.GetCurrentStreamInfo();
+        var cache = AudioSourceFactory.GlobalCache;
+        var cachedFormats = cache?.GetCachedFormats(CurrentTrack.Id) ?? [];
+
+        AvailableFormats.Clear();
+
+        int normalizedCurrentBitrate = AudioConstants.NormalizeBitrate(currentBitrate);
+
+        foreach (var f in formats)
+        {
+            int normalizedFormatBitrate = AudioConstants.NormalizeBitrate((int)f.Bitrate);
+
+            f.IsDownloaded = cachedFormats.Any(cached =>
+            {
+                int normalizedCachedBitrate = AudioConstants.NormalizeBitrate(cached.Bitrate);
+                return string.Equals(f.Container, cached.Container, StringComparison.OrdinalIgnoreCase) &&
+                       normalizedFormatBitrate == normalizedCachedBitrate;
+            });
+
+            f.IsActive = string.Equals(f.Codec, currentFormat, StringComparison.OrdinalIgnoreCase) &&
+                         normalizedFormatBitrate == normalizedCurrentBitrate;
+
+            AvailableFormats.Add(f);
+        }
+
+        // Проверяем наличие валидных физических форматов (размер > 0, исключая HLS/m3u8)
+        bool hasValidPhysicalFormats = formats.Any(f =>
+            f.SizeMb > 0 &&
+            !string.Equals(f.Container, "m3u8", StringComparison.OrdinalIgnoreCase) &&
+            !f.Codec.Contains("HLS", StringComparison.OrdinalIgnoreCase));
+
+        if (hasError || !hasValidPhysicalFormats)
+        {
+            if (!_youtube.AuthService.IsAuthenticated)
+            {
+                _restrictedTracks.Add(CurrentTrack.Id);
+            }
+            await HandleMissingFormatsNotificationAsync(caughtException, errorMessage);
+        }
+
+        Log.Debug($"Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
+    }
+
+    /// <summary>
+    /// Выполняет типизированный анализ ошибки отсутствия форматов и выводит контекстный Toast.
+    /// </summary>
+    private async Task HandleMissingFormatsNotificationAsync(Exception? exception, string? errorMessage)
+    {
+        string titleKey = "Error_StreamUnavailable_Title";
+        string messageKey = "Error_Stream_Generic";
+        string? recommendationKey = "Recommendation_ContactDev";
+
+        if (exception is LoginRequiredException lre)
+        {
+            messageKey = lre.GetLocalizationKey();
+            recommendationKey = lre.Reason switch
+            {
+                LoginRequiredReason.AgeRestricted => "Recommendation_Login_AgeRestricted",
+                LoginRequiredReason.Private => "Recommendation_Private",
+                LoginRequiredReason.MembersOnly => "Recommendation_MembersOnly",
+                _ => "Recommendation_Login"
+            };
+        }
+        else if (errorMessage != null &&
+                 (errorMessage.Contains("AgeRestricted", StringComparison.OrdinalIgnoreCase) ||
+                  errorMessage.Contains("Age restricted", StringComparison.OrdinalIgnoreCase)))
+        {
+            messageKey = "Error_Login_AgeRestricted";
+            recommendationKey = "Recommendation_Login_AgeRestricted";
+        }
+        else if (!_youtube.AuthService.IsAuthenticated)
+        {
+            messageKey = "Error_Login_Required";
+            recommendationKey = "Recommendation_Login";
+        }
+        else
+        {
+            recommendationKey = "Recommendation_DpiBlocked";
+        }
+
+        try
+        {
+            await _notificationService.ShowToastAsync(
+                titleKey: titleKey,
+                messageKey: messageKey,
+                severity: NotificationSeverity.Warning,
+                trackId: CurrentTrack?.Id,
+                trackTitle: CurrentTrack?.Title,
+                exceptionDetails: exception?.ToString() ?? errorMessage,
+                recommendationKey: recommendationKey);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[PlayerBar] Failed to show formats notification: {ex.Message}");
+        }
+    }
+
+    private void CancelFormatsLoading()
+    {
+        _formatsCts?.Cancel();
+        _formatsCts?.Dispose();
+        _formatsCts = null;
+        IsFormatsLoading = false;
+    }
+
+    private void ClearRestrictedTracksCache()
+    {
+        _restrictedTracks.Clear();
+        Log.Debug("[PlayerBar] Restricted tracks cache cleared due to AuthState change.");
     }
 
     private void OnFormatCached(string trackId, string container, int bitrate, bool isDownloaded)
@@ -1354,6 +1500,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         _heavySubscriptions?.Dispose();
         _heavySubscriptions = null;
 
+        CancelFormatsLoading();
         DownloadSpeedText = "";
 
         SuspendRequested?.Invoke();
@@ -1376,6 +1523,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
 
         IsSeekBusy = false;
+        IsFormatsLoading = false;
 
         _lastDownloadedBytes = _audio.GetDownloadedBytes();
         _lastSpeedCheck = DateTime.UtcNow;
@@ -1392,9 +1540,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (disposing)
         {
             LocalizationService.Instance.LanguageChanged -= OnLanguageChanged;
+            _youtube.AuthService.OnAuthStateChanged -= ClearRestrictedTracksCache;
 
             _activeHintCts?.Cancel();
             _activeHintCts?.Dispose();
+
+            CancelFormatsLoading();
 
             _heavySubscriptions?.Dispose();
 
