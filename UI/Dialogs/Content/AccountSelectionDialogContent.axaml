@@ -1,0 +1,152 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dialogs="using:LMP.UI.Dialogs"
+    xmlns:models="using:LMP.Core.Models"
+    xmlns:ui="using:LMP.UI.Controls"
+    x:Class="LMP.UI.Dialogs.Content.AccountSelectionDialogContent"
+    x:DataType="dialogs:AccountSelectionDialogViewModel"
+    x:CompileBindings="True"
+    Name="AccountDialogRoot"
+    Width="420">
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.dialog-subtitle">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="TextAlignment" Value="Center" />
+        </Style>
+
+        <!-- Сброс стандартных стилей ListBoxItem и фоновых заливок -->
+        <Style Selector="ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <!-- Hover состояния (Исключительно на BorderBrush и цвете текста) -->
+        <Style Selector="ListBoxItem:pointerover Border#CardBorder">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style Selector="ListBoxItem:pointerover TextBlock#AccountIndexText">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Selected состояния (Утолщение рамки + фиолетовый цвет, БЕЗ заливки фона) -->
+        <Style Selector="ListBoxItem:selected Border#CardBorder">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="ListBoxItem:selected TextBlock#AccountIndexText">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        </Style>
+    </UserControl.Styles>
+
+    <!-- Фон изменен строго на BgPrimaryBrush -->
+    <Border Background="{DynamicResource BgPrimaryBrush}"
+        BorderBrush="{DynamicResource BgHighlightBrush}"
+        BorderThickness="1"
+        CornerRadius="12"
+        Padding="24">
+
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
+
+            <!-- Title -->
+            <TextBlock Text="{Binding L[Auth_SelectAccount_Title]}"
+                Classes="h2"
+                HorizontalAlignment="Center" />
+
+            <!-- Subtitle -->
+            <TextBlock Text="{Binding L[Auth_SelectAccount_Subtitle]}"
+                Classes="dialog-subtitle"
+                HorizontalAlignment="Center" />
+
+            <!-- Accounts List (Двусторонняя строгая привязка) -->
+            <ScrollViewer MaxHeight="320" HorizontalScrollBarVisibility="Disabled" Margin="0,4">
+                <ListBox ItemsSource="{Binding Accounts}"
+                    SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                    SelectionMode="Single"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:YoutubeAccountItem">
+                            <!-- Background убран на Transparent для плоского дизайна на рамках -->
+                            <Border Name="CardBorder"
+                                CornerRadius="6"
+                                BorderThickness="1"
+                                Padding="12"
+                                Background="Transparent"
+                                BorderBrush="{DynamicResource BgHighlightBrush}"
+                                Cursor="Hand">
+
+                                <!-- Сетка уменьшена до 3 колонок (Индикатор убран) -->
+                                <Grid ColumnDefinitions="Auto, Auto, *">
+
+                                    <!-- Колонка 0: Номер аккаунта (Без круглой рамки) -->
+                                    <TextBlock Name="AccountIndexText" Grid.Column="0"
+                                        Text="{Binding Index}"
+                                        FontWeight="SemiBold"
+                                        FontSize="14"
+                                        Foreground="{DynamicResource TextMutedBrush}"
+                                        VerticalAlignment="Center" Margin="0,0,12,0" />
+
+                                    <!-- Колонка 1: Аватарка -->
+                                    <Border Grid.Column="1" Width="36" Height="36" CornerRadius="18"
+                                        ClipToBounds="True" Margin="0,0,12,0"
+                                        Background="Transparent"
+                                        BorderThickness="1"
+                                        BorderBrush="{DynamicResource BgHighlightBrush}">
+                                        <Image ui:SmartImage.Source="{Binding AvatarUrl}"
+                                            Stretch="UniformToFill" />
+                                    </Border>
+
+                                    <!-- Колонка 2: Информация об аккаунте (Имя, @тег и числовой ID) -->
+                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                            FontSize="14"
+                                            Foreground="{DynamicResource TextPrimaryBrush}"
+                                            TextTrimming="CharacterEllipsis" />
+
+                                        <!-- Вывод тега и ID бок о бок. Если тег пустой, ID
+                                        аккуратно прижмется влево -->
+                                        <StackPanel Orientation="Horizontal" Spacing="6"
+                                            Margin="0,2,0,0">
+                                            <TextBlock Text="{Binding Handle}" FontSize="12"
+                                                Foreground="{DynamicResource AccentBrush}"
+                                                FontWeight="SemiBold"
+                                                IsVisible="{Binding Handle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            <TextBlock
+                                                Text="{Binding DisplayId, StringFormat='ID: {0}'}"
+                                                FontSize="12"
+                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                IsVisible="{Binding DisplayId, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </ScrollViewer>
+
+            <!-- Buttons -->
+            <Grid ColumnDefinitions="*, *" Margin="0,8,0,0">
+                <Button Grid.Column="0" Content="{Binding L[Common_Cancel]}"
+                    Command="{Binding CancelCommand}" Classes="ghost-btn" Height="36" Padding="0"
+                    CornerRadius="6" HorizontalAlignment="Stretch" Margin="0,0,4,0" />
+                <Button Grid.Column="1" Content="{Binding L[Common_OK]}"
+                    Command="{Binding ConfirmCommand}" Classes="primary-btn" Height="36" Padding="0"
+                    CornerRadius="6" HorizontalAlignment="Stretch" Margin="4,0,0,0" />
+            </Grid>
+        </StackPanel>
+    </Border>
+</UserControl>

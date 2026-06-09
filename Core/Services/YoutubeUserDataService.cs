@@ -1,6 +1,7 @@
 ﻿using LMP.Core.Models;
 using LMP.Core.Youtube.Playlists;
 using LMP.Core.Helpers.Extensions;
+using LMP.Core.Youtube.Exceptions;
 
 namespace LMP.Core.Services;
 
@@ -12,7 +13,7 @@ public partial class YoutubeUserDataService
 {
     private readonly Lazy<YoutubeProvider> _youtubeLazy;
     private readonly CookieAuthService _auth;
-    
+
     private YoutubeProvider Provider => _youtubeLazy.Value;
 
     /// <summary>
@@ -137,7 +138,179 @@ public partial class YoutubeUserDataService
 
     #endregion
 
-    #region Account Info
+    #region Account
+
+    /// <summary>
+    /// Получает список всех каналов (бренд-аккаунтов), привязанных к текущим кукам.
+    /// </summary>
+    /// <exception cref="LoginRequiredException">Выбрасывается при невалидности или истечении сессии кук для данного эндпоинта.</exception>
+    public async Task<List<YoutubeAccountItem>> GetAvailableAccountsAsync()
+    {
+        if (!_auth.IsAuthenticated) return [];
+
+        try
+        {
+            var json = await Provider.GetClient().Music.GetAccountSwitcherAsync();
+            var results = new List<YoutubeAccountItem>();
+
+            var dataNode = json.GetPropertyOrNull("data") ?? json;
+            var actions = dataNode.GetPropertyOrNull("actions")?.EnumerateArrayOrNull()?.FirstOrDefault();
+            if (actions == null) return results;
+
+            var menuObj = actions.Value.GetPropertyOrNull("getMultiPageMenuAction")?.GetPropertyOrNull("menu")
+                          ?? actions.Value.GetPropertyOrNull("openPopupAction")?.GetPropertyOrNull("popup");
+
+            var sections = menuObj?.GetPropertyOrNull("multiPageMenuRenderer")
+                ?.GetPropertyOrNull("sections")
+                ?.EnumerateArrayOrNull();
+
+            if (sections == null) return results;
+
+            foreach (var section in sections.Value)
+            {
+                var items = section.GetPropertyOrNull("accountSectionListRenderer")
+                    ?.GetPropertyOrNull("contents")
+                    ?.EnumerateArrayOrNull();
+
+                if (items == null) continue;
+
+                foreach (var itemWrap in items.Value)
+                {
+                    var accountItemSection = itemWrap.GetPropertyOrNull("accountItemSectionRenderer");
+                    var subItems = accountItemSection?.GetPropertyOrNull("contents")?.EnumerateArrayOrNull();
+
+                    if (subItems != null)
+                    {
+                        foreach (var subItemWrap in subItems.Value)
+                        {
+                            var accountItem = subItemWrap.GetPropertyOrNull("accountItem");
+                            if (accountItem == null) continue;
+
+                            ProcessAccountItem(accountItem.Value, results);
+                        }
+                    }
+                    else
+                    {
+                        var accountItem = itemWrap.GetPropertyOrNull("accountItem");
+                        if (accountItem == null) continue;
+
+                        ProcessAccountItem(accountItem.Value, results);
+                    }
+                }
+            }
+
+            return results;
+        }
+        catch (LoginRequiredException ex) when (ex.Reason == LoginRequiredReason.SessionExpired)
+        {
+            Log.Warn($"[UserDataService] YouTube session expired during account listing. Propagating to UI to prompt for cookie update.");
+
+            // Позволяем плееру продолжить работать в режиме "деградировавшей сессии",
+            // пробрасывая исключение в UI для принятия решения пользователем.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Failed to parse accounts: {ex.Message}");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Разбирает элемент аккаунта из InnerTube JSON структуры, вычленяя PageId и AuthUser.
+    /// </summary>
+    private static void ProcessAccountItem(System.Text.Json.JsonElement accountItem, List<YoutubeAccountItem> results)
+    {
+        var name = accountItem.GetPropertyOrNull("accountName")
+            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
+            .GetPropertyOrNull("text")?.GetStringOrNull()
+            ?? accountItem.GetPropertyOrNull("accountName")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
+            ?? "Unknown";
+
+        var email = accountItem.GetPropertyOrNull("accountByline")
+            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
+            .GetPropertyOrNull("text")?.GetStringOrNull()
+            ?? accountItem.GetPropertyOrNull("accountByline")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
+            ?? "";
+
+        var avatar = accountItem.GetPropertyOrNull("accountPhoto")
+            ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.LastOrDefault()
+            .GetPropertyOrNull("url")?.GetStringOrNull() ?? "";
+
+        var isSelected = accountItem.GetPropertyOrNull("isSelected")?.GetBoolean() ?? false;
+
+        string pageId = "";
+        string gaiaId = "";
+        string handle = "";
+        string authUser = "0";
+
+        // Извлекаем channelHandle (@тег канала)
+        var parsedHandle = accountItem.GetPropertyOrNull("channelHandle")
+            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
+            .GetPropertyOrNull("text")?.GetStringOrNull();
+        if (!string.IsNullOrEmpty(parsedHandle))
+        {
+            handle = parsedHandle;
+        }
+
+        var tokens = accountItem.GetPropertyOrNull("serviceEndpoint")
+            ?.GetPropertyOrNull("selectActiveIdentityEndpoint")
+            ?.GetPropertyOrNull("supportedTokens")
+            ?.EnumerateArrayOrNull();
+
+        if (tokens != null)
+        {
+            foreach (var token in tokens.Value)
+            {
+                var pId = token.GetPropertyOrNull("pageIdToken")?.GetPropertyOrNull("pageId")?.GetStringOrNull();
+                if (!string.IsNullOrEmpty(pId))
+                {
+                    pageId = pId;
+                }
+
+                var stateToken = token.GetPropertyOrNull("accountStateToken");
+                if (stateToken != null)
+                {
+                    var gId = stateToken.Value.GetPropertyOrNull("obfuscatedGaiaId")?.GetStringOrNull();
+                    if (!string.IsNullOrEmpty(gId))
+                    {
+                        gaiaId = gId;
+                    }
+                }
+
+                var signinToken = token.GetPropertyOrNull("accountSigninToken");
+                if (signinToken != null)
+                {
+                    var signinUrl = signinToken.Value.GetPropertyOrNull("signinUrl")?.GetStringOrNull();
+                    if (!string.IsNullOrEmpty(signinUrl))
+                    {
+                        var urlSpan = signinUrl.AsSpan();
+                        int targetIdx = urlSpan.IndexOf("authuser=");
+                        if (targetIdx >= 0)
+                        {
+                            var remaining = urlSpan[(targetIdx + 9)..];
+                            int ampIdx = remaining.IndexOf('&');
+                            var valSpan = ampIdx >= 0 ? remaining[..ampIdx] : remaining;
+                            authUser = valSpan.ToString();
+                        }
+                    }
+                }
+            }
+        }
+
+        results.Add(new YoutubeAccountItem
+        {
+            Index = results.Count + 1,
+            Name = name,
+            Email = email,
+            AvatarUrl = avatar,
+            PageId = pageId,
+            GaiaId = gaiaId,
+            Handle = handle,
+            AuthUser = authUser,
+            IsSelected = isSelected
+        });
+    }
 
     public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()
     {

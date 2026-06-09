@@ -51,6 +51,9 @@
                             Content="{Binding L[Auth_Login]}"
                             Command="{Binding LoginCommand}"
                             IsVisible="{Binding !IsAuthenticated}" />
+                        <Button Content="{Binding L[Auth_SwitchAccount]}"
+                            Command="{Binding SwitchAccountCommand}"
+                            IsVisible="{Binding IsAuthenticated}" />
                         <Button Content="{Binding L[Auth_Logout]}"
                             Command="{Binding LogoutCommand}"
                             IsVisible="{Binding IsAuthenticated}" />

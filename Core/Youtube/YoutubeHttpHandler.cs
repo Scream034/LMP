@@ -102,10 +102,8 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         bool isPlayerRequest = request.Options.TryGetValue(IsPlayerContext, out var p) && p;
         bool isMobileClient = request.Options.TryGetValue(IsMobileClient, out var m) && m;
 
-        // Определяем, относится ли домен к YouTube API (исключаем googlevideo.com)
         bool isYoutubeDomain = host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase);
 
-        // User-Agent: НЕ добавляем если уже есть
         if (!request.Headers.Contains("User-Agent"))
         {
             request.Headers.Add("User-Agent", YoutubeClientUtils.UaWeb);
@@ -114,9 +112,6 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         if (!request.Headers.Contains("Accept-Language"))
             request.Headers.Add("Accept-Language", "en,ru;q=0.9");
 
-        // ═══ КРИТИЧНОЕ Куки передаются ТОЛЬКО на домены *.youtube.com ═══
-        // Это предотвращает отправку приватных кук на CDN-серверы googlevideo.com, 
-        // убирая ложные 403 Forbidden блокировки при проверочных HEAD-запросах.
         if (isYoutubeDomain && !isMobileClient && authService is { IsAuthenticated: true })
         {
             var cookieHeader = authService.GetCookieHeader();
@@ -144,7 +139,10 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
             request.Headers.Add("Origin", MusicOrigin);
 
             if (authService?.IsAuthenticated == true)
-                request.Headers.Add("X-Goog-AuthUser", "0");
+            {
+                var authUser = string.IsNullOrEmpty(authService.State.AuthUser) ? "0" : authService.State.AuthUser;
+                request.Headers.Add("X-Goog-AuthUser", authUser);
+            }
         }
         else if (!isPlayerRequest && request.Method == HttpMethod.Post)
         {
@@ -159,7 +157,6 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
             request.Headers.Add("X-Goog-Visitor-Id", visitorData);
         }
 
-        // SAPISIDHASH — только для API на доменах *.youtube.com
         bool isYoutubeApi = isYoutubeDomain && request.RequestUri.AbsolutePath.Contains("/youtubei/v1/");
 
         if (request.Method == HttpMethod.Post &&
@@ -187,8 +184,19 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                         request.Headers.Remove("X-Origin");
                     request.Headers.Add("X-Origin", origin);
 
-                    if (!request.Headers.Contains("X-Goog-AuthUser"))
-                        request.Headers.Add("X-Goog-AuthUser", "0");
+                    if (request.Headers.Contains("X-Goog-AuthUser"))
+                        request.Headers.Remove("X-Goog-AuthUser");
+
+                    var authUser = string.IsNullOrEmpty(authService.State.AuthUser) ? "0" : authService.State.AuthUser;
+                    request.Headers.Add("X-Goog-AuthUser", authUser);
+
+                    var pageId = authService.State.PageId;
+                    if (!string.IsNullOrEmpty(pageId))
+                    {
+                        if (request.Headers.Contains("X-Goog-PageId"))
+                            request.Headers.Remove("X-Goog-PageId");
+                        request.Headers.Add("X-Goog-PageId", pageId);
+                    }
                 }
             }
         }

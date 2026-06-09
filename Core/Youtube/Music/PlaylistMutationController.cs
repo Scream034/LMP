@@ -24,6 +24,8 @@ internal sealed class PlaylistMutationController(HttpClient http)
     private static readonly byte[] Utf8Request = "request"u8.ToArray();
     private static readonly byte[] Utf8UseSsl = "useSsl"u8.ToArray();
     private static readonly byte[] Utf8Web = "WEB"u8.ToArray();
+    private static readonly byte[] Utf8User = "user"u8.ToArray();
+    private static readonly byte[] Utf8OnBehalfOfUser = "onBehalfOfUser"u8.ToArray();
 
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
 
@@ -46,10 +48,22 @@ internal sealed class PlaylistMutationController(HttpClient http)
         writer.WriteBoolean(Utf8UseSsl, false);
         writer.WriteEndObject(); // request
 
+        // Исправлено: Теперь создание и редактирование плейлистов выполняется от имени бренд-канала
+        writer.WritePropertyName(Utf8User);
+        writer.WriteStartObject();
+        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
+        {
+            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
+        }
+        writer.WriteEndObject(); // user
+
         writer.WriteEndObject(); // context
     }
 
-    private static HttpContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
+    /// <summary>
+    /// Создаёт HTTP-контент с использованием ReadOnlyMemoryContent для нулевых аллокаций.
+    /// </summary>
+    private static ReadOnlyMemoryContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
     {
         var bufferWriter = new ArrayBufferWriter<byte>(512);
         using (var writer = new Utf8JsonWriter(bufferWriter))
@@ -60,7 +74,7 @@ internal sealed class PlaylistMutationController(HttpClient http)
             writer.WriteEndObject();
         }
 
-        var content = new ByteArrayContent(bufferWriter.WrittenSpan.ToArray());
+        var content = new ReadOnlyMemoryContent(bufferWriter.WrittenMemory);
         content.Headers.ContentType = JsonContentType;
         return content;
     }

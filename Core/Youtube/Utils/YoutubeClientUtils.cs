@@ -43,6 +43,20 @@ public static class YoutubeClientUtils
     }
   }
 
+  public static string PageId => _authService?.State.PageId ?? "";
+
+  /// <summary>
+  /// Генерирует JSON-строку контекста пользователя для авторизованных запросов бренд-аккаунтов.
+  /// </summary>
+  [MethodImpl(MethodImplOptions.AggressiveInlining)]
+  private static string GetUserContextJson()
+  {
+    var pageId = PageId;
+    return string.IsNullOrEmpty(pageId)
+      ? ""
+      : $@", ""user"": {{ ""onBehalfOfUser"": {Json.Serialize(pageId)} }}";
+  }
+
   /// <summary>
   /// Гарантирует наличие свежего VisitorData. Если он равен дефолтному
   /// или принудительно затребовано обновление — запускает фоновый/синхронный
@@ -225,146 +239,137 @@ public static class YoutubeClientUtils
     var hlJson = Json.Serialize(hl);
     var glJson = Json.Serialize(gl);
 
+    // Избегаем вложенных интерполяций $$""", вынося playbackContext в плоскую переменную
+    var playbackContextJson = signatureTimestamp != null
+        ? $@", ""playbackContext"": {{ ""contentPlaybackContext"": {{ ""signatureTimestamp"": {Json.Serialize(signatureTimestamp)} }} }}"
+        : "";
+
     return clientName switch
     {
       "WEB_REMIX" => $$"""
-            {
-              "videoId": {{vidJson}},
-              "contentCheckOk": true,
-              "racyCheckOk": true,
-              "context": {
-                "client": {
-                  "clientName": "WEB_REMIX",
-                  "clientVersion": "1.20260209.03.00",
-                  "visitorData": {{vdJson}},
-                  "hl": {{hlJson}},
-                  "gl": {{glJson}},
-                  "utcOffsetMinutes": 0
-                }
-              }{{(signatureTimestamp != null ? $$"""
-              ,
-              "playbackContext": {
-                "contentPlaybackContext": {
-                  "signatureTimestamp": {{Json.Serialize(signatureTimestamp)}}
-                }
-              }
-              """ : "")}}
-            }
-            """,
+        {
+          "videoId": {{vidJson}},
+          "contentCheckOk": true,
+          "racyCheckOk": true,
+          "context": {
+            "client": {
+              "clientName": "WEB_REMIX",
+              "clientVersion": "1.20260209.03.00",
+              "visitorData": {{vdJson}},
+              "hl": {{hlJson}},
+              "gl": {{glJson}},
+              "utcOffsetMinutes": 0
+            }{{GetUserContextJson()}}
+          }{{playbackContextJson}}
+        }
+        """,
 
       "ANDROID_VR" => $$"""
-            {
-              "videoId": {{vidJson}},
-              "contentCheckOk": true,
-              "racyCheckOk": true,
-              "context": {
-                "client": {
-                  "clientName": "ANDROID_VR",
-                  "clientVersion": "1.61.48",
-                  "deviceMake": "Oculus",
-                  "deviceModel": "Quest 3",
-                  "osName": "Android",
-                  "osVersion": "12",
-                  "androidSdkVersion": "32",
-                  "platform": "MOBILE",
-                  "visitorData": {{vdJson}},
-                  "hl": "en",
-                  "gl": "US",
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """,
+        {
+          "videoId": {{vidJson}},
+          "contentCheckOk": true,
+          "racyCheckOk": true,
+          "context": {
+            "client": {
+              "clientName": "ANDROID_VR",
+              "clientVersion": "1.61.48",
+              "deviceMake": "Oculus",
+              "deviceModel": "Quest 3",
+              "osName": "Android",
+              "osVersion": "12",
+              "androidSdkVersion": "32",
+              "platform": "MOBILE",
+              "visitorData": {{vdJson}},
+              "hl": "en",
+              "gl": "US",
+              "utcOffsetMinutes": 0
+            }{{GetUserContextJson()}}
+          }
+        }
+        """,
 
       "ANDROID_MUSIC" => $$"""
-            {
-              "videoId": {{vidJson}},
-              "contentCheckOk": true,
-              "racyCheckOk": true,
-              "context": {
-                "client": {
-                  "clientName": "ANDROID_MUSIC",
-                  "clientVersion": "7.27.52",
-                  "androidSdkVersion": "34",
-                  "osName": "Android",
-                  "osVersion": "14",
-                  "platform": "MOBILE",
-                  "visitorData": {{vdJson}},
-                  "hl": {{hlJson}},
-                  "gl": {{glJson}},
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """,
+        {
+          "videoId": {{vidJson}},
+          "contentCheckOk": true,
+          "racyCheckOk": true,
+          "context": {
+            "client": {
+              "clientName": "ANDROID_MUSIC",
+              "clientVersion": "7.27.52",
+              "androidSdkVersion": "34",
+              "osName": "Android",
+              "osVersion": "14",
+              "platform": "MOBILE",
+              "visitorData": {{vdJson}},
+              "hl": {{hlJson}},
+              "gl": {{glJson}},
+              "utcOffsetMinutes": 0
+            }{{GetUserContextJson()}}
+          }
+        }
+        """,
 
       "WEB" => $$"""
-            {
-              "videoId": {{vidJson}},
-              "contentCheckOk": true,
-              "racyCheckOk": true,
-              "context": {
-                "client": {
-                  "clientName": "WEB",
-                  "clientVersion": "2.20250120.01.00",
-                  "visitorData": {{vdJson}},
-                  "hl": {{hlJson}},
-                  "gl": {{glJson}},
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """,
+        {
+          "videoId": {{vidJson}},
+          "contentCheckOk": true,
+          "racyCheckOk": true,
+          "context": {
+            "client": {
+              "clientName": "WEB",
+              "clientVersion": "2.20250120.01.00",
+              "visitorData": {{vdJson}},
+              "hl": {{hlJson}},
+              "gl": {{glJson}},
+              "utcOffsetMinutes": 0
+            }{{GetUserContextJson()}}
+          }
+        }
+        """,
 
       "IOS" => $$"""
-            {
-              "videoId": {{vidJson}},
-              "contentCheckOk": true,
-              "racyCheckOk": true,
-              "context": {
-                "client": {
-                  "clientName": "IOS",
-                  "clientVersion": "19.29.1",
-                  "deviceMake": "Apple",
-                  "deviceModel": "iPhone16,2",
-                  "osName": "iOS",
-                  "osVersion": "17.5.1",
-                  "platform": "MOBILE",
-                  "visitorData": {{vdJson}},
-                  "hl": {{hlJson}},
-                  "gl": {{glJson}},
-                  "utcOffsetMinutes": 0
-                }
-              }
-            }
-            """,
+        {
+          "videoId": {{vidJson}},
+          "contentCheckOk": true,
+          "racyCheckOk": true,
+          "context": {
+            "client": {
+              "clientName": "IOS",
+              "clientVersion": "19.29.1",
+              "deviceMake": "Apple",
+              "deviceModel": "iPhone16,2",
+              "osName": "iOS",
+              "osVersion": "17.5.1",
+              "platform": "MOBILE",
+              "visitorData": {{vdJson}},
+              "hl": {{hlJson}},
+              "gl": {{glJson}},
+              "utcOffsetMinutes": 0
+            }{{GetUserContextJson()}}
+          }
+        }
+        """,
 
       "TVHTML5_SIMPLY_EMBEDDED_PLAYER" => $$"""
-            {
-              "videoId": {{vidJson}},
-              "context": {
-                "client": {
-                  "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-                  "clientVersion": "2.0",
-                  "visitorData": {{vdJson}},
-                  "hl": {{hlJson}},
-                  "gl": {{glJson}},
-                  "utcOffsetMinutes": 0,
-                  "platform": "TV"
-                },
-                "thirdParty": {
-                  "embedUrl": "https://www.youtube.com"
-                }
-              }{{(signatureTimestamp != null ? $$"""
-              ,
-              "playbackContext": {
-                "contentPlaybackContext": {
-                  "signatureTimestamp": {{Json.Serialize(signatureTimestamp)}}
-                }
-              }
-              """ : "")}}
+        {
+          "videoId": {{vidJson}},
+          "context": {
+            "client": {
+              "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+              "clientVersion": "2.0",
+              "visitorData": {{vdJson}},
+              "hl": {{hlJson}},
+              "gl": {{glJson}},
+              "utcOffsetMinutes": 0,
+              "platform": "TV"
+            }{{GetUserContextJson()}},
+            "thirdParty": {
+              "embedUrl": "https://www.youtube.com"
             }
-            """,
+          }{{playbackContextJson}}
+        }
+        """,
 
       _ => GeneratePlayerContextForClient("WEB_REMIX", videoId, visitorData)
     };
@@ -420,7 +425,7 @@ public static class YoutubeClientUtils
       if (colonCount == 1 && firstColon > 0)
       {
         if (int.TryParse(span[..firstColon], out var m) &&
-            int.TryParse(span[(firstColon + 1)..], out var s))
+        int.TryParse(span[(firstColon + 1)..], out var s))
         {
           return new TimeSpan(0, m, s);
         }
@@ -428,8 +433,8 @@ public static class YoutubeClientUtils
       else if (colonCount == 2 && firstColon > 0 && secondColon > firstColon)
       {
         if (int.TryParse(span[..firstColon], out var h) &&
-            int.TryParse(span[(firstColon + 1)..secondColon], out var m) &&
-            int.TryParse(span[(secondColon + 1)..], out var s))
+        int.TryParse(span[(firstColon + 1)..secondColon], out var m) &&
+        int.TryParse(span[(secondColon + 1)..], out var s))
         {
           return new TimeSpan(h, m, s);
         }

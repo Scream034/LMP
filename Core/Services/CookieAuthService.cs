@@ -3,7 +3,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LMP.Core.Audio.Http;
 using LMP.Core.Models;
+using LMP.Core.Youtube;
 using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Services;
@@ -189,9 +191,13 @@ public partial class CookieAuthService
     }
 
     /// <summary>
-    /// Лёгкая проверка валидности сессии через единую точку входа sw.js_data на YouTube.
-    /// Исключает создание сторонних инстансов HttpClient и утечки сокетов.
+    /// Выполняет точную асинхронную проверку валидности текущей сессии авторизации.
     /// </summary>
+    /// <remarks>
+    /// Выполняет легкий POST-запрос к меню аккаунта. Применение конкатенации вместо префиксов 
+    /// интерполяции гарантирует отсутствие конфликтов лексера компилятора на закрывающих скобках JSON.
+    /// </remarks>
+    /// <returns>Кортеж, содержащий флаг валидности сессии (IsValid) и сообщение об ошибке при её невалидности.</returns>
     public async Task<(bool IsValid, string? Error)> ValidateSessionAsync()
     {
         if (!IsAuthenticated)
@@ -201,28 +207,53 @@ public partial class CookieAuthService
         {
             var cookiesHeader = GetCookieHeader();
 
-            // Используем единый централизованный метод из YoutubeClientUtils
-            var (visitorData, setCookies, isSuccess) = await YoutubeClientUtils.FetchSwDataAsync(
-                cookiesHeader, default).ConfigureAwait(false);
+            using var request = new HttpRequestMessage(HttpMethod.Post, "https://music.youtube.com/youtubei/v1/account/account_menu");
+            request.Headers.UserAgent.ParseAdd(YoutubeClientUtils.UaWebRemix);
+            request.Headers.Add("Cookie", cookiesHeader);
 
-            if (isSuccess && !string.IsNullOrEmpty(visitorData))
+            // Безопасный фоллбэк для заголовка
+            var authUser = string.IsNullOrEmpty(State.AuthUser) ? "0" : State.AuthUser;
+            request.Headers.Add("X-Goog-AuthUser", authUser);
+
+            var payload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"" + YoutubeHttpHandler.MusicClientVersion + "\",\"hl\":\"en\",\"gl\":\"US\"}}}";
+            request.Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var response = await Audio.Http.SharedHttpClient.Instance.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.OK)
             {
-                if (setCookies != null)
+                if (response.Headers.TryGetValues("Set-Cookie", out var setCookies))
                 {
                     UpdateCookies(setCookies);
                 }
-                Log.Info("[Auth] Session validated successfully");
+                Log.Info("[Auth] Session validated successfully via account_menu");
                 return (true, null);
             }
 
-            Log.Warn("[Auth] Session invalid: sw.js_data request failed");
-            return (false, "Validation failed");
+            Log.Warn($"[Auth] Session invalid: account_menu returned status {response.StatusCode}");
+            return (false, $"Validation failed: {response.StatusCode}");
         }
         catch (Exception ex)
         {
-            Log.Error($"[Auth] Validation error: {ex.Message}");
-            return (true, null); // Оптимистичный подход
+            Log.Error($"[Auth] Validation network error: {ex.Message}");
+            return (false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Устанавливает идентификатор активного бренд-канала и индекс аккаунта, затем принудительно перезагружает клиент YouTube.
+    /// </summary>
+    public void SetPageId(string pageId, string authUser = "")
+    {
+        lock (_lock)
+        {
+            State.PageId = pageId;
+            State.AuthUser = authUser;
+        }
+        SaveAuthData();
+        OnAuthStateChanged?.Invoke();
     }
 
     // --- Cookie Management ---

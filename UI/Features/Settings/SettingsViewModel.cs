@@ -6,6 +6,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Normalization;
+using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 using LMP.UI.Dialogs;
 using LMP.UI.Features.Shell;
@@ -52,9 +53,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     private readonly ImageCacheService _imageCache;
     private readonly ThemeManagerService _themeManager;
     private readonly CookieAuthService _auth;
+    private readonly LocalAuthServer _localServer;
     private readonly DialogService _dialog;
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
+    private readonly YoutubeUserDataService _userData;
 
     private bool _isLoadingTheme;
     private bool _isUpdatingPreset;
@@ -324,6 +327,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public ReactiveCommand<Unit, Unit> ResetLibraryCommand { get; }
     public ReactiveCommand<Unit, Unit> LoginCommand { get; }
     public ReactiveCommand<Unit, Unit> LogoutCommand { get; }
+    public ReactiveCommand<Unit, Unit> SwitchAccountCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearImageCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearAudioCacheCommand { get; }
     public ReactiveCommand<Unit, Unit> ApplyThemeCommand { get; }
@@ -349,7 +353,9 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         CookieAuthService auth,
         DialogService dialog,
         AudioEngine audio,
-        YoutubeProvider youtube)
+        LocalAuthServer localServer,
+        YoutubeProvider youtube,
+        YoutubeUserDataService userData)
     {
         _library = library;
         _registry = registry;
@@ -359,9 +365,12 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         _auth = auth;
         _dialog = dialog;
         _audio = audio;
+        _localServer = localServer;
         _youtube = youtube;
+        _userData = userData;
 
         LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
+        SwitchAccountCommand = CreateCommand(ReactiveCommand.CreateFromTask(SwitchAccountAsync));
         LogoutCommand = CreateCommand(ReactiveCommand.CreateFromTask(LogoutAsync));
         BrowseDownloadPathCommand = CreateCommand(ReactiveCommand.CreateFromTask(BrowseDownloadPathAsync));
         ClearHistoryCommand = CreateCommand(ReactiveCommand.CreateFromTask(ClearHistoryAsync));
@@ -491,8 +500,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         try
         {
             Log.Info("[Settings] Auto-fetching missing user profile info...");
-            var ytUser = AppEntry.Services.GetRequiredService<YoutubeUserDataService>();
-            var (name, email, avatar) = await ytUser.GetAccountInfoAsync();
+            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
 
             if (!string.IsNullOrEmpty(name))
             {
@@ -1290,11 +1298,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     private async Task LoginAsync()
     {
         // Создаем ViewModel напрямую, инжектируя зависимости
-        var auth = AppEntry.Services.GetRequiredService<CookieAuthService>();
-        var userData = AppEntry.Services.GetRequiredService<YoutubeUserDataService>();
-        var localServer = AppEntry.Services.GetRequiredService<LocalAuthServer>();
-
-        var authVm = new AuthDialogViewModel(auth, userData, localServer);
+        var authVm = new AuthDialogViewModel(_auth, _userData, _localServer);
 
         var host = AppEntry.Services.GetRequiredService<DialogHostViewModel>();
         var tcs = new TaskCompletionSource<bool>();
@@ -1318,36 +1322,79 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         }
     }
 
-    private async Task LoginManualAsync()
+    /// <summary>
+    /// Вызывает диалог выбора канала/бренда и переключает контекст авторизованного пользователя.
+    /// В случае деградации сессии оставляет старые куки, но предлагает обновить их.
+    /// </summary>
+    private async Task SwitchAccountAsync()
     {
-        var cookies = await _dialog.ShowInputAsync(
-            SL["Dialog_Login_Title"] ?? "Авторизация",
-            SL["Dialog_LoginMessage_Manual"],
-            "SAPISID=...; __Secure-1PSID=...");
+        if (!IsAuthenticated) return;
 
-        if (string.IsNullOrWhiteSpace(cookies)) return;
-        await ApplyCookiesAsync(cookies);
-    }
-
-    private async Task ApplyCookiesAsync(string cookiesString)
-    {
-        _auth.SaveCookies(cookiesString);
-
-        if (!_auth.IsAuthenticated)
+        _isLoadingSettings = true;
+        try
         {
-            await _dialog.ShowInfoAsync(SL["Dialog_Error"] ?? "Ошибка", "Не найден обязательный параметр SAPISID. Вход не выполнен.");
-            return;
+            var accounts = await _userData.GetAvailableAccountsAsync();
+            if (accounts.Count == 0)
+            {
+                await _dialog.ShowInfoAsync(
+                    SL["Dialog_Error_Title"] ?? "Error",
+                    SL["Auth_ProfileLoadError_Message"] ?? "Failed to load profile data.");
+                return;
+            }
+
+            if (accounts.Count <= 1)
+            {
+                await _dialog.ShowInfoAsync(
+                    SL["Dialog_Info_Title"] ?? "Info",
+                    SL["Auth_NoMultipleAccounts"] ?? "There are no other channels available for this profile.");
+                return;
+            }
+
+            var selectedAccount = await _dialog.ShowAccountSelectionDialogAsync(accounts);
+            if (selectedAccount == null) return;
+
+            // Сброс сетевой сессии и немедленный переход под личность бренда
+            _auth.SetPageId(selectedAccount.PageId, selectedAccount.AuthUser);
+
+            // Теперь запрос профиля гарантированно пойдет через пересозданный клиент
+            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
+            _auth.UpdateUserProfile(name, email, avatar);
+
+            _youtube.ClearCache();
+
+            RaiseAccountProperties();
+
+            await _dialog.ShowInfoAsync(
+                SL["Dialog_Success"] ?? "Success",
+                string.Format(SL["Auth_LoggedInAs"] ?? "Signed in: {0}", name));
         }
+        catch (LoginRequiredException ex) when (ex.Reason == LoginRequiredReason.SessionExpired)
+        {
+            Log.Warn("[Settings] Switch account failed due to expired session. Prompting user to update cookies.");
 
-        var (name, email, avatar) = await AppEntry.Services
-            .GetRequiredService<YoutubeUserDataService>()
-            .GetAccountInfoAsync();
+            // Мы НЕ выходим из аккаунта (сохраняем деградировавшую сессию для стримов)
+            var title = SL["Auth_SessionExpired_SwitchAccount_Title"] ?? "Session Update Required";
+            var msg = SL["Auth_SessionExpired_SwitchAccount_Message"] ?? "To switch accounts, you need to update your authorization because the current session has expired.\n\nDo you want to sign in again right now?";
+            var loginText = SL["Auth_Login"] ?? "Sign In";
+            var cancelText = SL["Common_Cancel"] ?? "Cancel";
 
-        _auth.UpdateUserProfile(name, email, avatar);
-        IsAuthenticated = _auth.IsAuthenticated;
-        RaiseAccountProperties();
+            bool wantsToLogin = await _dialog.ConfirmAsync(title, msg, loginText, cancelText);
 
-        await _dialog.ShowInfoAsync(SL["Dialog_Success"] ?? "Успех", string.Format(SL["Auth_LoggedInAs"] ?? "Вы вошли как {0}", name));
+            if (wantsToLogin)
+            {
+                // Если пользователь согласился, открываем диалог. 
+                // Новые куки просто перезапишут старые поверх.
+                await LoginAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"] ?? "Error", ex.Message);
+        }
+        finally
+        {
+            _isLoadingSettings = false;
+        }
     }
 
     private async Task LogoutAsync()

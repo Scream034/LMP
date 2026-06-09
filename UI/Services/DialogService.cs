@@ -144,6 +144,28 @@ public sealed class DialogService
     #region Basic Dialogs (Overlay)
 
     /// <summary>
+    /// Диалог выбора YouTube аккаунта (основной/бренд).
+    /// </summary>
+    public async Task<YoutubeAccountItem?> ShowAccountSelectionDialogAsync(IEnumerable<YoutubeAccountItem> accounts)
+    {
+        var host = _getDialogHost();
+        var tcs = new TaskCompletionSource<YoutubeAccountItem?>();
+
+        // Передаем как PageId, так и AuthUser для 100% корректного сопоставления выбранной личности
+        var vm = new AccountSelectionDialogViewModel(accounts, _authService.State.PageId, _authService.State.AuthUser)
+        {
+            OnResult = result =>
+            {
+                host.CloseDialog(result);
+                tcs.TrySetResult(result);
+            }
+        };
+
+        _ = host.ShowAsync<object>(vm);
+        return await tcs.Task;
+    }
+
+    /// <summary>
     /// Показывает диалог автоматического скачивания, распаковки и ручной активации расширения LMP Auth.
     /// </summary>
     public async Task<bool> ShowExtensionInstallDialogAsync()

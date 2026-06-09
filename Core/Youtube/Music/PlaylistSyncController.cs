@@ -32,6 +32,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
     private static readonly byte[] Utf8Gl = "gl"u8.ToArray();
     private static readonly byte[] Utf8User = "user"u8.ToArray();
     private static readonly byte[] Utf8VisitorData = "visitorData"u8.ToArray();
+    private static readonly byte[] Utf8OnBehalfOfUser = "onBehalfOfUser"u8.ToArray();
 
     #region Context Writers
 
@@ -53,6 +54,15 @@ internal sealed class PlaylistSyncController(HttpClient http)
         writer.WriteStartObject();
         writer.WriteBoolean(Utf8UseSsl, false);
         writer.WriteEndObject();
+
+        // Исправлено: Добавлен блок user для корректного чтения плейлистов бренд-аккаунта
+        writer.WritePropertyName(Utf8User);
+        writer.WriteStartObject();
+        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
+        {
+            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
+        }
+        writer.WriteEndObject(); // user
 
         writer.WriteEndObject();
     }
@@ -80,9 +90,14 @@ internal sealed class PlaylistSyncController(HttpClient http)
 
         writer.WriteEndObject();
 
+        // Исправлено: Добавлен токен onBehalfOfUser для синхронизации треков в контексте бренда
         writer.WritePropertyName(Utf8User);
         writer.WriteStartObject();
-        writer.WriteEndObject();
+        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
+        {
+            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
+        }
+        writer.WriteEndObject(); // user
 
         writer.WriteEndObject();
     }
@@ -91,7 +106,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
 
     #region HTTP
 
-    private static ByteArrayContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
+    private static ReadOnlyMemoryContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
     {
         var bufferWriter = new ArrayBufferWriter<byte>(512);
         using (var writer = new Utf8JsonWriter(bufferWriter))
@@ -101,7 +116,8 @@ internal sealed class PlaylistSyncController(HttpClient http)
             writer.WriteEndObject();
         }
 
-        var content = new ByteArrayContent(bufferWriter.WrittenSpan.ToArray());
+        // Оптимизация: нулевое копирование промежуточного массива
+        var content = new ReadOnlyMemoryContent(bufferWriter.WrittenMemory);
         content.Headers.ContentType = JsonContentType;
         return content;
     }

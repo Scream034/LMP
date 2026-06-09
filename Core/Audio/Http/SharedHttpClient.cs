@@ -28,20 +28,16 @@ public static class SharedHttpClient
 
         var client = new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromSeconds(30),
+            Timeout = TimeSpan.FromSeconds(25),
 
-            // RequestVersionOrHigher + Version20 = ТРЕБУЕТ HTTP/2, фейлит если сервер не поддерживает.
-            // RequestVersionOrLower + Version20 = ПРОБУЕТ HTTP/2, фоллбэк на HTTP/1.1.
+            // RequestVersionOrHigher + Version30 = ТРЕБУЕТ HTTP/3, фейлит если сервер не поддерживает.
+            // RequestVersionOrLower + Version30 = ПРОБУЕТ HTTP/3, фоллбэк на HTTP/1.1.
             // Это критично: PlayerContextManager скачивает iframe_api через этот клиент,
-            // и если HTTP/2 недоступен — n-token вообще не расшифровывается.
-            DefaultRequestVersion = HttpVersion.Version20,
+            // и если HTTP/3 недоступен — n-token вообще не расшифровывается.
+            DefaultRequestVersion = HttpVersion.Version30,
             DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
 
-        // UA должен соответствовать параметру c= в URL (WEB_REMIX → Chrome UA).
-        // Статический UA из YoutubeClientUtils.UserAgent зависит от CurrentProfile,
-        // который может быть ANDROID_VR (из-за fallback порядка), а URL — от WEB_REMIX.
-        // UA теперь ставится per-request в CreateChunkRequest / CreateRangeRequest.
         client.DefaultRequestHeaders.Add("Accept", "*/*");
 
         Log.Debug($"[SharedHttpClient] Created: HTTP/{client.DefaultRequestVersion}, " +
@@ -59,7 +55,7 @@ public static class SharedHttpClient
         request.Headers.Range = new RangeHeaderValue(start, end);
         request.Version = HttpVersion.Version11;
 
-        // ═══ UA из параметра c= в URL ═══
+        // UA из параметра c= в URL
         ApplyUserAgentFromUrl(request, url);
 
         return request;

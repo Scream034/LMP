@@ -67,6 +67,11 @@
                     <content:ChoiceDialogContent />
                 </DataTemplate>
 
+                <!-- Выбор аккаунта (Добавлено для резолва View) -->
+                <DataTemplate DataType="{x:Type dialogs:AccountSelectionDialogViewModel}">
+                    <content:AccountSelectionDialogContent />
+                </DataTemplate>
+
                 <!-- ViewModel-based dialogs -->
                 <DataTemplate DataType="{x:Type dialogs:DeletePlaylistDialogViewModel}">
                     <content:DeletePlaylistDialogContent />

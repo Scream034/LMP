@@ -110,7 +110,6 @@ public sealed class AuthDialogViewModel : ViewModelBase
 
             SetStatus(SL["Nav_PleaseWait"], isError: false);
 
-            // Строгая проверка сессии перед получением профиля
             var (isValid, error) = await _auth.ValidateSessionAsync();
             if (!isValid)
             {
@@ -119,9 +118,37 @@ public sealed class AuthDialogViewModel : ViewModelBase
                 return;
             }
 
+            // Получение всех аккаунтов и показ диалога выбора
+            var accounts = await _userData.GetAvailableAccountsAsync();
+            if (accounts.Count > 1)
+            {
+                IsAuthenticating = false;
+
+                var dialogService = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                                     .GetRequiredService<DialogService>(AppEntry.Services);
+
+                var selectedAccount = await dialogService.ShowAccountSelectionDialogAsync(accounts);
+
+                if (selectedAccount == null)
+                {
+                    SetStatus(SL["Common_Cancel"], isError: true);
+                    _auth.Logout();
+                    return;
+                }
+
+                // Передаем выбранный PageId и связанный AuthUser
+                _auth.SetPageId(selectedAccount.PageId, selectedAccount.AuthUser);
+                IsAuthenticating = true;
+            }
+            else
+            {
+                // Если аккаунт всего один, сбрасываем PageId, но сохраняем правильный индекс сессии
+                var singleAccount = accounts.FirstOrDefault();
+                _auth.SetPageId("", singleAccount?.AuthUser ?? "0");
+            }
+
             var (name, email, avatar) = await _userData.GetAccountInfoAsync();
 
-            // Защита от сбоя парсинга (профиль "User" без аватара расценивается как ошибка авторизации)
             if (string.IsNullOrEmpty(name) || (name.Equals("User", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(avatar)))
             {
                 SetStatus(SL["Auth_ProfileLoadError_Message"], isError: true);

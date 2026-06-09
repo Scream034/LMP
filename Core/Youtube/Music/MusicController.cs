@@ -4,6 +4,8 @@ using System.Text.Json;
 using LMP.Core.Youtube.Utils;
 using LMP.Core.Helpers.Extensions;
 using LMP.Core.Helpers;
+using System.Net.Http;
+using LMP.Core.Youtube.Exceptions; // Добавлено для ReadOnlyMemoryContent
 
 namespace LMP.Core.Youtube.Music;
 
@@ -20,6 +22,11 @@ internal class MusicController(HttpClient http)
     private static readonly byte[] Utf8VisitorData = "visitorData"u8.ToArray();
     private static readonly byte[] Utf8User = "user"u8.ToArray();
     private static readonly byte[] Utf8WebRemix = "WEB_REMIX"u8.ToArray();
+
+    /// <summary>
+    /// Имя свойства для указания активного делегированного бренд-аккаунта в InnerTube.
+    /// </summary>
+    private static readonly byte[] Utf8OnBehalfOfUser = "onBehalfOfUser"u8.ToArray();
 
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
 
@@ -46,6 +53,11 @@ internal class MusicController(HttpClient http)
 
         writer.WritePropertyName(Utf8User);
         writer.WriteStartObject();
+        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
+        {
+            // Исправлено: заменено "delegatedSessionId" на "onBehalfOfUser" для поддержки бренд-аккаунтов
+            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
+        }
         writer.WriteEndObject(); // user
 
         writer.WriteEndObject(); // context
@@ -73,6 +85,9 @@ internal class MusicController(HttpClient http)
         }
     }
 
+    /// <summary>
+    /// Создаёт HTTP-контент с использованием ReadOnlyMemoryContent для снижения GC pressure.
+    /// </summary>
     private static HttpContent CreateJsonContent(Action<Utf8JsonWriter> writeBody)
     {
         var bufferWriter = new ArrayBufferWriter<byte>(512);
@@ -84,7 +99,8 @@ internal class MusicController(HttpClient http)
             writer.WriteEndObject();
         }
 
-        var content = new ByteArrayContent(bufferWriter.WrittenSpan.ToArray());
+        // Оптимизировано: предотвращает выделение нового массива в куче и копирование
+        var content = new ReadOnlyMemoryContent(bufferWriter.WrittenMemory);
         content.Headers.ContentType = JsonContentType;
         return content;
     }
@@ -167,6 +183,44 @@ internal class MusicController(HttpClient http)
     #endregion
 
     #region Account
+
+    /// <summary>
+    /// Асинхронно получает структуру переключателя аккаунтов.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены операции.</param>
+    /// <exception cref="LoginRequiredException">Выбрасывается, когда сессия авторизации недействительна или истекла.</exception>
+    public async Task<JsonElement> GetAccountSwitcherAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://music.youtube.com/getAccountSwitcherEndpoint");
+        AttachVisitorDataToRequest(request);
+
+        using var response = await http.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+        // Перехватываем 302/307 редирект (свидетельствует об истечении сессии/кук)
+        if (response.StatusCode is System.Net.HttpStatusCode.Redirect or System.Net.HttpStatusCode.Found)
+        {
+            Log.Warn("[MusicController] Switcher returned 302 Found redirect. Session is expired.");
+
+            // Возвращаем точную причину — SessionExpired
+            throw new LoginRequiredException(
+                "Authentication is required. Current session has expired.",
+                string.Empty,
+                LoginRequiredReason.SessionExpired);
+        }
+
+        response.EnsureSuccessStatusCode();
+
+        var jsonStr = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (jsonStr.StartsWith(")]}'"))
+        {
+            jsonStr = jsonStr[4..];
+        }
+
+        return Json.Parse(jsonStr);
+    }
 
     public async Task<JsonElement> GetAccountMenuAsync(
         CancellationToken cancellationToken = default)

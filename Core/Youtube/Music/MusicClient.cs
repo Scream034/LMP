@@ -121,6 +121,13 @@ public class MusicClient(HttpClient http)
 
     #region Account
 
+    /// <summary>
+    /// Получает структуру переключателя аккаунтов со списком всех каналов бренда.
+    /// </summary>
+    public async Task<JsonElement> GetAccountSwitcherAsync(
+        CancellationToken cancellationToken = default) =>
+        await _controller.GetAccountSwitcherAsync(cancellationToken);
+
     public async Task<JsonElement> GetAccountMenuAsync(
         CancellationToken cancellationToken = default) =>
         await _controller.GetAccountMenuAsync(cancellationToken);

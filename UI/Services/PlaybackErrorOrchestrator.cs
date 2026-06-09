@@ -194,29 +194,6 @@ public sealed class PlaybackErrorOrchestrator : IDisposable
         }
     }
 
-    private async Task ShowStreamWarningToastAsync(Exception exception)
-    {
-        try
-        {
-            bool isSslFailure = NetworkErrorHelper.IsSslOrTlsHandshakeFailure(exception);
-
-            string titleKey = "Notification_PlaybackDelay_Title";
-            string messageKey = isSslFailure ? "Notification_DpiWarning_Message" : "Notification_PlaybackDelay_Message";
-            string? recommendationKey = isSslFailure ? "Recommendation_DpiBlocked" : "Recommendation_CheckNetwork";
-
-            await _notificationService.ShowToastAsync(
-                titleKey: titleKey,
-                messageKey: messageKey,
-                severity: NotificationSeverity.Warning,
-                durationMs: SkipToastDurationMs,
-                recommendationKey: recommendationKey);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Orchestrator] Failed to show warning toast: {ex.Message}");
-        }
-    }
-
     #endregion
 
     #region Specific Error Handlers
