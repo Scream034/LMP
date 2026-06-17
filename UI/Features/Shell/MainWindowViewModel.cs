@@ -120,7 +120,6 @@ public class MainWindowViewModel : ViewModelBase
     {
         Dispatcher.UIThread.Post(() =>
         {
-            _services.GetRequiredService<TrackViewModelFactory>().ClearCache();
             ViewModelBase.BroadcastAccountChanged();
         }, DispatcherPriority.Normal);
     }
@@ -318,7 +317,6 @@ public class MainWindowViewModel : ViewModelBase
             Log.Warn($"[Navigation] Error disposing {pageName}: {ex.Message}");
         }
 
-        _services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
         _services.GetRequiredService<TrackRegistry>().CleanupDeadReferences();
     }
 

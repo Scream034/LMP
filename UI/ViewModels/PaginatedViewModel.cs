@@ -173,7 +173,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
 
     #region Public Methods
 
-    protected void MoveSourceItem(int oldIndex, int newIndex)
+    /// <summary>
+    /// Переносит элементы в источник данных и сбрасывает состояние пагинации.
+    /// </summary>
+    protected virtual void MoveSourceItem(int oldIndex, int newIndex)
     {
         _sourceList.Edit(list =>
         {
@@ -188,7 +191,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         });
     }
 
-    protected async Task InitializeItemsAsync(IEnumerable<TSource> items, bool canFetchMore = true)
+    /// <summary>
+    /// Инициализирует модель новыми элементами.
+    /// </summary>
+    protected virtual async Task InitializeItemsAsync(IEnumerable<TSource> items, bool canFetchMore = true)
     {
         if (_isDisposed) return;
 
@@ -214,7 +220,10 @@ public abstract class PaginatedViewModel<TSource, TViewModel> : ViewModelBase, I
         }
     }
 
-    protected void ClearItems()
+    /// <summary>
+    /// Полностью очищает список элементов.
+    /// </summary>
+    protected virtual void ClearItems()
     {
         _sourceList.Clear();
         TotalCount = 0;

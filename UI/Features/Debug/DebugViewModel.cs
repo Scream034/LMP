@@ -77,34 +77,10 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
         ForceGcCommand = CreateCommand(ReactiveCommand.Create(ExecuteForceGc));
         ClearCachesCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecuteClearCaches));
 
+        // ПРИМЕЧАНИЕ: CheckVmLeaksCommand переведен в no-op, так как фабрика бесстейтовая.
         CheckVmLeaksCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
-            var vmFactory = AppEntry.Services.GetRequiredService<TrackViewModelFactory>();
-
-            var cacheField = vmFactory.GetType().GetField("_cache",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-            if (cacheField?.GetValue(vmFactory) is System.Collections.Concurrent.ConcurrentDictionary<string, WeakReference<TrackItemViewModel>> cache)
-            {
-                int alive = 0, dead = 0, disposed = 0;
-
-                foreach (var kvp in cache)
-                {
-                    if (kvp.Value.TryGetTarget(out var vm))
-                    {
-                        if (vm.IsDisposed) disposed++;
-                        else alive++;
-                    }
-                    else dead++;
-                }
-
-                AppendLog($"\n--- TRACK VM CACHE ---");
-                AppendLog($"Total entries: {cache.Count}");
-                AppendLog($"Alive (not disposed): {alive}");
-                AppendLog($"Disposed but in cache: {disposed}");
-                AppendLog($"Dead (collected): {dead}");
-                AppendLog($"--- END ---\n");
-            }
+            AppendLog("\n[Debug] Track VM cache monitoring disabled (Factory is stateless). VM leaks are impossible.");
         }));
 
         PlayYoutubeAudioCommand = CreateCommand(ReactiveCommand.CreateFromTask(ExecutePlayYoutubeAudio));
@@ -569,14 +545,10 @@ public sealed class DebugViewModel : ViewModelBase, IDisposable
             Youtube.ClearCache();
             AppendLog("✓ YouTube stream URL cache cleared");
 
-            var vmFactory = AppEntry.Services.GetRequiredService<TrackViewModelFactory>();
-            var cleaned = vmFactory.CleanupCache();
-            AppendLog($"✓ TrackVM cache: cleaned {cleaned} dead refs");
-
             MemoryCleanupHelper.PerformCleanup(aggressive: true);
             AppendLog("✓ GC + Skia caches completed");
 
-            await Task.Delay(300); // дать время фоновому Task завершиться
+            await Task.Delay(300);
             var memMb = GC.GetTotalMemory(false) / 1024 / 1024;
             AppendLog($"\nCurrent GC memory: {memMb} MB");
         }

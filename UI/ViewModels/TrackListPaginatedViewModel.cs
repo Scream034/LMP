@@ -8,15 +8,12 @@ namespace LMP.UI.ViewModels;
 /// Абстрактный базовый класс для всех экранов с пагинированным списком треков.
 /// Фиксирует generic-параметры PaginatedViewModel на (TrackInfo, TrackItemViewModel)
 /// и добавляет Smart Parent паттерн: O(1) обновление активного трека и прогресса загрузки.
-///
+/// </summary>
+/// <remarks>
 /// <para><b>Smart Parent:</b> события AudioEngine/DownloadService приходят сюда,
 /// а не в каждый TrackItemViewModel. Это устраняет N подписок (по одной на каждый трек)
-/// и заменяет их двумя подписками на родителе с O(1) lookup через TrackViewModelFactory.</para>
-///
-/// <para><b>Наследники должны реализовать:</b>
-/// <see cref="OnPlay"/> — действие при нажатии Play на треке,
-/// <see cref="FetchMoreFromNetworkAsync"/> — загрузка следующей порции данных.</para>
-/// </summary>
+/// и заменяет их локальным высокопроизводительным zero-alloc сканированием видимых элементов.</para>
+/// </remarks>
 public abstract class TrackListPaginatedViewModel
     : PaginatedViewModel<TrackInfo, TrackItemViewModel>
 {
@@ -55,7 +52,6 @@ public abstract class TrackListPaginatedViewModel
 
     /// <summary>
     /// Подписка на события AudioEngine.
-    /// Два события вместо N×2 (по два на каждую TrackItemViewModel).
     /// </summary>
     private void SubscribeToAudioEngine()
     {
@@ -76,8 +72,7 @@ public abstract class TrackListPaginatedViewModel
     }
 
     /// <summary>
-    /// O(1): сбрасываем предыдущую активную VM и устанавливаем новую.
-    /// TryGet — O(1) lookup в WeakReference-кэше фабрики.
+    /// O(1): сбрасываем предыдущую активную VM и устанавливаем новую через локальный zero-alloc поиск.
     /// </summary>
     private void UpdatePlaybackState(TrackInfo? currentTrack, bool isPlaying)
     {
@@ -89,7 +84,21 @@ public abstract class TrackListPaginatedViewModel
 
         if (currentTrack is null) return;
 
-        _currentActiveVm ??= VmFactory.TryGet(currentTrack.Id);
+        if (_currentActiveVm == null)
+        {
+            // Прямой проход по индексу ReadOnlyObservableCollection не выделяет память в куче
+            var count = Items.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var vm = Items[i];
+                if (vm.Id == currentTrack.Id)
+                {
+                    _currentActiveVm = vm;
+                    break;
+                }
+            }
+        }
+
         _currentActiveVm?.SetActive(true, isPlaying);
     }
 
@@ -97,6 +106,9 @@ public abstract class TrackListPaginatedViewModel
 
     #region Smart Parent — Downloads
 
+    /// <summary>
+    /// Подписка на DownloadService. Транслирует прогресс в локальные ViewModels.
+    /// </summary>
     private void SubscribeToDownloadService()
     {
         Observable.FromEvent<Action<string, float>, (string id, float progress)>(
@@ -104,7 +116,19 @@ public abstract class TrackListPaginatedViewModel
                 h => Downloads.OnProgress += h,
                 h => Downloads.OnProgress -= h)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(x => VmFactory.TryGet(x.id)?.SetDownloadState(true, x.progress))
+            .Subscribe(x =>
+            {
+                var count = Items.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    var vm = Items[i];
+                    if (vm.Id == x.id)
+                    {
+                        vm.SetDownloadState(true, x.progress);
+                        break;
+                    }
+                }
+            })
             .DisposeWith(Disposables);
 
         Observable.FromEvent<Action<string, bool, string?>, (string id, bool ok, string? path)>(
@@ -112,7 +136,19 @@ public abstract class TrackListPaginatedViewModel
                 h => Downloads.OnCompleted += h,
                 h => Downloads.OnCompleted -= h)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(x => VmFactory.TryGet(x.id)?.SetDownloadState(false, 0f))
+            .Subscribe(x =>
+            {
+                var count = Items.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    var vm = Items[i];
+                    if (vm.Id == x.id)
+                    {
+                        vm.SetDownloadState(false, 0f);
+                        break;
+                    }
+                }
+            })
             .DisposeWith(Disposables);
     }
 
@@ -126,7 +162,7 @@ public abstract class TrackListPaginatedViewModel
         TrackFilters.MatchesTitleOrAuthor(item, query);
 
     /// <summary>
-    /// Создаёт или возвращает из кэша VM для трека.
+    /// Создаёт или возвращает из локального кэша VM для трека.
     /// Сразу устанавливает активное состояние если трек играет.
     /// </summary>
     protected sealed override TrackItemViewModel CreateItemViewModel(TrackInfo track)
@@ -148,7 +184,6 @@ public abstract class TrackListPaginatedViewModel
 
     /// <summary>
     /// Вызывается когда пользователь нажимает Play на треке в списке.
-    /// Наследник определяет контекст воспроизведения (плейлист, поиск, история и т.д.).
     /// </summary>
     protected abstract void OnPlay(TrackInfo track);
 

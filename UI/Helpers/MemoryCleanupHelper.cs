@@ -224,16 +224,6 @@ public static class MemoryCleanupHelper
             Log.Warn($"[Memory] ImageCache cleanup error: {ex.Message}");
         }
 
-        // TrackViewModel factory
-        try
-        {
-            AppEntry.Services.GetRequiredService<TrackViewModelFactory>().CleanupCache();
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Memory] TrackVmFactory cleanup error: {ex.Message}");
-        }
-
         // TrackRegistry dead references
         try
         {
@@ -256,10 +246,6 @@ public static class MemoryCleanupHelper
         }
 
         // GPU texture cache — только при aggressive и только из UI потока.
-        // Compositor хранит текстуры обложек, ColorPicker градиентов, глифов —
-        // после навигации со страницы с большим количеством UI (Settings)
-        // эти текстуры остаются resident. PurgeResourceCaches освобождает
-        // неиспользуемые текстуры из GPU VRAM обратно в системную память.
         if (aggressive)
         {
             try
@@ -274,15 +260,12 @@ public static class MemoryCleanupHelper
 
                         if (mainWindow != null)
                         {
-                            // В Avalonia 12 Compositor извлекается через ElementComposition
                             var visual = Avalonia.Rendering.Composition.ElementComposition.GetElementVisual(mainWindow);
 
                             if (visual?.Compositor is Avalonia.Rendering.Composition.Compositor compositor)
                             {
-                                // Метод RequestCompositionUpdate полностью доступен
                                 compositor.RequestCompositionUpdate(() =>
                                 {
-                                    // Очистка кэшей SkiaSharp внутри потока рендеринга
                                     SKGraphics.PurgeAllCaches();
                                 });
                             }
