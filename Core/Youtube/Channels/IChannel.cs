@@ -1,8 +1,4 @@
-﻿
-
-using LMP.Core.Models;
-
-namespace LMP.Core.Youtube.Channels;
+﻿namespace LMP.Core.Youtube.Channels;
 
 /// <summary>
 /// Properties shared by channel metadata resolved from different sources.

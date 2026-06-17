@@ -1,7 +1,3 @@
-
-
-using LMP.Core.Models;
-
 namespace LMP.Core.Youtube.Videos;
 
 /// <summary>

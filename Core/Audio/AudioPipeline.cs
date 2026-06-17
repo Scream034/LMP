@@ -8,7 +8,6 @@ using LMP.Core.Audio.Helpers;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Exceptions;
-using LMP.Core.Models;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
@@ -402,7 +401,7 @@ public sealed class AudioPipeline : IAsyncDisposable
 
         try { cts.Cancel(); } catch (ObjectDisposedException) { }
 
-        // Мгновенно прерываем блокирующие синхронные чтения сетевого потока перед ожиданием завершения таски [1].
+        // Мгновенно прерываем блокирующие синхронные чтения сетевого потока перед ожиданием завершения таски
         // Без этого Read() зависнет на `.GetResult()`, дожидаясь скачивания чанка или 600мс тайм-аута.
         if (_source is Sources.CachingStreamSource cachingSource)
         {

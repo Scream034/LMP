@@ -2,8 +2,6 @@ using System.Threading.Channels;
 using LMP.Core.Audio.Helpers;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Exceptions;
-using LMP.Core.Models;
-using LMP.Core.Services;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;
@@ -161,7 +159,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         // Мгновенно отменяем активное скачивание чанков предыдущего Seek на UI-потоке,
-        // чтобы разблокировать очередь команд плеера без ожидания сетевого таймаута [2].
+        // чтобы разблокировать очередь команд плеера без ожидания сетевого таймаута
         CancelActiveSeek();
 
         int session = _session.BeginNew();
@@ -216,7 +214,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
         if (_state is PlayerState.Seeking or PlayerState.Buffering)
         {
-            // Пользователь нажал паузу во время ожидания сети — немедленно прерываем скачивание чанка [2].
+            // Пользователь нажал паузу во время ожидания сети — немедленно прерываем скачивание чанка
             CancelActiveSeek();
         }
 
@@ -258,7 +256,7 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
         if (_state is PlayerState.Idle or PlayerState.Disposed) return;
 
         // Мгновенно отменяем активный Seek на UI-потоке. Сетевой стрим CachingStreamSource
-        // выбросит OperationCanceledException, и цикл обработки команд мгновенно перейдет к StopCommand [2].
+        // выбросит OperationCanceledException, и цикл обработки команд мгновенно перейдет к StopCommand
         CancelActiveSeek();
         _lastRawPlayedSamples = -1; // Сброс экстраполяции
 

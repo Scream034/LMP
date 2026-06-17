@@ -1,4 +1,3 @@
-using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;

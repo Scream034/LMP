@@ -3,8 +3,6 @@ using System.Text.Json;
 using Avalonia.Threading;
 using LMP.Core.Data.Entities;
 using LMP.Core.Data.Repositories;
-using LMP.Core.Helpers;
-using LMP.Core.Models;
 using ReactiveUI;
 
 namespace LMP.Core.Services;

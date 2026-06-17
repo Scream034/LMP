@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using LMP.Core.Models;
 
 
 namespace LMP.Core.Youtube.Channels;

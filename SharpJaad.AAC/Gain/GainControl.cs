@@ -1,6 +1,6 @@
 ﻿using SharpJaad.AAC.Syntax;
 using System;
-using System.Linq;
+
 using static SharpJaad.AAC.Syntax.ICSInfo;
 
 namespace SharpJaad.AAC.Gain

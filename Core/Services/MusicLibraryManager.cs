@@ -1,5 +1,4 @@
-﻿using LMP.Core.Models;
-using ReactiveUI;
+﻿using ReactiveUI;
 
 namespace LMP.Core.Services;
 

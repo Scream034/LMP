@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using LMP.Core.Models;
 using LMP.Core.Youtube.Videos;
 
 namespace LMP.Core.Youtube.Search;

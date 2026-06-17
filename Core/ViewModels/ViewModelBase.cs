@@ -1,319 +1,207 @@
 ﻿using System.Reactive.Disposables;
-using System.Reactive.Linq;
-using System.Reactive.Disposables.Fluent;
-using System.Linq;
-
-using LMP.Core.Services;
 using ReactiveUI;
+using ReactiveUI.Fody.Helpers;
 
 namespace LMP.Core.ViewModels;
 
 /// <summary>
-/// Уровень приостановки UI-обновлений.
+/// Базовый класс для всех моделей представления (ViewModels) приложения.
+/// Обеспечивает поддержку реактивного изменения свойств и управление жизненным циклом ресурсов.
 /// </summary>
-public enum SuspendLevel
+public abstract class ViewModelBase : ReactiveObject, IDisposable, ISuspendable
 {
-    /// <summary>
-    /// Окно активно — полная работа всех подписок и анимаций.
-    /// </summary>
-    None = 0,
+    #region Properties
 
     /// <summary>
-    /// Потеря фокуса или сворачивание (не в tray).
-    /// Поведение зависит от настройки OptimizeWhenInactive:
-    /// - true: аналогично Hard (dispose heavy subs)
-    /// - false: работает штатно (для второго монитора)
+    /// Контейнер для автоматической утилизации реактивных подписок и ресурсов.
     /// </summary>
-    Soft = 1,
+    protected CompositeDisposable Disposables { get; } = [];
 
     /// <summary>
-    /// Минимизация в tray — жёсткая остановка.
-    /// Всегда dispose heavy подписок независимо от настроек.
+    /// Текущий глобальный уровень приостановки активности приложения.
     /// </summary>
-    Hard = 2
-}
-
-public abstract class ViewModelBase : ReactiveObject, IDisposable
-{
-    #region Static Lifecycle
-
-    private static readonly Lock _lifecycleLock = new();
-    private static readonly List<WeakReference<ViewModelBase>> _instances = [];
-    private static volatile SuspendLevel _currentLevel = SuspendLevel.None;
+    public static SuspendLevel CurrentSuspendLevel { get; private set; } = SuspendLevel.None;
 
     /// <summary>
-    /// Время последнего изменения уровня — для дебаунса.
+    /// Указывает, находится ли текущий компонент в состоянии приостановки (фоновом режиме).
     /// </summary>
-    private static DateTime _lastLevelChangeTime = DateTime.MinValue;
+    [Reactive] public bool IsSuspended { get; private set; }
 
     /// <summary>
-    /// Минимальный интервал между broadcast (мс).
+    /// Предоставляет доступ к службе локализации для одноуровневого биндинга (требование IFilterable).
     /// </summary>
-    private const int BroadcastDebounceMs = 300;
-
-    /// <summary>
-    /// Текущий уровень приостановки приложения.
-    /// </summary>
-    public static SuspendLevel CurrentSuspendLevel => _currentLevel;
-
-    /// <summary>
-    /// Приложение в режиме suspend (любой уровень кроме None).
-    /// Для обратной совместимости.
-    /// </summary>
-    public static bool IsSuspended => _currentLevel != SuspendLevel.None;
-
-    /// <summary>
-    /// Приложение в жёстком suspend (tray).
-    /// </summary>
-    public static bool IsHardSuspended => _currentLevel == SuspendLevel.Hard;
-
-    /// <summary>
-    /// Вызывается из MainWindow при изменении состояния окна.
-    /// 
-    /// <para><b>Логика уровней:</b></para>
-    /// <list type="bullet">
-    ///   <item>Hard: tray — всегда suspend</item>
-    ///   <item>Soft: потеря фокуса — suspend если OptimizeWhenInactive=true</item>
-    ///   <item>None: активное окно — resume</item>
-    /// </list>
-    /// 
-    /// <para><b>Дебаунс:</b> Игнорирует повторные вызовы в течение 300ms для предотвращения спама,
-    /// кроме критических переходов в трей (Hard) и полного восстановления активности (None).</para>
-    /// </summary>
-    /// <param name="level">Новый уровень suspend</param>
-    /// <param name="forceOptimize">
-    /// Для Soft уровня: true = оптимизировать (пользователь включил настройку),
-    /// false = работать штатно (второй монитор).
-    /// Игнорируется для Hard и None.
-    /// </param>
-    public static void BroadcastSuspendLevel(SuspendLevel level, bool forceOptimize = true)
-    {
-        // Определяем эффективный уровень
-        SuspendLevel effectiveLevel = level switch
-        {
-            SuspendLevel.Hard => SuspendLevel.Hard,
-            SuspendLevel.Soft when forceOptimize => SuspendLevel.Soft,
-            SuspendLevel.Soft => SuspendLevel.None, // Soft без оптимизации = работаем штатно
-            _ => SuspendLevel.None
-        };
-
-        // РАННЯЯ ПРОВЕРКА: тот же уровень — выход
-        if (_currentLevel == effectiveLevel) return;
-
-        // ДЕБАУНС: предотвращаем спам при циклической потере фокуса.
-        var now = DateTime.UtcNow;
-        if ((now - _lastLevelChangeTime).TotalMilliseconds < BroadcastDebounceMs)
-        {
-            // <remarks>
-            // Переход в активное состояние (None) или жесткий уход в трей (Hard) 
-            // должны применяться мгновенно. Если дебаунсить активацию (None), 
-            // при быстром развертывании окна UI-слой останется в состоянии "заморозки" (без таймеров),
-            // хотя само приложение визуально будет доступно пользователю.
-            // </remarks>
-            if (effectiveLevel != SuspendLevel.Hard && effectiveLevel != SuspendLevel.None)
-            {
-                Log.Debug($"[Lifecycle] Broadcast debounced: {_currentLevel} → {effectiveLevel}");
-                return;
-            }
-        }
-        _lastLevelChangeTime = now;
-
-        var previousLevel = _currentLevel;
-        _currentLevel = effectiveLevel;
-
-        var alive = CollectAlive();
-
-        Log.Debug($"[Lifecycle] Level change: {previousLevel} → {effectiveLevel} " +
-                  $"(requested={level}, forceOptimize={forceOptimize}), VMs={alive.Count}");
-
-        foreach (var vm in alive)
-        {
-            try
-            {
-                if (effectiveLevel == SuspendLevel.None)
-                    vm.OnResume(previousLevel);
-                else
-                    vm.OnSuspend(effectiveLevel);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[Lifecycle] Error in {vm.GetType().Name}: {ex.Message}");
-            }
-        }
-
-        Log.Debug($"[Lifecycle] Level change complete. Current={_currentLevel}");
-    }
-
-    /// <summary>
-    /// Упрощённый вызов для жёсткого suspend (tray).
-    /// </summary>
-    public static void BroadcastSuspend() => BroadcastSuspendLevel(SuspendLevel.Hard);
-
-    /// <summary>
-    /// Упрощённый вызов для resume.
-    /// </summary>
-    public static void BroadcastResume() => BroadcastSuspendLevel(SuspendLevel.None);
-
-    /// <summary>
-    /// Собирает живые экземпляры, очищая мёртвые WeakReference.
-    /// </summary>
-    private static List<ViewModelBase> CollectAlive()
-    {
-        lock (_lifecycleLock)
-        {
-            _instances.RemoveAll(static wr => !wr.TryGetTarget(out _));
-
-            var result = new List<ViewModelBase>(_instances.Count);
-            foreach (var wr in _instances)
-            {
-                if (wr.TryGetTarget(out var vm))
-                    result.Add(vm);
-            }
-            return result;
-        }
-    }
-
-    /// <summary>
-    /// Выполняет широковещательную рассылку события смены аккаунта на все живые ViewModels
-    /// для предотвращения смешивания пользовательских данных.
-    /// </summary>
-    public static void BroadcastAccountChanged()
-    {
-        var alive = CollectAlive();
-        Log.Debug($"[Lifecycle] Broadcasting account change to {alive.Count} active ViewModels.");
-
-        foreach (var vm in alive)
-        {
-            try
-            {
-                vm.OnAccountChanged();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"[Lifecycle] Error executing OnAccountChanged in {vm.GetType().Name}: {ex.Message}");
-            }
-        }
-    }
-
-    #endregion
-
-    #region Localization Shortcuts
-
-    /// <summary>Статическое для кода.</summary>
-    public static LocalizationService SL => LocalizationService.Instance;
-
-    /// <summary>Нестатическое для XAML биндинга (через DataContext).</summary>
 #pragma warning disable CA1822 // Пометьте члены как статические
     public LocalizationService L => LocalizationService.Instance;
 #pragma warning restore CA1822 // Пометьте члены как статические
 
+    /// <summary>
+    /// Предоставляет статический доступ к службе локализации.
+    /// </summary>
+    public static LocalizationService SL => LocalizationService.Instance;
+
     #endregion
 
-    #region Instance
+    #region Constructor
 
     /// <summary>
-    /// Контейнер для всех подписок и IDisposable объектов.
-    /// Автоматически очищается при вызове Dispose().
+    /// Инициализирует базовый класс. Выполняет автоматическую точечную регистрацию
+    /// в реестре жизненного цикла, если наследник реализует интерфейс <see cref="IAccountAware"/>.
     /// </summary>
-    protected CompositeDisposable Disposables { get; } = [];
-
-    private bool _isDisposed;
-
     protected ViewModelBase()
     {
-        lock (_lifecycleLock)
+        if (this is IAccountAware accountAware)
         {
-            _instances.Add(new WeakReference<ViewModelBase>(this));
+            LifecycleRegistry.Instance?.RegisterAccountAware(accountAware);
         }
     }
 
     #endregion
 
-    #region Lifecycle — переопределяйте в наследниках
+    #region Navigation Lifecycle
 
     /// <summary>
-    /// Окно перешло в suspend состояние.
-    /// 
-    /// <para><b>Уровни:</b></para>
-    /// <list type="bullet">
-    ///   <item>Hard: tray — обязательно остановить всё тяжёлое</item>
-    ///   <item>Soft: потеря фокуса с OptimizeWhenInactive — можно оптимизировать</item>
-    /// </list>
-    /// 
-    /// Вызывается на UI-потоке.
+    /// Асинхронно вызывается при переходе на данную страницу навигации.
     /// </summary>
-    /// <param name="level">Уровень suspend</param>
-    protected virtual void OnSuspend(SuspendLevel level) { }
+    public virtual Task OnNavigatedToAsync() => Task.CompletedTask;
+
+    #endregion
+
+    #region ISuspendable Explicit Implementation
+
+    /// <inheritdoc />
+    void ISuspendable.OnSuspend(SuspendLevel level)
+    {
+        IsSuspended = true; // Фиксируем состояние приостановки на уровне VM
+        OnSuspend(level);
+    }
+
+    /// <inheritdoc />
+    void ISuspendable.OnResume(SuspendLevel previousLevel)
+    {
+        IsSuspended = false; // Возвращаем в активное состояние
+        OnResume(previousLevel);
+    }
+
+    #endregion
+
+    #region Protected Virtual Lifecycle
 
     /// <summary>
-    /// Окно вернулось в активное состояние.
-    /// 
-    /// <param name="previousLevel">Предыдущий уровень suspend (для понимания что восстанавливать)</param>
-    /// Вызывается на UI-потоке.
-    /// </summary>
-    protected virtual void OnResume(SuspendLevel previousLevel) { }
-
-    /// <summary>
-    /// Обратная совместимость: вызывается если наследник не переопределил OnSuspend(level).
+    /// Вызывается при переходе компонента в фоновый режим без параметров.
     /// </summary>
     protected virtual void OnSuspend() { }
 
     /// <summary>
-    /// Обратная совместимость: вызывается если наследник не переопределил OnResume(level).
+    /// Вызывается при возвращении компонента в активный режим без параметров.
     /// </summary>
     protected virtual void OnResume() { }
 
     /// <summary>
-    /// Вызывается из MainWindowViewModel после установки CurrentPage
-    /// и завершения CrossFade-анимации (~180ms задержка).
+    /// Вызывается при переходе компонента в фоновый режим с указанием уровня приостановки.
+    /// Перенаправляет вызов в беспараметрический метод для совместимости.
     /// </summary>
-    public virtual Task OnNavigatedToAsync() => Task.CompletedTask;
+    protected virtual void OnSuspend(SuspendLevel level) => OnSuspend();
 
     /// <summary>
-    /// Вызывается при изменении активного аккаунта или состояния авторизации.
-    /// Переопределите в наследниках для сброса локальных кэшей данных.
+    /// Вызывается при возвращении компонента в активный режим с указанием предыдущего уровня приостановки.
+    /// Перенаправляет вызов в беспараметрический метод для совместимости.
+    /// </summary>
+    protected virtual void OnResume(SuspendLevel previousLevel) => OnResume();
+
+    /// <summary>
+    /// Вызывается при изменении профиля пользователя.
     /// </summary>
     protected virtual void OnAccountChanged() { }
 
     #endregion
 
-    #region Command Helper
+    #region Helpers for Subclasses
 
     /// <summary>
-    /// Универсальный helper для ReactiveCommand.
+    /// Регистрирует команду в контейнере утилизации и настраивает отслеживание ошибок.
     /// </summary>
-    protected TCommand CreateCommand<TCommand>(TCommand command) where TCommand : IReactiveCommand
+    protected ReactiveCommand<TIn, TOut> CreateCommand<TSource, TIn, TOut>(
+        ReactiveCommand<TIn, TOut> command)
+        where TSource : notnull
     {
-        command.ThrownExceptions
-            .Subscribe(ex => Log.Error($"[{GetType().Name}] Command error: {ex.Message}"))
-            .DisposeWith(Disposables);
+        command.DisposeWith(Disposables);
+        return command;
+    }
 
-        if (command is IDisposable disposable)
+    /// <summary>
+    /// Регистрирует команду в контейнере утилизации ресурсов.
+    /// </summary>
+    protected TCommand CreateCommand<TCommand>(TCommand command) where TCommand : IDisposable
+    {
+        command.DisposeWith(Disposables);
+        return command;
+    }
+
+    #endregion
+
+    #region Static Lifecycle Broadcasts
+
+    /// <summary>
+    /// Распространяет уровень приостановки по системе. Применяет каскадную модель навигации 
+    /// и точечно оповещает фоновые службы .
+    /// </summary>
+    public static void BroadcastSuspendLevel(SuspendLevel level, bool forceOptimize = false)
+    {
+        var previousLevel = CurrentSuspendLevel;
+        if (previousLevel == level && !forceOptimize) return;
+
+        CurrentSuspendLevel = level;
+
+        // 1. Оповещаем зарегистрированные фоновые службы (например, AudioEngine)
+        if (LifecycleRegistry.Instance != null)
         {
-            disposable.DisposeWith(Disposables);
+            if (level != SuspendLevel.None)
+                LifecycleRegistry.Instance.BroadcastBackgroundSuspend(level);
+            else
+                LifecycleRegistry.Instance.BroadcastBackgroundResume(previousLevel);
         }
 
-        return command;
+        // 2. Иерархическое распространение: оповещаем только активную UI-страницу 
+        var activePage = LifecycleRegistry.ActiveUiPageResolver?.Invoke();
+        if (activePage != null)
+        {
+            if (level != SuspendLevel.None)
+                activePage.OnSuspend(level);
+            else
+                activePage.OnResume(previousLevel);
+        }
+    }
+
+    /// <summary>
+    /// Рассылает событие изменения аккаунта через точечный реестр.
+    /// </summary>
+    public static void BroadcastAccountChanged()
+    {
+        LifecycleRegistry.Instance?.BroadcastAccountChanged();
     }
 
     #endregion
 
     #region IDisposable
 
+    /// <summary>
+    /// Выполняет утилизацию ресурсов компонента.
+    /// </summary>
     public void Dispose()
     {
         Dispose(true);
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>
+    /// Выполняет утилизацию управляемых и неуправляемых ресурсов.
+    /// </summary>
     protected virtual void Dispose(bool disposing)
     {
-        if (_isDisposed) return;
         if (disposing)
         {
             Disposables.Dispose();
         }
-        _isDisposed = true;
     }
 
     #endregion

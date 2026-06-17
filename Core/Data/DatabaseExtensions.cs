@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using LMP.Core.Data.Entities;
-using LMP.Core.Models;
 
 namespace LMP.Core.Data;
 
@@ -249,7 +248,7 @@ public static class DatabaseExtensions
     }
 
     /// <summary>
-    /// Сохраняет запись об успешном импорте любимых треков с использованием JSON-ключей [1].
+    /// Сохраняет запись об успешном импорте любимых треков с использованием JSON-ключей
     /// </summary>
     private static void SaveSuccessMigrationNotification(LibraryDbContext context)
     {

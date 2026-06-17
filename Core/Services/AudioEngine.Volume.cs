@@ -1,5 +1,4 @@
 using LMP.Core.Audio.Normalization;
-using LMP.Core.Models;
 
 namespace LMP.Core.Services;
 

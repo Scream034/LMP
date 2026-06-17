@@ -1,8 +1,4 @@
-﻿using System.Buffers;
-using LMP.Core.Audio;
-using LMP.Core.Models;
-
-namespace LMP.Core.Services;
+﻿namespace LMP.Core.Services;
 
 public sealed class DownloadService
 {

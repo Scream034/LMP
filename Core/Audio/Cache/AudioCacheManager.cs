@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LMP.Core.Audio.Interfaces;
-using LMP.Core.Models;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio.Cache;

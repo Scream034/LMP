@@ -3,8 +3,6 @@ using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Http;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Sources;
-using LMP.Core.Models;
-using LMP.Core.Services;
 using static LMP.Core.Audio.AudioConstants;
 
 namespace LMP.Core.Audio;

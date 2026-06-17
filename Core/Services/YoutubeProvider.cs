@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using LMP.Core.Models;
 using LMP.Core.Youtube;
 using LMP.Core.Youtube.Channels;
 using LMP.Core.Youtube.Music;
@@ -16,12 +15,8 @@ using LMP.Core.Helpers.Extensions;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using LMP.Core.Youtube.Exceptions;
-using LMP.Core.Audio;
 using LMP.Core.Youtube.Bridge.NToken;
 using LMP.Core.Youtube.Bridge.SigCipher;
-using LMP.Core.Helpers;
-using Microsoft.Extensions.DependencyInjection;
-using LMP.Core.Audio.Http;
 
 namespace LMP.Core.Services;
 

@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;

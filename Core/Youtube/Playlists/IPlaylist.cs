@@ -1,8 +1,4 @@
-﻿
-
-using LMP.Core.Models;
-
-namespace LMP.Core.Youtube.Playlists;
+﻿namespace LMP.Core.Youtube.Playlists;
 
 /// <summary>
 /// Properties shared by playlist metadata resolved from different sources.

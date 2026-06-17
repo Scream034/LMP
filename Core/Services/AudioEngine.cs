@@ -1,11 +1,8 @@
 ﻿using System.Collections.Concurrent;
 using System.Threading.Channels;
-using LMP.Core.Audio;
 using LMP.Core.Audio.Helpers;
 using LMP.Core.Audio.Normalization;
 using LMP.Core.Exceptions;
-using LMP.Core.Models;
-using LMP.Core.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
@@ -16,23 +13,9 @@ namespace LMP.Core.Services;
 /// Координирует AudioPlayer, очередь треков, громкость и UI события.
 /// </summary>
 /// <remarks>
-/// <para><b>Декомпозиция (partial classes):</b></para>
-/// <list type="bullet">
-///   <item><c>AudioEngine.cs</c> — ядро: session, command loop, playback control, error handling.</item>
-///   <item><c>AudioEngine.Volume.cs</c> — вся логика громкости, gain, нормализация, persistence.</item>
-///   <item><c>AudioEngine.Queue.cs</c> — очередь, shuffle, навигация.</item>
-///   <item><c>AudioEngine.NToken.cs</c> — предупреждения о сложной расшифровке n-токена.</item>
-/// </list>
-///
-/// <para><b>Session-aware cancellation:</b></para>
-/// <para>Каждая новая операция вызывает <see cref="BeginNewSession"/>,
-/// что отменяет <see cref="_sessionCts"/>.</para>
-///
-/// <para><b>Failure Barrier:</b></para>
-/// <para>ID трека, вызвавшего фатальную ошибку, запечатывается в <see cref="_sealedFailedTrackId"/>.
-/// Барьер сбрасывается только явным действием пользователя.</para>
+/// <para>Освобожден от наследования UI-класса ViewModelBase для строгого разделения слоев Core и UI </para>
 /// </remarks>
-public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisposable
+public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposable, IAsyncDisposable
 {
     #region Engine Command Types
 
@@ -273,6 +256,9 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
         _commandProcessorTask = Task.Run(ProcessCommandsAsync);
         _volumeSaveTask = Task.Run(VolumeSaveLoopAsync);
+
+        // Внедряем регистрацию службы в реестре жизненного цикла  [2]
+        LifecycleRegistry.Instance?.RegisterBackgroundSuspendable(this);
     }
 
     /// <summary>
@@ -1123,16 +1109,18 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
 
     #endregion
 
-    #region ViewModelBase
+    #region ISuspendable Implementation
 
-    protected override void OnSuspend()
+    /// <inheritdoc />
+    public void OnSuspend(SuspendLevel level)
     {
         _isSuspended = true;
         if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
             cs.Suspend();
     }
 
-    protected override void OnResume()
+    /// <inheritdoc />
+    public void OnResume(SuspendLevel previousLevel)
     {
         _isSuspended = false;
         if (_player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
@@ -1199,6 +1187,43 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     #endregion
 
     #region Dispose
+
+    /// <summary>
+    /// Синхронный dispose — FALLBACK shutdown path.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort cleanup без блокирующего ожидания async операций.
+    /// НЕ ожидает flush pending gain writes — возможна потеря последних записей.
+    /// Для корректного flush использовать <see cref="DisposeAsync"/>.
+    /// </remarks>
+    private void Dispose(bool disposing)
+    {
+        if (disposing && !_disposed)
+        {
+            _disposed = true;
+
+            _youtube.OnNTokenDecryptionStarted -= HandleNTokenDecryptionStarted;
+            lock (_sessionLock) { _sessionCts?.Cancel(); _sessionCts?.Dispose(); }
+
+            _library.UpdateSettings(s =>
+            {
+                s.Volume = _volumePercent;
+                s.RepeatMode = RepeatMode;
+                s.ShuffleEnabled = ShuffleEnabled;
+            });
+
+            // Закрываем канал явно, затем cancel — максимально быстрое завершение loop'а
+            _commandQueue.Writer.TryComplete();
+            _lifetimeCts.Cancel();
+
+            // Best-effort блокирующее ожидание: короткий таймаут, не блокируем UI надолго
+            try { _commandProcessorTask?.Wait(millisecondsTimeout: 500); } catch { }
+            try { _volumeSaveTask?.Wait(millisecondsTimeout: 200); } catch { }
+
+            _player.Dispose();
+            _lifetimeCts.Dispose();
+        }
+    }
 
     /// <summary>
     /// Асинхронный dispose — PRIMARY shutdown path.
@@ -1273,41 +1298,12 @@ public sealed partial class AudioEngine : ViewModelBase, IDisposable, IAsyncDisp
     }
 
     /// <summary>
-    /// Синхронный dispose — FALLBACK shutdown path.
+    /// Выполняет синхронную утилизацию ресурсов аудио-движка.
     /// </summary>
-    /// <remarks>
-    /// Best-effort cleanup без блокирующего ожидания async операций.
-    /// НЕ ожидает flush pending gain writes — возможна потеря последних записей.
-    /// Для корректного flush использовать <see cref="DisposeAsync"/>.
-    /// </remarks>
-    protected override void Dispose(bool disposing)
+    public void Dispose()
     {
-        if (disposing && !_disposed)
-        {
-            _disposed = true;
-
-            _youtube.OnNTokenDecryptionStarted -= HandleNTokenDecryptionStarted;
-            lock (_sessionLock) { _sessionCts?.Cancel(); _sessionCts?.Dispose(); }
-
-            _library.UpdateSettings(s =>
-            {
-                s.Volume = _volumePercent;
-                s.RepeatMode = RepeatMode;
-                s.ShuffleEnabled = ShuffleEnabled;
-            });
-
-            // Закрываем канал явно, затем cancel — максимально быстрое завершение loop'а
-            _commandQueue.Writer.TryComplete();
-            _lifetimeCts.Cancel();
-
-            // Best-effort блокирующее ожидание: короткий таймаут, не блокируем UI надолго
-            try { _commandProcessorTask?.Wait(millisecondsTimeout: 500); } catch { }
-            try { _volumeSaveTask?.Wait(millisecondsTimeout: 200); } catch { }
-
-            _player.Dispose();
-            _lifetimeCts.Dispose();
-        }
-        base.Dispose(disposing);
+        Dispose(true);
+        GC.SuppressFinalize(this);
     }
 
     #endregion

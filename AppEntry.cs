@@ -56,6 +56,10 @@ public sealed class AppEntry
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
+            LifecycleRegistry.Instance = Services.GetRequiredService<LifecycleRegistry>();
+            LifecycleRegistry.ActiveUiPageResolver = () =>
+                Services.GetService<MainWindowViewModel>()?.CurrentPage;
+
             // Безопасная инициализация и автоматическая миграция БД
             MigrateDatabaseSync();
 
@@ -189,7 +193,7 @@ public sealed class AppEntry
     }
 
     /// <summary>
-    /// Записывает локализованное уведомление о сбросе базы данных с использованием JSON-ключей [1].
+    /// Записывает локализованное уведомление о сбросе базы данных с использованием JSON-ключей
     /// </summary>
     private static void SaveEmergencyNotification()
     {
@@ -400,8 +404,9 @@ public sealed class AppEntry
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<PlaylistViewModel>();
         services.AddTransient<SyncSelectionViewModel>();
-        services.AddSingleton<TrackViewModelFactory>();
 
+        services.AddSingleton<LifecycleRegistry>();
+        services.AddSingleton<TrackViewModelFactory>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<PlayerBarViewModel>();
 

@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using LMP.Core.Data.Entities;
-using LMP.Core.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace LMP.Core.Data.Repositories;

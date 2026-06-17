@@ -1,10 +1,8 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
-using LMP.Core.Audio;
 using LMP.Core.Audio.Cache;
 using LMP.Core.Data.Repositories;
-using LMP.Core.Models;
 
 namespace LMP.Core.Services;
 
@@ -16,7 +14,7 @@ namespace LMP.Core.Services;
 /// <para>Использует комбинацию слабых ссылок (<see cref="WeakReference{T}"/>) для неиспользуемых треков 
 /// и жесткого закрепления (<see cref="_pinned"/>) для активных, лайкнутых или загруженных на устройство элементов.
 /// Позволяет минимизировать накладные расходы сборщика мусора (GC) и избежать дублирования объектов.</para>
-/// <para>Интегрирован с механизмом изоляции мультиаккаунтов через обращение к <see cref="CookieAuthService"/> [1].</para>
+/// <para>Интегрирован с механизмом изоляции мультиаккаунтов через обращение к <see cref="CookieAuthService"/></para>
 /// </remarks>
 public sealed class TrackRegistry
 {
@@ -34,7 +32,7 @@ public sealed class TrackRegistry
     /// </summary>
     /// <param name="repository">Репозиторий метаданных треков.</param>
     /// <param name="playlists">Репозиторий управления связями плейлистов.</param>
-    /// <param name="auth">Служба аутентификации для извлечения контекста активного пользователя [1].</param>
+    /// <param name="auth">Служба аутентификации для извлечения контекста активного пользователя</param>
     public TrackRegistry(
         ITrackRepository? repository = null,
         IPlaylistRepository? playlists = null,
@@ -46,7 +44,7 @@ public sealed class TrackRegistry
     }
 
     /// <summary>
-    /// Идентификатор активного аккаунта для сквозного контекстного маппинга данных [1].
+    /// Идентификатор активного аккаунта для сквозного контекстного маппинга данных
     /// </summary>
     private string CurrentOwnerId => _auth?.State?.DisplayId ?? "guest";
 

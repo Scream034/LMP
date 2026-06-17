@@ -3,7 +3,6 @@ using System.Net.Http.Headers;
 using LMP.Core.Audio.Http;
 using LMP.Core.Exceptions;
 using LMP.Core.Youtube.Utils;
-using LMP.Core.Helpers;
 
 namespace LMP.Core.Audio.Sources;
 
@@ -978,11 +977,6 @@ public sealed partial class CachingStreamSource
     /// Эвикция удалённых чанков из RAM с корректным возвратом буферов в пул.
     /// Удаляет до <c>MaxRamChunks / 4</c> самых далёких от текущей позиции чанков.
     /// </summary>
-    /// <remarks>
-    /// <para><b>7:</b> Manual loop вместо LINQ (Where → OrderByDescending → Take → ToList).
-    /// Устраняет аллокации замыканий, итераторов и промежуточного List на каждый вызов.
-    /// Вызывается из preload loop и ReleaseRamBuffers — hot path при воспроизведении.</para>
-    /// </remarks>
     private void EvictDistantRamChunks()
     {
         int current = Volatile.Read(ref _currentChunk);

@@ -1,6 +1,5 @@
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Exceptions;
-using LMP.Core.Services;
 using NAudio;
 using NAudio.Wave;
 

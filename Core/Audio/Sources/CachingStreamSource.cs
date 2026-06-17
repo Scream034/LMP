@@ -3,7 +3,6 @@ using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
 using LMP.Core.Exceptions;
-using LMP.Core.Models;
 
 namespace LMP.Core.Audio.Sources;
 

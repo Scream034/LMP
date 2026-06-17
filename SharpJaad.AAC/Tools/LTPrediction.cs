@@ -1,7 +1,7 @@
 ﻿using SharpJaad.AAC.Filterbank;
 using SharpJaad.AAC.Syntax;
 using System;
-using System.Linq;
+
 
 namespace SharpJaad.AAC.Tools
 {

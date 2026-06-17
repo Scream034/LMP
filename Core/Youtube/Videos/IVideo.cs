@@ -1,8 +1,4 @@
-﻿
-
-using LMP.Core.Models;
-
-namespace LMP.Core.Youtube.Videos;
+﻿namespace LMP.Core.Youtube.Videos;
 
 /// <summary>
 /// Properties shared by video metadata resolved from different sources.

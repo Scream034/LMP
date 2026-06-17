@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 using LMP.Core.Helpers.Extensions;
 using LMP.Core.Youtube.Utils;

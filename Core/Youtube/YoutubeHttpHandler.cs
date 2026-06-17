@@ -2,8 +2,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using LMP.Core.Models;
-using LMP.Core.Services;
 using LMP.Core.Youtube.Exceptions;
 using LMP.Core.Youtube.Utils;
 

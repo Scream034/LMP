@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
-using LMP.Core.Models;
 using LMP.Core.Youtube.Bridge;
 
 using LMP.Core.Youtube.Exceptions;

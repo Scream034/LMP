@@ -1,5 +1,3 @@
-using LMP.Core.Services;
-
 namespace LMP.Core.ViewModels;
 
 /// <summary>
