@@ -19,6 +19,7 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(AuthState))]
 [JsonSerializable(typeof(YoutubeAccountItem))]
 [JsonSerializable(typeof(List<YoutubeAccountItem>))]
+[JsonSerializable(typeof(List<string>))]
 [JsonSourceGenerationOptions(
     WriteIndented = false, 
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

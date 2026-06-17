@@ -1,7 +1,5 @@
-﻿using LMP.Core.Models;
-using LMP.Core.Youtube.Playlists;
+﻿using LMP.Core.Youtube.Playlists;
 using LMP.Core.Helpers.Extensions;
-using LMP.Core.Youtube.Exceptions;
 
 namespace LMP.Core.Services;
 
@@ -193,101 +191,14 @@ public partial class YoutubeUserDataService
     /// <summary>
     /// Возвращает базовые метаданные текущего авторизованного пользователя (имя, почту и аватар).
     /// </summary>
-    public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()
+    public async Task<(string Name, string Email, string AvatarUrl, string ActiveGaiaId)> GetAccountInfoAsync()
     {
-        if (!_auth.IsAuthenticated) return ("Guest", "", "");
+        if (!_auth.IsAuthenticated) return ("Guest", "", "", "");
 
         // Принудительное обновление кэша профиля через валидацию сессии
         await _auth.ValidateSessionAsync();
 
-        return (_auth.State.UserName, _auth.State.UserEmail, _auth.State.AvatarUrl);
-    }
-
-    /// <summary>
-    /// Парсит отдельный элемент аккаунта из сырого JSON-узла InnerTube.
-    /// </summary>
-    private static void ProcessAccountItem(System.Text.Json.JsonElement accountItem, List<YoutubeAccountItem> results)
-    {
-        var name = accountItem.GetPropertyOrNull("accountName")
-            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("text")?.GetStringOrNull()
-            ?? accountItem.GetPropertyOrNull("accountName")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
-            ?? "Unknown";
-
-        var email = accountItem.GetPropertyOrNull("accountByline")
-            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("text")?.GetStringOrNull()
-            ?? accountItem.GetPropertyOrNull("accountByline")?.GetPropertyOrNull("simpleText")?.GetStringOrNull()
-            ?? "";
-
-        var avatar = accountItem.GetPropertyOrNull("accountPhoto")
-            ?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.LastOrDefault()
-            .GetPropertyOrNull("url")?.GetStringOrNull() ?? "";
-
-        var isSelected = accountItem.GetPropertyOrNull("isSelected")?.GetBoolean() ?? false;
-
-        string gaiaId = "";
-        string handle = "";
-        string authUser = AuthState.DefaultAuthUser;
-
-        var parsedHandle = accountItem.GetPropertyOrNull("channelHandle")
-            ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
-            .GetPropertyOrNull("text")?.GetStringOrNull();
-        if (!string.IsNullOrEmpty(parsedHandle))
-        {
-            handle = parsedHandle;
-        }
-
-        var tokens = accountItem.GetPropertyOrNull("serviceEndpoint")
-            ?.GetPropertyOrNull("selectActiveIdentityEndpoint")
-            ?.GetPropertyOrNull("supportedTokens")
-            ?.EnumerateArrayOrNull();
-
-        if (tokens != null)
-        {
-            foreach (var token in tokens.Value)
-            {
-                var stateToken = token.GetPropertyOrNull("accountStateToken");
-                if (stateToken != null)
-                {
-                    var gId = stateToken.Value.GetPropertyOrNull("obfuscatedGaiaId")?.GetStringOrNull();
-                    if (!string.IsNullOrEmpty(gId))
-                    {
-                        gaiaId = gId;
-                    }
-                }
-
-                var signinToken = token.GetPropertyOrNull("accountSigninToken");
-                if (signinToken != null)
-                {
-                    var signinUrl = signinToken.Value.GetPropertyOrNull("signinUrl")?.GetStringOrNull();
-                    if (!string.IsNullOrEmpty(signinUrl))
-                    {
-                        var urlSpan = signinUrl.AsSpan();
-                        int targetIdx = urlSpan.IndexOf("authuser=");
-                        if (targetIdx >= 0)
-                        {
-                            var remaining = urlSpan[(targetIdx + 9)..];
-                            int ampIdx = remaining.IndexOf('&');
-                            var valSpan = ampIdx >= 0 ? remaining[..ampIdx] : remaining;
-                            authUser = valSpan.ToString();
-                        }
-                    }
-                }
-            }
-        }
-
-        results.Add(new YoutubeAccountItem
-        {
-            Index = results.Count + 1,
-            Name = name,
-            Email = email,
-            AvatarUrl = avatar,
-            GaiaId = gaiaId,
-            Handle = handle,
-            AuthUser = authUser,
-            IsSelected = isSelected
-        });
+        return (_auth.State.UserName, _auth.State.UserEmail, _auth.State.AvatarUrl, _auth.State.ActiveGaiaId);
     }
 
     #endregion

@@ -61,13 +61,14 @@ public partial class CookieAuthService
         }
     }
 
-    public void UpdateUserProfile(string name, string email, string avatarUrl)
+    public void UpdateUserProfile(string name, string email, string avatarUrl, string activeGaiaId = "")
     {
         State.UserName = name;
         State.UserEmail = email;
         State.AvatarUrl = avatarUrl;
         State.LastUpdated = DateTime.UtcNow;
         State.IsAuthenticated = IsAuthenticated;
+        State.ActiveGaiaId = activeGaiaId;
 
         SaveAuthData();
         OnAuthStateChanged?.Invoke();

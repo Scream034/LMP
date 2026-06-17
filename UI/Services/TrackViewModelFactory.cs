@@ -8,7 +8,7 @@ namespace LMP.UI.Services;
 /// Фабрика для создания TrackItemViewModel.
 /// Использует TrackRegistry для Identity Map и кэширует ViewModel-и.
 /// </summary>
-public class TrackViewModelFactory
+public sealed class TrackViewModelFactory
 {
     private readonly LibraryService _library;
     private readonly DialogService _dialog;
@@ -34,6 +34,16 @@ public class TrackViewModelFactory
         _downloads = downloads;
         _manager = manager;
         _registry = registry;
+    }
+
+    /// <summary>
+    /// Полностью стирает кэш-карту представлений во время ротации аккаунтов.
+    /// Предотвращает удержание старых реактивных свойств ViewModel-представлений.
+    /// </summary>
+    public void ClearCache()
+    {
+        _cache.Clear();
+        Log.Info("[TrackViewModelFactory] Memory representation caches successfully flushed.");
     }
 
     /// <summary>

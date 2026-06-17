@@ -24,6 +24,11 @@ public sealed class AuthState
     public string AvatarUrl { get; set; } = "";
 
     /// <summary>
+    /// Идентификатор активного аккаунта YouTube (Gaia ID) для точечной изоляции.
+    /// </summary>
+    public string ActiveGaiaId { get; set; } = string.Empty;
+
+    /// <summary>
     /// Индекс сессии мульти-авторизации Google активного аккаунта.
     /// По умолчанию пустая строка — это позволяет доверять флагу IsSelected от YouTube 
     /// при первичном входе через расширение.
@@ -37,9 +42,12 @@ public sealed class AuthState
 
     /// <summary>
     /// Уникальный идентификатор текущего профиля для изоляции данных в БД.
+    /// Использует Gaia ID при наличии, иначе email, с безусловным fallback на гостя.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public string DisplayId => !string.IsNullOrEmpty(UserEmail) ? UserEmail : "guest";
+    public string DisplayId => !string.IsNullOrEmpty(ActiveGaiaId) 
+        ? ActiveGaiaId 
+        : (!string.IsNullOrEmpty(UserEmail) ? UserEmail : "guest");
 
     public DateTime LastUpdated { get; set; } = DateTime.MinValue;
 }

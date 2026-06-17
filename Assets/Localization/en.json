@@ -472,6 +472,7 @@
   "Auth_SelectAccount_Title": "Select Account",
   "Auth_SelectAccount_Subtitle": "This profile has multiple channels. Which one to use?",
   "Auth_MainAccount": "Main Account",
+  "Auth_RefreshProfile": "Refresh Profile",
 
   "Dialog_Info_Title": "Information",
   "Dialog_Error_Title": "Error",

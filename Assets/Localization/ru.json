@@ -470,6 +470,7 @@
   "Auth_SelectAccount_Title": "Выберите аккаунт",
   "Auth_SelectAccount_Subtitle": "У этого профиля есть несколько каналов. Какой использовать?",
   "Auth_MainAccount": "Основной аккаунт",
+  "Auth_RefreshProfile": "Обновить профиль",
 
   "Dialog_Info_Title": "Информация",
   "Dialog_Error_Title": "Ошибка",

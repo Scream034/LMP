@@ -326,9 +326,6 @@ public sealed class AppSettings
     /// </summary>
     public NotificationSettings Notifications { get; set; } = new();
 
-    // === Search ===
-    public List<string> SearchHistory { get; set; } = [];
-
     /// <summary>
     /// Режим синхронизации лайков с YouTube.
     /// </summary>

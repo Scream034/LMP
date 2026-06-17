@@ -36,7 +36,7 @@ public sealed class TrackRegistry
     /// <param name="playlists">Репозиторий управления связями плейлистов.</param>
     /// <param name="auth">Служба аутентификации для извлечения контекста активного пользователя [1].</param>
     public TrackRegistry(
-        ITrackRepository? repository = null, 
+        ITrackRepository? repository = null,
         IPlaylistRepository? playlists = null,
         CookieAuthService? auth = null)
     {
@@ -365,6 +365,7 @@ public sealed class TrackRegistry
     {
         _cache.Clear();
         _pinned.Clear();
+        Log.Debug("[TrackRegistry] Memory caches successfully cleared on profile transition.");
     }
 
     /// <summary>

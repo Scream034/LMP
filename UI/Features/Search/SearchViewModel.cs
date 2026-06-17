@@ -5,6 +5,7 @@ using System.Diagnostics;
 using LMP.Core.Youtube.Search;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using Avalonia.Threading;
 
 namespace LMP.UI.Features.Search;
 
@@ -115,9 +116,6 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         _searchCache = searchCache;
         _imageCache = imageCache;
 
-        foreach (var item in LibService.Settings.SearchHistory)
-            RecentSearches.Add(new SearchHistoryItem(item, this));
-
         var canSearch = this.WhenAnyValue(
             x => x.SearchQuery, x => x.IsLoading,
             static (q, loading) => !string.IsNullOrWhiteSpace(q) && !loading);
@@ -193,6 +191,7 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     {
         if (_isDisposed) return;
 
+        await LoadHistoryAsync();
         await base.OnNavigatedToAsync(); // Запуск базового перехватчика
     }
 
@@ -303,10 +302,7 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
 
         ClearItems();
 
-        // Синхронизируем историю поиска с настройками нового аккаунта
-        RecentSearches.Clear();
-        foreach (var item in LibService.Settings.SearchHistory)
-            RecentSearches.Add(new SearchHistoryItem(item, this));
+        _ = Dispatcher.UIThread.InvokeAsync(LoadHistoryAsync, DispatcherPriority.Background);
 
         Log.Info("[Search] Search state and account history successfully synchronized.");
     }
@@ -547,6 +543,23 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
 
     #region History
 
+    private async Task LoadHistoryAsync()
+    {
+        try
+        {
+            var history = await LibService.GetSearchHistoryAsync();
+            RecentSearches.Clear();
+            foreach (var query in history)
+            {
+                RecentSearches.Add(new SearchHistoryItem(query, this));
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[Search] Failed to load search history on navigate: {ex.Message}");
+        }
+    }
+
     private void AddToHistory(string query)
     {
         if (_isDisposed || string.IsNullOrWhiteSpace(query)) return;
@@ -563,9 +576,18 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
     private void UpdateHistoryStorage()
     {
         if (_isDisposed) return;
-        // Извлекаем чистые строки для сохранения в БД
-        var historyStrings = RecentSearches.Select(x => x.Query).ToArray();
-        LibService.UpdateSettings(s => s.SearchHistory = [.. historyStrings]);
+        var historyStrings = RecentSearches.Select(x => x.Query).ToList();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await LibService.SaveSearchHistoryAsync(historyStrings);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"[Search] Failed to commit search history storage: {ex.Message}");
+            }
+        });
     }
 
     #endregion

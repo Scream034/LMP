@@ -53,7 +53,7 @@
                                     Command="{Binding RefreshProfileCommand}"
                                     Width="28" Height="28" Padding="4"
                                     IsVisible="{Binding IsAuthenticated}"
-                                    ToolTip.Tip="{Binding L[Common_Refresh]}">
+                                    ToolTip.Tip="{Binding L[Auth_RefreshProfile]}">
                                     <PathIcon Data="{StaticResource Icon.Sync}" Width="14"
                                         Height="14"
                                         Foreground="{DynamicResource TextSecondaryBrush}" />

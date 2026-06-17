@@ -35,6 +35,11 @@ public sealed class LibraryService : IAsyncDisposable
     public event Action<Playlist>? OnPlaylistChanged;
     public event Action<string>? OnPlaylistRemoved;
 
+    /// <summary>
+    /// Событие, сигнализирующее о завершении полной асинхронной гидрации кэшей после смены аккаунта.
+    /// </summary>
+    public event Action? OnAccountHydrated;
+
     private string CurrentOwnerId => _auth.State.DisplayId;
 
     public LibraryService(
@@ -66,12 +71,20 @@ public sealed class LibraryService : IAsyncDisposable
             });
     }
 
-    private void HandleAuthStateChanged()
+    private async void HandleAuthStateChanged()
     {
-        // Сбрасываем L1 кэш в оперативной памяти во избежание смешивания лайков
-        _registry.Clear();
-        _ = _registry.HydrateAsync(CancellationToken.None);
-        OnDataChanged?.Invoke();
+        try
+        {
+            // Сбрасываем L1 кэш в оперативной памяти во избежание смешивания лайков
+            _registry.Clear();
+            await _registry.HydrateAsync(CancellationToken.None).ConfigureAwait(false);
+            OnAccountHydrated?.Invoke();
+            OnDataChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[LibraryService] Hydration failed during auth state shift: {ex.Message}");
+        }
     }
 
     #region Инициализация
@@ -225,8 +238,7 @@ public sealed class LibraryService : IAsyncDisposable
         SearchBatchSize = d.SearchBatchSize,
         EnableSearchCache = d.EnableSearchCache,
         SearchCacheTtlMinutes = d.SearchCacheTtlMinutes,
-        PlaylistHeaderHeight = d.PlaylistHeaderHeight,
-        SearchHistory = d.SearchHistory ?? []
+        PlaylistHeaderHeight = d.PlaylistHeaderHeight
     };
 
     #endregion
@@ -698,6 +710,24 @@ public sealed class LibraryService : IAsyncDisposable
     }
 
     private void SaveSettings() => _saveSettingsSignal.OnNext(Unit.Default);
+
+    /// <summary>
+    /// Извлекает историю поиска текущего пользователя из изолированной БД-таблицы параметров.
+    /// </summary>
+    public async Task<List<string>> GetSearchHistoryAsync(CancellationToken ct = default)
+    {
+        var key = $"SearchHistory_{CurrentOwnerId}";
+        return await _settings.GetOrDefaultAsync(key, new List<string>(), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Сохраняет историю поиска текущего пользователя в изолированную БД-таблицу параметров.
+    /// </summary>
+    public async Task SaveSearchHistoryAsync(List<string> history, CancellationToken ct = default)
+    {
+        var key = $"SearchHistory_{CurrentOwnerId}";
+        await _settings.SetAsync(key, history, ct).ConfigureAwait(false);
+    }
 
     #endregion
 

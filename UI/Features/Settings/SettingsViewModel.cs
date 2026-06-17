@@ -514,35 +514,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         }
     }
 
-    /// <summary>
-    /// Фоновое получение профиля пользователя если при логине он не был загружен.
-    /// <para>Ошибки подавляются — это best-effort операция, не критичная для работы.</para>
-    /// </summary>
-    private async Task FetchUserProfileQuietlyAsync()
-    {
-        IsAccountLoading = true;
-        try
-        {
-            Log.Info("[Settings] Auto-fetching missing user profile info...");
-            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
-
-            if (!string.IsNullOrEmpty(name))
-            {
-                _auth.UpdateUserProfile(name, email, avatar);
-                RaiseAccountProperties();
-                Log.Info($"[Settings] Profile successfully restored: {name}");
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[Settings] Failed to auto-fetch profile: {ex.Message}");
-        }
-        finally
-        {
-            IsAccountLoading = false;
-        }
-    }
-
     /// <summary>При смене языка — перестраиваем все локализованные списки ComboBox.</summary>
     private void OnLanguageChanged(object? sender, string e) => RefreshLocalizedLists();
 
@@ -1395,7 +1366,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
             if (selectedAccount == null) return;
 
             _auth.SetAuthUser(selectedAccount.AuthUser);
-            _auth.UpdateUserProfile(selectedAccount.Name, selectedAccount.Email, selectedAccount.AvatarUrl);
+            _auth.UpdateUserProfile(selectedAccount.Name, selectedAccount.Email, selectedAccount.AvatarUrl, selectedAccount.GaiaId);
 
             _youtube.ClearCache();
             RaiseAccountProperties();
@@ -1444,10 +1415,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         IsAccountLoading = true;
         try
         {
-            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
+            var (name, email, avatar, gaiaId) = await _userData.GetAccountInfoAsync();
             if (!string.IsNullOrEmpty(name))
             {
-                _auth.UpdateUserProfile(name, email, avatar);
+                _auth.UpdateUserProfile(name, email, avatar, gaiaId);
                 RaiseAccountProperties();
             }
 

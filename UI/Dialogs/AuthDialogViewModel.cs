@@ -8,6 +8,7 @@ using LMP.Core.Audio.Http;
 using LMP.Core.Services;
 using LMP.UI.Helpers;
 using LMP.UI.Services;
+using LMP.UI.Features.Shell;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 
@@ -108,6 +109,22 @@ public sealed class AuthDialogViewModel : ViewModelBase
 
         _ = StartListeningAsync(_cts.Token);
         _ = CheckExtensionVersionAsync(_cts.Token);
+    }
+
+    /// <summary>
+    /// Динамически вычисляет и извлекает текущий синглтон MainWindowViewModel для блокировок TitleBar.
+    /// </summary>
+    private static MainWindowViewModel? GetMainWindowViewModel()
+    {
+        try
+        {
+            return Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                .GetRequiredService<MainWindowViewModel>(AppEntry.Services);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -234,18 +251,6 @@ public sealed class AuthDialogViewModel : ViewModelBase
         return "https://raw.githubusercontent.com/Scream034/LMP-Auth/refs/heads/main/manifest.json";
     }
 
-    private void ApplyLocalExtension()
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var extractedFolder = Path.Combine(G.Folder.Extension, "LMP-Auth-main");
-            ExtensionFolderPath = Directory.Exists(extractedFolder) ? extractedFolder : G.Folder.Extension;
-            InstalledExtensionVersion = GetLocalExtensionVersion() ?? "—";
-            IsExtensionReady = true;
-            IsGuideExpanded = false;
-        });
-    }
-
     private async Task StartListeningAsync(CancellationToken ct)
     {
         try
@@ -275,6 +280,9 @@ public sealed class AuthDialogViewModel : ViewModelBase
         AttemptCount++;
         SetStatus($"{SL["Splash_ConnectingYouTube"]} ({AttemptCount})", isError: false);
 
+        var mainWindow = GetMainWindowViewModel();
+        mainWindow?.LockNavigation(SL["Splash_ConnectingYouTube"] ?? "Подключение к YouTube...");
+
         try
         {
             _auth.SaveCookies(CookiesText);
@@ -303,11 +311,12 @@ public sealed class AuthDialogViewModel : ViewModelBase
             }
 
             var accounts = await _userData.GetAvailableAccountsAsync();
-            string finalName, finalEmail, finalAvatar;
+            string finalName, finalEmail, finalAvatar, finalGaiaId;
 
             if (accounts.Count > 1)
             {
                 IsAuthenticating = false;
+                mainWindow?.UnlockNavigation();
 
                 var dialogService = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
                                      .GetRequiredService<DialogService>(AppEntry.Services);
@@ -323,11 +332,13 @@ public sealed class AuthDialogViewModel : ViewModelBase
 
                 _auth.SetAuthUser(selectedAccount.AuthUser);
                 IsAuthenticating = true;
+                mainWindow?.LockNavigation(SL["Splash_ConnectingYouTube"] ?? "Подключение к YouTube...");
 
                 // БЕРЕМ ДАННЫЕ ИЗ ВЫБРАННОГО АККАУНТА, а не запрашиваем заново
                 finalName = selectedAccount.Name;
                 finalEmail = selectedAccount.Email;
                 finalAvatar = selectedAccount.AvatarUrl;
+                finalGaiaId = selectedAccount.GaiaId;
             }
             else
             {
@@ -340,14 +351,16 @@ public sealed class AuthDialogViewModel : ViewModelBase
                     finalName = singleAccount.Name;
                     finalEmail = singleAccount.Email;
                     finalAvatar = singleAccount.AvatarUrl;
+                    finalGaiaId = singleAccount.GaiaId;
                 }
                 else
                 {
                     // Иначе делаем запасной сетевой запрос
-                    var (Name, Email, AvatarUrl) = await _userData.GetAccountInfoAsync();
+                    var (Name, Email, AvatarUrl, GaiaId) = await _userData.GetAccountInfoAsync();
                     finalName = Name;
                     finalEmail = Email;
                     finalAvatar = AvatarUrl;
+                    finalGaiaId = GaiaId;
                 }
             }
 
@@ -358,7 +371,7 @@ public sealed class AuthDialogViewModel : ViewModelBase
                 return;
             }
 
-            _auth.UpdateUserProfile(finalName, finalEmail, finalAvatar);
+            _auth.UpdateUserProfile(finalName, finalEmail, finalAvatar, finalGaiaId);
 
             SetStatus($"{SL["Dialog_Success"]}! {finalName}", isError: false);
             await Task.Delay(1000);
@@ -372,6 +385,7 @@ public sealed class AuthDialogViewModel : ViewModelBase
         finally
         {
             IsAuthenticating = false;
+            mainWindow?.UnlockNavigation();
         }
     }
 

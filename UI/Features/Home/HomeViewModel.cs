@@ -3,6 +3,7 @@ using ReactiveUI.Fody.Helpers;
 using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Linq;
+using Avalonia.Threading;
 
 namespace LMP.UI.Features.Home;
 
@@ -144,6 +145,12 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
     {
         base.OnAccountChanged();
         _isDataLoaded = false;
+
+        // Если страница главного экрана активна прямо сейчас, принудительно запускаем обновление
+        if (ViewModelBase.CurrentSuspendLevel == SuspendLevel.None)
+        {
+            _ = Dispatcher.UIThread.InvokeAsync(async () => await LoadTracksAsync(force: true), DispatcherPriority.Background);
+        }
     }
 
     #endregion

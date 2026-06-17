@@ -64,7 +64,7 @@ public class MainWindowViewModel : ViewModelBase
           NotificationPanelViewModel notificationPanel,
           ToastOverlayViewModel toastOverlay,
           DialogHostViewModel dialogHost,
-          CookieAuthService auth)
+          LibraryService library)
     {
         Log.Info("MainWindowViewModel constructor started.");
 
@@ -75,7 +75,7 @@ public class MainWindowViewModel : ViewModelBase
         ToastOverlay = toastOverlay;
         DialogHost = dialogHost;
 
-        auth.OnAuthStateChanged += HandleGlobalAuthStateChanged;
+        library.OnAccountHydrated += HandleGlobalAccountHydrated;
 
         UpdateCommitsDisplay();
 
@@ -97,13 +97,13 @@ public class MainWindowViewModel : ViewModelBase
             x => x.DialogHost.HasActiveDialog,
             (locked, hasDialog) => !locked && !hasDialog);
 
-        NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
+        NavigateCommand = CreateCommand(NavigateCommand = CreateCommand(ReactiveCommand.Create<string>(pageName =>
         {
             if (!IsNavigationLocked && !DialogHost.HasActiveDialog)
             {
                 Navigate(pageName);
             }
-        }, canNavigate));
+        }, canNavigate)));
 
         Navigate("Home");
 
@@ -113,13 +113,14 @@ public class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Обрабатывает изменения авторизации на глобальном уровне.
-    /// Принудительно перенаправляет выполнение в UI-поток во избежание кросс-поточных исключений при рендере списков.
+    /// Обрабатывает изменения авторизации на глобальном уровне после полной гидрации кэшей.
+    /// Принудительно очищает кэш представлений фабрики перед рендером.
     /// </summary>
-    private static void HandleGlobalAuthStateChanged()
+    private void HandleGlobalAccountHydrated()
     {
         Dispatcher.UIThread.Post(() =>
         {
+            _services.GetRequiredService<TrackViewModelFactory>().ClearCache();
             ViewModelBase.BroadcastAccountChanged();
         }, DispatcherPriority.Normal);
     }
