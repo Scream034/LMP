@@ -6,8 +6,8 @@ using LMP.Core.Youtube.Exceptions;
 namespace LMP.Core.Services;
 
 /// <summary>
-/// Сервис для работы с данными пользователя YouTube Music.
-/// Делегирует сетевые операции в YoutubeProvider, добавляя бизнес-логику.
+/// Сервис для работы с пользовательскими данными на YouTube Music.
+/// Координирует сетевые запросы к InnerTube API и управляет локальным кэшированием сессий.
 /// </summary>
 public partial class YoutubeUserDataService
 {
@@ -17,29 +17,32 @@ public partial class YoutubeUserDataService
     private YoutubeProvider Provider => _youtubeLazy.Value;
 
     /// <summary>
-    /// Инициализирует новый экземпляр службы с ленивой зависимостью на провайдер.
+    /// Инициализирует новый экземпляр службы с ленивым разрешением зависимостей для предотвращения циклических связей при DI.
     /// </summary>
+    /// <param name="youtubeLazy">Ленивый инициализатор провайдера YouTube.</param>
+    /// <param name="auth">Служба управления аутентификацией и куками.</param>
     public YoutubeUserDataService(
-        Lazy<YoutubeProvider> youtubeLazy, // Разрывает циклическую зависимость в DI
+        Lazy<YoutubeProvider> youtubeLazy,
         CookieAuthService auth)
     {
         _youtubeLazy = youtubeLazy;
         _auth = auth;
     }
 
-    #region Liked Tracks
+    #region Лайки YouTube
 
     /// <summary>
-    /// Получает лайкнутые треки в зависимости от режима синхронизации.
+    /// Загружает список понравившихся треков пользователя в зависимости от текущего режима синхронизации библиотеки.
     /// </summary>
     /// <remarks>
-    /// <para><b>MusicOnly:</b> Один запрос VLLM через WEB_REMIX — возвращает только музыку.
-    /// Ранее дополнительно загружался плейлист LL (все лайки YouTube) для поиска "пропущенных"
-    /// треков, что генерировало 10+ лишних HTTP-запросов. Убрано: YTM API — исчерпывающий
-    /// источник музыкальных лайков, дублирование через LL не даёт значимого выигрыша.</para>
-    ///
-    /// <para><b>AllVideos:</b> Загружает LL целиком — все лайкнутые видео включая немузыкальные.</para>
+    /// <para><b>Режим MusicOnly:</b> Выполняет один точечный запрос VLLM через WEB_REMIX API YouTube Music.
+    /// Ранее выполнялась дополнительная избыточная выгрузка всего плейлиста "LL" (все лайки YouTube),
+    /// генерировавшая более 10 сетевых запросов. Это поведение убрано — API YouTube Music является 
+    /// самодостаточным источником музыкального контента.</para>
+    /// <para><b>Режим AllVideos:</b> Выкачивает полный плейлист "LL" со всеми видео, включая немузыкальный контент.</para>
     /// </remarks>
+    /// <param name="mode">Режим синхронизации лайков (только музыка или все видео).</param>
+    /// <returns>Список моделей треков <see cref="TrackInfo"/>, отмеченных лайком на YouTube.</returns>
     public async Task<List<TrackInfo>> GetLikedTracksAsync(
         LikeSyncMode mode = LikeSyncMode.MusicOnly)
     {
@@ -97,6 +100,9 @@ public partial class YoutubeUserDataService
         }
     }
 
+    /// <summary>
+    /// Выполняет постраничную выгрузку всех понравившихся видео (плейлист "LL") до лимита в 1000 элементов.
+    /// </summary>
     private async Task<List<TrackInfo>> GetAllLikedVideosAsync()
     {
         return await Provider.GetClient().Playlists
@@ -107,8 +113,13 @@ public partial class YoutubeUserDataService
 
     #endregion
 
-    #region Rating
+    #region Оценки
 
+    /// <summary>
+    /// Устанавливает оценку видео на YouTube (лайк / дизлайк).
+    /// </summary>
+    /// <param name="videoId">Идентификатор видео на YouTube.</param>
+    /// <param name="rating">Строковое представление оценки ("like" или "dislike").</param>
     public async Task RateVideoAsync(string videoId, string rating)
     {
         await Provider.LikeTrackAsync(videoId, rating == "like");
@@ -116,21 +127,35 @@ public partial class YoutubeUserDataService
 
     #endregion
 
-    #region Playlist Operations
+    #region Операции с плейлистами
 
+    /// <summary>
+    /// Создает новый облачный плейлист на аккаунте YouTube Music.
+    /// </summary>
+    /// <param name="title">Название плейлиста.</param>
+    /// <param name="description">Описание (устарело в мобильных мутациях API, поддерживается как fallback).</param>
+    /// <returns>YouTube-идентификатор созданного плейлиста.</returns>
+    /// <exception cref="InvalidOperationException">Выбрасывается, если YouTube API вернул пустой результат.</exception>
     public async Task<string> CreatePlaylistAsync(string title, string description = "")
     {
-        // Description is no longer supported via WEB client mutations.
-        // Title-only creation via PlaylistMutationController.
         return await Provider.CreatePlaylistAsync(title)
             ?? throw new InvalidOperationException("YouTube API returned null playlist ID.");
     }
 
+    /// <summary>
+    /// Удаляет облачный плейлист с аккаунта YouTube Music.
+    /// </summary>
+    /// <param name="youtubePlaylistId">YouTube-идентификатор плейлиста.</param>
     public async Task DeletePlaylistAsync(string youtubePlaylistId)
     {
         await Provider.DeletePlaylistAsync(youtubePlaylistId);
     }
 
+    /// <summary>
+    /// Добавляет один трек в облачный плейлист на YouTube.
+    /// </summary>
+    /// <param name="youtubePlaylistId">YouTube-идентификатор целевого плейлиста.</param>
+    /// <param name="videoId">YouTube-идентификатор трека.</param>
     public async Task AddTrackToPlaylistAsync(string youtubePlaylistId, string videoId)
     {
         await Provider.AddToPlaylistAsync(youtubePlaylistId, videoId);
@@ -138,86 +163,48 @@ public partial class YoutubeUserDataService
 
     #endregion
 
-    #region Account
+    #region Получение профилей и каналов
 
     /// <summary>
-    /// Получает список всех каналов (бренд-аккаунтов), привязанных к текущим кукам.
+    /// Возвращает список всех каналов (бренд-аккаунтов), привязанных к текущим кукам.
+    /// Использует данные, автоматически собранные при стартовой валидации сессии.
     /// </summary>
-    /// <exception cref="LoginRequiredException">Выбрасывается при невалидности или истечении сессии кук для данного эндпоинта.</exception>
     public async Task<List<YoutubeAccountItem>> GetAvailableAccountsAsync()
     {
         if (!_auth.IsAuthenticated) return [];
 
-        try
+        // Если кэш уже заполнен валидатором (обычно на старте) — возвращаем мгновенно
+        if (_auth.State.CachedAccounts != null && _auth.State.CachedAccounts.Count > 0)
         {
-            var json = await Provider.GetClient().Music.GetAccountSwitcherAsync();
-            var results = new List<YoutubeAccountItem>();
-
-            var dataNode = json.GetPropertyOrNull("data") ?? json;
-            var actions = dataNode.GetPropertyOrNull("actions")?.EnumerateArrayOrNull()?.FirstOrDefault();
-            if (actions == null) return results;
-
-            var menuObj = actions.Value.GetPropertyOrNull("getMultiPageMenuAction")?.GetPropertyOrNull("menu")
-                          ?? actions.Value.GetPropertyOrNull("openPopupAction")?.GetPropertyOrNull("popup");
-
-            var sections = menuObj?.GetPropertyOrNull("multiPageMenuRenderer")
-                ?.GetPropertyOrNull("sections")
-                ?.EnumerateArrayOrNull();
-
-            if (sections == null) return results;
-
-            foreach (var section in sections.Value)
-            {
-                var items = section.GetPropertyOrNull("accountSectionListRenderer")
-                    ?.GetPropertyOrNull("contents")
-                    ?.EnumerateArrayOrNull();
-
-                if (items == null) continue;
-
-                foreach (var itemWrap in items.Value)
-                {
-                    var accountItemSection = itemWrap.GetPropertyOrNull("accountItemSectionRenderer");
-                    var subItems = accountItemSection?.GetPropertyOrNull("contents")?.EnumerateArrayOrNull();
-
-                    if (subItems != null)
-                    {
-                        foreach (var subItemWrap in subItems.Value)
-                        {
-                            var accountItem = subItemWrap.GetPropertyOrNull("accountItem");
-                            if (accountItem == null) continue;
-
-                            ProcessAccountItem(accountItem.Value, results);
-                        }
-                    }
-                    else
-                    {
-                        var accountItem = itemWrap.GetPropertyOrNull("accountItem");
-                        if (accountItem == null) continue;
-
-                        ProcessAccountItem(accountItem.Value, results);
-                    }
-                }
-            }
-
-            return results;
+            return _auth.State.CachedAccounts;
         }
-        catch (LoginRequiredException ex) when (ex.Reason == LoginRequiredReason.SessionExpired)
-        {
-            Log.Warn($"[UserDataService] YouTube session expired during account listing. Propagating to UI to prompt for cookie update.");
 
-            // Позволяем плееру продолжить работать в режиме "деградировавшей сессии",
-            // пробрасывая исключение в UI для принятия решения пользователем.
-            throw;
-        }
-        catch (Exception ex)
+        // Если кэш пуст, принудительно запрашиваем меню через валидатор
+        var (isValid, error, _) = await _auth.ValidateSessionAsync();
+        if (!isValid)
         {
-            Log.Error($"Failed to parse accounts: {ex.Message}");
+            Log.Warn($"[UserDataService] Session validation failed during account fetch: {error}");
             return [];
         }
+
+        return _auth.State.CachedAccounts ?? [];
     }
 
     /// <summary>
-    /// Разбирает элемент аккаунта из InnerTube JSON структуры, вычленяя PageId и AuthUser.
+    /// Возвращает базовые метаданные текущего авторизованного пользователя (имя, почту и аватар).
+    /// </summary>
+    public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()
+    {
+        if (!_auth.IsAuthenticated) return ("Guest", "", "");
+
+        // Принудительное обновление кэша профиля через валидацию сессии
+        await _auth.ValidateSessionAsync();
+
+        return (_auth.State.UserName, _auth.State.UserEmail, _auth.State.AvatarUrl);
+    }
+
+    /// <summary>
+    /// Парсит отдельный элемент аккаунта из сырого JSON-узла InnerTube.
     /// </summary>
     private static void ProcessAccountItem(System.Text.Json.JsonElement accountItem, List<YoutubeAccountItem> results)
     {
@@ -239,12 +226,10 @@ public partial class YoutubeUserDataService
 
         var isSelected = accountItem.GetPropertyOrNull("isSelected")?.GetBoolean() ?? false;
 
-        string pageId = "";
         string gaiaId = "";
         string handle = "";
-        string authUser = "0";
+        string authUser = AuthState.DefaultAuthUser;
 
-        // Извлекаем channelHandle (@тег канала)
         var parsedHandle = accountItem.GetPropertyOrNull("channelHandle")
             ?.GetPropertyOrNull("runs")?.EnumerateArrayOrNull()?.FirstOrDefault()
             .GetPropertyOrNull("text")?.GetStringOrNull();
@@ -262,12 +247,6 @@ public partial class YoutubeUserDataService
         {
             foreach (var token in tokens.Value)
             {
-                var pId = token.GetPropertyOrNull("pageIdToken")?.GetPropertyOrNull("pageId")?.GetStringOrNull();
-                if (!string.IsNullOrEmpty(pId))
-                {
-                    pageId = pId;
-                }
-
                 var stateToken = token.GetPropertyOrNull("accountStateToken");
                 if (stateToken != null)
                 {
@@ -304,7 +283,6 @@ public partial class YoutubeUserDataService
             Name = name,
             Email = email,
             AvatarUrl = avatar,
-            PageId = pageId,
             GaiaId = gaiaId,
             Handle = handle,
             AuthUser = authUser,
@@ -312,59 +290,13 @@ public partial class YoutubeUserDataService
         });
     }
 
-    public async Task<(string Name, string Email, string AvatarUrl)> GetAccountInfoAsync()
-    {
-        if (!_auth.IsAuthenticated) return ("Guest", "", "");
-
-        try
-        {
-            var json = await Provider.GetClient().Music.GetAccountMenuAsync();
-
-            var header = json.GetPropertyOrNull("actions")
-                ?.EnumerateArrayOrNull()
-                ?.FirstOrDefault()
-                .GetPropertyOrNull("openPopupAction")
-                ?.GetPropertyOrNull("popup")
-                ?.GetPropertyOrNull("multiPageMenuRenderer")
-                ?.GetPropertyOrNull("header")
-                ?.GetPropertyOrNull("activeAccountHeaderRenderer");
-
-            if (header == null) return ("User", "", "");
-
-            var name = header.Value.GetPropertyOrNull("accountName")
-                ?.GetPropertyOrNull("runs")
-                ?.EnumerateArrayOrNull()
-                ?.FirstOrDefault()
-                .GetPropertyOrNull("text")
-                ?.GetStringOrNull() ?? "User";
-
-            var email = header.Value.GetPropertyOrNull("email")
-                ?.GetPropertyOrNull("runs")
-                ?.EnumerateArrayOrNull()
-                ?.FirstOrDefault()
-                .GetPropertyOrNull("text")
-                ?.GetStringOrNull() ?? "";
-
-            var avatar = header.Value.GetPropertyOrNull("accountPhoto")
-                ?.GetPropertyOrNull("thumbnails")
-                ?.EnumerateArrayOrNull()
-                ?.LastOrDefault()
-                .GetPropertyOrNull("url")
-                ?.GetStringOrNull() ?? "";
-
-            return (name, email, avatar);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Failed to get account menu: {ex.Message}");
-            return ("User", "", "");
-        }
-    }
-
     #endregion
 
-    #region Library
+    #region Библиотека YouTube
 
+    /// <summary>
+    /// Возвращает список всех плейлистов в облачной библиотеке пользователя на YouTube Music.
+    /// </summary>
     public async Task<List<Playlist>> GetMyPlaylistsAsync()
     {
         if (!_auth.IsAuthenticated) return [];

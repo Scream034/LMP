@@ -279,6 +279,38 @@ public sealed class SearchViewModel : TrackListPaginatedViewModel
         }
     }
 
+    /// <inheritdoc />
+    protected override void OnAccountChanged()
+    {
+        base.OnAccountChanged();
+
+        // Полностью очищаем стейт поиска старого аккаунта во избежание утечки приватности
+        SearchQuery = string.Empty;
+        _currentQuery = string.Empty;
+        ErrorMessage = null;
+        IsFromCache = false;
+        HasResults = false;
+
+        try
+        {
+            _searchSession?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Search] Error disposing search session on account change: {ex.Message}");
+        }
+        _searchSession = null;
+
+        ClearItems();
+
+        // Синхронизируем историю поиска с настройками нового аккаунта
+        RecentSearches.Clear();
+        foreach (var item in LibService.Settings.SearchHistory)
+            RecentSearches.Add(new SearchHistoryItem(item, this));
+
+        Log.Info("[Search] Search state and account history successfully synchronized.");
+    }
+
     #endregion
 
     #region Search Logic

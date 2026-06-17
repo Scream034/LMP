@@ -2,6 +2,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Text.Json;
 using Avalonia.Threading;
 using LMP.Core.Audio.Http;
 using LMP.Core.Services;
@@ -12,6 +13,9 @@ using ReactiveUI.Fody.Helpers;
 
 namespace LMP.UI.Dialogs;
 
+/// <summary>
+/// Модель представления для диалога авторизации через расширение браузера.
+/// </summary>
 public sealed class AuthDialogViewModel : ViewModelBase
 {
     private readonly CookieAuthService _auth;
@@ -29,8 +33,31 @@ public sealed class AuthDialogViewModel : ViewModelBase
     [Reactive] public bool IsGuideExpanded { get; set; } = true;
     [Reactive] public string ExtensionFolderPath { get; private set; } = string.Empty;
 
+    [Reactive] public bool IsPathCopied { get; private set; }
+    [Reactive] public int SelectedBrowserTabIndex { get; set; }
+    [Reactive] public string InstalledExtensionVersion { get; private set; } = "—";
+
     /// <summary>
-    /// Свойство-индикатор активности спиннера (загрузка расширения или проверка авторизации).
+    /// Возвращает текстовое представление установленной версии расширения на основе текущей локализации.
+    /// </summary>
+    public string ExtensionVersionText
+    {
+        get
+        {
+            var format = SL["Auth_Extension_Version_Format"];
+            if (string.IsNullOrEmpty(format) || !format.Contains("{0}"))
+            {
+                format = "Extension: v{0}";
+            }
+            return string.Format(format, InstalledExtensionVersion);
+        }
+    }
+
+    public bool IsFirefoxWarningVisible => IsGuideExpanded && SelectedBrowserTabIndex == 2;
+    public bool IsWarningVisible => !IsGuideExpanded || IsFirefoxWarningVisible;
+
+    /// <summary>
+    /// Возвращает значение, указывающее, выполняется ли в данный момент сетевая операция.
     /// </summary>
     public bool IsSpinnerActive => IsAuthenticating || IsExtensionDownloading;
 
@@ -40,10 +67,14 @@ public sealed class AuthDialogViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> DownloadExtensionCommand { get; }
     public ReactiveCommand<Unit, Unit> CopyPathCommand { get; }
     public ReactiveCommand<string, Unit> CopyLinkCommand { get; }
+    public ReactiveCommand<Unit, bool> ToggleGuideCommand { get; }
     public ReactiveCommand<Unit, Unit> CloseCommand { get; }
 
     private readonly CancellationTokenSource _cts = new();
 
+    /// <summary>
+    /// Инициализирует новый экземпляр класса <see cref="AuthDialogViewModel"/>.
+    /// </summary>
     public AuthDialogViewModel(
         CookieAuthService auth,
         YoutubeUserDataService userData,
@@ -57,16 +88,162 @@ public sealed class AuthDialogViewModel : ViewModelBase
         DownloadExtensionCommand = CreateCommand(ReactiveCommand.CreateFromTask(DownloadExtensionAsync));
         CopyPathCommand = CreateCommand(ReactiveCommand.CreateFromTask(CopyPathToClipboardAsync));
         CopyLinkCommand = CreateCommand(ReactiveCommand.CreateFromTask<string>(CopyLinkAsync));
+        ToggleGuideCommand = CreateCommand(ReactiveCommand.Create(() => IsGuideExpanded = !IsGuideExpanded));
         CloseCommand = CreateCommand(ReactiveCommand.Create(() => OnResult?.Invoke(false)));
 
-        // Инициализируем статус по умолчанию текстом ожидания
         StatusText = SL["Dialog_Login_WaitingStatus"] ?? "Ожидаем запрос от расширения или введите куки вручную...";
 
-        // Отслеживаем изменения состояний для управления системным спиннером
         this.WhenAnyValue(x => x.IsAuthenticating, x => x.IsExtensionDownloading)
             .Subscribe(_ => this.RaisePropertyChanged(nameof(IsSpinnerActive)));
 
+        this.WhenAnyValue(x => x.SelectedBrowserTabIndex, x => x.IsGuideExpanded)
+            .Subscribe(_ =>
+            {
+                this.RaisePropertyChanged(nameof(IsFirefoxWarningVisible));
+                this.RaisePropertyChanged(nameof(IsWarningVisible));
+            });
+
+        this.WhenAnyValue(x => x.InstalledExtensionVersion)
+            .Subscribe(_ => this.RaisePropertyChanged(nameof(ExtensionVersionText)));
+
         _ = StartListeningAsync(_cts.Token);
+        _ = CheckExtensionVersionAsync(_cts.Token);
+    }
+
+    /// <summary>
+    /// Выполняет автоматическую проверку соответствия локальной и удаленной версий расширения.
+    /// </summary>
+    private async Task CheckExtensionVersionAsync(CancellationToken ct)
+    {
+        var localVersionStr = GetLocalExtensionVersion();
+        if (string.IsNullOrEmpty(localVersionStr))
+        {
+            InstalledExtensionVersion = "—";
+            IsExtensionReady = false;
+            IsGuideExpanded = true;
+            return;
+        }
+
+        var extractedFolder = Path.Combine(G.Folder.Extension, "LMP-Auth-main");
+        ExtensionFolderPath = Directory.Exists(extractedFolder) ? extractedFolder : G.Folder.Extension;
+        InstalledExtensionVersion = localVersionStr;
+        IsExtensionReady = true;
+        IsGuideExpanded = false;
+
+        try
+        {
+            var remoteManifestUrl = GetRemoteManifestUrl();
+            using var response = await SharedHttpClient.Instance.GetAsync(
+                remoteManifestUrl,
+                HttpCompletionOption.ResponseContentRead,
+                ct).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            var json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("version", out var remoteVerProp))
+            {
+                var remoteVersionStr = remoteVerProp.GetString();
+                if (!string.IsNullOrEmpty(remoteVersionStr) &&
+                    Version.TryParse(localVersionStr, out var localVer) &&
+                    Version.TryParse(remoteVersionStr, out var remoteVer))
+                {
+                    if (localVer < remoteVer)
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            IsExtensionReady = false;
+                            IsGuideExpanded = true;
+                        });
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Auth] Automatic extension version check failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Возвращает версию расширения, обнаруженного в локальном каталоге приложения.
+    /// </summary>
+    private string? GetLocalExtensionVersion()
+    {
+        try
+        {
+            var extractedFolder = Path.Combine(G.Folder.Extension, "LMP-Auth-main");
+            var folder = Directory.Exists(extractedFolder) ? extractedFolder : G.Folder.Extension;
+            var manifestPath = Path.Combine(folder, "manifest.json");
+
+            if (!File.Exists(manifestPath)) return null;
+
+            var json = File.ReadAllText(manifestPath);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("version", out var versionProp))
+            {
+                return versionProp.GetString();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Auth] Failed to read local extension version: {ex.Message}");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Формирует адрес для получения манифеста из удаленного репозитория.
+    /// </summary>
+    private string GetRemoteManifestUrl()
+    {
+        var url = G.AuthExtensionDownloadUrl;
+        if (url.Contains("github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var uri = new Uri(url);
+                var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length >= 2)
+                {
+                    var owner = segments[0];
+                    var repo = segments[1];
+                    var branch = "main";
+
+                    int headsIdx = url.IndexOf("heads/", StringComparison.OrdinalIgnoreCase);
+                    if (headsIdx >= 0)
+                    {
+                        var remaining = url.Substring(headsIdx + 6);
+                        int zipIdx = remaining.IndexOf(".zip", StringComparison.OrdinalIgnoreCase);
+                        if (zipIdx >= 0)
+                        {
+                            branch = remaining.Substring(0, zipIdx);
+                        }
+                    }
+
+                    return $"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/manifest.json";
+                }
+            }
+            catch { /* fallback */ }
+        }
+
+        return "https://raw.githubusercontent.com/Scream034/LMP-Auth/refs/heads/main/manifest.json";
+    }
+
+    private void ApplyLocalExtension()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            var extractedFolder = Path.Combine(G.Folder.Extension, "LMP-Auth-main");
+            ExtensionFolderPath = Directory.Exists(extractedFolder) ? extractedFolder : G.Folder.Extension;
+            InstalledExtensionVersion = GetLocalExtensionVersion() ?? "—";
+            IsExtensionReady = true;
+            IsGuideExpanded = false;
+        });
     }
 
     private async Task StartListeningAsync(CancellationToken ct)
@@ -104,22 +281,30 @@ public sealed class AuthDialogViewModel : ViewModelBase
 
             if (!_auth.IsAuthenticated)
             {
-                SetStatus($"{SL["Dialog_Error_Title"]}: Не найден SAPISID!", isError: true);
+                SetStatus(SL["Auth_LoginError_SAPISID"], isError: true);
                 return;
             }
 
             SetStatus(SL["Nav_PleaseWait"], isError: false);
 
-            var (isValid, error) = await _auth.ValidateSessionAsync();
+            var (isValid, error, isNetworkError) = await _auth.ValidateSessionAsync();
             if (!isValid)
             {
-                SetStatus(SL["Auth_SessionExpired_Message"] ?? "Куки недействительны или устарели.", isError: true);
-                _auth.Logout();
+                if (isNetworkError)
+                {
+                    SetStatus($"{SL["Search_NetworkError"]} ({error})", isError: true);
+                }
+                else
+                {
+                    SetStatus(SL["Auth_SessionExpired_Message"], isError: true);
+                    _auth.Logout();
+                }
                 return;
             }
 
-            // Получение всех аккаунтов и показ диалога выбора
             var accounts = await _userData.GetAvailableAccountsAsync();
+            string finalName, finalEmail, finalAvatar;
+
             if (accounts.Count > 1)
             {
                 IsAuthenticating = false;
@@ -136,36 +321,53 @@ public sealed class AuthDialogViewModel : ViewModelBase
                     return;
                 }
 
-                // Передаем выбранный PageId и связанный AuthUser
-                _auth.SetPageId(selectedAccount.PageId, selectedAccount.AuthUser);
+                _auth.SetAuthUser(selectedAccount.AuthUser);
                 IsAuthenticating = true;
+
+                // БЕРЕМ ДАННЫЕ ИЗ ВЫБРАННОГО АККАУНТА, а не запрашиваем заново
+                finalName = selectedAccount.Name;
+                finalEmail = selectedAccount.Email;
+                finalAvatar = selectedAccount.AvatarUrl;
             }
             else
             {
-                // Если аккаунт всего один, сбрасываем PageId, но сохраняем правильный индекс сессии
                 var singleAccount = accounts.FirstOrDefault();
-                _auth.SetPageId("", singleAccount?.AuthUser ?? "0");
+                _auth.SetAuthUser(singleAccount?.AuthUser ?? AuthState.DefaultAuthUser);
+
+                // Если аккаунт один, пробуем взять данные сразу из него
+                if (singleAccount != null && !string.IsNullOrEmpty(singleAccount.Name))
+                {
+                    finalName = singleAccount.Name;
+                    finalEmail = singleAccount.Email;
+                    finalAvatar = singleAccount.AvatarUrl;
+                }
+                else
+                {
+                    // Иначе делаем запасной сетевой запрос
+                    var (Name, Email, AvatarUrl) = await _userData.GetAccountInfoAsync();
+                    finalName = Name;
+                    finalEmail = Email;
+                    finalAvatar = AvatarUrl;
+                }
             }
 
-            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
-
-            if (string.IsNullOrEmpty(name) || (name.Equals("User", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(avatar)))
+            if (string.IsNullOrEmpty(finalName) || (finalName.Equals("User", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(finalAvatar)))
             {
                 SetStatus(SL["Auth_ProfileLoadError_Message"], isError: true);
                 _auth.Logout();
                 return;
             }
 
-            _auth.UpdateUserProfile(name, email, avatar);
+            _auth.UpdateUserProfile(finalName, finalEmail, finalAvatar);
 
-            SetStatus($"{SL["Dialog_Success"]}! {name}", isError: false);
+            SetStatus($"{SL["Dialog_Success"]}! {finalName}", isError: false);
             await Task.Delay(1000);
 
             OnResult?.Invoke(true);
         }
         catch (Exception ex)
         {
-            SetStatus(ex.Message, isError: true);
+            SetStatus(SL["Dialog_Error_Title"] + ": " + ex.Message, isError: true);
         }
         finally
         {
@@ -230,6 +432,7 @@ public sealed class AuthDialogViewModel : ViewModelBase
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 ExtensionFolderPath = Directory.Exists(extractedFolder) ? extractedFolder : G.Folder.Extension;
+                InstalledExtensionVersion = GetLocalExtensionVersion() ?? "—";
                 IsExtensionReady = true;
                 IsGuideExpanded = true;
                 SetStatus(SL["Dialog_Login_WaitingStatus"], isError: false);
@@ -252,13 +455,14 @@ public sealed class AuthDialogViewModel : ViewModelBase
     {
         if (string.IsNullOrEmpty(ExtensionFolderPath)) return;
         await Clipboard.SetTextAsync(ExtensionFolderPath);
-        CopyHintService.Instance.Show(SL["Extension_Path_Copied_Toast"] ?? "Путь скопирован! Добавьте распакованное расширение в браузер.", CopyHintKind.Success);
+        IsPathCopied = true;
+        CopyHintService.Instance.Show(SL["Extension_Path_Copied_Toast"], CopyHintKind.Success);
     }
 
     private async Task CopyLinkAsync(string url)
     {
         await Clipboard.SetTextAsync(url);
-        CopyHintService.Instance.Show(SL["Extension_Link_Copied_Toast"] ?? "Ссылка скопирована! Перейдите в ваш браузер и вставьте её в адресную строку.", CopyHintKind.Success);
+        CopyHintService.Instance.Show(SL["Extension_Link_Copied_Toast"], CopyHintKind.Success);
     }
 
     private void SetStatus(string text, bool isError)

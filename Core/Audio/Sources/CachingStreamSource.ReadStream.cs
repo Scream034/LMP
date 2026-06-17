@@ -12,7 +12,7 @@ public sealed partial class CachingStreamSource
     /// <list type="bullet">
     ///   <item><c>Position setter</c> — лёгкий <c>Volatile.Write</c>, без CTS</item>
     ///   <item><see cref="SeekAndCancelPendingReads"/> — явный cancel для внешнего seek
-    ///     (вызывается только из <see cref="CachingStreamSource.SeekAsync"/>)</item>
+    ///     (вызывается только из <see cref="SeekAsync"/>)</item>
     /// </list>
     /// <para>Безопасность: парсер однопоточен (read → skip → read), во время skip
     /// нет pending ReadAsync. Внешний seek использует <see cref="SeekAndCancelPendingReads"/>,
@@ -67,7 +67,7 @@ public sealed partial class CachingStreamSource
 
         /// <summary>
         /// Устанавливает позицию потока И отменяет все pending ReadAsync.
-        /// Вызывается ТОЛЬКО из <see cref="CachingStreamSource.SeekAsync"/>
+        /// Вызывается ТОЛЬКО из <see cref="SeekAsync"/>
         /// при внешнем seek — не из парсера.
         /// </summary>
         /// <remarks>
@@ -188,7 +188,7 @@ public sealed partial class CachingStreamSource
             }
             catch (OperationCanceledException) { return 0; }
             catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { return 0; }
-            catch (Exception ex) when (ex is System.IO.IOException || ex is System.Net.Sockets.SocketException)
+            catch (Exception ex) when (ex is IOException || ex is System.Net.Sockets.SocketException)
             {
                 // Глушитель для отладчика: при отмене сетевого запроса сокеты Windows рвутся с IOException.
                 // Возвращаем 0 (EOF), чтобы парсер тихо завершился без всплытия исключений по всему стеку приложения.
@@ -209,7 +209,7 @@ public sealed partial class CachingStreamSource
         }
 
         /// <summary>
-        /// Ядро чтения: делегирует в <see cref="CachingStreamSource.ReadAtAsync"/> и
+        /// Ядро чтения: делегирует в <see cref="ReadAtAsync"/> и
         /// атомарно продвигает позицию только если seek не произошёл во время чтения.
         /// </summary>
         /// <param name="buffer">Целевой буфер.</param>

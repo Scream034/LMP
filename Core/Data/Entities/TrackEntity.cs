@@ -13,7 +13,6 @@ public sealed class TrackEntity
 
     public bool IsOfficialArtist { get; set; }
     public bool IsMusic { get; set; }
-    public bool IsLiked { get; set; }
     public bool IsDisliked { get; set; }
     public bool IsDownloaded { get; set; }
     public string? LocalPath { get; set; }
@@ -23,9 +22,7 @@ public sealed class TrackEntity
     public string? RadioSeedId { get; set; }
 
     /// <summary>
-    /// Cached linear normalization gain computed by EBU R128 analysis (pre-scan or real-time).
-    /// Null = not yet computed. Stored as linear multiplier (e.g. 0.562, 1.78).
-    /// Takes priority over LoudnessDb-derived gain when present.
+    /// Кэшированное линейное усиление нормализации, вычисленное EBU R128.
     /// </summary>
     public float? CachedNormalizationGain { get; set; }
 

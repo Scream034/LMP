@@ -11,6 +11,7 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
     public DbSet<RecentlyPlayedEntity> RecentlyPlayed => Set<RecentlyPlayedEntity>();
     public DbSet<SettingEntity> Settings => Set<SettingEntity>();
     public DbSet<NotificationEntity> Notifications => Set<NotificationEntity>();
+    public DbSet<LikedTrackEntity> LikedTracks => Set<LikedTrackEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,10 +25,24 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.Url).HasMaxLength(512);
             entity.Property(e => e.ThumbnailUrl).HasMaxLength(512);
 
-            entity.HasIndex(e => e.IsLiked);
             entity.HasIndex(e => e.IsDownloaded);
             entity.HasIndex(e => e.UpdatedAt);
             entity.HasIndex(e => new { e.Title, e.Author });
+        });
+
+        // === Liked Tracks ===
+        modelBuilder.Entity<LikedTrackEntity>(entity =>
+        {
+            entity.HasKey(e => new { e.OwnerId, e.TrackId });
+            entity.Property(e => e.OwnerId).HasMaxLength(128);
+            entity.Property(e => e.TrackId).HasMaxLength(64);
+
+            entity.HasOne(e => e.Track)
+                .WithMany()
+                .HasForeignKey(e => e.TrackId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => e.OwnerId);
         });
 
         // === Playlist ===
@@ -39,6 +54,9 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
             entity.Property(e => e.CustomColor).HasMaxLength(16);
             entity.Property(e => e.ComputedColor).HasMaxLength(16);
             entity.Property(e => e.Description).HasMaxLength(2000);
+            entity.Property(e => e.OwnerId).HasMaxLength(128).HasDefaultValue("");
+
+            entity.HasIndex(e => e.OwnerId);
         });
 
         // === PlaylistTrack (Junction Table) ===
@@ -66,8 +84,11 @@ public sealed class LibraryDbContext(DbContextOptions<LibraryDbContext> options)
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).ValueGeneratedOnAdd();
+            entity.Property(e => e.OwnerId).HasMaxLength(128).HasDefaultValue("");
+
             entity.HasIndex(e => e.TrackId);
             entity.HasIndex(e => e.PlayedAt);
+            entity.HasIndex(e => e.OwnerId);
         });
 
         // === Settings ===

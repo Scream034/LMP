@@ -229,7 +229,7 @@ public sealed class LocalFileSource : IAudioSource
                 // Сценарий А: Файл открыт из кэша. Запускаем хирургическую точечную инвалидацию чанка
                 if (!string.IsNullOrEmpty(_trackId) && _expectedSize > 0)
                 {
-                    int chunkSize = AudioConstants.ChunkSize;
+                    int chunkSize = ChunkSize;
                     int chunkIndex = (int)(ex.AbsoluteBytePosition / chunkSize);
 
                     Log.Warn($"[LocalFileSource] Cache corruption detected for track {_trackId} at byte {ex.AbsoluteBytePosition} (Chunk {chunkIndex}). Performing surgical invalidation.");

@@ -139,6 +139,13 @@ public sealed class HomeViewModel : TrackListReorderableViewModel
         return [];
     }
 
+    /// <inheritdoc />
+    protected override void OnAccountChanged()
+    {
+        base.OnAccountChanged();
+        _isDataLoaded = false;
+    }
+
     #endregion
 
     #region Private Methods

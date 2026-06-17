@@ -1,21 +1,45 @@
 ﻿namespace LMP.Core.Models;
 
+/// <summary>
+/// Представляет состояние авторизации пользователя Google/YouTube.
+/// </summary>
 public sealed class AuthState
 {
+    public const string DefaultAuthUser = "0";
+
+    private string _userName = "Guest";
+
     public bool IsAuthenticated { get; set; }
 
-    public string UserName { get; set; } = "Guest";
+    /// <summary>
+    /// Отображаемое имя пользователя. Автоматически возвращает локализованное имя гостя из ресурсов при отсутствии сессии.
+    /// </summary>
+    public string UserName
+    {
+        get => IsAuthenticated ? _userName : LocalizationService.Instance["Auth_Guest"];
+        set => _userName = value;
+    }
+
     public string UserEmail { get; set; } = "";
     public string AvatarUrl { get; set; } = "";
-
-    public string PageId { get; set; } = "";
 
     /// <summary>
     /// Индекс сессии мульти-авторизации Google активного аккаунта.
     /// По умолчанию пустая строка — это позволяет доверять флагу IsSelected от YouTube 
     /// при первичном входе через расширение.
     /// </summary>
-    public string AuthUser { get; set; } = "";
+    public string AuthUser { get; set; } = DefaultAuthUser;
+
+    /// <summary>
+    /// Кэшированный список каналов пользователя для мгновенного оффлайн-переключения.
+    /// </summary>
+    public List<YoutubeAccountItem> CachedAccounts { get; set; } = [];
+
+    /// <summary>
+    /// Уникальный идентификатор текущего профиля для изоляции данных в БД.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string DisplayId => !string.IsNullOrEmpty(UserEmail) ? UserEmail : "guest";
 
     public DateTime LastUpdated { get; set; } = DateTime.MinValue;
 }

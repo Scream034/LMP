@@ -16,7 +16,9 @@ namespace LMP.Core.Models;
 [JsonSerializable(typeof(CacheEntry))]
 [JsonSerializable(typeof(ThemeSettings))]
 [JsonSerializable(typeof(BootstrapSettings))]
-[JsonSerializable(typeof(AuthState))] // Добавлено для AOT-совместимости
+[JsonSerializable(typeof(AuthState))]
+[JsonSerializable(typeof(YoutubeAccountItem))]
+[JsonSerializable(typeof(List<YoutubeAccountItem>))]
 [JsonSourceGenerationOptions(
     WriteIndented = false, 
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

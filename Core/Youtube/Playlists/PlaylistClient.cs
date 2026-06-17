@@ -100,7 +100,7 @@ public class PlaylistClient(HttpClient http)
                 if (!encounteredIds.Add(videoId)) continue;
 
                 var title = videoData.Title ?? "";
-                var author = videoData.Author ?? Services.LocalizationService.Instance["Track_UnknownAuthor"];
+                var author = videoData.Author ?? LocalizationService.Instance["Track_UnknownAuthor"];
 
                 // Вызов ThumbnailResolver.GetBestUrl вместо множественных вызовов Select/TryGetWithHighestResolution
                 var bestThumb = YoutubeClientUtils.ThumbnailResolver.GetBestUrl(videoData.Thumbnails, videoId);

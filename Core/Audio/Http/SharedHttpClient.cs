@@ -34,7 +34,7 @@ public static class SharedHttpClient
             // RequestVersionOrLower + Version30 = ПРОБУЕТ HTTP/3, фоллбэк на HTTP/1.1.
             // Это критично: PlayerContextManager скачивает iframe_api через этот клиент,
             // и если HTTP/3 недоступен — n-token вообще не расшифровывается.
-            DefaultRequestVersion = HttpVersion.Version30,
+            DefaultRequestVersion = HttpVersion.Version11,
             DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
 

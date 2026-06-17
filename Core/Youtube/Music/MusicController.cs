@@ -20,13 +20,7 @@ internal class MusicController(HttpClient http)
     private static readonly byte[] Utf8Hl = "hl"u8.ToArray();
     private static readonly byte[] Utf8Gl = "gl"u8.ToArray();
     private static readonly byte[] Utf8VisitorData = "visitorData"u8.ToArray();
-    private static readonly byte[] Utf8User = "user"u8.ToArray();
     private static readonly byte[] Utf8WebRemix = "WEB_REMIX"u8.ToArray();
-
-    /// <summary>
-    /// Имя свойства для указания активного делегированного бренд-аккаунта в InnerTube.
-    /// </summary>
-    private static readonly byte[] Utf8OnBehalfOfUser = "onBehalfOfUser"u8.ToArray();
 
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
 
@@ -42,7 +36,6 @@ internal class MusicController(HttpClient http)
         writer.WriteString(Utf8Hl, YoutubeHttpHandler.GetHl());
         writer.WriteString(Utf8Gl, YoutubeHttpHandler.GetGl());
 
-        // Читаем глобальный VisitorData напрямую
         var visitorData = YoutubeClientUtils.VisitorData;
         if (!string.IsNullOrEmpty(visitorData))
             writer.WriteString(Utf8VisitorData, visitorData);
@@ -50,15 +43,6 @@ internal class MusicController(HttpClient http)
             writer.WriteNull(Utf8VisitorData);
 
         writer.WriteEndObject(); // client
-
-        writer.WritePropertyName(Utf8User);
-        writer.WriteStartObject();
-        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
-        {
-            // Исправлено: заменено "delegatedSessionId" на "onBehalfOfUser" для поддержки бренд-аккаунтов
-            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
-        }
-        writer.WriteEndObject(); // user
 
         writer.WriteEndObject(); // context
     }

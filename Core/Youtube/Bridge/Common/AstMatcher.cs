@@ -170,7 +170,7 @@ internal static class AstMatcher
             {
                 VariableDeclaration vd => MatchAnyKey(vd.Declarations, template.AnyKey),
                 BlockStatement bs => MatchAnyKey(bs.Body, template.AnyKey),
-                Acornima.Ast.Program p => MatchAnyKey(p.Body, template.AnyKey),
+                Program p => MatchAnyKey(p.Body, template.AnyKey),
                 CallExpression ce => MatchAnyKey(ce.Arguments, template.AnyKey),
                 _ => MatchAnyKey(node.ChildNodes, template.AnyKey)
             };

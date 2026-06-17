@@ -11,7 +11,6 @@ public sealed class PlaylistEntity
 
     /// <summary>
     /// Автоматически вычисленный доминантный цвет из обложки.
-    /// Формат: #RRGGBB. Пересчитывается при смене обложки.
     /// </summary>
     public string? ComputedColor { get; set; }
 
@@ -19,6 +18,11 @@ public sealed class PlaylistEntity
     /// Описание плейлиста.
     /// </summary>
     public string? Description { get; set; }
+
+    /// <summary>
+    /// Идентификатор владельца (аккаунта), к которому привязан плейлист.
+    /// </summary>
+    public string OwnerId { get; set; } = string.Empty;
 
     public int SyncMode { get; set; }
     public DateTime CreatedAt { get; set; }

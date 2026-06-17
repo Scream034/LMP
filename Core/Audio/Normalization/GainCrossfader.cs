@@ -22,7 +22,7 @@ namespace LMP.Core.Audio.Normalization;
 /// </list>
 ///
 /// <para><b>Zero-alloc value type.</b> Всё состояние хранится внутри struct.
-/// Хранится как поле в <see cref="Audio.AudioPipeline"/>.</para>
+/// Хранится как поле в <see cref="AudioPipeline"/>.</para>
 ///
 /// <para><b>Single writer:</b> используется исключительно из fill thread
 /// backend'а в <c>AudioCallback</c>. Нет конкуренции по записи.</para>

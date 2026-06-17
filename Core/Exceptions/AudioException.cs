@@ -134,7 +134,7 @@ public class UnsupportedFormatException(string format)
 /// <remarks>
 /// <para><b>Когда выбрасывается:</b></para>
 /// <list type="bullet">
-///   <item>Превышен лимит последовательных HTTP 403 ответов (<see cref="Audio.AudioConstants.Max403BeforeGiveUp"/> в CachingStreamSource)</item>
+///   <item>Превышен лимит последовательных HTTP 403 ответов (<see cref="AudioConstants.Max403BeforeGiveUp"/> в CachingStreamSource)</item>
 ///   <item>YouTube вернул UMP формат вместо raw audio</item>
 ///   <item>Все retry-попытки исчерпаны без успеха</item>
 /// </list>
@@ -150,7 +150,7 @@ public class UnsupportedFormatException(string format)
 ///           → PlaybackErrorOrchestrator
 /// </code>
 /// 
-/// <para><b>Действия оркестратора</b> зависят от <see cref="Models.PlaybackErrorBehavior"/>:</para>
+/// <para><b>Действия оркестратора</b> зависят от <see cref="PlaybackErrorBehavior"/>:</para>
 /// <list type="bullet">
 ///   <item>Dialog — пауза, модальный диалог</item>
 ///   <item>ToastAndSkip — toast + авто-skip</item>

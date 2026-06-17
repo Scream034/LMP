@@ -58,6 +58,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     private readonly AudioEngine _audio;
     private readonly YoutubeProvider _youtube;
     private readonly YoutubeUserDataService _userData;
+    private readonly NotificationService _notifications;
 
     private bool _isLoadingTheme;
     private bool _isUpdatingPreset;
@@ -117,6 +118,11 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
 
     /// <summary>Email или локализованная строка "гость".</summary>
     public string AccountSubtitle => IsAuthenticated ? _auth.State.UserEmail : SL["Auth_Guest"];
+
+    /// <summary>
+    /// Указывает, выполняется ли в данный момент сетевая транзакция с аккаунтом (вход, смена канала, выход).
+    /// </summary>
+    [Reactive] public bool IsAccountLoading { get; private set; }
 
     #endregion
 
@@ -334,6 +340,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     public ReactiveCommand<Unit, Unit> ResetThemeCommand { get; }
     public ReactiveCommand<Unit, Unit> ClearDownloadsCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowNormalizationInfoCommand { get; }
+    public ReactiveCommand<Unit, Unit> RefreshProfileCommand { get; }
 
     #endregion
 
@@ -355,7 +362,8 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         AudioEngine audio,
         LocalAuthServer localServer,
         YoutubeProvider youtube,
-        YoutubeUserDataService userData)
+        YoutubeUserDataService userData,
+        NotificationService notifications)
     {
         _library = library;
         _registry = registry;
@@ -368,6 +376,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         _localServer = localServer;
         _youtube = youtube;
         _userData = userData;
+        _notifications = notifications;
 
         LoginCommand = CreateCommand(ReactiveCommand.CreateFromTask(LoginAsync));
         SwitchAccountCommand = CreateCommand(ReactiveCommand.CreateFromTask(SwitchAccountAsync));
@@ -383,6 +392,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         CleanupMemoryNowCommand = CreateCommand(ReactiveCommand.Create(
             () => MemoryCleanupHelper.PerformCleanup(aggressive: true)));
         ShowNormalizationInfoCommand = CreateCommand(ReactiveCommand.CreateFromTask(ShowNormalizationInfoAsync));
+        RefreshProfileCommand = CreateCommand(ReactiveCommand.CreateFromTask(RefreshProfileAsync));
 
         SidebarItems =
         [
@@ -464,7 +474,6 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
 
         if (_isDataLoaded)
         {
-            // Настройки и локализация уже в памяти, мгновенно открываем UI
             IsContentReady = true;
             return;
         }
@@ -481,14 +490,28 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
 
             SelectedSidebarItem ??= SidebarItems.FirstOrDefault();
 
-            if (IsAuthenticated && _auth.State.UserName == "Guest")
-                _ = FetchUserProfileQuietlyAsync();
-
             _isDataLoaded = true;
             IsContentReady = true;
         });
 
         MemoryCleanupHelper.PerformCleanup(aggressive: false);
+    }
+
+    /// <inheritdoc />
+    protected override void OnAccountChanged()
+    {
+        base.OnAccountChanged();
+
+        _isDataLoaded = false;
+
+        if (IsContentReady)
+        {
+            Log.Info("[Settings] Account changed while settings page was open. Re-loading configuration in real-time.");
+            IsContentReady = false;
+            LoadAllSettings();
+            UpdateCacheStats();
+            IsContentReady = true;
+        }
     }
 
     /// <summary>
@@ -497,6 +520,7 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
     /// </summary>
     private async Task FetchUserProfileQuietlyAsync()
     {
+        IsAccountLoading = true;
         try
         {
             Log.Info("[Settings] Auto-fetching missing user profile info...");
@@ -512,6 +536,10 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         catch (Exception ex)
         {
             Log.Warn($"[Settings] Failed to auto-fetch profile: {ex.Message}");
+        }
+        finally
+        {
+            IsAccountLoading = false;
         }
     }
 
@@ -1297,93 +1325,100 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
 
     private async Task LoginAsync()
     {
-        // Создаем ViewModel напрямую, инжектируя зависимости
-        var authVm = new AuthDialogViewModel(_auth, _userData, _localServer);
-
-        var host = AppEntry.Services.GetRequiredService<DialogHostViewModel>();
-        var tcs = new TaskCompletionSource<bool>();
-
-        authVm.OnResult = result =>
+        IsAccountLoading = true;
+        try
         {
-            host.CloseDialog(result);
-            tcs.TrySetResult(result);
-        };
+            var authVm = new AuthDialogViewModel(_auth, _userData, _localServer);
+            var host = AppEntry.Services.GetRequiredService<DialogHostViewModel>();
+            var tcs = new TaskCompletionSource<bool>();
 
-        // Показываем единый диалог
-        _ = host.ShowAsync<object>(authVm);
-        var success = await tcs.Task;
+            authVm.OnResult = result =>
+            {
+                host.CloseDialog(result);
+                tcs.TrySetResult(result);
+            };
 
-        if (success)
+            _ = host.ShowAsync<object>(authVm);
+            var success = await tcs.Task;
+
+            if (success)
+            {
+                IsAuthenticated = _auth.IsAuthenticated;
+                RaiseAccountProperties();
+
+                await _notifications.ShowToastAsync(
+                    titleKey: SL["Dialog_Success"] ?? "Success",
+                    messageKey: string.Format(SL["Auth_LoggedInAs"] ?? "Signed in: {0}", _auth.State.UserName),
+                    severity: NotificationSeverity.Success,
+                    durationMs: 4000);
+            }
+        }
+        finally
         {
-            IsAuthenticated = _auth.IsAuthenticated;
-            RaiseAccountProperties();
-
-            await _dialog.ShowInfoAsync(SL["Dialog_Success"] ?? "Успех", string.Format(SL["Auth_LoggedInAs"] ?? "Вы вошли как {0}", _auth.State.UserName));
+            IsAccountLoading = false;
         }
     }
 
     /// <summary>
-    /// Вызывает диалог выбора канала/бренда и переключает контекст авторизованного пользователя.
-    /// В случае деградации сессии оставляет старые куки, но предлагает обновить их.
+    /// Вызывает диалог выбора канала/бренда и мгновенно переключает контекст авторизованного пользователя
+    /// без дополнительных сетевых запросов, используя данные из кэша.
     /// </summary>
     private async Task SwitchAccountAsync()
     {
         if (!IsAuthenticated) return;
 
+        IsAccountLoading = true;
         _isLoadingSettings = true;
         try
         {
-            var accounts = await _userData.GetAvailableAccountsAsync();
+            var accounts = _auth.State.CachedAccounts;
+            if (accounts == null || accounts.Count == 0)
+            {
+                Log.Info("[Settings] No cached accounts found. Making fallback network request...");
+                accounts = await _userData.GetAvailableAccountsAsync();
+            }
+
+            // Хардкод заменен на ключи локализации
             if (accounts.Count == 0)
             {
-                await _dialog.ShowInfoAsync(
-                    SL["Dialog_Error_Title"] ?? "Error",
-                    SL["Auth_ProfileLoadError_Message"] ?? "Failed to load profile data.");
+                await _dialog.ShowInfoAsync(SL["Dialog_Error_Title"] ?? "Error", SL["Auth_ProfileLoadError_Message"] ?? "Failed to load profile data.");
                 return;
             }
 
             if (accounts.Count <= 1)
             {
-                await _dialog.ShowInfoAsync(
-                    SL["Dialog_Info_Title"] ?? "Info",
-                    SL["Auth_NoMultipleAccounts"] ?? "There are no other channels available for this profile.");
+                await _dialog.ShowInfoAsync(SL["Dialog_Info_Title"] ?? "Info", SL["Auth_NoMultipleAccounts"] ?? "There are no other channels available for this profile.");
                 return;
             }
 
             var selectedAccount = await _dialog.ShowAccountSelectionDialogAsync(accounts);
             if (selectedAccount == null) return;
 
-            // Сброс сетевой сессии и немедленный переход под личность бренда
-            _auth.SetPageId(selectedAccount.PageId, selectedAccount.AuthUser);
-
-            // Теперь запрос профиля гарантированно пойдет через пересозданный клиент
-            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
-            _auth.UpdateUserProfile(name, email, avatar);
+            _auth.SetAuthUser(selectedAccount.AuthUser);
+            _auth.UpdateUserProfile(selectedAccount.Name, selectedAccount.Email, selectedAccount.AvatarUrl);
 
             _youtube.ClearCache();
-
             RaiseAccountProperties();
 
-            await _dialog.ShowInfoAsync(
-                SL["Dialog_Success"] ?? "Success",
-                string.Format(SL["Auth_LoggedInAs"] ?? "Signed in: {0}", name));
+            // Используем Toast вместо блокирующего диалога
+            await _notifications.ShowToastAsync(
+                titleKey: SL["Dialog_Success"] ?? "Success",
+                messageKey: string.Format(SL["Auth_LoggedInAs"] ?? "Signed in: {0}", selectedAccount.Name),
+                severity: NotificationSeverity.Success,
+                durationMs: 4000);
         }
         catch (LoginRequiredException ex) when (ex.Reason == LoginRequiredReason.SessionExpired)
         {
             Log.Warn("[Settings] Switch account failed due to expired session. Prompting user to update cookies.");
 
-            // Мы НЕ выходим из аккаунта (сохраняем деградировавшую сессию для стримов)
             var title = SL["Auth_SessionExpired_SwitchAccount_Title"] ?? "Session Update Required";
             var msg = SL["Auth_SessionExpired_SwitchAccount_Message"] ?? "To switch accounts, you need to update your authorization because the current session has expired.\n\nDo you want to sign in again right now?";
             var loginText = SL["Auth_Login"] ?? "Sign In";
             var cancelText = SL["Common_Cancel"] ?? "Cancel";
 
             bool wantsToLogin = await _dialog.ConfirmAsync(title, msg, loginText, cancelText);
-
             if (wantsToLogin)
             {
-                // Если пользователь согласился, открываем диалог. 
-                // Новые куки просто перезапишут старые поверх.
                 await LoginAsync();
             }
         }
@@ -1394,15 +1429,55 @@ public sealed class SettingsViewModel : ViewModelBase, IDisposable, ISmoothTrans
         finally
         {
             _isLoadingSettings = false;
+            IsAccountLoading = false;
+        }
+    }
+
+    /// <summary>
+    /// Ручное принудительное обновление данных профиля пользователя по кнопке.
+    /// Полезно, если аватарка "протухла" или пользователь сменил ник.
+    /// </summary>
+    private async Task RefreshProfileAsync()
+    {
+        if (!IsAuthenticated) return;
+
+        IsAccountLoading = true;
+        try
+        {
+            var (name, email, avatar) = await _userData.GetAccountInfoAsync();
+            if (!string.IsNullOrEmpty(name))
+            {
+                _auth.UpdateUserProfile(name, email, avatar);
+                RaiseAccountProperties();
+            }
+
+            // Запускаем фоновое обновление свитчера, чтобы обновить кэш каналов
+            _ = _userData.GetAvailableAccountsAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[Settings] Failed to refresh profile manually: {ex.Message}");
+        }
+        finally
+        {
+            IsAccountLoading = false;
         }
     }
 
     private async Task LogoutAsync()
     {
         if (!await _dialog.ConfirmAsync(SL["Auth_Logout"], SL["Dialog_LogoutMessage"])) return;
-        _auth.Logout();
-        IsAuthenticated = _auth.IsAuthenticated;
-        RaiseAccountProperties();
+        IsAccountLoading = true;
+        try
+        {
+            _auth.Logout();
+            IsAuthenticated = _auth.IsAuthenticated;
+            RaiseAccountProperties();
+        }
+        finally
+        {
+            IsAccountLoading = false;
+        }
     }
 
     /// <summary>

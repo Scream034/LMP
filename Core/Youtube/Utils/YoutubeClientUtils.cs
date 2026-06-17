@@ -43,20 +43,6 @@ public static class YoutubeClientUtils
     }
   }
 
-  public static string PageId => _authService?.State.PageId ?? "";
-
-  /// <summary>
-  /// Генерирует JSON-строку контекста пользователя для авторизованных запросов бренд-аккаунтов.
-  /// </summary>
-  [MethodImpl(MethodImplOptions.AggressiveInlining)]
-  private static string GetUserContextJson()
-  {
-    var pageId = PageId;
-    return string.IsNullOrEmpty(pageId)
-      ? ""
-      : $@", ""user"": {{ ""onBehalfOfUser"": {Json.Serialize(pageId)} }}";
-  }
-
   /// <summary>
   /// Гарантирует наличие свежего VisitorData. Если он равен дефолтному
   /// или принудительно затребовано обновление — запускает фоновый/синхронный
@@ -90,8 +76,12 @@ public static class YoutubeClientUtils
   {
     try
     {
-      using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
+      using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/sw.js_data")
+      {
+        Version = System.Net.HttpVersion.Version11 // Исключаем медленные UDP-согласования HTTP/3 при старте
+      };
       request.Headers.UserAgent.ParseAdd(UaWeb);
+      request.Headers.Add("Referer", "https://www.youtube.com/");
 
       if (!string.IsNullOrEmpty(cookiesHeader))
       {
@@ -99,7 +89,7 @@ public static class YoutubeClientUtils
       }
 
       using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-      cts.CancelAfter(TimeSpan.FromSeconds(5));
+      cts.CancelAfter(TimeSpan.FromSeconds(10));
 
       using var response = await SharedHttpClient.Instance.SendAsync(
           request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
@@ -122,7 +112,7 @@ public static class YoutubeClientUtils
     }
     catch (Exception ex)
     {
-      Logger.Log.Warn($"[YoutubeClientUtils] Failed to fetch sw.js_data: {ex.Message}");
+      Log.Warn($"[YoutubeClientUtils] Failed to fetch sw.js_data: {ex.Message}");
       return (null, null, false);
     }
   }
@@ -239,7 +229,6 @@ public static class YoutubeClientUtils
     var hlJson = Json.Serialize(hl);
     var glJson = Json.Serialize(gl);
 
-    // Избегаем вложенных интерполяций $$""", вынося playbackContext в плоскую переменную
     var playbackContextJson = signatureTimestamp != null
         ? $@", ""playbackContext"": {{ ""contentPlaybackContext"": {{ ""signatureTimestamp"": {Json.Serialize(signatureTimestamp)} }} }}"
         : "";
@@ -259,7 +248,7 @@ public static class YoutubeClientUtils
               "hl": {{hlJson}},
               "gl": {{glJson}},
               "utcOffsetMinutes": 0
-            }{{GetUserContextJson()}}
+            }
           }{{playbackContextJson}}
         }
         """,
@@ -283,7 +272,7 @@ public static class YoutubeClientUtils
               "hl": "en",
               "gl": "US",
               "utcOffsetMinutes": 0
-            }{{GetUserContextJson()}}
+            }
           }
         }
         """,
@@ -305,7 +294,7 @@ public static class YoutubeClientUtils
               "hl": {{hlJson}},
               "gl": {{glJson}},
               "utcOffsetMinutes": 0
-            }{{GetUserContextJson()}}
+            }
           }
         }
         """,
@@ -323,7 +312,7 @@ public static class YoutubeClientUtils
               "hl": {{hlJson}},
               "gl": {{glJson}},
               "utcOffsetMinutes": 0
-            }{{GetUserContextJson()}}
+            }
           }
         }
         """,
@@ -346,7 +335,7 @@ public static class YoutubeClientUtils
               "hl": {{hlJson}},
               "gl": {{glJson}},
               "utcOffsetMinutes": 0
-            }{{GetUserContextJson()}}
+            }
           }
         }
         """,
@@ -363,7 +352,7 @@ public static class YoutubeClientUtils
               "gl": {{glJson}},
               "utcOffsetMinutes": 0,
               "platform": "TV"
-            }{{GetUserContextJson()}},
+            },
             "thirdParty": {
               "embedUrl": "https://www.youtube.com"
             }

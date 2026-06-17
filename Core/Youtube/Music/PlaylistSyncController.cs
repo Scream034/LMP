@@ -8,14 +8,11 @@ using LMP.Core.Helpers;
 
 namespace LMP.Core.Youtube.Music;
 
-/// <summary>
-/// Reads user playlists and playlist tracks for synchronization.
-/// Uses WEB client for playlist listing, WEB_REMIX for full playlist data.
-/// </summary>
 internal sealed class PlaylistSyncController(HttpClient http)
 {
     private const string WebApiUrl = "https://www.youtube.com/youtubei/v1";
     private const string MusicApiUrl = "https://music.youtube.com/youtubei/v1";
+    private const string ConstantParams = "qAIC";
     private const string GreyOutPolicy = "MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT";
 
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
@@ -30,9 +27,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
     private static readonly byte[] Utf8WebRemix = "WEB_REMIX"u8.ToArray();
     private static readonly byte[] Utf8Hl = "hl"u8.ToArray();
     private static readonly byte[] Utf8Gl = "gl"u8.ToArray();
-    private static readonly byte[] Utf8User = "user"u8.ToArray();
     private static readonly byte[] Utf8VisitorData = "visitorData"u8.ToArray();
-    private static readonly byte[] Utf8OnBehalfOfUser = "onBehalfOfUser"u8.ToArray();
 
     #region Context Writers
 
@@ -54,15 +49,6 @@ internal sealed class PlaylistSyncController(HttpClient http)
         writer.WriteStartObject();
         writer.WriteBoolean(Utf8UseSsl, false);
         writer.WriteEndObject();
-
-        // Исправлено: Добавлен блок user для корректного чтения плейлистов бренд-аккаунта
-        writer.WritePropertyName(Utf8User);
-        writer.WriteStartObject();
-        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
-        {
-            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
-        }
-        writer.WriteEndObject(); // user
 
         writer.WriteEndObject();
     }
@@ -89,15 +75,6 @@ internal sealed class PlaylistSyncController(HttpClient http)
             writer.WriteNull(Utf8VisitorData);
 
         writer.WriteEndObject();
-
-        // Исправлено: Добавлен токен onBehalfOfUser для синхронизации треков в контексте бренда
-        writer.WritePropertyName(Utf8User);
-        writer.WriteStartObject();
-        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
-        {
-            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
-        }
-        writer.WriteEndObject(); // user
 
         writer.WriteEndObject();
     }
@@ -712,7 +689,7 @@ internal sealed class PlaylistSyncController(HttpClient http)
         var root = await PostWebAsync("browse", writer =>
         {
             writer.WriteString("browseId", "FEplaylist_aggregation");
-            writer.WriteString("params", "qAIC");
+            writer.WriteString("params", ConstantParams);
         }, ct);
 
         var batch = ParseLockupViewModels(root);

@@ -3,16 +3,10 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LMP.Core.Youtube.Exceptions;
-using LMP.Core.Youtube.Utils;
-using LMP.Core.Helpers;
 using LMP.Core.Helpers.Extensions;
 
 namespace LMP.Core.Youtube.Music;
 
-/// <summary>
-/// All playlist mutations via WEB client (www.youtube.com).
-/// Supports batch add/remove operations in a single request.
-/// </summary>
 internal sealed class PlaylistMutationController(HttpClient http)
 {
     private const string ApiUrl = "https://www.youtube.com/youtubei/v1";
@@ -24,8 +18,6 @@ internal sealed class PlaylistMutationController(HttpClient http)
     private static readonly byte[] Utf8Request = "request"u8.ToArray();
     private static readonly byte[] Utf8UseSsl = "useSsl"u8.ToArray();
     private static readonly byte[] Utf8Web = "WEB"u8.ToArray();
-    private static readonly byte[] Utf8User = "user"u8.ToArray();
-    private static readonly byte[] Utf8OnBehalfOfUser = "onBehalfOfUser"u8.ToArray();
 
     private static readonly MediaTypeHeaderValue JsonContentType = new("application/json");
 
@@ -47,15 +39,6 @@ internal sealed class PlaylistMutationController(HttpClient http)
         writer.WriteStartObject();
         writer.WriteBoolean(Utf8UseSsl, false);
         writer.WriteEndObject(); // request
-
-        // Исправлено: Теперь создание и редактирование плейлистов выполняется от имени бренд-канала
-        writer.WritePropertyName(Utf8User);
-        writer.WriteStartObject();
-        if (!string.IsNullOrEmpty(YoutubeClientUtils.PageId))
-        {
-            writer.WriteString(Utf8OnBehalfOfUser, YoutubeClientUtils.PageId);
-        }
-        writer.WriteEndObject(); // user
 
         writer.WriteEndObject(); // context
     }

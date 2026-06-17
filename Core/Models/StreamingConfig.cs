@@ -2,7 +2,7 @@ namespace LMP.Core.Models;
 
 /// <summary>
 /// Конфигурация потоковой передачи и буферизации аудио.
-/// Создаётся через <see cref="Services.StreamingProfiles"/> на основе <see cref="InternetProfile"/>.
+/// Создаётся через <see cref="StreamingProfiles"/> на основе <see cref="InternetProfile"/>.
 /// Иммутабельна после создания — безопасно передавать между потоками.
 /// </summary>
 public sealed record StreamingConfig

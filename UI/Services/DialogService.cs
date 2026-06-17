@@ -151,8 +151,7 @@ public sealed class DialogService
         var host = _getDialogHost();
         var tcs = new TaskCompletionSource<YoutubeAccountItem?>();
 
-        // Передаем как PageId, так и AuthUser для 100% корректного сопоставления выбранной личности
-        var vm = new AccountSelectionDialogViewModel(accounts, _authService.State.PageId, _authService.State.AuthUser)
+        var vm = new AccountSelectionDialogViewModel(accounts, _authService.State.AuthUser)
         {
             OnResult = result =>
             {

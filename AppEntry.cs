@@ -20,11 +20,19 @@ using LMP.Core.Youtube.Bridge.Common;
 using LMP.UI.Features.Notifications;
 using ReactiveUI.Avalonia;
 using LMP.UI.Features.Queue;
+using LMP.Core.Data.Entities;
+using LMP.Core.Models;
 
 namespace LMP;
 
+/// <summary>
+/// Точка входа в приложение Lite Music Player.
+/// </summary>
 public sealed class AppEntry
 {
+    /// <summary>
+    /// Глобальный провайдер служб внедрения зависимостей.
+    /// </summary>
     public static IServiceProvider Services { get; private set; } = null!;
 
     [STAThread]
@@ -37,25 +45,20 @@ public sealed class AppEntry
 
         try
         {
-            // ═══ ЭТАП 1: Создать папки ПЕРВЫМ ═══
             G.Folder.Create();
 
-            // ═══ ЭТАП 2: Логгер ═══
             Log.Initialize();
             Log.Info($"{G.AppId} starting...");
 
-            // ═══ ЭТАП 3: Bootstrap настройки (быстро, без БД) ═══
             BootstrapSettings.Initialize();
 
-            // ═══ ЭТАП 4: DI контейнер ═══
             var services = new ServiceCollection();
             ConfigureServices(services);
             Services = services.BuildServiceProvider();
 
-            // ═══ ЭТАП 5: КРИТИЧНО — Мигрировать БД ДО создания сервисов ═══
+            // Безопасная инициализация и автоматическая миграция БД
             MigrateDatabaseSync();
 
-            // ═══ ЭТАП 6: Avalonia ═══
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         }
         catch (Exception ex)
@@ -64,49 +67,163 @@ public sealed class AppEntry
         }
         finally
         {
-            // ═══ ГАРАНТИРОВАННЫЙ SHUTDOWN логгера ═══
             Log.Shutdown();
         }
     }
 
     /// <summary>
-    /// Синхронно выполняет миграцию БД ДО старта Avalonia и создания сервисов.
-    /// Гарантирует что NotificationService и LibraryService найдут готовую схему.
+    /// Выполняет инициализацию базы данных. При обнаружении старой версии схемы 
+    /// осуществляет её резервное копирование и разворачивает чистую БД.
     /// </summary>
     private static void MigrateDatabaseSync()
+    {
+        var dbPath = G.FilePath.Database;
+        bool needsRecreation = false;
+
+        if (File.Exists(dbPath))
+        {
+            try
+            {
+                // Ограничиваем область видимости DbContext, чтобы он гарантированно закрылся
+                using (var ctx = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>().CreateDbContext())
+                {
+                    int dbVersion = ctx.GetDatabaseVersionAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    if (dbVersion < DatabaseExtensions.CurrentDbVersion)
+                    {
+                        Log.Info($"[DB] Outdated database version detected (Current: {dbVersion}, Required: {DatabaseExtensions.CurrentDbVersion}). Requiring clean recreation...");
+                        needsRecreation = true;
+                    }
+                }
+
+                // КРИТИЧЕСКИЙ ПАТЧ: Освобождаем пулы соединений SQLite, снимая блокировку с файла БД
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[DB] Error while verifying database schema version: {ex.Message}. Recreating to be safe...");
+                needsRecreation = true;
+
+                // Сбрасываем пулы в случае исключения
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            }
+        }
+
+        if (needsRecreation)
+        {
+            try
+            {
+                if (File.Exists(dbPath))
+                {
+                    // Принудительно собираем мусор, чтобы закрыть невыгруженные файловые дескрипторы
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+
+                    var backupPath = dbPath + $".backup.{DateTime.Now:yyyyMMddHHmmss}";
+                    File.Move(dbPath, backupPath, overwrite: true);
+                    Log.Info($"[DB] Old database successfully backed up to: {backupPath}");
+                }
+
+                // Сбрасываем сессию, чтобы гарантировать чистый вход в аккаунт на новой БД
+                var auth = Services.GetRequiredService<CookieAuthService>();
+                auth.Logout();
+                Log.Info("[DB] Authorization cleared to prevent state conflicts.");
+            }
+            catch (Exception backupEx)
+            {
+                Log.Error($"[DB] Failed to backup legacy database or clear cookies: {backupEx.Message}");
+            }
+        }
+
+        try
+        {
+            TryInitializeDatabaseInternal();
+
+            if (needsRecreation)
+            {
+                SaveEmergencyNotification();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[DB] Critical database initialization/migration error: {ex.Message}");
+
+            try
+            {
+                // В случае критического сбоя пробуем очистить пулы еще раз и повторить процедуру
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
+                if (File.Exists(dbPath))
+                {
+                    var backupPath = dbPath + $".backup.{DateTime.Now:yyyyMMddHHmmss}";
+                    File.Move(dbPath, backupPath, overwrite: true);
+                    Log.Info($"[DB] Current incompatible database successfully backed up to: {backupPath}");
+
+                    TryInitializeDatabaseInternal();
+                    SaveEmergencyNotification();
+                }
+            }
+            catch (Exception backupEx)
+            {
+                Log.Fatal($"[DB] Failed to recover database with a clean slate: {backupEx.Message}");
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Выполняет стандартные процедуры развертывания структуры SQLite с проставлением версии.
+    /// </summary>
+    private static void TryInitializeDatabaseInternal()
+    {
+        var dbFactory = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>();
+        using var ctx = dbFactory.CreateDbContext();
+
+        ctx.Database.EnsureCreated();
+        ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
+        ctx.SetDatabaseVersionAsync(DatabaseExtensions.CurrentDbVersion, CancellationToken.None).GetAwaiter().GetResult();
+
+        Log.Info($"[DB] Database initialization/migration complete (Version: {DatabaseExtensions.CurrentDbVersion})");
+    }
+
+    /// <summary>
+    /// Записывает локализованное уведомление о сбросе базы данных с использованием JSON-ключей [1].
+    /// </summary>
+    private static void SaveEmergencyNotification()
     {
         try
         {
             var dbFactory = Services.GetRequiredService<IDbContextFactory<LibraryDbContext>>();
             using var ctx = dbFactory.CreateDbContext();
 
-            ctx.Database.EnsureCreated();
-            ctx.MigrateSchemaAsync(CancellationToken.None).GetAwaiter().GetResult();
-            ctx.OptimizeAsync(CancellationToken.None).GetAwaiter().GetResult();
-            ctx.EnsureFtsTablesAsync(CancellationToken.None).GetAwaiter().GetResult();
+            var notification = new NotificationEntity
+            {
+                Id = Guid.NewGuid().ToString(),
+                TitleKey = "Dialog_Warning_Title", // "Предупреждение" / "Warning"
+                MessageKey = "Auth_ProfileLoadError_Message", // Сообщение об ошибке профиля/БД
+                RecommendationKey = "Recommendation_ContactDev", // "Обратитесь к разработчику"
+                Severity = (int)NotificationSeverity.Warning,
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            };
 
-            Log.Info("[DB] Schema migration complete");
+            ctx.Notifications.Add(notification);
+            ctx.SaveChanges();
+            Log.Info("[DB] Emergency recovery notification saved to database using localization keys");
         }
         catch (Exception ex)
         {
-            Log.Error($"[DB] Migration failed: {ex.Message}");
-            throw;
+            Log.Warn($"[DB] Failed to save emergency notification: {ex.Message}");
         }
     }
 
-    /// <summary>
-    /// Регистрирует глобальные обработчики исключений.
-    /// Должен вызываться ДО создания любых Task, HttpClient, etc.
-    /// </summary>
     private static void SetupGlobalExceptionHandlers()
     {
-        // 1. Unobserved Task Exceptions — подавляем ВСЕ, логируем когда можем.
-        //    Это ловит exceptions из Task'ов которые не были await'нуты
-        //    и собираются GC.
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
-            e.SetObserved(); // Предотвращает crash в любом случае
-
+            e.SetObserved();
             try
             {
                 var msg = e.Exception?.InnerException?.Message
@@ -114,23 +231,15 @@ public sealed class AppEntry
                        ?? "unknown";
                 Log.Debug($"[UnobservedTask] Suppressed: {msg}");
             }
-            catch
-            {
-                // Логгер ещё не инициализирован — молча подавляем
-            }
+            catch { }
         };
 
-        // 2. Unhandled Exceptions на уровне AppDomain — 
-        //    ловит исключения из IO completion threads, finalizer thread, etc.
-        //    IsTerminating=true означает что CLR уже решил крашить процесс,
-        //    но мы хотя бы залогируем.
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             try
             {
                 if (e.ExceptionObject is Exception ex)
                 {
-                    // SSL/TLS ошибки из SocketsHttpHandler — не фатальные
                     if (IsSslRelatedException(ex))
                     {
                         Log.Warn($"[AppDomain] SSL/TLS exception suppressed: {ex.Message}");
@@ -144,16 +253,10 @@ public sealed class AppEntry
                     Log.Error($"[AppDomain] Unhandled non-exception: {e.ExceptionObject}");
                 }
             }
-            catch
-            {
-                // Логгер не готов — ничего не можем сделать
-            }
+            catch { }
         };
     }
 
-    /// <summary>
-    /// Проверяет, связано ли исключение с SSL/TLS (known .NET HTTP/2 issue).
-    /// </summary>
     private static bool IsSslRelatedException(Exception ex)
     {
         var current = ex;
@@ -177,7 +280,6 @@ public sealed class AppEntry
             current = current.InnerException;
         }
 
-        // Проверяем AggregateException
         if (ex is AggregateException agg)
         {
             foreach (var inner in agg.InnerExceptions)
@@ -212,10 +314,8 @@ public sealed class AppEntry
     {
         Log.Info("Configuring services...");
 
-        // === Bootstrap Settings (уже загружены) ===
         services.AddSingleton(_ => BootstrapSettings.Current);
 
-        // === Database ===
         var dbPath = G.FilePath.Database;
         services.AddDbContextFactory<LibraryDbContext>(options =>
         {
@@ -227,18 +327,17 @@ public sealed class AppEntry
 #endif
         });
 
-        // === Repositories ===
         services.AddSingleton<ITrackRepository, TrackRepository>();
         services.AddSingleton<IPlaylistRepository, PlaylistRepository>();
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
         services.AddSingleton<INotificationRepository, NotificationRepository>();
 
-        // === Core Services ===
         services.AddSingleton(sp =>
         {
             var trackRepo = sp.GetRequiredService<ITrackRepository>();
             var playlistRepo = sp.GetRequiredService<IPlaylistRepository>();
-            return new TrackRegistry(trackRepo, playlistRepo);
+            var auth = sp.GetRequiredService<CookieAuthService>();
+            return new TrackRegistry(trackRepo, playlistRepo, auth);
         });
 
         services.AddSingleton<IAsyncImageLoader>(sp =>
@@ -261,8 +360,6 @@ public sealed class AppEntry
             var userData = sp.GetRequiredService<YoutubeUserDataService>();
             var localServer = sp.GetRequiredService<LocalAuthServer>();
 
-            // Lazy accessor — избегаем циклической зависимости
-            // MainWindowViewModel создаётся позже, чем DialogService
             DialogHostViewModel GetDialogHost()
             {
                 var mainWindow = sp.GetRequiredService<MainWindowViewModel>();
@@ -279,29 +376,23 @@ public sealed class AppEntry
         services.AddSingleton<PlaylistSyncService>();
         services.AddSingleton<PlaylistEditService>();
 
-        // === Caching ===
         services.AddSingleton<SearchCacheService>();
         services.AddSingleton<ImageCacheService>();
 
-        // === Audio & Downloads ====
         services.AddSingleton<AudioCacheManager>();
         services.AddSingleton<AudioEngine>();
         services.AddSingleton<DownloadService>();
 
-        // === NOTIFICATION SYSTEM ===
         services.AddSingleton<NotificationService>();
         services.AddTransient<NotificationButtonViewModel>();
         services.AddTransient<NotificationPanelViewModel>();
         services.AddTransient<ToastOverlayViewModel>();
 
-        // === ERROR ORCHESTRATOR ===
         services.AddSingleton<PlaybackErrorOrchestrator>();
 
-        // === Other Services ===
         services.AddSingleton<DominantColorService>();
         services.AddSingleton<PlayerControlService>();
 
-        // === ViewModels ===
         services.AddTransient<HomeViewModel>();
         services.AddTransient<SearchViewModel>();
         services.AddTransient<LibraryViewModel>();

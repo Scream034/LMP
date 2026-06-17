@@ -21,11 +21,11 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     private List<string> _masterIds = [];
     private readonly Dictionary<string, TSource> _sources = [];
-    
+
     // Переведено в protected для доступа из UpdateMasterData и производных VM
     protected readonly Dictionary<string, TViewModel> _vmCache = [];
     protected readonly Dictionary<TViewModel, string> _vmToId = new(ReferenceEqualityComparer.Instance);
-    
+
     private List<TViewModel> _rebuildBuffer = [];
 
     private CancellationTokenSource? _loadCts;
@@ -89,7 +89,7 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
 
     #endregion
 
-    #region Navigation Lifecycle
+    #region Lifecycle
 
     public override async Task OnNavigatedToAsync()
     {
@@ -97,6 +97,20 @@ public abstract class ReorderableViewModel<TSource, TViewModel> : ViewModelBase,
         this.RaisePropertyChanged(nameof(IsLoading));
 
         await base.OnNavigatedToAsync();
+    }
+
+    /// <inheritdoc />
+    protected override void OnAccountChanged()
+    {
+        base.OnAccountChanged();
+
+        CancelLoading();
+        Items.Clear();
+        _masterIds.Clear();
+        _sources.Clear();
+        DisposeAndClearVmCache();
+
+        _isDataLoading = true;
     }
 
     #endregion

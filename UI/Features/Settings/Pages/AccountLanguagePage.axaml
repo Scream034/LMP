@@ -24,41 +24,77 @@
             <StackPanel Spacing="20">
 
                 <!-- Account info -->
-                <Grid ColumnDefinitions="Auto, *, Auto">
-                    <Border Width="64" Height="64" CornerRadius="32"
-                        ClipToBounds="True" Margin="0,0,20,0"
-                        Background="{DynamicResource BgHighlightBrush}">
-                        <Panel>
-                            <PathIcon Data="{StaticResource Icon.Account}"
-                                Width="36" Height="36"
-                                IsVisible="{Binding AccountAvatarUrl,
-                                                  Converter={x:Static StringConverters.IsNullOrEmpty}}" />
-                            <Image ui:SmartImage.Source="{Binding AccountAvatarUrl}"
-                                ui:SmartImage.Quality="Low"
-                                Stretch="UniformToFill"
-                                IsVisible="{Binding AccountAvatarUrl,
-                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </Panel>
-                    </Border>
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding AccountName}" FontWeight="Bold" FontSize="18" />
-                        <TextBlock Text="{Binding AccountSubtitle}"
-                            Foreground="{DynamicResource TextSecondaryBrush}"
-                            Margin="0,4,0,0" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
-                        <Button Classes="primary-btn"
-                            Content="{Binding L[Auth_Login]}"
-                            Command="{Binding LoginCommand}"
-                            IsVisible="{Binding !IsAuthenticated}" />
-                        <Button Content="{Binding L[Auth_SwitchAccount]}"
-                            Command="{Binding SwitchAccountCommand}"
-                            IsVisible="{Binding IsAuthenticated}" />
-                        <Button Content="{Binding L[Auth_Logout]}"
-                            Command="{Binding LogoutCommand}"
-                            IsVisible="{Binding IsAuthenticated}" />
-                    </StackPanel>
-                </Grid>
+                <Panel>
+                    <!-- Отображается только в состоянии покоя -->
+                    <Grid ColumnDefinitions="Auto, *, Auto" IsVisible="{Binding !IsAccountLoading}">
+                        <Border Width="64" Height="64" CornerRadius="32"
+                            ClipToBounds="True" Margin="0,0,20,0"
+                            Background="{DynamicResource BgHighlightBrush}">
+                            <Panel>
+                                <PathIcon Data="{StaticResource Icon.Account}"
+                                    Width="36" Height="36"
+                                    IsVisible="{Binding AccountAvatarUrl,
+                                                      Converter={x:Static StringConverters.IsNullOrEmpty}}" />
+                                <Image ui:SmartImage.Source="{Binding AccountAvatarUrl}"
+                                    ui:SmartImage.Quality="Low"
+                                    Stretch="UniformToFill"
+                                    IsVisible="{Binding AccountAvatarUrl,
+                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </Panel>
+                        </Border>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{Binding AccountName}" FontWeight="Bold"
+                                    FontSize="18" VerticalAlignment="Center" />
+
+                                <!-- Новая кнопка ручного обновления профиля -->
+                                <Button Classes="icon-btn ghost-btn"
+                                    Command="{Binding RefreshProfileCommand}"
+                                    Width="28" Height="28" Padding="4"
+                                    IsVisible="{Binding IsAuthenticated}"
+                                    ToolTip.Tip="{Binding L[Common_Refresh]}">
+                                    <PathIcon Data="{StaticResource Icon.Sync}" Width="14"
+                                        Height="14"
+                                        Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </Button>
+                            </StackPanel>
+
+                            <TextBlock Text="{Binding AccountSubtitle}"
+                                Foreground="{DynamicResource TextSecondaryBrush}"
+                                Margin="0,2,0,0" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
+                            <Button Classes="primary-btn"
+                                Content="{Binding L[Auth_Login]}"
+                                Command="{Binding LoginCommand}"
+                                IsVisible="{Binding !IsAuthenticated}" />
+                            <Button Content="{Binding L[Auth_SwitchAccount]}"
+                                Command="{Binding SwitchAccountCommand}"
+                                IsVisible="{Binding IsAuthenticated}" />
+                            <Button Content="{Binding L[Auth_Logout]}"
+                                Command="{Binding LogoutCommand}"
+                                IsVisible="{Binding IsAuthenticated}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Состояние загрузки (Background заменен на Transparent) -->
+                    <Grid ColumnDefinitions="Auto, *" IsVisible="{Binding IsAccountLoading}"
+                        Height="64">
+                        <Border Width="64" Height="64" CornerRadius="32" ClipToBounds="True"
+                            Margin="0,0,20,0" Background="Transparent">
+                            <PathIcon Data="{StaticResource Icon.Sync}" Classes="spinning"
+                                Width="24" Height="24" Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                            <TextBlock Text="{Binding L[Nav_PleaseWait]}" FontWeight="Bold"
+                                FontSize="16" />
+                            <TextBlock Text="{Binding L[Splash_ConnectingYouTube]}"
+                                Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" />
+                        </StackPanel>
+                    </Grid>
+                </Panel>
 
                 <Separator Background="{DynamicResource BgHighlightBrush}" Height="1" />
 

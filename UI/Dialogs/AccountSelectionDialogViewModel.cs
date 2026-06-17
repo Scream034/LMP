@@ -24,17 +24,16 @@ public sealed class AccountSelectionDialogViewModel : ViewModelBase
     /// Инициализирует модель представления выбора аккаунта.
     /// </summary>
     public AccountSelectionDialogViewModel(
-        IEnumerable<YoutubeAccountItem> accounts, 
-        string? activePageId = null,
+        IEnumerable<YoutubeAccountItem> accounts,
         string? activeAuthUser = "")
     {
         Accounts = new ObservableCollection<YoutubeAccountItem>(accounts);
-        
+
         // Логика выбора:
         // 1. Если у нас явно сохранен AuthUser (!= "") -> ищем точное совпадение.
         // 2. Если это свежий логин (AuthUser == "") -> доверяем флагу IsSelected от YouTube.
         // 3. Фоллбэк на первый аккаунт.
-        SelectedAccount = Accounts.FirstOrDefault(a => a.PageId == (activePageId ?? "") && a.AuthUser == activeAuthUser && !string.IsNullOrEmpty(activeAuthUser))
+        SelectedAccount = Accounts.FirstOrDefault(a => a.AuthUser == activeAuthUser && !string.IsNullOrEmpty(activeAuthUser))
                        ?? Accounts.FirstOrDefault(a => a.IsSelected)
                        ?? Accounts.FirstOrDefault();
 

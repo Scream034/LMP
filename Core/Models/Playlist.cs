@@ -1,5 +1,4 @@
 ﻿using System.Text.Json.Serialization;
-using LMP.Core.Services;
 using LMP.Core.Youtube.Search;
 
 namespace LMP.Core.Models;
@@ -30,7 +29,6 @@ public sealed class Playlist : IBatchItem, ISearchResult
         set => StoredName = value;
     }
 
-    // ISearchResult implementation
     [JsonIgnore]
     public string Title => Name;
 
@@ -49,7 +47,7 @@ public sealed class Playlist : IBatchItem, ISearchResult
 
     /// <summary>
     /// Эффективный цвет для градиента хедера.
-    /// Приоритет: CustomColor → ComputedColor → null (будет вычислен из обложки).
+    /// Приоритет: CustomColor → ComputedColor → null.
     /// </summary>
     [JsonIgnore]
     public string? EffectiveColor => CustomColor ?? ComputedColor;
@@ -60,6 +58,11 @@ public sealed class Playlist : IBatchItem, ISearchResult
     public PlaylistSyncMode SyncMode { get; set; } = PlaylistSyncMode.LocalOnly;
     public string? YoutubeId { get; set; }
     public string? ETag { get; set; }
+
+    /// <summary>
+    /// Идентификатор владельца плейлиста для изоляции между аккаунтами.
+    /// </summary>
+    public string OwnerId { get; set; } = string.Empty;
 
     [JsonIgnore] public bool IsLocal => SyncMode == PlaylistSyncMode.LocalOnly || SyncMode == PlaylistSyncMode.TwoWaySync;
     [JsonIgnore] public bool IsFromAccount => SyncMode == PlaylistSyncMode.TwoWaySync;

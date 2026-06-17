@@ -181,7 +181,7 @@ public sealed class QueueViewModel : TrackListReorderableViewModel
 
     #endregion
 
-    #region Lifecycle (Suspend/Resume)
+    #region Lifecycle
 
     protected override void OnSuspend(SuspendLevel level)
     {
@@ -194,6 +194,17 @@ public sealed class QueueViewModel : TrackListReorderableViewModel
         _isSuspended = false;
         RefreshFromAudioEngine();
         Log.Debug("[QueueVM] Resumed");
+    }
+
+    /// <inheritdoc />
+    protected override void OnAccountChanged()
+    {
+        base.OnAccountChanged();
+
+        // Синхронизируем визуальное отображение очереди с актуальным стейтом AudioEngine для нового профиля
+        RefreshFromAudioEngine();
+
+        Log.Info("[Queue] Playback queue view synchronized with new account state.");
     }
 
     #endregion

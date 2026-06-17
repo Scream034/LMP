@@ -1,18 +1,45 @@
+using System.Runtime.CompilerServices;
 using LMP.Core.Data.Entities;
-using LMP.Core.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace LMP.Core.Data.Repositories;
 
+/// <summary>
+/// Репозиторий списков воспроизведения на базе SQLite.
+/// Исключает дублирование системных плейлистов и обеспечивает отображение локальных плейлистов под любыми аккаунтами.
+/// </summary>
 public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> factory) : IPlaylistRepository
 {
     private readonly IDbContextFactory<LibraryDbContext> _factory = factory;
 
-    public async Task<Playlist?> GetByIdAsync(string id, CancellationToken ct = default)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsGuest(string ownerId) => string.IsNullOrEmpty(ownerId) || ownerId == "guest";
+
+    /// <inheritdoc />
+    public async Task<Playlist?> GetByIdAsync(string id, string ownerId, CancellationToken ct = default)
     {
+        if (id == LibraryService.LikedPlaylistId)
+        {
+            var trackIds = await GetTrackIdsAsync(id, ownerId, ct);
+            return new Playlist
+            {
+                Id = LibraryService.LikedPlaylistId,
+                StoredName = "Liked",
+                SyncMode = PlaylistSyncMode.LocalOnly,
+                TrackIds = trackIds,
+                TrackCount = trackIds.Count,
+                OwnerId = ownerId
+            };
+        }
+
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        var entity = await ctx.Playlists.FirstOrDefaultAsync(p => p.Id == id, ct);
+        // Плейлист доступен, если он принадлежит текущему профилю, либо гостю (общие гостевые плейлисты)
+        // Исключаем из физической выборки системный "liked", чтобы избежать дублирования
+        var entity = await ctx.Playlists
+            .FirstOrDefaultAsync(p => p.Id == id && p.Id != LibraryService.LikedPlaylistId &&
+                (p.OwnerId == ownerId || p.OwnerId == "" || p.OwnerId == "guest"), ct);
+
         if (entity is null) return null;
 
         var playlist = MapToModel(entity);
@@ -28,11 +55,16 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         return playlist;
     }
 
-    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<List<(Playlist Playlist, int TrackCount)>> GetAllWithCountsAsync(string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
+        // Загружаем облачные плейлисты текущего аккаунта И гостевые плейлисты устройства
+        // Исключаем "liked" из физического SQL запроса во избежание дублирования в боковой панели
         var playlistsWithCounts = await ctx.Playlists
+            .Where(p => p.Id != LibraryService.LikedPlaylistId &&
+                (p.OwnerId == ownerId || p.OwnerId == "" || p.OwnerId == "guest"))
             .Select(p => new
             {
                 Playlist = p,
@@ -41,34 +73,60 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .OrderBy(x => x.Playlist.Name)
             .ToListAsync(ct);
 
-        return [.. playlistsWithCounts.Select(x => (MapToModel(x.Playlist), x.TrackCount))];
+        var list = new List<(Playlist Playlist, int TrackCount)>(playlistsWithCounts.Count + 1);
+
+        // Интегрируем виртуальный Liked
+        var likedTrackCount = await ctx.LikedTracks
+            .CountAsync(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId, ct);
+
+        var likedPlaylist = new Playlist
+        {
+            Id = LibraryService.LikedPlaylistId,
+            StoredName = "Liked",
+            SyncMode = PlaylistSyncMode.LocalOnly,
+            TrackCount = likedTrackCount,
+            OwnerId = ownerId
+        };
+        list.Add((likedPlaylist, likedTrackCount));
+
+        for (int i = 0; i < playlistsWithCounts.Count; i++)
+        {
+            var item = playlistsWithCounts[i];
+            var pl = MapToModel(item.Playlist);
+            pl.TrackCount = item.TrackCount;
+            list.Add((pl, item.TrackCount));
+        }
+
+        return list;
     }
 
-    public async Task<List<Playlist>> GetAllAsync(CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<List<Playlist>> GetAllAsync(string ownerId, CancellationToken ct = default)
+    {
+        var withCounts = await GetAllWithCountsAsync(ownerId, ct);
+        var result = new List<Playlist>(withCounts.Count);
+        for (int i = 0; i < withCounts.Count; i++)
+        {
+            var pl = withCounts[i].Playlist;
+            pl.TrackCount = withCounts[i].TrackCount;
+            result.Add(pl);
+        }
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<List<string>> GetTrackIdsAsync(string playlistId, string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        var playlistsWithCounts = await ctx.Playlists
-            .Select(p => new
-            {
-                Playlist = p,
-                TrackCount = ctx.PlaylistTracks.Count(pt => pt.PlaylistId == p.Id)
-            })
-            .OrderBy(x => x.Playlist.Name)
-            .ToListAsync(ct);
-
-        return [.. playlistsWithCounts
-            .Select(x =>
-            {
-                var playlist = MapToModel(x.Playlist);
-                playlist.TrackCount = x.TrackCount;
-                return playlist;
-            })];
-    }
-
-    public async Task<List<string>> GetTrackIdsAsync(string playlistId, CancellationToken ct = default)
-    {
-        await using var ctx = await _factory.CreateDbContextAsync(ct);
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            return await ctx.LikedTracks
+                .Where(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId)
+                .OrderByDescending(lt => lt.LikedAt)
+                .Select(lt => lt.TrackId)
+                .ToListAsync(ct);
+        }
 
         return await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
@@ -77,14 +135,22 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .ToListAsync(ct);
     }
 
-    /// <summary>
-    /// SQL-level LIMIT/OFFSET — generates: SELECT TrackId ... ORDER BY Position LIMIT @limit OFFSET @offset.
-    /// Avoids loading all IDs into memory when only a page is needed.
-    /// </summary>
+    /// <inheritdoc />
     public async Task<List<string>> GetTrackIdsAsync(
-        string playlistId, int limit, int offset = 0, CancellationToken ct = default)
+        string playlistId, string ownerId, int limit, int offset = 0, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            return await ctx.LikedTracks
+                .Where(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId)
+                .OrderByDescending(lt => lt.LikedAt)
+                .Skip(offset)
+                .Take(limit)
+                .Select(lt => lt.TrackId)
+                .ToListAsync(ct);
+        }
 
         return await ctx.PlaylistTracks
             .Where(pt => pt.PlaylistId == playlistId)
@@ -95,25 +161,31 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .ToListAsync(ct);
     }
 
-    public async Task<int> GetTrackCountAsync(string playlistId, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<int> GetTrackCountAsync(string playlistId, string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            return await ctx.LikedTracks.CountAsync(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId, ct);
+        }
+
         return await ctx.PlaylistTracks.CountAsync(pt => pt.PlaylistId == playlistId, ct);
     }
 
+    /// <inheritdoc />
     public async Task UpsertAsync(Playlist playlist, CancellationToken ct = default)
     {
+        if (playlist.Id == LibraryService.LikedPlaylistId)
+            return;
+
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
         var existing = await ctx.Playlists.FirstOrDefaultAsync(p => p.Id == playlist.Id, ct);
 
         if (existing != null)
         {
-            Log.Debug($"[PlaylistRepo] UpsertAsync UPDATE id={playlist.Id}: " +
-                       $"SyncMode={playlist.SyncMode}({(int)playlist.SyncMode}), " +
-                       $"YoutubeId={playlist.YoutubeId ?? "null"}, " +
-                       $"Name={playlist.StoredName}");
-
             var entry = ctx.Entry(existing);
             entry.State = EntityState.Detached;
 
@@ -125,6 +197,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             existing.ComputedColor = playlist.ComputedColor;
             existing.Description = playlist.Description;
             existing.SyncMode = (int)playlist.SyncMode;
+            existing.OwnerId = playlist.OwnerId;
             existing.UpdatedAt = DateTime.UtcNow;
 
             ctx.Playlists.Update(existing);
@@ -135,21 +208,19 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             entity.CreatedAt = DateTime.UtcNow;
             entity.UpdatedAt = DateTime.UtcNow;
             ctx.Playlists.Add(entity);
-
-            Log.Debug($"[PlaylistRepo] UpsertAsync INSERT id={playlist.Id}: " +
-                       $"SyncMode={entity.SyncMode}, " +
-                       $"YoutubeId={entity.YoutubeId ?? "null"}");
         }
 
         await ctx.SaveChangesAsync(ct);
     }
 
+    /// <inheritdoc />
     public async Task DeleteAsync(string id, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
         await ctx.Playlists.Where(p => p.Id == id).ExecuteDeleteAsync(ct);
     }
 
+    /// <inheritdoc />
     public async Task RenameAsync(string id, string newName, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
@@ -160,8 +231,15 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
                 .SetProperty(p => p.UpdatedAt, DateTime.UtcNow), ct);
     }
 
-    public async Task AddTrackAsync(string playlistId, string trackId, int? position = null, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task AddTrackAsync(string playlistId, string trackId, string ownerId, int? position = null, CancellationToken ct = default)
     {
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            await SetLikedDirectAsync(trackId, ownerId, true, ct);
+            return;
+        }
+
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
         var exists = await ctx.PlaylistTracks
@@ -193,11 +271,23 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .ExecuteUpdateAsync(s => s.SetProperty(p => p.UpdatedAt, DateTime.UtcNow), ct);
     }
 
-    public async Task<int> AddTracksAsync(string playlistId, IEnumerable<string> trackIds, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<int> AddTracksAsync(string playlistId, IEnumerable<string> trackIds, string ownerId, CancellationToken ct = default)
     {
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            int added = 0;
+            foreach (var trackId in trackIds)
+            {
+                await SetLikedDirectAsync(trackId, ownerId, true, ct);
+                added++;
+            }
+            return added;
+        }
+
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        var trackIdList = trackIds.ToList();
+        var trackIdList = trackIds as IList<string> ?? trackIds.ToList();
         if (trackIdList.Count == 0) return 0;
 
         var existingTrackIds = await ctx.Tracks
@@ -214,9 +304,10 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .Where(pt => pt.PlaylistId == playlistId)
             .MaxAsync(pt => (int?)pt.Position, ct) ?? -1;
 
-        int added = 0;
-        foreach (var trackId in trackIdList)
+        int addedCount = 0;
+        for (int i = 0; i < trackIdList.Count; i++)
         {
+            var trackId = trackIdList[i];
             if (!existingTrackIds.Contains(trackId) || alreadyLinked.Contains(trackId))
                 continue;
 
@@ -227,10 +318,10 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
                 TrackId = trackId,
                 Position = maxPos
             });
-            added++;
+            addedCount++;
         }
 
-        if (added > 0)
+        if (addedCount > 0)
         {
             await ctx.SaveChangesAsync(ct);
 
@@ -239,11 +330,18 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
                 .ExecuteUpdateAsync(s => s.SetProperty(p => p.UpdatedAt, DateTime.UtcNow), ct);
         }
 
-        return added;
+        return addedCount;
     }
 
-    public async Task RemoveTrackAsync(string playlistId, string trackId, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task RemoveTrackAsync(string playlistId, string trackId, string ownerId, CancellationToken ct = default)
     {
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            await SetLikedDirectAsync(trackId, ownerId, false, ct);
+            return;
+        }
+
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
         var entry = await ctx.PlaylistTracks
@@ -260,6 +358,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             .ExecuteUpdateAsync(s => s.SetProperty(pt => pt.Position, pt => pt.Position - 1), ct);
     }
 
+    /// <inheritdoc />
     public async Task MoveTrackAsync(string playlistId, int oldIndex, int newIndex, CancellationToken ct = default)
     {
         if (oldIndex == newIndex) return;
@@ -286,25 +385,45 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         await ctx.SaveChangesAsync(ct);
     }
 
-    public async Task<bool> ContainsTrackAsync(string playlistId, string trackId, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<bool> ContainsTrackAsync(string playlistId, string trackId, string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
+
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            return await ctx.LikedTracks.AnyAsync(lt => (IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId) && lt.TrackId == trackId, ct);
+        }
+
         return await ctx.PlaylistTracks
             .AnyAsync(pt => pt.PlaylistId == playlistId && pt.TrackId == trackId, ct);
     }
 
-    public async Task<HashSet<string>> GetPlaylistsForTrackAsync(string trackId, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<HashSet<string>> GetPlaylistsForTrackAsync(string trackId, string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
+
         var ids = await ctx.PlaylistTracks
-            .Where(pt => pt.TrackId == trackId)
+            .Where(pt => pt.TrackId == trackId && pt.PlaylistId != LibraryService.LikedPlaylistId &&
+                (pt.Playlist.OwnerId == ownerId || pt.Playlist.OwnerId == "" || pt.Playlist.OwnerId == "guest"))
             .Select(pt => pt.PlaylistId)
             .ToListAsync(ct);
-        return [.. ids];
+
+        var set = new HashSet<string>(ids, StringComparer.Ordinal);
+
+        var isLiked = await ctx.LikedTracks.AnyAsync(lt => (IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId) && lt.TrackId == trackId, ct);
+        if (isLiked)
+        {
+            set.Add(LibraryService.LikedPlaylistId);
+        }
+
+        return set;
     }
 
+    /// <inheritdoc />
     public async Task<Dictionary<string, HashSet<string>>> GetPlaylistsForTracksAsync(
-        IEnumerable<string> trackIds, CancellationToken ct = default)
+        IEnumerable<string> trackIds, string ownerId, CancellationToken ct = default)
     {
         var ids = trackIds as IList<string> ?? [.. trackIds];
         if (ids.Count == 0) return [];
@@ -312,13 +431,20 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
         var links = await ctx.PlaylistTracks
-            .Where(pt => ids.Contains(pt.TrackId))
+            .Where(pt => ids.Contains(pt.TrackId) && pt.PlaylistId != LibraryService.LikedPlaylistId &&
+                (pt.Playlist.OwnerId == ownerId || pt.Playlist.OwnerId == "" || pt.Playlist.OwnerId == "guest"))
             .Select(pt => new { pt.TrackId, pt.PlaylistId })
             .ToListAsync(ct);
 
+        var likedTrackIds = await ctx.LikedTracks
+            .Where(lt => (IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId) && ids.Contains(lt.TrackId))
+            .Select(lt => lt.TrackId)
+            .ToHashSetAsync(ct);
+
         var result = new Dictionary<string, HashSet<string>>(ids.Count);
-        foreach (var link in links)
+        for (int i = 0; i < links.Count; i++)
         {
+            var link = links[i];
             if (!result.TryGetValue(link.TrackId, out var set))
             {
                 set = [];
@@ -327,15 +453,38 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
             set.Add(link.PlaylistId);
         }
 
+        foreach (var trackId in likedTrackIds)
+        {
+            if (!result.TryGetValue(trackId, out var set))
+            {
+                set = [];
+                result[trackId] = set;
+            }
+            set.Add(LibraryService.LikedPlaylistId);
+        }
+
         return result;
     }
 
-    public async Task<long> GetTotalDurationTicksAsync(string playlistId, CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<long> GetTotalDurationTicksAsync(string playlistId, string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
+        if (playlistId == LibraryService.LikedPlaylistId)
+        {
+            return await ctx.LikedTracks
+                .Where(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId)
+                .Join(ctx.Tracks,
+                    lt => lt.TrackId,
+                    t => t.Id,
+                    (lt, t) => t.DurationTicks)
+                .SumAsync(ct);
+        }
+
         var totalTicks = await ctx.PlaylistTracks
-            .Where(pt => pt.PlaylistId == playlistId)
+            .Where(pt => pt.PlaylistId == playlistId && pt.PlaylistId != LibraryService.LikedPlaylistId &&
+                (pt.Playlist.OwnerId == ownerId || pt.Playlist.OwnerId == "" || pt.Playlist.OwnerId == "guest"))
             .Join(ctx.Tracks,
                 pt => pt.TrackId,
                 t => t.Id,
@@ -345,20 +494,45 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         return totalTicks;
     }
 
-    // ═══ ОДИН ЗАПРОС НА ВСЮ БАЗУ ═══
-    public async Task<long> GetTotalLibraryDurationAsync(CancellationToken ct = default)
+    /// <inheritdoc />
+    public async Task<long> GetTotalLibraryDurationAsync(string ownerId, CancellationToken ct = default)
     {
         await using var ctx = await _factory.CreateDbContextAsync(ct);
 
-        // Вычисляет сумму всех треков, привязанных ко всем плейлистам
-        var totalTicks = await ctx.PlaylistTracks
-            .Join(ctx.Tracks,
-                pt => pt.TrackId,
-                t => t.Id,
-                (pt, t) => t.DurationTicks)
-            .SumAsync(ct);
+        var customTrackIds = ctx.PlaylistTracks
+            .Where(pt => pt.PlaylistId != LibraryService.LikedPlaylistId &&
+                (pt.Playlist.OwnerId == ownerId || pt.Playlist.OwnerId == "" || pt.Playlist.OwnerId == "guest"))
+            .Select(pt => pt.TrackId);
+
+        var likedTrackIds = ctx.LikedTracks
+            .Where(lt => IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId)
+            .Select(lt => lt.TrackId);
+
+        var allUserTracks = customTrackIds.Union(likedTrackIds);
+
+        var totalTicks = await ctx.Tracks
+            .Where(t => allUserTracks.Contains(t.Id))
+            .SumAsync(t => t.DurationTicks, ct);
 
         return totalTicks;
+    }
+
+    private async Task SetLikedDirectAsync(string trackId, string ownerId, bool liked, CancellationToken ct)
+    {
+        await using var ctx = await _factory.CreateDbContextAsync(ct);
+        if (liked)
+        {
+            var exists = await ctx.LikedTracks.AnyAsync(lt => (IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId) && lt.TrackId == trackId, ct);
+            if (!exists)
+            {
+                ctx.LikedTracks.Add(new LikedTrackEntity { OwnerId = ownerId, TrackId = trackId, LikedAt = DateTime.UtcNow });
+                await ctx.SaveChangesAsync(ct);
+            }
+        }
+        else
+        {
+            await ctx.LikedTracks.Where(lt => (IsGuest(ownerId) ? (lt.OwnerId == "" || lt.OwnerId == "guest") : lt.OwnerId == ownerId) && lt.TrackId == trackId).ExecuteDeleteAsync(ct);
+        }
     }
 
     #region SetVideoId
@@ -429,6 +603,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         ComputedColor = e.ComputedColor,
         Description = e.Description,
         SyncMode = (PlaylistSyncMode)e.SyncMode,
+        OwnerId = e.OwnerId,
         UpdatedAt = e.UpdatedAt
     };
 
@@ -443,6 +618,7 @@ public sealed class PlaylistRepository(IDbContextFactory<LibraryDbContext> facto
         ComputedColor = m.ComputedColor,
         Description = m.Description,
         SyncMode = (int)m.SyncMode,
+        OwnerId = m.OwnerId,
         UpdatedAt = DateTime.UtcNow
     };
 

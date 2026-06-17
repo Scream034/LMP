@@ -384,6 +384,25 @@ public sealed class LibraryViewModel : ViewModelBase, ISmoothTransitionViewModel
             DispatcherPriority.Background);
     }
 
+    /// <inheritdoc />
+    protected override void OnAccountChanged()
+    {
+        base.OnAccountChanged();
+
+        bool wasActive = IsContentReady;
+
+        _isDataLoaded = false;
+        IsContentReady = false;
+        Playlists.Clear();
+
+        if (wasActive)
+        {
+            Log.Info("[Library] Account changed while page was visible. Re-rendering lists immediately.");
+            _ = LoadPlaylistsAsync();
+            IsContentReady = true;
+        }
+    }
+
     #endregion
 
     #region Синхронизация с YouTube

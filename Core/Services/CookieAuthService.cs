@@ -1,49 +1,22 @@
-using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
-using LMP.Core.Audio.Http;
-using LMP.Core.Models;
 using LMP.Core.Youtube;
 using LMP.Core.Youtube.Utils;
+using LMP.Core.Helpers.Extensions;
+using System.Text.RegularExpressions;
 
 namespace LMP.Core.Services;
 
 public partial class CookieAuthService
 {
+    public event Action? OnLoginSuccess;
+
     private readonly Lock _lock = new();
     private readonly Dictionary<string, string> _cookieMap = new(32, StringComparer.Ordinal);
     private string _cachedHeaderString = "";
-
-    /// <summary>
-    /// Путь к файлу состояния авторизации.
-    /// Использует G.FilePath.AuthData (%APPDATA%/LMP/auth.json).
-    /// </summary>
     private readonly string _authDataPath = G.FilePath.AuthData;
 
-    /// <summary>
-    /// Статический FrozenSet для resurrection cookies — O(1) проверка, zero alloc.
-    /// </summary>
-    private static readonly FrozenSet<string> ResurrectionCookieNames = new[]
-    {
-        "SID", "HSID", "SSID", "APISID", "SAPISID",
-        "__Secure-1PSID", "__Secure-3PSID",
-        "__Secure-1PAPISID", "__Secure-3PAPISID",
-        "LOGIN_INFO", "PREF"
-    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Критические куки, при обновлении которых нужно сохранить файл.
-    /// </summary>
-    private static readonly FrozenSet<string> CriticalCookieNames = new[]
-    {
-        "1PSIDTS", "SAPISID", "SIDCC"
-    }.ToFrozenSet(StringComparer.Ordinal);
-
-    /// <summary>
-    /// Ошибка загрузки профиля при старте. Не null → auth.json не удалось прочитать.
-    /// </summary>
     private string? _profileLoadError;
     public bool HasProfileLoadError => _profileLoadError != null;
 
@@ -64,45 +37,29 @@ public partial class CookieAuthService
         LoadCookies();
         LoadAuthData();
         UpdateStateAuthStatus();
-
-        // Миграция: удалить старый файл рядом с exe если существует
         MigrateLegacyAuthFile();
     }
 
-    /// <summary>
-    /// Мигрирует auth.json из папки exe в %APPDATA%/LMP/.
-    /// Вызывается один раз при старте для обратной совместимости.
-    /// </summary>
     private void MigrateLegacyAuthFile()
     {
         try
         {
             var legacyPath = Path.Combine(AppContext.BaseDirectory, "auth.json");
-
             if (!File.Exists(legacyPath)) return;
 
-            // Если новый файл не существует или пустой — копируем старый
             if (!File.Exists(_authDataPath) || new FileInfo(_authDataPath).Length == 0)
             {
                 File.Copy(legacyPath, _authDataPath, overwrite: true);
-                Log.Info($"[Auth] Migrated auth.json from exe folder to {_authDataPath}");
-
-                // Перезагружаем данные из нового расположения
+                Log.Info($"[Auth] Migrated auth.json to {_authDataPath}");
                 LoadAuthData();
             }
-
-            // Удаляем старый файл
             File.Delete(legacyPath);
-            Log.Info("[Auth] Deleted legacy auth.json from exe folder");
         }
         catch (Exception ex)
         {
-            // Не критично — просто логируем
             Log.Warn($"[Auth] Failed to migrate legacy auth.json: {ex.Message}");
         }
     }
-
-    // --- Profile Management ---
 
     public void UpdateUserProfile(string name, string email, string avatarUrl)
     {
@@ -116,6 +73,15 @@ public partial class CookieAuthService
         OnAuthStateChanged?.Invoke();
     }
 
+    public void UpdateCachedAccounts(List<YoutubeAccountItem> accounts)
+    {
+        lock (_lock)
+        {
+            State.CachedAccounts = accounts;
+        }
+        SaveAuthData();
+    }
+
     private void LoadAuthData()
     {
         if (!File.Exists(_authDataPath)) return;
@@ -123,32 +89,15 @@ public partial class CookieAuthService
         try
         {
             var json = File.ReadAllText(_authDataPath);
+            if (string.IsNullOrWhiteSpace(json)) return;
 
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                Log.Warn("[Auth] auth.json is empty");
-                return;
-            }
-
-            var loadedState = JsonSerializer.Deserialize<AuthState>(json);
+            // Высокопроизводительный AOT-совместимый разбор во избежание потери CachedAccounts при тримминге
+            var loadedState = JsonSerializer.Deserialize(json, AppJsonContext.DefaultCompact.AuthState);
             if (loadedState != null)
             {
                 State = loadedState;
-                Log.Info($"[Auth] Profile restored from cache: {State.UserName} (updated: {State.LastUpdated:g})");
+                Log.Info($"[Auth] Profile restored from cache: {State.UserName}");
             }
-        }
-        catch (JsonException ex)
-        {
-            _profileLoadError = ex.Message;
-            Log.Error($"[Auth] Corrupted auth.json: {ex.Message}");
-
-            // Пытаемся спасти: если куки валидны, не перезаписываем файл дефолтным State
-            // State остаётся Guest, но мы не вызываем SaveAuthData() чтобы не затереть файл
-        }
-        catch (IOException ex)
-        {
-            _profileLoadError = ex.Message;
-            Log.Error($"[Auth] Cannot read auth.json (file locked?): {ex.Message}");
         }
         catch (Exception ex)
         {
@@ -157,11 +106,11 @@ public partial class CookieAuthService
         }
     }
 
-    private void SaveAuthData()
+    public void SaveAuthData()
     {
         try
         {
-            var json = JsonSerializer.Serialize(State, G.Json.Beautiful);
+            var json = JsonSerializer.Serialize(State, AppJsonContext.DefaultCompact.AuthState);
             File.WriteAllText(_authDataPath, json);
         }
         catch (Exception ex)
@@ -176,87 +125,272 @@ public partial class CookieAuthService
         if (State.IsAuthenticated != currentAuth)
         {
             State.IsAuthenticated = currentAuth;
-
-            // Не перезаписываем auth.json если загрузка провалилась —
-            // файл может содержать валидные данные профиля, которые мы не смогли прочитать.
-            if (!HasProfileLoadError)
-            {
-                SaveAuthData();
-            }
-            else
-            {
-                Log.Warn("[Auth] Skipping SaveAuthData — profile load error present, avoiding overwrite");
-            }
+            if (!HasProfileLoadError) SaveAuthData();
         }
     }
 
     /// <summary>
-    /// Выполняет точную асинхронную проверку валидности текущей сессии авторизации.
+    /// Универсальный извлекатель текста, поддерживающий как плоский формат simpleText,
+    /// так и сложную структуру с массивом runs.
     /// </summary>
-    /// <remarks>
-    /// Выполняет легкий POST-запрос к меню аккаунта. Применение конкатенации вместо префиксов 
-    /// интерполяции гарантирует отсутствие конфликтов лексера компилятора на закрывающих скобках JSON.
-    /// </remarks>
-    /// <returns>Кортеж, содержащий флаг валидности сессии (IsValid) и сообщение об ошибке при её невалидности.</returns>
-    public async Task<(bool IsValid, string? Error)> ValidateSessionAsync()
+    private static string? GetStringValue(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Undefined) return null;
+
+        // 1. Проверяем наличие прямого simpleText
+        if (element.TryGetProperty("simpleText", out var simpleTextProp))
+        {
+            return simpleTextProp.GetString();
+        }
+
+        // 2. Проверяем наличие массива форматирования runs
+        if (element.TryGetProperty("runs", out var runsProp) && runsProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var run in runsProp.EnumerateArray())
+            {
+                if (run.TryGetProperty("text", out var textProp))
+                {
+                    return textProp.GetString();
+                }
+            }
+        }
+
+        return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+    }
+
+    /// <summary>
+    /// Проверяет валидность текущей сессии на серверах YouTube.
+    /// Парсит единый ответ switcher для одновременного извлечения текущего профиля и списка всех каналов мульти-авторизации.
+    /// Автоматически завершает сессию (Logout) при получении подтвержденного отказа от Google во избежание бесконечных 401 ошибок.
+    /// </summary>
+    /// <param name="ct">Токен отмены асинхронной операции.</param>
+    /// <returns>Кортеж, содержащий признак валидности сессии, строку ошибки и признак сетевой ошибки в случае неудачи.</returns>
+    public async Task<(bool IsValid, string? Error, bool IsNetworkError)> ValidateSessionAsync(CancellationToken ct = default)
     {
         if (!IsAuthenticated)
-            return (false, "Not authenticated");
+            return (false, "Not authenticated", false);
 
         try
         {
             var cookiesHeader = GetCookieHeader();
+            var sapisid = GetCookieValue("SAPISID");
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, "https://music.youtube.com/youtubei/v1/account/account_menu");
-            request.Headers.UserAgent.ParseAdd(YoutubeClientUtils.UaWebRemix);
+            var mainOrigin = "https://www.youtube.com";
+            var authHeader = YoutubeHttpHandler.GetAuthHeader(sapisid, mainOrigin);
+
+            // Используем стандартный GET эндпоинт получения свичера
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/getAccountSwitcherEndpoint");
+            request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36");
             request.Headers.Add("Cookie", cookiesHeader);
+            request.Headers.Add("Origin", mainOrigin);
+            request.Headers.Add("X-Origin", mainOrigin);
+            request.Headers.Add("Referer", mainOrigin + "/");
 
-            // Безопасный фоллбэк для заголовка
-            var authUser = string.IsNullOrEmpty(State.AuthUser) ? "0" : State.AuthUser;
-            request.Headers.Add("X-Goog-AuthUser", authUser);
+            if (!string.IsNullOrEmpty(authHeader))
+                request.Headers.Add("Authorization", authHeader);
 
-            var payload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"" + YoutubeHttpHandler.MusicClientVersion + "\",\"hl\":\"en\",\"gl\":\"US\"}}}";
-            request.Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(8));
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             using var response = await Audio.Http.SharedHttpClient.Instance.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+                request, HttpCompletionOption.ResponseContentRead, cts.Token).ConfigureAwait(false);
+
+            // Если пришел явный 401 — сессия гарантированно мертва. Принудительно выкидываем из аккаунта
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                Log.Warn("[Auth] 401 Unauthorized received during session validation. Session expired. Automatically logging out...");
+                Logout();
+                return (false, "Unauthorized", false);
+            }
 
             if (response.StatusCode == System.Net.HttpStatusCode.OK)
             {
                 if (response.Headers.TryGetValues("Set-Cookie", out var setCookies))
-                {
                     UpdateCookies(setCookies);
+
+                var rawJson = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+
+                // Защита от XSSI: Отсекаем префикс )]}' перед парсингом JSON
+                int jsonStart = rawJson.IndexOf('{');
+                if (jsonStart >= 0)
+                {
+                    rawJson = rawJson.Substring(jsonStart);
                 }
-                Log.Info("[Auth] Session validated successfully via account_menu");
-                return (true, null);
+
+                using var jsonDoc = JsonDocument.Parse(rawJson);
+
+                var results = new List<YoutubeAccountItem>();
+                bool hasActiveAccount = false;
+                string? activeName = null, activeEmail = null, activeAvatar = null;
+                string? activeHandle = null;
+
+                // getAccountSwitcherEndpoint оборачивает весь InnerTube ответ в свойство "data"
+                var dataElement = jsonDoc.RootElement.GetPropertyOrNull("data") ?? jsonDoc.RootElement;
+
+                // Унифицированный парсинг структуры меню switcher
+                var menu = dataElement.GetPropertyOrNull("actions")
+                    ?.EnumerateArrayOrNull()?.FirstOrDefault()
+                    .GetPropertyOrNull("getMultiPageMenuAction")?.GetPropertyOrNull("menu")?.GetPropertyOrNull("multiPageMenuRenderer")
+                    ?? dataElement.GetPropertyOrNull("actions")
+                    ?.EnumerateArrayOrNull()?.FirstOrDefault()
+                    .GetPropertyOrNull("openPopupAction")?.GetPropertyOrNull("popup")?.GetPropertyOrNull("multiPageMenuRenderer");
+
+                // Локальная функция для парсинга отдельного врапмера аккаунта во избежание дублирования
+                void ProcessWrap(JsonElement wrap, string sectionEmail)
+                {
+                    var accountItem = wrap.GetPropertyOrNull("accountItem");
+                    if (accountItem == null) return;
+
+                    var nameEl = accountItem.Value.GetPropertyOrNull("accountName");
+                    var name = nameEl.HasValue ? GetStringValue(nameEl.Value) ?? "Unknown" : "Unknown";
+
+                    var avatar = accountItem.Value.GetPropertyOrNull("accountPhoto")?.GetPropertyOrNull("thumbnails")?.EnumerateArrayOrNull()?.LastOrDefault().GetPropertyOrNull("url")?.GetStringOrNull() ?? "";
+                    bool isSelected = accountItem.Value.GetPropertyOrNull("isSelected")?.GetBoolean() ?? false;
+
+                    string gaiaId = "";
+
+                    var handleEl = accountItem.Value.GetPropertyOrNull("channelHandle");
+                    string handle = handleEl.HasValue ? GetStringValue(handleEl.Value) ?? "" : "";
+
+                    string parsedAuthUser = AuthState.DefaultAuthUser;
+
+                    var tokens = accountItem.Value.GetPropertyOrNull("serviceEndpoint")?.GetPropertyOrNull("selectActiveIdentityEndpoint")?.GetPropertyOrNull("supportedTokens")?.EnumerateArrayOrNull();
+                    if (tokens != null)
+                    {
+                        foreach (var token in tokens.Value)
+                        {
+                            var stateToken = token.GetPropertyOrNull("accountStateToken");
+                            if (stateToken != null) gaiaId = stateToken.Value.GetPropertyOrNull("obfuscatedGaiaId")?.GetStringOrNull() ?? gaiaId;
+
+                            var signinToken = token.GetPropertyOrNull("accountSigninToken");
+                            if (signinToken != null)
+                            {
+                                var signinUrl = signinToken.Value.GetPropertyOrNull("signinUrl")?.GetStringOrNull();
+                                if (!string.IsNullOrEmpty(signinUrl))
+                                {
+                                    int targetIdx = signinUrl.IndexOf("authuser=");
+                                    if (targetIdx >= 0)
+                                    {
+                                        var remaining = signinUrl.Substring(targetIdx + 9);
+                                        int ampIdx = remaining.IndexOf('&');
+                                        parsedAuthUser = ampIdx >= 0 ? remaining.Substring(0, ampIdx) : remaining;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    results.Add(new YoutubeAccountItem
+                    {
+                        Index = results.Count + 1,
+                        Name = name,
+                        Email = sectionEmail,
+                        AvatarUrl = avatar,
+                        GaiaId = gaiaId,
+                        Handle = handle,
+                        AuthUser = parsedAuthUser,
+                        IsSelected = isSelected
+                    });
+
+                    if (isSelected)
+                    {
+                        hasActiveAccount = true;
+                        activeName = name;
+                        activeEmail = sectionEmail;
+                        activeAvatar = avatar;
+                        activeHandle = handle;
+                    }
+                }
+
+                var sections = menu?.GetPropertyOrNull("sections")?.EnumerateArrayOrNull();
+                if (sections != null)
+                {
+                    foreach (var section in sections.Value)
+                    {
+                        var accountSection = section.GetPropertyOrNull("accountSectionListRenderer");
+                        if (accountSection == null) continue;
+
+                        string sectionEmail = "";
+
+                        var header = accountSection.Value.GetPropertyOrNull("header");
+                        if (header != null)
+                        {
+                            var googleHeader = header.Value.GetPropertyOrNull("googleAccountHeaderRenderer");
+                            if (googleHeader != null)
+                            {
+                                var emailEl = googleHeader.Value.GetPropertyOrNull("email");
+                                sectionEmail = emailEl.HasValue ? GetStringValue(emailEl.Value) ?? "" : "";
+                            }
+                            else
+                            {
+                                var itemHeader = header.Value.GetPropertyOrNull("accountItemSectionHeaderRenderer");
+                                if (itemHeader != null)
+                                {
+                                    var titleEl = itemHeader.Value.GetPropertyOrNull("title");
+                                    sectionEmail = titleEl.HasValue ? GetStringValue(titleEl.Value) ?? "" : "";
+                                }
+                            }
+                        }
+
+                        var contents = accountSection.Value.GetPropertyOrNull("contents")?.EnumerateArrayOrNull();
+                        if (contents == null) continue;
+
+                        foreach (var itemWrap in contents.Value)
+                        {
+                            var accItemSection = itemWrap.GetPropertyOrNull("accountItemSectionRenderer");
+                            var subItems = accItemSection?.GetPropertyOrNull("contents")?.EnumerateArrayOrNull();
+
+                            if (subItems != null)
+                            {
+                                foreach (var subItemWrap in subItems.Value)
+                                {
+                                    ProcessWrap(subItemWrap, sectionEmail);
+                                }
+                            }
+                            else
+                            {
+                                ProcessWrap(itemWrap, sectionEmail);
+                            }
+                        }
+                    }
+                }
+
+                if (hasActiveAccount)
+                {
+                    UpdateCachedAccounts(results);
+                    UpdateUserProfile(activeName ?? "User", activeEmail ?? "", activeAvatar ?? "");
+                    return (true, null, false);
+                }
+
+                // Google успешно вернул 200 OK, но в нем нет активного аккаунта (меню гостя).
+                // Это значит, что сессия аннулирована сервером. Принудительно выходим!
+                Log.Warn("[Auth] Validation returned guest configuration. Session expired. Automatically logging out...");
+                Logout();
+                return (false, "Session expired or returned guest menu configuration.", false);
             }
 
-            Log.Warn($"[Auth] Session invalid: account_menu returned status {response.StatusCode}");
-            return (false, $"Validation failed: {response.StatusCode}");
+            return (false, $"Validation returned status {response.StatusCode}", true);
         }
         catch (Exception ex)
         {
-            Log.Error($"[Auth] Validation network error: {ex.Message}");
-            return (false, ex.Message);
+            // Важно: При сетевых таймаутах мы НЕ вызываем Logout(),
+            // так как куки могут быть валидными, просто временно отсутствует соединение.
+            Log.Error($"[Auth] Session validation exception: {ex.Message}");
+            return (false, ex.Message, true);
         }
     }
 
-    /// <summary>
-    /// Устанавливает идентификатор активного бренд-канала и индекс аккаунта, затем принудительно перезагружает клиент YouTube.
-    /// </summary>
-    public void SetPageId(string pageId, string authUser = "")
+    public void SetAuthUser(string authUser)
     {
         lock (_lock)
         {
-            State.PageId = pageId;
             State.AuthUser = authUser;
         }
         SaveAuthData();
         OnAuthStateChanged?.Invoke();
     }
 
-    // --- Cookie Management ---
+    // Метод RotateCookiesAsync полностью вырезан во избежание 401 блокировок со стороны Google Botguard
 
     private void LoadCookies()
     {
@@ -279,46 +413,10 @@ public partial class CookieAuthService
             return _cookieMap.TryGetValue(key, out var val) ? val : null;
     }
 
-    /// <summary>
-    /// Собирает resurrection cookie header. Использует FrozenSet для O(1) проверки.
-    /// </summary>
-    public string GetResurrectionCookieHeader()
-    {
-        lock (_lock)
-        {
-            // Предварительная оценка размера
-            int estimatedLen = 0;
-            int matchCount = 0;
-            foreach (var kvp in _cookieMap)
-            {
-                if (ResurrectionCookieNames.Contains(kvp.Key))
-                {
-                    estimatedLen += kvp.Key.Length + kvp.Value.Length + 3; // "key=value; "
-                    matchCount++;
-                }
-            }
-
-            if (matchCount == 0) return "";
-
-            var sb = new StringBuilder(estimatedLen);
-            foreach (var kvp in _cookieMap)
-            {
-                if (!ResurrectionCookieNames.Contains(kvp.Key)) continue;
-
-                if (sb.Length > 0) sb.Append("; ");
-                sb.Append(kvp.Key);
-                sb.Append('=');
-                sb.Append(kvp.Value);
-            }
-            return sb.ToString();
-        }
-    }
-
     public void SaveCookies(string cookies)
     {
         if (string.IsNullOrWhiteSpace(cookies)) return;
 
-        // Span-based очистка
         var span = cookies.AsSpan().Trim().Trim('"');
         var clean = span.ToString().Replace("\r", "").Replace("\n", "");
         clean = FindCookieTextRegex().Replace(clean, "");
@@ -329,11 +427,23 @@ public partial class CookieAuthService
             return;
         }
 
+        bool wasAuthenticated;
+        lock (_lock)
+        {
+            wasAuthenticated = _cookieMap.ContainsKey("SAPISID");
+        }
+
         ParseAndSetCookies(clean);
         SaveCookiesToFile();
 
         UpdateStateAuthStatus();
         OnAuthStateChanged?.Invoke();
+
+        if (!wasAuthenticated && IsAuthenticated)
+        {
+            Log.Info("[Auth] Fresh authentication detected. Invoking login success event.");
+            OnLoginSuccess?.Invoke();
+        }
 
         Log.Info($"[Auth] Cookies saved manually. Total keys: {_cookieMap.Count}");
     }
@@ -345,7 +455,6 @@ public partial class CookieAuthService
         {
             foreach (var header in setCookieHeaders)
             {
-                // Парсим первую пару key=value до ';'
                 var headerSpan = header.AsSpan();
                 int semicolonIdx = headerSpan.IndexOf(';');
                 var firstPart = semicolonIdx >= 0 ? headerSpan[..semicolonIdx] : headerSpan;
@@ -357,20 +466,20 @@ public partial class CookieAuthService
                 var value = firstPart[(equalIdx + 1)..].Trim().ToString();
 
                 if (string.IsNullOrEmpty(value) ||
-                    value.Equals("deleted", StringComparison.OrdinalIgnoreCase))
+                    value.Equals("deleted", StringComparison.OrdinalIgnoreCase) ||
+                    value.Equals("expired", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_cookieMap.Remove(key))
+                    {
+                        Log.Debug($"[Auth] Cookie '{key}' deleted by server request.");
+                    }
                     continue;
+                }
 
                 if (!_cookieMap.TryGetValue(key, out var existingVal) || existingVal != value)
                 {
                     _cookieMap[key] = value;
-
-                    // Проверка через FrozenSet + Contains
-                    if (!criticalCookieUpdated && IsCriticalCookie(key))
-                        criticalCookieUpdated = true;
-
-                    // Синхронизация PSIDTS
-                    if (key == "__Secure-1PSIDTS")
-                        _cookieMap["__Secure-3PSIDTS"] = value;
+                    criticalCookieUpdated = true;
                 }
             }
 
@@ -385,21 +494,6 @@ public partial class CookieAuthService
         }
 
         return criticalCookieUpdated;
-    }
-
-    /// <summary>
-    /// Проверяет, является ли cookie критическим (нужно сохранение).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsCriticalCookie(string key)
-    {
-        // Проверяем по точному совпадению и по Contains для составных имён
-        foreach (var criticalName in CriticalCookieNames)
-        {
-            if (key.Contains(criticalName, StringComparison.Ordinal))
-                return true;
-        }
-        return false;
     }
 
     public void Logout()
@@ -418,21 +512,15 @@ public partial class CookieAuthService
         OnAuthStateChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Парсит cookie строку без лишних аллокаций.
-    /// Использует Span для поиска разделителей.
-    /// </summary>
     private void ParseAndSetCookies(string raw)
     {
         lock (_lock)
         {
             _cookieMap.Clear();
-
             var remaining = raw.AsSpan();
 
             while (remaining.Length > 0)
             {
-                // Ищем разделитель ';'
                 int semicolonIdx = remaining.IndexOf(';');
                 ReadOnlySpan<char> part;
 
@@ -447,7 +535,6 @@ public partial class CookieAuthService
                     remaining = [];
                 }
 
-                // Ищем '='
                 int equalIdx = part.IndexOf('=');
                 if (equalIdx <= 0) continue;
 
@@ -462,9 +549,6 @@ public partial class CookieAuthService
         }
     }
 
-    /// <summary>
-    /// Перестраивает строку cookie header с предварительным расчётом размера.
-    /// </summary>
     private void RebuildHeaderString()
     {
         if (_cookieMap.Count == 0)
@@ -473,7 +557,6 @@ public partial class CookieAuthService
             return;
         }
 
-        // Оценка размера: средний cookie ~30 символов + разделители
         int estimatedLen = _cookieMap.Count * 40;
         var sb = new StringBuilder(estimatedLen);
 

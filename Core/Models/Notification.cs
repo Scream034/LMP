@@ -56,7 +56,7 @@ public sealed class Notification
 
     #region Computed Localized Properties
 
-    private static Services.LocalizationService L => Services.LocalizationService.Instance;
+    private static LocalizationService L => LocalizationService.Instance;
 
     /// <summary>
     /// Локализованный заголовок (автоматически переводится при смене языка).
@@ -152,7 +152,7 @@ public sealed record AttemptRecord(
         get
         {
             if (Success)
-                return Services.LocalizationService.Instance["Attempt_Success"];
+                return LocalizationService.Instance["Attempt_Success"];
 
             if (!string.IsNullOrEmpty(ErrorMessage))
             {
@@ -161,7 +161,7 @@ public sealed record AttemptRecord(
                     : ErrorMessage;
             }
 
-            return Services.LocalizationService.Instance["Attempt_Failed"];
+            return LocalizationService.Instance["Attempt_Failed"];
         }
     }
 }

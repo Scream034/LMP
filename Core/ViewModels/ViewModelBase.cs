@@ -173,6 +173,28 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Выполняет широковещательную рассылку события смены аккаунта на все живые ViewModels
+    /// для предотвращения смешивания пользовательских данных.
+    /// </summary>
+    public static void BroadcastAccountChanged()
+    {
+        var alive = CollectAlive();
+        Log.Debug($"[Lifecycle] Broadcasting account change to {alive.Count} active ViewModels.");
+
+        foreach (var vm in alive)
+        {
+            try
+            {
+                vm.OnAccountChanged();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[Lifecycle] Error executing OnAccountChanged in {vm.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
     #endregion
 
     #region Localization Shortcuts
@@ -246,6 +268,12 @@ public abstract class ViewModelBase : ReactiveObject, IDisposable
     /// и завершения CrossFade-анимации (~180ms задержка).
     /// </summary>
     public virtual Task OnNavigatedToAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// Вызывается при изменении активного аккаунта или состояния авторизации.
+    /// Переопределите в наследниках для сброса локальных кэшей данных.
+    /// </summary>
+    protected virtual void OnAccountChanged() { }
 
     #endregion
 

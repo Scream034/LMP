@@ -14,6 +14,7 @@ using LMP.UI.Features.Playlist;
 using LMP.UI.Features.Notifications;
 using System.Runtime;
 using LMP.UI.Features.Queue;
+using Avalonia.Threading;
 
 namespace LMP.UI.Features.Shell;
 
@@ -57,12 +58,13 @@ public class MainWindowViewModel : ViewModelBase
     public ReactiveCommand<string, Unit> NavigateCommand { get; }
 
     public MainWindowViewModel(
-        IServiceProvider services,
-        PlayerBarViewModel playerBar,
-        NotificationButtonViewModel notificationButton,
-        NotificationPanelViewModel notificationPanel,
-        ToastOverlayViewModel toastOverlay,
-        DialogHostViewModel dialogHost)
+          IServiceProvider services,
+          PlayerBarViewModel playerBar,
+          NotificationButtonViewModel notificationButton,
+          NotificationPanelViewModel notificationPanel,
+          ToastOverlayViewModel toastOverlay,
+          DialogHostViewModel dialogHost,
+          CookieAuthService auth)
     {
         Log.Info("MainWindowViewModel constructor started.");
 
@@ -72,6 +74,8 @@ public class MainWindowViewModel : ViewModelBase
         NotificationPanel = notificationPanel;
         ToastOverlay = toastOverlay;
         DialogHost = dialogHost;
+
+        auth.OnAuthStateChanged += HandleGlobalAuthStateChanged;
 
         UpdateCommitsDisplay();
 
@@ -106,6 +110,18 @@ public class MainWindowViewModel : ViewModelBase
         _ = ValidateAuthOnStartupAsync();
 
         Log.Info("MainWindowViewModel initialized.");
+    }
+
+    /// <summary>
+    /// Обрабатывает изменения авторизации на глобальном уровне.
+    /// Принудительно перенаправляет выполнение в UI-поток во избежание кросс-поточных исключений при рендере списков.
+    /// </summary>
+    private static void HandleGlobalAuthStateChanged()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            ViewModelBase.BroadcastAccountChanged();
+        }, DispatcherPriority.Normal);
     }
 
     private void UpdateCommitsDisplay()
@@ -347,7 +363,7 @@ public class MainWindowViewModel : ViewModelBase
 
             if (!auth.IsAuthenticated) return;
 
-            var (isValid, error) = await auth.ValidateSessionAsync();
+            var (isValid, error, _) = await auth.ValidateSessionAsync();
 
             if (!isValid)
             {

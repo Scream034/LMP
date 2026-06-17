@@ -11,10 +11,6 @@ public class SearchClient(HttpClient http)
 {
     private readonly SearchController _controller = new(http);
 
-    // Кэшированные UTF-8 имена для частых свойств
-    private static readonly byte[] Utf8Thumbnails = "thumbnails"u8.ToArray();
-    private static readonly byte[] Utf8Title = "title"u8.ToArray();
-
     public async IAsyncEnumerable<Batch<ISearchResult>> GetResultBatchesAsync(
         string searchQuery,
         SearchFilter searchFilter,
@@ -84,7 +80,7 @@ public class SearchClient(HttpClient http)
             {
                 Id = videoId,
                 Title = videoData.Title ?? "",
-                Author = videoData.Author ?? Services.LocalizationService.Instance["Track_UnknownAuthor"],
+                Author = videoData.Author ?? LocalizationService.Instance["Track_UnknownAuthor"],
                 ChannelId = videoData.ChannelId,
                 Duration = videoData.Duration ?? TimeSpan.Zero,
                 ThumbnailUrl = thumbUrl,

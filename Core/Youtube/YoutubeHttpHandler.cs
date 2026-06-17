@@ -56,7 +56,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
     /// <summary>
     /// Генерация заголовка авторизации SAPISIDHASH с использованием Span и stackalloc для минимизации аллокаций.
     /// </summary>
-    private static string? GetAuthHeader(string? sapisid, string origin)
+    internal static string? GetAuthHeader(string? sapisid, string origin)
     {
         if (string.IsNullOrWhiteSpace(sapisid)) return null;
 
@@ -140,7 +140,7 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
 
             if (authService?.IsAuthenticated == true)
             {
-                var authUser = string.IsNullOrEmpty(authService.State.AuthUser) ? "0" : authService.State.AuthUser;
+                var authUser = string.IsNullOrEmpty(authService.State.AuthUser) ? AuthState.DefaultAuthUser : authService.State.AuthUser;
                 request.Headers.Add("X-Goog-AuthUser", authUser);
             }
         }
@@ -160,9 +160,9 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         bool isYoutubeApi = isYoutubeDomain && request.RequestUri.AbsolutePath.Contains("/youtubei/v1/");
 
         if (request.Method == HttpMethod.Post &&
-            isYoutubeApi &&
-            !isMobileClient &&
-            authService?.IsAuthenticated == true)
+               isYoutubeApi &&
+               !isMobileClient &&
+               authService?.IsAuthenticated == true)
         {
             var origin = isMusic ? MusicOrigin : YoutubeOrigin;
             var sapisid = authService.GetCookieValue("SAPISID");
@@ -187,16 +187,8 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                     if (request.Headers.Contains("X-Goog-AuthUser"))
                         request.Headers.Remove("X-Goog-AuthUser");
 
-                    var authUser = string.IsNullOrEmpty(authService.State.AuthUser) ? "0" : authService.State.AuthUser;
+                    var authUser = string.IsNullOrEmpty(authService.State.AuthUser) ? AuthState.DefaultAuthUser : authService.State.AuthUser;
                     request.Headers.Add("X-Goog-AuthUser", authUser);
-
-                    var pageId = authService.State.PageId;
-                    if (!string.IsNullOrEmpty(pageId))
-                    {
-                        if (request.Headers.Contains("X-Goog-PageId"))
-                            request.Headers.Remove("X-Goog-PageId");
-                        request.Headers.Add("X-Goog-PageId", pageId);
-                    }
                 }
             }
         }
@@ -204,50 +196,13 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
         return request;
     }
 
-    /// <summary>
-    /// Попытка асинхронного обновления/восстановления протухшей сессии авторизации.
-    /// Переиспользует оптимизированный метод слияния sw.js_data.
-    /// </summary>
-    private async Task<string?> TryRefreshSessionAsync(CancellationToken ct)
-    {
-        if (authService == null || !authService.IsAuthenticated) return null;
-
-        Log.Info("[YouTube] Attempting session recovery via sw.js_data...");
-
-        try
-        {
-            var resurrectionCookies = authService.GetResurrectionCookieHeader();
-
-            // Переиспользуем централизованную логику
-            var (visitorData, setCookies, isSuccess) = await YoutubeClientUtils.FetchSwDataAsync(
-                resurrectionCookies, ct).ConfigureAwait(false);
-
-            if (isSuccess)
-            {
-                bool sessionRefreshed = false;
-                if (setCookies != null)
-                    sessionRefreshed = authService.UpdateCookies(setCookies);
-
-                if (sessionRefreshed || !string.IsNullOrEmpty(visitorData))
-                {
-                    Log.Info("[YouTube] Session successfully recovered.");
-                    return visitorData;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"[YouTube] Session recovery failed: {ex.Message}");
-        }
-
-        return null;
-    }
-
     /// <inheritdoc/>
     protected override async Task<HttpResponseMessage> SendAsync(
        HttpRequestMessage request,
        CancellationToken cancellationToken)
     {
+        // Все скрытые фоновые попытки эмуляции RotateCookies убраны во избежание 401 блокировок
+
         for (var i = 0; i < 3; i++)
         {
             var requestClone = await CloneRequestAsync(request).ConfigureAwait(false);
@@ -271,14 +226,9 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
                         continue;
                     }
 
-                    if (authService != null)
-                    {
-                        var newVisitorData = await TryRefreshSessionAsync(cancellationToken).ConfigureAwait(false);
-                        if (!string.IsNullOrEmpty(newVisitorData))
-                            request.Options.Set(VisitorDataKey, newVisitorData);
-                        await Task.Delay(500, cancellationToken).ConfigureAwait(false);
-                        continue;
-                    }
+                    // Больше не пытаемся делать скрытую реанимацию сессии, так как это поведение бота.
+                    // Возвращаем исходный 401 ответ, переводя сессию в режим Guest.
+                    return response;
                 }
 
                 if ((int)response.StatusCode == 429)
@@ -292,11 +242,9 @@ public partial class YoutubeHttpHandler(HttpClient http, CookieAuthService? auth
             }
             catch (Exception ex)
             {
-                // Пробрасываем немедленно, если токен был отменён пользователем (например, при Skip)
                 if (cancellationToken.IsCancellationRequested && ex is OperationCanceledException)
                     throw;
 
-                // Для сетевых ошибок и таймаутов делаем ретрай
                 if (i < 2 && (ex is HttpRequestException || ex is OperationCanceledException || ex is System.IO.IOException))
                 {
                     Log.Warn($"[YouTube] Network error: {ex.Message}. Retrying {i + 1}...");
