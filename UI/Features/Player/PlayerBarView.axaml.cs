@@ -1,4 +1,6 @@
-﻿using System.Reactive.Disposables;
+﻿using System;
+using System.ComponentModel;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -9,6 +11,9 @@ using ReactiveUI;
 
 namespace LMP.UI.Features.Player;
 
+/// <summary>
+/// Code-behind нижней панели управления плеером (Player Bar).
+/// </summary>
 public partial class PlayerBarView : UserControl
 {
     private static class LayoutConstants
@@ -58,7 +63,6 @@ public partial class PlayerBarView : UserControl
     private bool _isRafRunning;
     private TopLevel? _topLevel;
 
-    private TranslateTransform? _playingGlowTranslate;
     private TranslateTransform? _seekThumbTranslate;
     private TranslateTransform? _seekCursorTranslate;
     private TranslateTransform? _seekTooltipTranslate;
@@ -81,6 +85,12 @@ public partial class PlayerBarView : UserControl
 
     #endregion
 
+    #region Initialization
+
+    /// <summary>
+    /// Инициализирует новый экземпляр класса <see cref="PlayerBarView"/>.
+    /// Загружает XAML-разметку, инициализирует аппаратные трансформации и регистрирует обработчики событий.
+    /// </summary>
     public PlayerBarView()
     {
         InitializeComponent();
@@ -88,11 +98,8 @@ public partial class PlayerBarView : UserControl
         SetupEventHandlers();
     }
 
-    #region Initialization
-
     private void CacheRenderTransforms()
     {
-        _playingGlowTranslate = (TranslateTransform)PlayingGlow.RenderTransform!;
         _seekThumbTranslate = (TranslateTransform)SeekThumb.RenderTransform!;
         _seekCursorTranslate = (TranslateTransform)SeekCursor.RenderTransform!;
 
@@ -191,19 +198,19 @@ public partial class PlayerBarView : UserControl
     }
 
     private void OnViewModelPropertyChanged(
-        object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+       object? sender, PropertyChangedEventArgs e)
     {
         if (sender is not PlayerBarViewModel vm) return;
 
         switch (e.PropertyName)
         {
             case nameof(PlayerBarViewModel.IsLoading):
-                SparkContainer.IsVisible = vm.IsLoading && !vm.IsTrackResetting;
-                return;
-
             case nameof(PlayerBarViewModel.IsTrackResetting):
                 if (vm.IsTrackResetting) ApplySliderReset();
                 else RemoveSliderReset();
+
+                // Детерминированно показываем искру при любой загрузке, включая смену трека
+                SparkContainer.IsVisible = vm.IsLoading;
                 return;
         }
 
@@ -223,18 +230,11 @@ public partial class PlayerBarView : UserControl
     {
         StopRaf();
 
-        double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
-        double hiddenOffset = width > 0 ? -width : -5000.0;
-
-        _playingGlowTranslate!.X = hiddenOffset;
-
-        SeekThumb.Classes.Add("hidden");
-        SeekCursor.Classes.Add("hidden");
         _seekThumbTranslate!.X = LayoutConstants.RenderTransformResetValue;
         _seekCursorTranslate!.X = LayoutConstants.RenderTransformResetValue;
 
         CustomProgressBar.Value = 0;
-        CustomProgressBar.IsVisible = false;
+        CustomProgressBar.IsVisible = true;
 
         _isGliding = false;
         _displayPosition = 0;
@@ -242,22 +242,19 @@ public partial class PlayerBarView : UserControl
 
         SeekRangeSpan.Opacity = 0;
         SeekTooltip.Opacity = 0;
+        SeekHint.Opacity = 0;
 
-        if (_seekHintTranslate != null)
-        {
-            _seekHintTranslate.X = LayoutConstants.RenderTransformResetValue;
-        }
+        _seekHintTranslate?.X = LayoutConstants.RenderTransformResetValue;
 
-        SparkContainer.IsVisible = true;
+        // Позволяем искре отображаться во время сброса, если в этот момент идет буферизация
+        SparkContainer.IsVisible = _currentViewModel?.IsLoading ?? false;
     }
 
     private void RemoveSliderReset()
     {
         CustomProgressBar.IsVisible = true;
-        SeekThumb.Classes.Remove("hidden");
-        SeekCursor.Classes.Remove("hidden");
-
-        SparkContainer.IsVisible = _currentViewModel?.IsLoading ?? false;
+        bool isLoading = _currentViewModel?.IsLoading ?? false;
+        SparkContainer.IsVisible = isLoading;
 
         if (!_isSuspended) RefreshAllVisuals();
     }
@@ -266,16 +263,12 @@ public partial class PlayerBarView : UserControl
     {
         _isSuspended = true;
         StopRaf();
-        SparkContainer.IsVisible = false;
-        PlayingGlow.Classes.Add("suspended");
         CloseAllPopups();
     }
 
     public void OnResume()
     {
         _isSuspended = false;
-        PlayingGlow.Classes.Remove("suspended");
-        SparkContainer.IsVisible = _currentViewModel?.IsLoading ?? false;
         _cachedSeekWidth = SeekContainer.Bounds.Width;
         RefreshAllVisuals();
     }
@@ -345,9 +338,6 @@ public partial class PlayerBarView : UserControl
 
     private void ApplySeekVisual(double ratio, double width)
     {
-        double offset = -(width * (1.0 - ratio));
-        _playingGlowTranslate!.X = offset;
-
         double position = width * ratio;
         _seekThumbTranslate!.X = position - LayoutConstants.SeekThumbHalfWidth;
         _seekCursorTranslate!.X = position - LayoutConstants.SeekCursorHalfWidth;
@@ -396,6 +386,16 @@ public partial class PlayerBarView : UserControl
         double width = _cachedSeekWidth > 0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
         double duration = vm.DurationSeconds;
         if (width <= 0 || duration <= 0) return false;
+
+        // Во время перемотки блокируем перезапись положения, фиксируя ползунок на месте скраббинга
+        if (vm.IsSeekBusy)
+        {
+            double displayPos = vm.PositionSeconds;
+            double seekRatio = displayPos / duration;
+            ApplySeekVisual(seekRatio, width);
+            CustomProgressBar.Value = displayPos;
+            return true;
+        }
 
         double enginePosition = vm.ReadCurrentPositionSeconds();
 
@@ -447,11 +447,9 @@ public partial class PlayerBarView : UserControl
         _displayPosition = displayPosition;
         double currentRatio = displayPosition / duration;
         double currentX = currentRatio * width;
-
         ApplySeekVisual(currentRatio, width);
         CustomProgressBar.Value = displayPosition;
 
-        // Динамическое позиционирование полых рельс моста через Canvas.SetLeft
         if (_currentPreviewRatio.HasValue && _isDraggingSeek)
         {
             double previewX = _currentPreviewRatio.Value * width;
@@ -482,12 +480,28 @@ public partial class PlayerBarView : UserControl
     #region Seek Visual Helpers
 
     /// <summary>
-    /// Обновляет положение и текстовое наполнение временного тултипа.
+    /// Обновляет положение и время тултипа предпросмотра с защитой от выхода за границы экрана.
     /// </summary>
     private void UpdateSeekTooltip(double x, double seconds)
     {
+        double containerWidth = _cachedSeekWidth > 0.0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
         double width = SeekTooltip.Bounds.Width > 0.0 ? SeekTooltip.Bounds.Width : LayoutConstants.DefaultTooltipWidth;
-        _seekTooltipTranslate!.X = x - width / 2.0;
+
+        double targetX = x - width / 2.0;
+
+        if (containerWidth > 0.0)
+        {
+            // Защитный отступ от краев таймлайна в пикселях
+            const double safetyMargin = 6.0;
+            double minX = safetyMargin;
+            double maxX = Math.Max(safetyMargin, containerWidth - width - safetyMargin);
+
+            _seekTooltipTranslate!.X = Math.Clamp(targetX, minX, maxX);
+        }
+        else
+        {
+            _seekTooltipTranslate!.X = targetX;
+        }
 
         var time = TimeSpan.FromSeconds(Math.Max(0.0, seconds));
         HoverTimeText.Text = time.TotalHours >= 1.0
@@ -496,14 +510,30 @@ public partial class PlayerBarView : UserControl
     }
 
     /// <summary>
-    /// Центрирует и перемещает подсказку отмены вслед за курсором мыши.
+    /// Обновляет положение подсказки отмены с защитой от выхода за границы экрана.
     /// </summary>
-    /// <param name="x">Текущая координата курсора по оси X.</param>
     private void UpdateSeekHintPosition(double x)
     {
         if (_seekHintTranslate is null) return;
+
+        double containerWidth = _cachedSeekWidth > 0.0 ? _cachedSeekWidth : SeekContainer.Bounds.Width;
         double width = SeekHint.Bounds.Width > 0.0 ? SeekHint.Bounds.Width : LayoutConstants.DefaultHintWidth;
-        _seekHintTranslate.X = x - width / 2.0;
+
+        double targetX = x - width / 2.0;
+
+        if (containerWidth > 0.0)
+        {
+            // Синхронный защитный отступ для подсказки отмены
+            const double safetyMargin = 6.0;
+            double minX = safetyMargin;
+            double maxX = Math.Max(safetyMargin, containerWidth - width - safetyMargin);
+
+            _seekHintTranslate.X = Math.Clamp(targetX, minX, maxX);
+        }
+        else
+        {
+            _seekHintTranslate.X = targetX;
+        }
     }
 
     private void UpdateSeekPreview(double x)
@@ -513,23 +543,17 @@ public partial class PlayerBarView : UserControl
 
     #region Seek Hint (Canvas-based)
 
-    /// <summary>
-    /// Отображает центрированную подсказку отмены перемотки.
-    /// Если указан параметр <paramref name="autoHideMs"/>, автоматически скрывает её по таймеру.
-    /// </summary>
-    /// <param name="text">Текст подсказки.</param>
-    /// <param name="autoHideMs">Таймаут в миллисекундах. Если null — подсказка остается видимой постоянно.</param>
     private void ShowSeekHint(string text, int? autoHideMs = null)
     {
         SeekHintText.Text = text;
-        SeekHint.IsVisible = true;
+        SeekHint.Opacity = 1; // Плавно отображаем через Opacity
 
         if (autoHideMs.HasValue)
         {
             _seekHintDisposable.Disposable = Observable
                 .Timer(TimeSpan.FromMilliseconds(autoHideMs.Value))
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => SeekHint.IsVisible = false);
+                .Subscribe(_ => SeekHint.Opacity = 0);
         }
         else
         {
@@ -539,7 +563,7 @@ public partial class PlayerBarView : UserControl
 
     private void HideSeekHint()
     {
-        SeekHint.IsVisible = false;
+        SeekHint.Opacity = 0; // Плавно скрываем через Opacity
         _seekHintDisposable.Disposable = null;
     }
 
@@ -551,7 +575,7 @@ public partial class PlayerBarView : UserControl
     {
         SeekTooltip.Opacity = 0;
         SeekRangeSpan.Opacity = 0;
-        SeekHint.IsVisible = false;
+        SeekHint.Opacity = 0; // Синхронно тушим подсказку
         _seekHintDisposable.Disposable = null;
     }
 
@@ -592,7 +616,7 @@ public partial class PlayerBarView : UserControl
             UpdateSeekPreview(x);
 
             SeekTooltip.Opacity = 1;
-            SeekRangeSpan.Opacity = 1; // Рельсы становятся видимыми при перетаскивании
+            SeekRangeSpan.Opacity = 1;
         }
         else if (SeekHitBox.IsPointerOver)
         {
@@ -640,11 +664,10 @@ public partial class PlayerBarView : UserControl
         UpdateSeekHintPosition(x);
 
         SeekTooltip.Opacity = 1;
-        SeekRangeSpan.Opacity = 1; // Зажигаем рельсы при нажатии
+        SeekRangeSpan.Opacity = 1;
 
         EnsureRafRunning();
 
-        // Отображение подсказки отмены БЕЗ таймаута автоматического скрытия
         ShowSeekHint(
             vm.L.Get("Seek_CancelHint", "ESC or Right Click to cancel"));
     }
@@ -694,6 +717,9 @@ public partial class PlayerBarView : UserControl
         }
     }
 
+    /// <summary>
+    /// Отменяет активную операцию перемотки (Seek) и сбрасывает визуальное состояние.
+    /// </summary>
     private void CancelSeekDrag()
     {
         if (_isDraggingSeek)
@@ -704,26 +730,26 @@ public partial class PlayerBarView : UserControl
             if (_currentViewModel is { } vm)
             {
                 vm.CancelSeek();
-                // Показ уведомления об отмене с коротким автоскрытием (2 секунды)
-                ShowSeekHint(
-                    vm.L.Get("Seek_Cancelled", "Seek cancelled"),
-                    2000);
+
+                // Всегда скрываем подсказку отмены немедленно
+                HideSeekHint();
 
                 ApplySeekFromEngine(vm);
             }
         }
-        else
+
+        // Скрываем соединительный мост-рельсы в любом случае
+        SeekRangeSpan.Opacity = 0;
+
+        // Если курсор всё ещё находится на таймлайне, НЕ скрываем текущее время (SeekTooltip),
+        // а скрываем только подсказку (SeekHint). Если курсора нет — скрываем и обнуляем всё.
+        if (!SeekHitBox.IsPointerOver)
         {
             SeekTooltip.Opacity = 0;
-            SeekRangeSpan.Opacity = 0;
             HideSeekPreview();
             _currentPreviewRatio = null;
         }
     }
-
-    #endregion
-
-    #region Keyboard
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {

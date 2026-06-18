@@ -87,10 +87,17 @@ public sealed partial class AudioPlayer
         if (pipeline == null || !pipeline.Source.CanSeek)
             return ValueTask.CompletedTask;
 
-        // Coalescing: если seek активен для того же pipeline — только обновляем позицию.
-        if (_backgroundSeekActive && ReferenceEquals(Volatile.Read(ref _backgroundSeekPipeline), pipeline))
+        // Мгновенно приостанавливаем фоновую загрузку источника прямо отсюда на UI-потоке.
+        // Это исключает планирование новых фоновых загрузок в PreloadLoop до завершения серии seeks.
+        pipeline.Source.SetPlaybackActive(false);
+
+        long targetMs = (long)position.TotalMilliseconds;
+
+        // Coalescing: если seek уже выполняется или в очереди канала уже висит SeekCommand,
+        // мы просто атомарно обновляем целевую позицию без создания новой команды в канале.
+        if (_backgroundSeekActive || Interlocked.Read(ref _pendingSeekMs) >= 0)
         {
-            Volatile.Write(ref _pendingSeekMs, (long)position.TotalMilliseconds);
+            Interlocked.Exchange(ref _pendingSeekMs, targetMs);
             return ValueTask.CompletedTask;
         }
 
@@ -98,6 +105,8 @@ public sealed partial class AudioPlayer
 
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         ct.Register(() => tcs.TrySetCanceled(ct));
+
+        Interlocked.Exchange(ref _pendingSeekMs, targetMs);
 
         _commandChannel.Writer.TryWrite(new SeekCommand(position, _session.Current, tcs));
 
@@ -155,6 +164,10 @@ public sealed partial class AudioPlayer
             return;
         }
 
+        // Читаем самую свежую позицию, которая могла прийти во время ожидания в канале
+        long latestTargetMs = DrainPendingSeekMs();
+        long posMs = latestTargetMs >= 0 ? latestTargetMs : (long)cmd.Position.TotalMilliseconds;
+
         bool wasPlaying = _state == PlayerState.Playing;
         SetState(PlayerState.Seeking);
         StopPositionTimer();
@@ -166,8 +179,7 @@ public sealed partial class AudioPlayer
             // Prefetch целевого чанка параллельно с остановкой decoder
             if (pipeline.Source is Sources.CachingStreamSource cachingSource)
             {
-                _ = cachingSource.TryPrefetchChunkForSeekAsync(
-                    (long)cmd.Position.TotalMilliseconds, _lifetimeCts.Token);
+                _ = cachingSource.TryPrefetchChunkForSeekAsync(posMs, _lifetimeCts.Token);
             }
 
             await pipeline.StopDecodingAsync(
@@ -183,10 +195,8 @@ public sealed partial class AudioPlayer
             pipeline.Stop();
             pipeline.Flush();
 
-            long posMs = (long)cmd.Position.TotalMilliseconds;
             pipeline.PrepareForSeek(posMs);
 
-            Volatile.Write(ref _pendingSeekMs, -1);
             Volatile.Write(ref _backgroundSeekPipeline, pipeline);
             _backgroundSeekActive = true;
 
@@ -467,16 +477,10 @@ public sealed partial class AudioPlayer
     ///     начнёт выдавать PCM мгновенно.</item>
     ///   <item><b>Streaming (target chunk не cached):</b> полный threshold
     ///     и стандартный timeout — нужно дождаться HTTP-загрузки.</item>
-    /// </list>
+    ///   </list>
     /// <para>Предыдущая версия использовала единый <c>BufferProgress ≥ 95%</c>
     /// порог, из-за которого 92% cached трек ждал полные 300ms.</para>
     /// </remarks>
-    /// <param name="pipeline">Активный pipeline.</param>
-    /// <param name="targetMs">Целевая позиция seek в миллисекундах.</param>
-    /// <returns>
-    /// Кортеж (seekThreshold в samples, warmupTimeout в мс).
-    /// Оба = 0 означает пропуск WaitForBuffer.
-    /// </returns>
     private static (int seekThreshold, int warmupTimeout) ComputeSeekWarmupParams(
         AudioPipeline pipeline, long targetMs)
     {

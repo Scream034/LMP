@@ -2,25 +2,6 @@ namespace LMP.Core.Audio.Sources;
 
 public sealed partial class CachingStreamSource
 {
-    /// <summary>
-    /// Минимальный интервал между seek-initiated preload fire-and-forget запусками (мс).
-    /// </summary>
-    /// <remarks>
-    /// <para>При scrubbing (быстрое перетаскивание слайдера) пользователь генерирует
-    /// 5–15 seek'ов за 2–3 секунды. Каждый seek ранее запускал preload на 3 чанка →
-    /// ~40 HTTP-запросов, из которых ~36 немедленно отменялись следующим epoch reset.</para>
-    /// <para>Задержка 300ms подавляет промежуточные preload'ы: если следующий seek
-    /// приходит раньше, предыдущий preload не запускается. Только финальная позиция
-    /// (после стабилизации слайдера) инициирует реальную загрузку.</para>
-    /// </remarks>
-    private const int SeekPreloadDebounceMs = 300;
-
-    /// <summary>
-    /// Timestamp последнего вызова <see cref="SeekAsync"/> (UTC ticks).
-    /// Используется для debounce seek-initiated preload.
-    /// </summary>
-    private long _lastSeekTimestamp;
-
     /// <inheritdoc/>
     public async ValueTask<bool> SeekAsync(long positionMs, CancellationToken ct)
     {
@@ -41,10 +22,6 @@ public sealed partial class CachingStreamSource
         int targetChunk = Math.Clamp((int)(targetBytePos / _chunkSize), 0, _totalChunks - 1);
 
         Log.Debug($"[CachingSource] Seek: {positionMs}ms → byte {targetBytePos}, chunk {targetChunk}/{_totalChunks}");
-
-        // Записываем timestamp ДО epoch reset — debounce preload использует это значение.
-        long seekTimestamp = Environment.TickCount64;
-        Volatile.Write(ref _lastSeekTimestamp, seekTimestamp);
 
         ResetDownloadEpoch();
 
@@ -73,47 +50,12 @@ public sealed partial class CachingStreamSource
             }
         }
 
-        // Debounced preload: запускаем fire-and-forget загрузку окружающих чанков
-        // только если в течение SeekPreloadDebounceMs не пришёл следующий seek.
-        // При scrubbing промежуточные seek'и не генерируют бессмысленные HTTP-запросы,
-        // которые будут немедленно отменены следующим epoch reset.
+        // Мгновенный запуск фоновой загрузки окружающих чанков без искусственных задержек дебаунса.
+        // Старые фоновые задачи автоматически отменяются через сброс эпохи ResetDownloadEpoch().
         if (_cacheEntry != null)
-            _ = DebouncedPreloadForSeekAsync(targetChunk, seekTimestamp);
+            _ = PreloadChunksForSeekFireAndForgetAsync(targetChunk);
 
         return true;
-    }
-
-    /// <summary>
-    /// Запускает preload окружающих чанков только если за время debounce не пришёл новый seek.
-    /// </summary>
-    /// <remarks>
-    /// <para>При scrubbing (10 seek'ов за 3 сек) каждый промежуточный seek ранее
-    /// запускал <see cref="PreloadChunksForSeekFireAndForgetAsync"/>, который стартовал
-    /// 3 HTTP GET'а — итого ~30 запросов, из которых ~27 немедленно отменялись.
-    /// Теперь реальный preload запускается только для финальной позиции.</para>
-    /// </remarks>
-    /// <param name="targetChunk">Чанк целевой позиции seek.</param>
-    /// <param name="seekTimestamp">Timestamp вызова seek для проверки актуальности.</param>
-    private async Task DebouncedPreloadForSeekAsync(int targetChunk, long seekTimestamp)
-    {
-        try
-        {
-            await Task.Delay(SeekPreloadDebounceMs).ConfigureAwait(false);
-
-            // Если за время ожидания пришёл новый seek — этот preload уже неактуален.
-            if (Volatile.Read(ref _lastSeekTimestamp) != seekTimestamp)
-                return;
-
-            if (_disposed || _cacheEntry is { IsComplete: true })
-                return;
-
-            await PreloadChunksForSeekFireAndForgetAsync(targetChunk).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Log.Debug($"[CachingSource] Debounced preload error: {ex.Message}");
-        }
     }
 
     /// <summary>

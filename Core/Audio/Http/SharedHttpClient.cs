@@ -20,6 +20,9 @@ public static class SharedHttpClient
             AutomaticDecompression = DecompressionMethods.All,
             UseCookies = false,
             EnableMultipleHttp2Connections = true,
+            
+            // Сброшено в Zero для мгновенной отмены сетевых потоков.
+            // Предотвращает удержание потоков ThreadPool и исключает микро-лаги UI при быстром скраббинге.
             ResponseDrainTimeout = TimeSpan.Zero,
             KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
             ConnectTimeout = TimeSpan.FromSeconds(15),
@@ -29,11 +32,9 @@ public static class SharedHttpClient
         {
             Timeout = TimeSpan.FromSeconds(25),
 
-            // RequestVersionOrHigher + Version30 = ТРЕБУЕТ HTTP/3, фейлит если сервер не поддерживает.
-            // RequestVersionOrLower + Version30 = ПРОБУЕТ HTTP/3, фоллбэк на HTTP/1.1.
-            // Это критично: PlayerContextManager скачивает iframe_api через этот клиент,
-            // и если HTTP/3 недоступен — n-token вообще не расшифровывается.
-            DefaultRequestVersion = HttpVersion.Version11,
+            // Использование HTTP/2.0 позволяет мультиплексировать запросы, 
+            // сохраняя SSL-соединения живыми при частых отменах Seek-запросов.
+            DefaultRequestVersion = HttpVersion.Version20,
             DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
 
@@ -52,7 +53,7 @@ public static class SharedHttpClient
     {
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Range = new RangeHeaderValue(start, end);
-        request.Version = HttpVersion.Version11;
+        request.Version = HttpVersion.Version20;
 
         // UA из параметра c= в URL
         ApplyUserAgentFromUrl(request, url);
@@ -78,12 +79,12 @@ public static class SharedHttpClient
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            request.Version = HttpVersion.Version11;
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Version = HttpVersion.Version20;
             ApplyUserAgentFromUrl(request, url);
 
             using var response = await Instance.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, ct);
+                request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             return response.Content.Headers.ContentLength ?? -1;
         }
         catch
@@ -96,12 +97,12 @@ public static class SharedHttpClient
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            request.Version = HttpVersion.Version11;
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Version = HttpVersion.Version20;
             ApplyUserAgentFromUrl(request, url);
 
             using var response = await Instance.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, ct);
+                request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             return response.Content.Headers.ContentType?.MediaType;
         }
         catch

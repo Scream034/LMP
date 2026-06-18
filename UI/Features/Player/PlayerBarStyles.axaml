@@ -55,10 +55,6 @@
     <Style Selector="Grid.seek-container.dragging Border.slider-thumb">
         <Setter Property="Opacity" Value="1" />
     </Style>
-    <Style Selector="Border.slider-thumb.hidden">
-        <Setter Property="Opacity" Value="0" />
-        <Setter Property="Transitions" Value="{x:Null}" />
-    </Style>
 
     <Style Selector="Border.seek-cursor">
         <Setter Property="Opacity" Value="0" />
@@ -70,10 +66,6 @@
     </Style>
     <Style Selector="Grid.seek-container:pointerover Border.seek-cursor">
         <Setter Property="Opacity" Value="0.6" />
-    </Style>
-    <Style Selector="Border.seek-cursor.hidden">
-        <Setter Property="Opacity" Value="0" />
-        <Setter Property="Transitions" Value="{x:Null}" />
     </Style>
 
     <Style Selector="Border.seek-preview-cursor">
@@ -94,34 +86,6 @@
     </Style>
     <Style Selector="Grid.dragging Border.progress-bar">
         <Setter Property="Transitions" Value="{x:Null}" />
-    </Style>
-    <Style Selector="Border.progress-bar.hidden">
-        <Setter Property="Transitions" Value="{x:Null}" />
-    </Style>
-    <Style Selector="Border.playing-glow">
-        <Setter Property="Transitions" Value="{x:Null}" />
-    </Style>
-    <Style Selector="Grid.dragging Border.playing-glow">
-        <Setter Property="Transitions" Value="{x:Null}" />
-    </Style>
-
-    <Style Selector="Border.playing-glow.active">
-        <Style.Animations>
-            <Animation IterationCount="Infinite" Duration="0:0:1.5">
-                <KeyFrame Cue="0%">
-                    <Setter Property="Opacity" Value="0.3" />
-                </KeyFrame>
-                <KeyFrame Cue="50%">
-                    <Setter Property="Opacity" Value="0.7" />
-                </KeyFrame>
-                <KeyFrame Cue="100%">
-                    <Setter Property="Opacity" Value="0.3" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
-    </Style>
-    <Style Selector="Border.playing-glow.suspended">
-        <Setter Property="Opacity" Value="0" />
     </Style>
 
     <Style Selector="Ellipse.vol-thumb">
@@ -223,7 +187,6 @@
         <Setter Property="RenderTransform" Value="translateY(0)" />
     </Style>
 
-    <!-- СТИЛИЗАЦИЯ FLYOUT И ВЫБОРА ФОРМАТА (КОНЦЕПЦИЯ BORDER-ONLY) -->
     <Style Selector="FlyoutPresenter">
         <Setter Property="Background" Value="{DynamicResource BgElevatedBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource BgHighlightBrush}" />

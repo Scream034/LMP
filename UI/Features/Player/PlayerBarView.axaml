@@ -22,6 +22,7 @@
                 VerticalAlignment="Top"
                 Background="Transparent"
                 Classes="seek-container"
+                Classes.is-loading="{Binding IsLoading}"
                 ClipToBounds="False"
                 Cursor="Hand">
 
@@ -44,28 +45,45 @@
                         BackgroundBrush="{DynamicResource BgHighlightBrush}"
                         BufferBrush="{DynamicResource TextSecondaryBrush}" />
 
-                    <!-- Спарк загрузки -->
+                    <!-- Единая сквозная искра по всему таймлайну при загрузке -->
                     <Border Name="SparkContainer"
                         ClipToBounds="True"
                         CornerRadius="2"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Top"
+                        Height="4"
+                        IsHitTestVisible="False"
                         IsVisible="{Binding IsLoading}">
                         <Border Name="SparkRunner"
-                            Width="80" Height="4"
+                            Width="120" Height="4"
                             HorizontalAlignment="Left"
                             CornerRadius="2"
                             RenderTransformOrigin="0,0.5">
                             <Border.RenderTransform>
-                                <TranslateTransform X="-80" />
+                                <TranslateTransform X="-120" />
                             </Border.RenderTransform>
                             <Border.Styles>
                                 <Style Selector="Border#SparkRunner">
                                     <Style.Animations>
                                         <Animation Duration="0:0:1.8"
                                             IterationCount="INFINITE"
-                                            Easing="LinearEasing">
+                                            Easing="CubicEaseInOut">
+                                            <!-- Фаза 1: Быстрый старт -->
                                             <KeyFrame Cue="0%">
-                                                <Setter Property="TranslateTransform.X" Value="-80" />
+                                                <Setter Property="TranslateTransform.X" Value="-120" />
                                             </KeyFrame>
+                                            <!-- Фаза 2: Замедление/дрейф в центре -->
+                                            <KeyFrame Cue="30%">
+                                                <Setter Property="TranslateTransform.X" Value="320" />
+                                            </KeyFrame>
+                                            <KeyFrame Cue="60%">
+                                                <Setter Property="TranslateTransform.X" Value="620" />
+                                            </KeyFrame>
+                                            <!-- Фаза 3: Взрывное ускорение -->
+                                            <KeyFrame Cue="85%">
+                                                <Setter Property="TranslateTransform.X" Value="1820" />
+                                            </KeyFrame>
+                                            <!-- Фаза 4: Финишный уход за экран -->
                                             <KeyFrame Cue="100%">
                                                 <Setter Property="TranslateTransform.X" Value="2400" />
                                             </KeyFrame>
@@ -75,35 +93,12 @@
                             </Border.Styles>
                             <Border.Background>
                                 <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                                    <GradientStop Offset="0"
-                                        Color="{DynamicResource AccentHoverTransparent}" />
+                                    <GradientStop Offset="0" Color="Transparent" />
                                     <GradientStop Offset="0.5" Color="{DynamicResource Accent}" />
-                                    <GradientStop Offset="1"
-                                        Color="{DynamicResource AccentHoverTransparent}" />
+                                    <GradientStop Offset="1" Color="Transparent" />
                                 </LinearGradientBrush>
                             </Border.Background>
                         </Border>
-                    </Border>
-
-                    <!-- Свечение -->
-                    <Border
-                        Name="PlayingGlow"
-                        Height="4"
-                        HorizontalAlignment="Stretch"
-                        Classes="playing-glow"
-                        Classes.active="{Binding IsPlaying}"
-                        Classes.suspended="{Binding IsSuspended}"
-                        CornerRadius="2"
-                        IsHitTestVisible="False">
-                        <Border.RenderTransform>
-                            <TranslateTransform X="0" />
-                        </Border.RenderTransform>
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="100%,50%" EndPoint="0%,50%">
-                                <GradientStop Offset="0" Color="{DynamicResource AccentHover}" />
-                                <GradientStop Offset="0.3" Color="Transparent" />
-                            </LinearGradientBrush>
-                        </Border.Background>
                     </Border>
                 </Grid>
 
@@ -134,10 +129,7 @@
                     ClipToBounds="False"
                     IsHitTestVisible="False">
 
-                    <!-- 
-                        Высокопроизводительный полый мост-рельсы (две независимые линии).
-                        Полностью исключает субпиксельное искажение и наложение на дорожку.
-                    -->
+                    <!-- Высокопроизводительный полый мост-рельсы -->
                     <Grid
                         Name="SeekRangeSpan"
                         Canvas.Top="-1.5"
@@ -177,7 +169,7 @@
                         </Border.RenderTransform>
                     </Border>
 
-                    <!-- ПРЯМОУГОЛЬНЫЙ БЕГУНК ВЗАМЕН КРУГЛОГО -->
+                    <!-- ПРЯМОУГОЛЬНЫЙ БЕГУНОК -->
                     <Border
                         Name="SeekThumb"
                         Canvas.Left="0"
@@ -201,7 +193,7 @@
                     ClipToBounds="False"
                     IsHitTestVisible="False">
 
-                    <!-- ТУЛТИП ЦЕЛЕВОГО ВРЕМЕНИ В КЛАССИЧЕСКОМ BORDER-ONLY СТИЛЕ -->
+                    <!-- ТУЛТИП ЦЕЛЕВОГО ВРЕМЕНИ -->
                     <Border
                         Name="SeekTooltip"
                         Padding="8,4"
@@ -226,7 +218,6 @@
                             Foreground="{DynamicResource AccentBrush}"
                             Text="0:00" />
                     </Border>
-
                     <!-- Окно подсказки отмены Seek -->
                     <Border
                         Name="SeekHint"
@@ -236,7 +227,13 @@
                         BorderThickness="1"
                         CornerRadius="4"
                         Canvas.Top="-64"
-                        IsVisible="False">
+                        Opacity="0"
+                        IsHitTestVisible="False">
+                        <Border.Transitions>
+                            <Transitions>
+                                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+                            </Transitions>
+                        </Border.Transitions>
                         <Border.RenderTransform>
                             <TranslateTransform X="0" />
                         </Border.RenderTransform>
@@ -488,7 +485,6 @@
                                         <TextBlock Margin="4" FontWeight="Bold"
                                             Text="{Binding L[Stream_SelectQuality]}" />
 
-                                        <!-- Анимированный статус-бар загрузки форматов -->
                                         <StackPanel Orientation="Horizontal" Spacing="10"
                                             Margin="4,12"
                                             HorizontalAlignment="Center" VerticalAlignment="Center"

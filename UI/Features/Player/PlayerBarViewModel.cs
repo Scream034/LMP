@@ -14,17 +14,7 @@ namespace LMP.UI.Features.Player;
 /// <summary>
 /// ViewModel для нижней панели управления плеером (Player Bar).
 /// </summary>
-/// <remarks>
-/// <para><b>Атомарная событийно-ориентированная архитектура:</b></para>
-/// <para>Устранены все задержки на базе <see cref="Task.Delay"/> и временные опросы. 
-/// Сброс трека <see cref="IsTrackResetting"/> завершается атомарно в момент получения валидных 
-/// метаданных звукового потока <see cref="AudioStreamInfo"/> на аппаратном уровне.</para>
 /// 
-/// <para><b>Zero-Delay Commit Seek:</b></para>
-/// <para>Поскольку внутренний звуковой конвейер <see cref="AudioEngine"/> осуществляет собственное 
-/// слияние операций на уровне ядра (Coalescing Engine), UI-слой более не выполняет искусственного 
-/// дебаунсинга и посылает команду Seek в плеер мгновенно по завершении перетаскивания.</para>
-/// </remarks>
 public sealed class PlayerBarViewModel : ViewModelBase
 {
     #region Constants - UI & UX
@@ -34,7 +24,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     private const int PositionUpdateThrottleMs = 50;
     private const int FallbackPositionIntervalMs = 500;
     private const int ShuffleAnimationDurationMs = 500;
-    private const int SpeedUpdateIntervalMs = 1000;
 
     /// <summary>Таймаут, после которого состояние Reset считается зависшим (сек).</summary>
     private const int StaleResetTimeoutSec = 3;
@@ -395,34 +384,23 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     private void SetupCommands()
     {
-        var canNavigate = this.WhenAnyValue(
-            x => x.HasTrack, x => x.IsNavigating, x => x.IsLoading, x => x.IsTrackResetting,
-            (hasTrack, isNav, loading, resetting) => hasTrack && !isNav && !loading && !resetting);
-
-        var canShuffle = this.WhenAnyValue(
-            x => x.HasQueueToShuffle, x => x.IsLoading, x => x.IsTrackResetting,
-            (hasTracks, loading, resetting) => hasTracks && !loading && !resetting);
-
-        var canPlayPause = this.WhenAnyValue(
-            x => x.HasTrack, x => x.IsLoading, x => x.IsTrackResetting,
-            (hasTrack, loading, resetting) => hasTrack && !loading && !resetting);
-
         var hasTrackObs = this.WhenAnyValue(x => x.HasTrack);
+        var canShuffle = this.WhenAnyValue(x => x.HasQueueToShuffle);
 
         PlayPauseCommand = CreateCommand(ReactiveCommand.CreateFromTask(
-            _playerControl.PlayPauseAsync, canPlayPause));
+            _playerControl.PlayPauseAsync, hasTrackObs));
 
         NextCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             IsNavigating = true;
             _nextSubject.OnNext(Unit.Default);
-        }, canNavigate));
+        }, hasTrackObs));
 
         PreviousCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
             IsNavigating = true;
             _prevSubject.OnNext(Unit.Default);
-        }, canNavigate));
+        }, hasTrackObs));
 
         ShuffleQueueCommand = CreateCommand(ReactiveCommand.Create(() =>
         {
@@ -543,7 +521,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(loading =>
             {
                 IsLoading = loading;
-                IsSeekBusy = loading;
             })
             .DisposeWith(Disposables);
 
@@ -669,7 +646,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 PositionSeconds = pos.TotalSeconds;
                 Position = pos;
                 SyncBufferState();
-                IsSeekBusy = false;
+                
+                // Детерминированный сброс состояния занятости по факту физического завершения
+                IsSeekBusy = false; 
             })
             .DisposeWith(_heavySubscriptions);
 
@@ -686,7 +665,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
             .Subscribe(_ => FallbackPositionUpdate())
             .DisposeWith(_heavySubscriptions);
 
-        Observable.Interval(TimeSpan.FromMilliseconds(SpeedUpdateIntervalMs))
+        Observable.Interval(TimeSpan.FromMilliseconds(FallbackPositionIntervalMs))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => UpdateDownloadSpeed())
             .DisposeWith(_heavySubscriptions);
@@ -751,21 +730,12 @@ public sealed class PlayerBarViewModel : ViewModelBase
             return;
         }
 
-        // VBR Visual Gap Fix: 
-        // CachingStreamSource рассчитывает кэш в байтах (физические чанки на диске).
-        // Слайдер (таймлайн) оперирует временем. Из-за переменного битрейта (VBR) кодеков Opus/AAC,
-        // временной прогресс может отклоняться от байтового на 10-15%.
-        // Чтобы избежать тёмных "дыр" между ползунком и кэшем, мы находим ближайший
-        // диапазон и визуально растягиваем его так, чтобы он покрывал текущий ползунок.
-
-        // ВАЖНО: Мы применяем это только если данные реально есть (плеер не буферизируется и не ждет сеть)
         bool isPcmDataGuaranteed = !IsLoading && !IsSeekBusy;
 
         if (isPcmDataGuaranteed && rawRanges.Count > 0 && currentRatio > 0.0)
         {
             var adjustedRanges = new List<(double Start, double End)>(rawRanges.Count);
 
-            // Находим ближайший диапазон кэша к текущему положению ползунка
             int closestIndex = -1;
             double minDistance = double.MaxValue;
 
@@ -788,12 +758,8 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 double start = rawRanges[i].Start;
                 double end = rawRanges[i].End;
 
-                // Дотягиваем края кэша до ползунка. 
-                // Ограничение 0.15 (15%) защищает от слияния далеких кусков.
                 if (i == closestIndex && minDistance < 0.15)
                 {
-                    // Делаем запас (bleed) 0.5% вперёд и назад, чтобы ползунок не выпадал 
-                    // из кэша между тиками 500-мс таймера при воспроизведении.
                     if (start > currentRatio) start = Math.Max(0.0, currentRatio - 0.005);
                     if (end < currentRatio) end = Math.Min(1.0, currentRatio + 0.005);
                 }
@@ -838,13 +804,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
         IsTrackResetting = true;
         Position = TimeSpan.Zero;
         PositionSeconds = 0;
-        IsSeekBusy = true;
         ResetBufferState();
     }
 
-    /// <summary>
-    /// Атомарно завершает сброс по факту готовности аудиопотока.
-    /// </summary>
     private void EndTrackReset()
     {
         if (!IsTrackResetting) return;
@@ -1131,7 +1093,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         {
             var pos = _audio.CurrentPosition;
 
-            // Обновляем VM-свойства текстового таймера и тултипа только при смене секунды во избежание лишнего парсинга строк
             if ((long)pos.TotalSeconds != (long)Position.TotalSeconds)
             {
                 Position = pos;
@@ -1160,8 +1121,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Атомарный коммит перемотки без Task.Delay.
-    /// Передает задачу на слияние запросов напрямую в AudioEngine.
+    /// Инициирует перемотку. Состояние IsSeekBusy сбрасывается по событию OnSeekCompleted.
     /// </summary>
     public async void EndSeek()
     {
@@ -1183,18 +1143,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         try
         {
-            // Отправляем команду немедленно без пауз, так как звуковой движок
-            // уже осуществляет атомарное слияние (coalescing) запросов.
             await _audio.SeekAsync(TimeSpan.FromSeconds(target));
         }
         catch (Exception ex)
         {
             Log.Warn($"[PlayerBar] Seek failed: {ex.Message}");
-        }
-        finally
-        {
-            // ГАРАНТИЯ: Визуальное состояние "IsSeekBusy" сбрасывается строго в finally,
-            // а позиция принудительно синхронизируется, исключая гонку событий.
             IsSeekBusy = false;
             SyncPositionFromEngine();
         }
@@ -1274,7 +1227,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         if (CurrentTrack == null) return;
 
-        // Если мы уже выяснили в этой сессии, что трек требует авторизации — не шлём лишний запрос в сеть
         if (_restrictedTracks.Contains(CurrentTrack.Id))
         {
             await HandleMissingFormatsNotificationAsync(
@@ -1304,7 +1256,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
         catch (OperationCanceledException)
         {
-            // Корректный выход без выброса уведомлений при отмене операции пользователем
             return;
         }
         catch (Exception ex)
@@ -1314,7 +1265,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             hasError = true;
             errorMessage = ex.Message;
 
-            // Заносим трек в черный список ограничений авторизации
             if (ex is LoginRequiredException)
             {
                 _restrictedTracks.Add(CurrentTrack.Id);
@@ -1363,7 +1313,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
             AvailableFormats.Add(f);
         }
 
-        // Проверяем наличие валидных физических форматов (размер > 0, исключая HLS/m3u8)
         bool hasValidPhysicalFormats = formats.Any(f =>
             f.SizeMb > 0 &&
             !string.Equals(f.Container, "m3u8", StringComparison.OrdinalIgnoreCase) &&
@@ -1381,9 +1330,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Log.Debug($"Loaded {AvailableFormats.Count} formats, {cachedFormats.Count} cached");
     }
 
-    /// <summary>
-    /// Выполняет типизированный анализ ошибки отсутствия форматов и выводит контекстный Toast.
-    /// </summary>
     private async Task HandleMissingFormatsNotificationAsync(Exception? exception, string? errorMessage)
     {
         string titleKey = "Error_StreamUnavailable_Title";

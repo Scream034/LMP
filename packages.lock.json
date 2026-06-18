@@ -634,7 +634,7 @@
           "Avalonia": "[12.0.3, )",
           "CommunityToolkit.Mvvm": "[8.4.0, )",
           "Concentus": "[2.2.2, )",
-          "LMP.Decoders.AAC": "[1.0.0-dev, )",
+          "LMP.Decoders.AAC": "[0.0.286, )",
           "Microsoft.Data.Sqlite": "[8.0.2, )",
           "Microsoft.EntityFrameworkCore": "[10.0.2, )",
           "Microsoft.EntityFrameworkCore.Sqlite": "[10.0.2, )",

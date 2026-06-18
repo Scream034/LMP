@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace LMP.Core.Audio.Sources;
 
 public sealed partial class CachingStreamSource
@@ -131,7 +133,8 @@ public sealed partial class CachingStreamSource
         /// <inheritdoc/>
         /// <remarks>
         /// <para><b>Оптимизированный гибридный метод:</b> Если данные чанка уже доступны локально 
-        /// (в оперативной памяти или на диске), чтение происходит абсолютно синхронно.</para>
+        /// (в оперативной памяти или на диске), чтение происходит абсолютно синхронно без аллокаций
+        /// и без блокировок Task-планировщика.</para>
         /// </remarks>
         public override int Read(byte[] buffer, int offset, int count)
         {
@@ -140,7 +143,7 @@ public sealed partial class CachingStreamSource
 
             int chunkIndex = (int)(posBefore / _source._chunkSize);
 
-            // ШАГ 1: Проверяем локальную доступность чанка в кэше
+            // Проверяем локальную доступность чанка в кэше
             if (_source.IsChunkAvailable(chunkIndex))
             {
                 int offsetInChunk = (int)(posBefore % _source._chunkSize);
@@ -153,31 +156,65 @@ public sealed partial class CachingStreamSource
                     return read;
                 }
 
-                // Б. Синхронизированный запрос к диску (чтение файла)
+                // Б. Прямое СИНХРОННОЕ чтение с диска (без async-планировщика и .GetResult())
                 try
                 {
-                    var diskResult = _source._cacheManager.ReadChunkAsync(_source._cacheKey, chunkIndex, CancellationToken.None)
-                        .GetAwaiter()
-                        .GetResult();
-
-                    if (diskResult.HasValue)
+                    var entry = _source._cacheEntry;
+                    if (entry != null)
                     {
-                        var (owner, length) = diskResult.Value;
-                        using (owner)
+                        var filePath = _source._cacheManager.GetCachePath(_source._cacheKey);
+                        if (File.Exists(filePath))
                         {
-                            int read = CopyFromChunk(owner.Memory.Span, length, offsetInChunk, buffer.AsMemory(offset, count));
-                            Volatile.Write(ref _position, posBefore + read);
-                            return read;
+                            long chunkOffset = (long)chunkIndex * entry.ChunkSize;
+                            int size = (int)Math.Min(entry.ChunkSize, entry.TotalSize - chunkOffset);
+                            if (size > 0)
+                            {
+                                using var fs = new FileStream(
+                                    filePath,
+                                    FileMode.Open,
+                                    FileAccess.Read,
+                                    FileShare.ReadWrite,
+                                    bufferSize: 4096,
+                                    useAsync: false); // Чисто синхронный дескриптор ввода-вывода
+
+                                fs.Position = chunkOffset;
+
+                                byte[] chunkBuf = ArrayPool<byte>.Shared.Rent(size);
+                                try
+                                {
+                                    int totalRead = 0;
+                                    while (totalRead < size)
+                                    {
+                                        int readBytes = fs.Read(chunkBuf, totalRead, size - totalRead);
+                                        if (readBytes == 0) break;
+                                        totalRead += readBytes;
+                                    }
+
+                                    if (totalRead == size)
+                                    {
+                                        int read = CopyFromChunk(chunkBuf.AsSpan(0, size), size, offsetInChunk, buffer.AsMemory(offset, count));
+                                        Volatile.Write(ref _position, posBefore + read);
+
+                                        _source._cacheManager.Touch(_source._cacheKey);
+                                        return read;
+                                    }
+                                }
+                                finally
+                                {
+                                    ArrayPool<byte>.Shared.Return(chunkBuf);
+                                }
+                            }
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Fallback на стандартное асинхронное чтение при сбое ввода-вывода
+                    Log.Warn($"[ReadStream] Synchronous disk read failed for {_source._cacheKey}: {ex.Message}");
                 }
             }
 
-            // ШАГ 2: Медленный путь (сетевой запрос) с контролируемым Sync-over-Async
+            // Медленный путь (сетевой запрос) с контролируемым Sync-over-Async.
+            // На горячем пути WebM/Opus воспроизведения этот метод не вызывается (вызывается ReadAsync).
             try
             {
                 return ReadAsyncCore(buffer.AsMemory(offset, count), GetCurrentReadToken())
@@ -190,8 +227,6 @@ public sealed partial class CachingStreamSource
             catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { return 0; }
             catch (Exception ex) when (ex is IOException || ex is System.Net.Sockets.SocketException)
             {
-                // Глушитель для отладчика: при отмене сетевого запроса сокеты Windows рвутся с IOException.
-                // Возвращаем 0 (EOF), чтобы парсер тихо завершился без всплытия исключений по всему стеку приложения.
                 return 0;
             }
         }

@@ -41,10 +41,8 @@ public sealed partial class CachingStreamSource
     ///   <item><b>Suspend mode:</b> Загружает только critical read-ahead (5 чанков вперёд).
     ///     Чанки загружаются последовательно (await) для надёжности при тротлинге сети.
     ///     Блокируется на _suspendGate до Resume или timeout 500ms.</item>
-    ///   <item><b>Active seek mode:</b> Preload loop уступает приоритет seek path —
-    ///     пропускает итерацию, если с момента последнего seek прошло менее
-    ///     <see cref="SeekPreloadDebounceMs"/>. Это предотвращает конкуренцию
-    ///     preload loop и critical seek downloads за download slots.</item>
+    ///   <item><b>Active seek mode:</b> Оптимизирован: убрано подавление предзагрузки при seek,
+    ///     так как задержка дебаунса отключена ради максимальной скорости.</item>
     ///   <item><b>Normal mode:</b> Полный preload с parallel downloads и background fill.</item>
     /// </list>
     /// </summary>
@@ -133,20 +131,6 @@ public sealed partial class CachingStreamSource
                     try
                     {
                         await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) { break; }
-                    continue;
-                }
-
-                // Active seek suppression: если seek был недавно, уступаем приоритет
-                // critical seek path, чтобы не конкурировать за download slots.
-                long msSinceLastSeek = Environment.TickCount64 - Volatile.Read(ref _lastSeekTimestamp);
-                if (msSinceLastSeek < SeekPreloadDebounceMs)
-                {
-                    try
-                    {
-                        int waitMs = (int)(SeekPreloadDebounceMs - msSinceLastSeek);
-                        await Task.Delay(waitMs, ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) { break; }
                     continue;

@@ -145,9 +145,9 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     public bool IsPaused => _player.State == PlaybackState.Paused;
 
     /// <summary>
-    /// Возвращает true, если плеер выполняет буферизацию или движок асинхронно разрешает Stream URL.
+    /// Возвращает true, если плеер выполняет буферизацию, загрузку или находится в процессе перемещения.
     /// </summary>
-    public bool IsLoading => _isManualLoading || _player.State is PlaybackState.Loading or PlaybackState.Buffering;
+    public bool IsLoading => _isManualLoading || _player.State is PlaybackState.Loading or PlaybackState.Buffering || _player.DetailedState == PlayerState.Seeking;
 
     public int CurrentQueueIndex => Volatile.Read(ref _currentIndex);
     public bool ShuffleEnabled { get; set; }

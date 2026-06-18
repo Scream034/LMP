@@ -76,6 +76,9 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     /// <summary>События плеера.</summary>
     public AudioPlayerEvents Events => _events;
 
+    /// <summary>Текущее детальное состояние плеера.</summary>
+    public PlayerState DetailedState => _state;
+
     /// <summary>Текущая позиция воспроизведения с суб-миллисекундной экстраполяцией времени [2, 3].</summary>
     public TimeSpan Position
     {
