@@ -626,25 +626,41 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             Interlocked.Exchange(ref _nTokenActiveTrackId, track.Id);
             Interlocked.Exchange(ref _nTokenWarnedTrackId, null);
 
-            var (streamUrl, bitrateHint) = await Task.Run(
-                () => ResolveStreamUrlAsync(track, ct), ct).ConfigureAwait(false);
-
-            if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
-
             if (track.HasCachedNormalizationGain)
             {
                 Log.Debug($"[AudioEngine] [PlayTrackCore] Queuing initial cached gain write: {track.CachedNormalizationGain:F4}x for {track.Id}");
                 _pendingGainWrites.Enqueue((track.Id, track.CachedNormalizationGain));
             }
 
-            try
+            string streamUrl = "";
+            int bitrateHint = 0;
+            const int maxStartupAttempts = 3;
+
+            // Локальный цикл повторных попыток для защиты от транзиентных отмен (например, при перезагрузке Auth-клиента на старте)
+            for (int attempt = 1; attempt <= maxStartupAttempts; attempt++)
             {
-                await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct, seekPosition: seekPosition).ConfigureAwait(false);
-            }
-            // Предупреждение CS0168 устранено (ex убран)
-            catch (Exception) when (_session.IsStaleOrCancelled(session, ct))
-            {
-                return;
+                try
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    (streamUrl, bitrateHint) = await Task.Run(
+                        () => ResolveStreamUrlAsync(track, ct), ct).ConfigureAwait(false);
+
+                    if (_session.IsStaleOrCancelled(session, ct) || IsSealedFailedTrack(track.Id)) return;
+
+                    await _player.PlayAsync(streamUrl, track.Id, bitrateHint, ct, seekPosition: seekPosition).ConfigureAwait(false);
+                    break; // Успешно запустились, выходим из цикла попыток
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw; // Сессия отменена пользователем, пробрасываем выше для тихого выхода
+                }
+                catch (OperationCanceledException ex) when (attempt < maxStartupAttempts)
+                {
+                    Log.Warn($"[AudioEngine] Transient cancellation during track startup (attempt {attempt}/{maxStartupAttempts}), retrying in 150ms: {ex.Message}");
+                    _player.Stop();
+                    await Task.Delay(150, ct).ConfigureAwait(false);
+                }
             }
 
             ApplyGainToPipeline();
@@ -652,7 +668,17 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             if (_isSuspended && _player.GetActivePipeline()?.Source is Audio.Sources.CachingStreamSource cs)
                 cs.Suspend();
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (OperationCanceledException ex)
+        {
+            // Если сессионный токен отменен — выходим молча. 
+            // Если транзиентная отмена исчерпала лимит попыток, останавливаем плеер, но НЕ блокируем трек в IsSealedFailedTrack.
+            if (!ct.IsCancellationRequested)
+            {
+                Log.Warn($"[AudioEngine] Playback startup aborted due to exhausted transient cancellations: {ex.Message}");
+                _player.Stop();
+                RaiseError(ex);
+            }
+        }
         // Предупреждение CS0168 устранено (ex убран)
         catch (Exception) when (_session.IsStaleOrCancelled(session, ct)) { }
         catch (Exception ex)

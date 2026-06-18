@@ -310,6 +310,7 @@
   "Stream_Format_Mb": "{0:F1} МБ",
   "Stream_Speed_Mb": "{0:F1} МБ/с",
   "Stream_Speed_Kb": "{0:F0} КБ/с",
+  "Stream_Ping_Ms": "{0:F0} мс",
   "Stream_Bitrate": "{0} kbps",
 
   "Settings_General": "Общие",

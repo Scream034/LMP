@@ -149,6 +149,39 @@ public sealed partial class CachingStreamSource : IAudioSource
     private volatile bool _initialized;
     private volatile bool _disposed;
 
+    // ── Latency Tracking & Adaptive Preloading ──
+    private readonly object _latencyLock = new();
+    private double _latency0;
+    private double _latency1;
+    private double _latency2;
+
+    private double _estimatedBandwidthBytesPerSec;
+
+    /// <summary>
+    /// Текущая расчетная скорость загрузки данных из сети (байт/сек).
+    /// </summary>
+    public double EstimatedSpeedBytesPerSec
+    {
+        get
+        {
+            lock (_latencyLock)
+            {
+                return _estimatedBandwidthBytesPerSec;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Текущая средняя задержка сети (мс).
+    /// </summary>
+    public double AveragePingMs
+    {
+        get
+        {
+            lock (_latencyLock) return GetAverageLatencyInternal();
+        }
+    }
+
     /// <summary>
     /// ManualResetEventSlim для блокировки preload loop при suspend.
     /// Set = работаем, Reset = приостановлены.
@@ -602,7 +635,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     /// <summary>
     /// Мгновенно отменяет все активные операции чтения на потоке без уничтожения источника.
-    /// Предотвращает мёртвые 600мс блокировки при быстрой смене эпох (rapid seeks) [1, 2].
+    /// Предотвращает мёртвые 600мс блокировки при быстрой смене эпох (rapid seeks).
     /// </summary>
     public void CancelActiveReads()
     {
@@ -617,11 +650,10 @@ public sealed partial class CachingStreamSource : IAudioSource
     public void ReleaseRamBuffers()
     {
         int current = Volatile.Read(ref _currentChunk);
-        int evictionDistance = _config.RamEvictionDistance;
 
-        // Итерируем по snapshot ключей напрямую — без LINQ, без промежуточного List.
-        // ConcurrentDictionary.Keys возвращает snapshot, безопасный для итерации
-        // при конкурентных модификациях.
+        // Синхронизируем вытеснение с адаптивным окном, чтобы не удалить предзагруженное
+        GetAdaptivePreloadParams(out _, out _, out int evictionDistance);
+
         foreach (var kvp in _ramChunks)
         {
             if (Math.Abs(kvp.Key - current) > evictionDistance

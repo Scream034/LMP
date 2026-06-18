@@ -90,6 +90,140 @@ public sealed partial class CachingStreamSource
 
     #endregion
 
+    #region Adaptive Latency Calculations
+
+    /// <summary>
+    /// Сохраняет измеренную задержку последнего успешного сетевого запроса (TTFB).
+    /// </summary>
+    /// <param name="latencyMs">Задержка в миллисекундах.</param>
+    private void SaveLatency(double latencyMs)
+    {
+        double currentAverage;
+        lock (_latencyLock)
+        {
+            _latency2 = _latency1;
+            _latency1 = _latency0;
+            _latency0 = latencyMs;
+            currentAverage = GetAverageLatencyInternal();
+        }
+
+        Log.Debug($"[CachingSource] Latency: {latencyMs:F1}ms (Average Trend: {currentAverage:F1}ms)");
+    }
+
+    /// <summary>
+    /// Накапливает замеры пропускной способности сети с использованием экспоненциального скользящего среднего (EWMA).
+    /// </summary>
+    /// <param name="speedBytesPerSec">Мгновенная скорость чтения данных из сокета.</param>
+    private void SaveBandwidth(double speedBytesPerSec)
+    {
+        double currentSpeed;
+        lock (_latencyLock)
+        {
+            if (_estimatedBandwidthBytesPerSec <= 0)
+            {
+                _estimatedBandwidthBytesPerSec = speedBytesPerSec;
+            }
+            else
+            {
+                _estimatedBandwidthBytesPerSec = (0.3 * speedBytesPerSec) + (0.7 * _estimatedBandwidthBytesPerSec);
+            }
+            currentSpeed = _estimatedBandwidthBytesPerSec;
+        }
+
+        double speedMbps = (currentSpeed * 8) / 1000_000.0;
+        Log.Debug($"[CachingSource] Real-time Throughput: {speedMbps:F2} Mbps ({currentSpeed / 1024.0:F1} KB/s)");
+    }
+
+    /// <summary>
+    /// Возвращает среднюю сетевую задержку.
+    /// </summary>
+    private double GetAverageLatencyInternal()
+    {
+        if (_latency0 <= 0) return 0;
+        if (_latency1 <= 0) return _latency0;
+        if (_latency2 <= 0) return (_latency0 + _latency1) / 2.0;
+        return (_latency0 + _latency1 + _latency2) / 3.0;
+    }
+
+    /// <summary>
+    /// Динамически вычисляет параметры окна предзагрузки на основе задержки сети.
+    /// Чем выше пинг, тем шире окно предзагрузки, чтобы предотвратить истощение буфера.
+    /// </summary>
+    internal void GetAdaptivePreloadParams(out int readAhead, out int minBuffer, out int evictionDistance)
+    {
+        double avg;
+        lock (_latencyLock) avg = GetAverageLatencyInternal();
+
+        double multiplier = 1.0;
+        if (avg > 800) multiplier = 3.0;       // Экстремальный пинг -> Огромное окно (ранее реагирование)
+        else if (avg > 400) multiplier = 2.0;  // Высокий пинг -> Удвоенное окно
+        else if (avg > 150) multiplier = 1.5;  // Заметная задержка -> +50%
+
+        readAhead = (int)Math.Round(_config.ReadAheadChunks * multiplier);
+        minBuffer = (int)Math.Round(_config.MinBufferAheadForBackgroundFill * multiplier);
+
+        // Математика защиты памяти: Дистанция вытеснения ОБЯЗАНА быть больше окна предзагрузки,
+        // иначе мы начнем удалять чанки, которые только что загрузили "про запас".
+        int safeEviction = Math.Max(_config.RamEvictionDistance, readAhead + 4);
+
+        // Жесткий лимит: защищаем сборщик мусора от нехватки памяти (OOM)
+        evictionDistance = Math.Min(safeEviction, Math.Max(2, _config.MaxRamChunks - 8));
+    }
+
+    /// <summary>
+    /// Вычисляет адаптивное количество чанков для загрузки в одном пакетном запросе.
+    /// </summary>
+    private int GetAdaptiveBatchCount(int startIndex)
+    {
+        int batchCount = 1;
+        double avgLatencyMs;
+        double estBandwidth;
+        bool isIncreasing;
+
+        lock (_latencyLock)
+        {
+            avgLatencyMs = GetAverageLatencyInternal();
+            estBandwidth = _estimatedBandwidthBytesPerSec;
+            isIncreasing = _latency0 > 0 && _latency1 > 0 && _latency2 > 0
+                           && _latency0 > _latency1 && _latency1 > _latency2;
+        }
+
+        if (avgLatencyMs > 0)
+        {
+            if (avgLatencyMs > 1000) batchCount = 4;
+            else if (avgLatencyMs > 500) batchCount = 3;
+            else if (avgLatencyMs > 200) batchCount = 2;
+
+            if (isIncreasing)
+            {
+                batchCount = Math.Min(batchCount + 1, 4);
+            }
+
+            if (estBandwidth > 0)
+            {
+                double latencySeconds = avgLatencyMs / 1000.0;
+                double bdpBytes = estBandwidth * latencySeconds;
+                double bdpChunks = bdpBytes / _chunkSize;
+
+                int maxBdpBatch = (int)Math.Max(1, Math.Round(bdpChunks * 1.5));
+                batchCount = Math.Min(batchCount, maxBdpBatch);
+            }
+        }
+
+        int availableBatch = 1;
+        for (int i = 1; i < batchCount; i++)
+        {
+            int idx = startIndex + i;
+            if (idx >= _totalChunks) break;
+            if (IsChunkAvailable(idx) || _activeDownloads.ContainsKey(idx)) break;
+            availableBatch++;
+        }
+
+        return availableBatch;
+    }
+
+    #endregion
+
     #region ReadAtAsync
 
     /// <summary>
@@ -99,11 +233,6 @@ public sealed partial class CachingStreamSource
     /// <remarks>
     /// <para><b>ИСПРАВЛЕНИЕ (epoch retry):</b> Epoch-retry guard теперь проверяет
     /// <paramref name="ct"/> (внешний токен декодера), а НЕ linked token.</para>
-    /// <para>Предыдущая версия передавала linked token (ct + downloadToken) в EnsureChunkAsync.
-    /// При epoch reset downloadToken отменялся → linked CTS отменялся → 
-    /// <c>ct.IsCancellationRequested</c> на linked токене возвращал <c>true</c> →
-    /// guard <c>when (!ct.IsCancellationRequested)</c> не срабатывал → retry не выполнялся →
-    /// exception пробрасывался до DecoderLoopAsync → <c>catch (OCE) { break; }</c> → decoder death.</para>
     /// </remarks>
     /// <param name="position">Абсолютная байтовая позиция в контенте.</param>
     /// <param name="buffer">Целевой буфер.</param>
@@ -129,16 +258,10 @@ public sealed partial class CachingStreamSource
         // 3. Сеть — с retry по смене эпохи
         for (int attempt = 0; attempt < ReadAtMaxEpochRetries; attempt++)
         {
-            // Проверяем ВНЕШНИЙ ct (decoder), не linked
-            // Если decoder остановлен — выходим сразу.
-            // Если epoch сменился — linked отменён, но ct жив → retry.
             ct.ThrowIfCancellationRequested();
 
             try
             {
-                // Берём ТЕКУЩИЙ epoch token (после возможного reset).
-                // linked = ct (decoder) + downloadToken (epoch).
-                // Если epoch сброшен → linked отменяется → EnsureChunkAsync бросает OCE.
                 var downloadToken = CurrentDownloadToken;
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, downloadToken);
 
@@ -154,10 +277,6 @@ public sealed partial class CachingStreamSource
                     return CopyFromChunk(afterNetworkDisk.Memory.Span, afterNetworkDisk.Length, offsetInChunk, buffer);
             }
             catch (ChunkDownloadFatalException) { throw; }
-            // 2b: Guard проверяет ВНЕШНИЙ ct, не linked
-            // ct — это decoder CTS, он НЕ содержит epoch token.
-            // Если ct жив, а linked отменён — значит это epoch reset (seek/preload) → retry.
-            // Если ct отменён — значит decoder остановлен → пробрасываем дальше.
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 Log.Debug($"[CachingSource] ReadAt chunk {chunkIndex}: epoch changed, " +
@@ -172,16 +291,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Пытается загрузить чанк с диска и добавить в RAM-кэш.
-    /// Обрабатывает гонку: если другой поток уже добавил чанк в <see cref="_ramChunks"/> —
-    /// возвращает буфер в пул и читает из существующего.
     /// </summary>
-    /// <param name="chunkIndex">Индекс чанка.</param>
-    /// <param name="ct">Токен отмены.</param>
-    /// <returns>RAM-запись чанка или null, если чанк на диске отсутствует.</returns>
-    /// <exception cref="FileNotFoundException">
-    /// Выбрасывается, если метаданные считают чанк скачанным, но физический файл кэша отсутствует на диске
-    /// или был удалён пользователем через настройки во время активного воспроизведения.
-    /// </exception>
     private async Task<ChunkData?> TryLoadChunkFromDiskAsync(int chunkIndex, CancellationToken ct)
     {
         var diskResult = await _cacheManager.ReadChunkAsync(_cacheKey, chunkIndex, ct).ConfigureAwait(false);
@@ -198,8 +308,6 @@ public sealed partial class CachingStreamSource
             return _ramChunks.TryGetValue(chunkIndex, out var existing) ? existing : null;
         }
 
-        // Если ReadChunkAsync вернул null, но при этом наш _cacheEntry считает этот чанк скачанным,
-        // значит произошла принудительная инвалидация/очистка всего кэша пользователем прямо во время воспроизведения.
         if (_cacheEntry != null && _cacheEntry.IsChunkDownloaded(chunkIndex))
         {
             var filePath = _cacheManager.GetCachePath(_cacheKey);
@@ -216,11 +324,6 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Копирует данные из чанка в целевой буфер с учётом смещения <paramref name="offset"/>.
     /// </summary>
-    /// <param name="chunkData">Данные чанка.</param>
-    /// <param name="chunkLength">Реальная длина данных в чанке.</param>
-    /// <param name="offset">Смещение внутри чанка.</param>
-    /// <param name="buffer">Целевой буфер.</param>
-    /// <returns>Количество скопированных байт.</returns>
     private static int CopyFromChunk(
         ReadOnlySpan<byte> chunkData, int chunkLength, int offset, Memory<byte> buffer)
     {
@@ -238,14 +341,10 @@ public sealed partial class CachingStreamSource
     /// Гарантирует доступность чанка с заданным индексом.
     /// Использует retry-логику, circuit breaker и координацию параллельных загрузок.
     /// </summary>
-    /// <param name="index">Индекс чанка.</param>
-    /// <param name="ct">Токен отмены (epoch или lifetime).</param>
-    /// <param name="isCritical">Если true, запрос обходит ограничения параллелизма.</param>
-    /// <returns>Результат загрузки.</returns>
     private async Task<ChunkDownloadResult> EnsureChunkAsync(int index, CancellationToken ct, bool isCritical = false)
     {
         if (_cacheEntry!.IsChunkCorruptedOffline(index))
-            return ChunkDownloadResult.Fatal; // Быстрый выход для безнадежных чанков
+            return ChunkDownloadResult.Fatal;
         else if (index < 0 || index >= _totalChunks) return ChunkDownloadResult.OutOfRange;
 
         long chunkStart = (long)index * _chunkSize;
@@ -278,14 +377,16 @@ public sealed partial class CachingStreamSource
                 catch (ChunkDownloadFatalException) { throw; }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    // Старый owner был отменён предыдущей эпохой, а текущий caller
-                    // (например, новый seek target) всё ещё актуален. Latest-wins path:
-                    // немедленно переходим к новой попытке без artificial delay.
                     continue;
                 }
                 finally
                 {
                     RemoveActiveDownloadIfOwner(index, actualLazy);
+                    // Очистка возможных параллельных регистраций для пакета (максимум до 4)
+                    for (int i = 1; i < 4; i++)
+                    {
+                        RemoveActiveDownloadIfOwner(index + i, actualLazy);
+                    }
                 }
 
                 switch (result)
@@ -302,7 +403,6 @@ public sealed partial class CachingStreamSource
                         int delay = attempt == 0 ? 50 : ComputeRetryDelay(attempt);
                         Log.Warn($"[CachingSource] Chunk {index}: network retry {attempt + 1}/{maxAttempts}, delay={delay}ms");
 
-                        // Fire a non-blocking warning toast exactly at the halfway point of retries
                         if (attempt == maxAttempts / 2)
                         {
                             var warningException = _lastDownloadException
@@ -319,8 +419,6 @@ public sealed partial class CachingStreamSource
                     case ChunkDownloadResult.Cancelled:
                         if (!ct.IsCancellationRequested)
                         {
-                            // Обычно это результат отмены старой эпохи. Для active seek
-                            // лишняя задержка только увеличивает latency, поэтому retry сразу.
                             continue;
                         }
 
@@ -353,17 +451,6 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Создаёт ленивую single-flight задачу загрузки чанка.
     /// </summary>
-    /// <remarks>
-    /// <para><see cref="Lazy{T}"/> с режимом
-    /// <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/> гарантирует,
-    /// что HTTP-загрузка стартует ровно один раз для конкретного экземпляра lazy.</para>
-    /// <para>Это устраняет спекулятивный запуск второго HTTP-запроса проигравшим потоком,
-    /// который возможен при создании <see cref="Task"/> до публикации в словаре.</para>
-    /// </remarks>
-    /// <param name="index">Индекс чанка.</param>
-    /// <param name="ct">Токен отмены.</param>
-    /// <param name="isCritical">Флаг критической загрузки.</param>
-    /// <returns>Ленивая задача загрузки чанка.</returns>
     private Lazy<Task<ChunkDownloadResult>> CreateChunkDownloadLazy(int index, CancellationToken ct, bool isCritical)
     {
         return new Lazy<Task<ChunkDownloadResult>>(
@@ -374,13 +461,6 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Удаляет запись об активной загрузке только если текущий caller остаётся владельцем.
     /// </summary>
-    /// <remarks>
-    /// <para>Проверка через <see cref="ReferenceEquals(object?, object?)"/> защищает от гонки:
-    /// если после завершения старой загрузки другой поток уже зарегистрировал новый lazy
-    /// для того же chunk index, текущий поток не должен удалять новую запись.</para>
-    /// </remarks>
-    /// <param name="index">Индекс чанка.</param>
-    /// <param name="ownerLazy">Lazy, созданный текущим владельцем загрузки.</param>
     private void RemoveActiveDownloadIfOwner(int index, Lazy<Task<ChunkDownloadResult>> ownerLazy)
     {
         if (_activeDownloads.TryGetValue(index, out var current) && ReferenceEquals(current, ownerLazy))
@@ -389,10 +469,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Ждёт завершения активной загрузки, поглощая epoch-отмены и прочие исключения.
-    /// Пробрасывает только <see cref="ChunkDownloadFatalException"/> и пользовательскую отмену.
     /// </summary>
-    /// <param name="task">Задача активной загрузки.</param>
-    /// <param name="ct">Токен отмены пользователя (lifetime/seek).</param>
     private static async Task WaitForActiveDownloadAsync(Task task, CancellationToken ct)
     {
         try { await task.WaitAsync(ct); }
@@ -402,8 +479,6 @@ public sealed partial class CachingStreamSource
     }
 
     /// <summary>Проверяет circuit breaker перед началом загрузки.</summary>
-    /// <param name="index">Индекс чанка — используется в сообщении исключения.</param>
-    /// <exception cref="ChunkDownloadFatalException">Если накоплено слишком много 403.</exception>
     private void CheckCircuitBreaker(int index)
     {
         int failures = Volatile.Read(ref _consecutive403Count);
@@ -421,10 +496,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Вычисляет задержку retry с экспоненциальным backoff.
-    /// Ограничена 10 секундами во избежание бесконечного ожидания.
     /// </summary>
-    /// <param name="attempt">Номер попытки (от 1).</param>
-    /// <returns>Задержка в миллисекундах.</returns>
     private int ComputeRetryDelay(int attempt)
     {
         int baseDelay = _config.NetworkRetryBaseDelayMs;
@@ -439,21 +511,17 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Вычисляет HTTP Range, валидирует его и инициирует загрузку.
-    /// Удерживает download slot на всё время HTTP-операции для реального
-    /// ограничения параллелизма до <see cref="StreamingConfig.MaxConcurrentDownloads"/>.
+    /// Поддерживает адаптивное пакетное скачивание.
     /// </summary>
-    /// <remarks>
-    /// <para><b>Почему slot удерживается на весь download:</b></para>
-    /// <para>Без удержания — неограниченный параллелизм при seek + preload + on-demand read
-    /// → connection pool exhaustion → timeout → decoder starvation → underrun.</para>
-    /// </remarks>
     private async Task<ChunkDownloadResult> DownloadChunkCoreAsync(int index, CancellationToken ct, bool isCritical)
     {
         if (_disposed || _cacheEntry!.IsChunkDownloaded(index))
             return _disposed ? ChunkDownloadResult.Cancelled : ChunkDownloadResult.Success;
 
+        // Вычисляем размер адаптивного пакета на основе текущей задержки
+        int batchCount = GetAdaptiveBatchCount(index);
         long start = (long)index * _chunkSize;
-        long end = Math.Min(start + _chunkSize - 1, _contentLength - 1);
+        long end = Math.Min(start + (batchCount * _chunkSize) - 1, _contentLength - 1);
 
         if (start >= _contentLength || start > end)
         {
@@ -465,12 +533,8 @@ public sealed partial class CachingStreamSource
 
         try
         {
-            // Guard: SemaphoreSlim.WaitAsync на disposed семафоре → ObjectDisposedException.
-            // Проверяем _disposed перед обращением и ловим гонку в catch.
             if (_disposed) return ChunkDownloadResult.Cancelled;
 
-            // Критические запросы (Seek/Read) обходят лимит слотов, 
-            // чтобы не ждать фоновую докачку.
             if (!isCritical)
             {
                 gotSlot = await _downloadSlots.WaitAsync(_config.DownloadSlotTimeoutMs, ct).ConfigureAwait(false);
@@ -485,7 +549,16 @@ public sealed partial class CachingStreamSource
             if (ct.IsCancellationRequested)
                 return ChunkDownloadResult.Cancelled;
 
-            return await DownloadChunkHttpAsync(index, start, end, ct).ConfigureAwait(false);
+            // Регистрируем сопутствующие чанки пакета в _activeDownloads
+            if (batchCount > 1 && _activeDownloads.TryGetValue(index, out var currentLazy))
+            {
+                for (int i = 1; i < batchCount; i++)
+                {
+                    _activeDownloads.TryAdd(index + i, currentLazy);
+                }
+            }
+
+            return await DownloadChunkHttpAsync(index, start, end, batchCount, ct).ConfigureAwait(false);
         }
         catch (ChunkDownloadFatalException) { throw; }
         catch (ObjectDisposedException) { return ChunkDownloadResult.Cancelled; }
@@ -507,29 +580,28 @@ public sealed partial class CachingStreamSource
     }
 
     /// <summary>
-    /// HTTP-загрузка чанка с явной моделью владения буфером через <see cref="MemoryPool{T}.Shared"/>.
-    /// Владение передаётся в <see cref="ChunkData"/> → <c>_ramChunks</c> → возврат при эвикции.
-    /// Для fire-and-forget записи на диск создаётся независимая копия через <see cref="ArrayPool{T}.Shared"/>.
+    /// HTTP-загрузка чанка/пакета с замером TTFB и чистой скорости скачивания контента.
     /// </summary>
-    /// <param name="index">Индекс чанка.</param>
-    /// <param name="start">Начало HTTP Range в байтах.</param>
-    /// <param name="end">Конец HTTP Range в байтах (включительно).</param>
-    /// <param name="ct">Токен отмены.</param>
     private async Task<ChunkDownloadResult> DownloadChunkHttpAsync(
-     int index, long start, long end, CancellationToken ct)
+        int index, long start, long end, int batchCount, CancellationToken ct)
     {
         int rn = Interlocked.Increment(ref _requestSequenceNumber);
-        int expectedBytes = (int)(end - start + 1);
-
-        Log.Debug($"[CachingSource] Chunk {index}: GET rn={rn}, range={start}-{end}");
+        Log.Debug($"[CachingSource] Chunk {index} (batch={batchCount}): GET rn={rn}, range={start}-{end}");
 
         using var request = CreateChunkRequest(index, start, end, rn);
 
         HttpResponseMessage response;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             response = await _httpClient.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+
+            sw.Stop();
+            if (response.IsSuccessStatusCode)
+            {
+                SaveLatency(sw.Elapsed.TotalMilliseconds);
+            }
         }
         catch (TaskCanceledException) when (ct.IsCancellationRequested || _disposed)
         {
@@ -581,98 +653,127 @@ public sealed partial class CachingStreamSource
 
             response.EnsureSuccessStatusCode();
 
-            IMemoryOwner<byte> memoryOwner = MemoryPool<byte>.Shared.Rent(expectedBytes);
-            int actualLength;
-
             try
             {
                 using var contentStream = await response.Content
                     .ReadAsStreamAsync(ct).ConfigureAwait(false);
 
-                actualLength = await ReadStreamFullyAsync(
-                    contentStream, memoryOwner.Memory[..expectedBytes], ct).ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException)
-            {
-                memoryOwner.Dispose();
-                throw new OperationCanceledException("HTTP stream disposed during read (seek/stop)");
-            }
-            catch (OperationCanceledException)
-            {
-                memoryOwner.Dispose();
-                throw;
-            }
-            catch (Exception ex) when (ct.IsCancellationRequested || _disposed || ex is IOException || ex is System.Net.Sockets.SocketException)
-            {
-                _lastDownloadException = ex;
-                memoryOwner.Dispose();
-                if (ct.IsCancellationRequested || _disposed) return ChunkDownloadResult.Cancelled;
-
-                Log.Warn($"[CachingSource] Chunk {index} read I/O error: {ex.Message}");
-                return ChunkDownloadResult.NetworkError;
-            }
-            catch (Exception ex)
-            {
-                _lastDownloadException = ex;
-                memoryOwner.Dispose();
-                Log.Warn($"[CachingSource] Chunk {index} read error: {ex.Message}");
-                return ChunkDownloadResult.NetworkError;
-            }
-
-            if (ct.IsCancellationRequested)
-            {
-                memoryOwner.Dispose();
-                return ChunkDownloadResult.Cancelled;
-            }
-
-            if (actualLength == 0)
-            {
-                memoryOwner.Dispose();
-                Log.Warn($"[CachingSource] Chunk {index}: empty response");
-                return ChunkDownloadResult.NetworkError;
-            }
-
-            if (actualLength < expectedBytes)
-            {
-                bool isNearEof = start + actualLength >= _contentLength - _chunkSize;
-                if (!isNearEof)
+                for (int i = 0; i < batchCount; i++)
                 {
-                    memoryOwner.Dispose();
-                    Log.Warn($"[CachingSource] Chunk {index} incomplete: {actualLength}/{expectedBytes}");
-                    return ChunkDownloadResult.NetworkError;
+                    int currentIndex = index + i;
+                    if (currentIndex >= _totalChunks) break;
+
+                    long chunkStart = (long)currentIndex * _chunkSize;
+                    long chunkEnd = Math.Min(chunkStart + _chunkSize - 1, _contentLength - 1);
+                    int expectedBytes = (int)(chunkEnd - chunkStart + 1);
+
+                    if (expectedBytes <= 0) break;
+
+                    IMemoryOwner<byte> memoryOwner = MemoryPool<byte>.Shared.Rent(expectedBytes);
+                    int actualLength;
+
+                    // Замер чистой пропускной способности сокета (исключая RTT/пинг)
+                    var bodySw = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        actualLength = await ReadStreamFullyAsync(
+                            contentStream, memoryOwner.Memory[..expectedBytes], ct).ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        memoryOwner.Dispose();
+                        throw new OperationCanceledException("HTTP stream disposed during read (seek/stop)");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        memoryOwner.Dispose();
+                        throw;
+                    }
+                    catch (Exception ex) when (ct.IsCancellationRequested || _disposed || ex is IOException || ex is System.Net.Sockets.SocketException)
+                    {
+                        _lastDownloadException = ex;
+                        memoryOwner.Dispose();
+                        if (ct.IsCancellationRequested || _disposed) return ChunkDownloadResult.Cancelled;
+
+                        Log.Warn($"[CachingSource] Chunk {currentIndex} read I/O error: {ex.Message}");
+                        return ChunkDownloadResult.NetworkError;
+                    }
+                    catch (Exception ex)
+                    {
+                        _lastDownloadException = ex;
+                        memoryOwner.Dispose();
+                        Log.Warn($"[CachingSource] Chunk {currentIndex} read error: {ex.Message}");
+                        return ChunkDownloadResult.NetworkError;
+                    }
+                    finally
+                    {
+                        bodySw.Stop();
+                    }
+
+                    if (actualLength > 0 && bodySw.Elapsed.TotalMilliseconds > 5)
+                    {
+                        double chunkSpeedBytesPerSec = actualLength / (bodySw.Elapsed.TotalMilliseconds / 1000.0);
+                        SaveBandwidth(chunkSpeedBytesPerSec);
+                    }
+
+                    if (ct.IsCancellationRequested)
+                    {
+                        memoryOwner.Dispose();
+                        return ChunkDownloadResult.Cancelled;
+                    }
+
+                    if (actualLength == 0)
+                    {
+                        memoryOwner.Dispose();
+                        if (i == 0)
+                        {
+                            Log.Warn($"[CachingSource] Chunk {currentIndex}: empty response");
+                            return ChunkDownloadResult.NetworkError;
+                        }
+                        break;
+                    }
+
+                    if (actualLength < expectedBytes)
+                    {
+                        bool isNearEof = chunkStart + actualLength >= _contentLength - _chunkSize;
+                        if (!isNearEof)
+                        {
+                            memoryOwner.Dispose();
+                            Log.Warn($"[CachingSource] Chunk {currentIndex} incomplete: {actualLength}/{expectedBytes}");
+                            return ChunkDownloadResult.NetworkError;
+                        }
+                        Log.Debug($"[CachingSource] Chunk {currentIndex}: partial {actualLength}/{expectedBytes} (near EOF)");
+                    }
+
+                    var chunkData = new ChunkData(memoryOwner, actualLength);
+
+                    if (!_ramChunks.TryAdd(currentIndex, chunkData))
+                    {
+                        chunkData.Dispose();
+                    }
+                    else
+                    {
+                        byte[] diskCopy = ArrayPool<byte>.Shared.Rent(actualLength);
+                        chunkData.Memory.Span.CopyTo(diskCopy.AsSpan(0, actualLength));
+                        _ = WriteToDiskFireAndForgetAsync(currentIndex, diskCopy, actualLength);
+                    }
                 }
-                Log.Debug($"[CachingSource] Chunk {index}: partial {actualLength}/{expectedBytes} (near EOF)");
-            }
-
-            var chunkData = new ChunkData(memoryOwner, actualLength);
-
-            if (!_ramChunks.TryAdd(index, chunkData))
-            {
-                // Гонка: другой поток уже сохранил этот чанк
-                chunkData.Dispose();
-            }
-            else
-            {
-                byte[] diskCopy = ArrayPool<byte>.Shared.Rent(actualLength);
-                chunkData.Memory.Span.CopyTo(diskCopy.AsSpan(0, actualLength));
-                _ = WriteToDiskFireAndForgetAsync(index, diskCopy, actualLength);
 
                 if (_ramChunks.Count > _config.MaxRamChunks)
                     EvictDistantRamChunks();
-            }
 
-            return ChunkDownloadResult.Success;
+                return ChunkDownloadResult.Success;
+            }
+            catch (OperationCanceledException)
+            {
+                return ChunkDownloadResult.Cancelled;
+            }
         }
     }
 
     /// <summary>
     /// Читает поток до <paramref name="buffer"/>.Length байт или EOF.
-    /// <paramref name="ct"/> пробрасывается в <see cref="Stream.ReadAsync"/> — read прерывается при отмене.
     /// </summary>
-    /// <param name="stream">Источник данных.</param>
-    /// <param name="buffer">Целевой буфер.</param>
-    /// <param name="ct">Токен отмены.</param>
-    /// <returns>Суммарное количество прочитанных байт.</returns>
     private static async ValueTask<int> ReadStreamFullyAsync(
         Stream stream, Memory<byte> buffer, CancellationToken ct)
     {
@@ -690,12 +791,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Fire-and-forget запись чанка на диск.
-    /// Принимает независимую копию данных, арендованную из <see cref="ArrayPool{T}.Shared"/>,
-    /// и возвращает её в пул после завершения записи.
     /// </summary>
-    /// <param name="index">Индекс чанка.</param>
-    /// <param name="rentedCopy">Арендованный буфер с данными.</param>
-    /// <param name="length">Реальная длина данных в буфере.</param>
     private async Task WriteToDiskFireAndForgetAsync(int index, byte[] rentedCopy, int length)
     {
         try
@@ -718,9 +814,6 @@ public sealed partial class CachingStreamSource
     #region 403 Diagnostics
 
     /// <summary>Логирует расширенную диагностику при 403 Forbidden.</summary>
-    /// <param name="index">Индекс чанка, при загрузке которого пришёл 403.</param>
-    /// <param name="request">HTTP-запрос, вызвавший 403.</param>
-    /// <param name="response">HTTP-ответ с кодом 403.</param>
     private async Task LogAndDiagnose403Async(
         int index, HttpRequestMessage request, HttpResponseMessage response)
     {
@@ -752,13 +845,8 @@ public sealed partial class CachingStreamSource
     #region URL Refresh
 
     /// <summary>
-    /// Координированный URL refresh: только один поток выполняет refresh,
-    /// остальные ждут его завершения. Содержит circuit breaker по числу неудачных refresh.
+    /// Координированный URL refresh: только один поток выполняет refresh, остальные ждут его завершения.
     /// </summary>
-    /// <param name="ct">Токен отмены.</param>
-    /// <exception cref="ChunkDownloadFatalException">
-    /// Если circuit breaker открыт (слишком много последовательных неудач refresh).
-    /// </exception>
     private async Task CoordinatedRefreshAsync(CancellationToken ct)
     {
         int refreshFailures = Volatile.Read(ref _consecutiveRefreshFailures);
@@ -773,7 +861,6 @@ public sealed partial class CachingStreamSource
                 httpStatusCode: 403);
         }
 
-        // Guard: _refreshLock может быть disposed при гонке с Dispose/DisposeAsync.
         if (_disposed) return;
 
         bool acquired;
@@ -854,13 +941,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Строит HTTP-запрос для загрузки чанка.
-    /// Для YouTube-URL применяет chunk-специфичные параметры и UA; для прочих — generic UA.
     /// </summary>
-    /// <param name="index">Индекс чанка (для диагностики).</param>
-    /// <param name="start">Начало HTTP Range.</param>
-    /// <param name="end">Конец HTTP Range (включительно).</param>
-    /// <param name="rn">Монотонный номер запроса (request number) для YouTube.</param>
-    /// <returns>Готовый <see cref="HttpRequestMessage"/>.</returns>
     private HttpRequestMessage CreateChunkRequest(int index, long start, long end, int rn)
     {
         bool isYouTube = _currentUrl.Contains("googlevideo.com/videoplayback");
@@ -886,8 +967,6 @@ public sealed partial class CachingStreamSource
     }
 
     /// <summary>Логирует ключевые параметры URL чанка для диагностики.</summary>
-    /// <param name="index">Индекс чанка.</param>
-    /// <param name="url">Итоговый URL запроса.</param>
     private static void LogChunkRequestParams(int index, string url)
     {
         var nParam = UrlEx.TryGetQueryParameterValue(url, "n");
@@ -902,12 +981,7 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Добавляет chunk-специфичные параметры <c>rn</c> и <c>rbuf</c> к базовому URL.
-    /// Использует in-place замену через <see cref="UrlEx.SetQueryParameter"/> —
-    /// существующие параметры обновляются, порядок остальных не изменяется.
     /// </summary>
-    /// <param name="baseUrl">Базовый URL потока.</param>
-    /// <param name="rn">Монотонный номер запроса.</param>
-    /// <returns>URL с подставленными параметрами чанка.</returns>
     private static string BuildYouTubeChunkUrl(string baseUrl, int rn)
     {
         string url = UrlEx.SetQueryParameter(baseUrl, "rn", rn.ToString());
@@ -920,24 +994,8 @@ public sealed partial class CachingStreamSource
     #region Chunk Helpers
 
     /// <summary>
-    /// Определяет, был ли <see cref="HttpRequestException"/> вызван штатной отменой
-    /// запроса (seek / dispose / epoch reset), а не реальной сетевой ошибкой.
+    /// Определяет, был ли <see cref="HttpRequestException"/> вызван штатной отменой запроса.
     /// </summary>
-    /// <param name="exception">Исключение, полученное из HTTP send path.</param>
-    /// <param name="ct">Токен операции загрузки чанка.</param>
-    /// <param name="disposed">Флаг утилизации источника.</param>
-    /// <returns>
-    /// <c>true</c>, если исключение следует классифицировать как
-    /// <see cref="ChunkDownloadResult.Cancelled"/>; иначе <c>false</c>.
-    /// </returns>
-    /// <remarks>
-    /// <para>Во время seek старый epoch отменяет in-flight <c>SendAsync</c> и SSL/socket
-    /// стек может выбросить не только <see cref="TaskCanceledException"/>, но и
-    /// <see cref="HttpRequestException"/> с вложенными
-    /// <see cref="ObjectDisposedException"/> или socket-abort ошибками.</para>
-    /// <para>Если трактовать такие случаи как <see cref="ChunkDownloadResult.NetworkError"/>,
-    /// <see cref="EnsureChunkAsync"/> запускает ложные retry и раздувает churn при scrubbing.</para>
-    /// </remarks>
     private static bool IsCancelledSendFailure(
         HttpRequestException exception, CancellationToken ct, bool disposed)
     {
@@ -968,25 +1026,23 @@ public sealed partial class CachingStreamSource
     /// <summary>
     /// Проверяет доступность чанка: либо загружен на диск, либо находится в RAM-кэше.
     /// </summary>
-    /// <param name="index">Индекс чанка.</param>
-    /// <returns><c>true</c> если данные чанка доступны без сетевого запроса.</returns>
     private bool IsChunkAvailable(int index) =>
         _cacheEntry!.IsChunkDownloaded(index) || _ramChunks.ContainsKey(index);
 
     /// <summary>
     /// Эвикция удалённых чанков из RAM с корректным возвратом буферов в пул.
-    /// Удаляет до <c>MaxRamChunks / 4</c> самых далёких от текущей позиции чанков.
+    /// Удаляет самые далёкие от текущей позиции чанки.
     /// </summary>
     private void EvictDistantRamChunks()
     {
         int current = Volatile.Read(ref _currentChunk);
-        int evictionDistance = _config.RamEvictionDistance;
+
+        // Используем адаптивную дистанцию вытеснения, чтобы случайно не удалить расширенный ReadAhead
+        GetAdaptivePreloadParams(out _, out _, out int evictionDistance);
+
         int maxEvict = _config.MaxRamChunks / 4;
         int evicted = 0;
 
-        // Один проход по snapshot ключей — O(n) вместо O(n log n) сортировки.
-        // Эвикция по расстоянию: все чанки дальше evictionDistance удаляются,
-        // с ограничением maxEvict за вызов для предотвращения spike'ов.
         foreach (var kvp in _ramChunks)
         {
             if (evicted >= maxEvict) break;

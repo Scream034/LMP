@@ -92,51 +92,44 @@ public sealed record StreamingConfig
     #endregion
 
     /// <summary>
-    /// Значения по умолчанию — совпадают со сбалансированным Medium профилем (16 КБ).
+    /// Значения по умолчанию — совпадают с обновленным сбалансированным Medium (бывший High) профилем (64 КБ).
     /// </summary>
     public static class Defaults
     {
         // Chunk Settings
-        public const int ChunkSizeBytes = 16 * 1024;
-        public const int ReadAheadChunks = 4;
-        public const int MaxRamChunks = 256;
-        public const int RamEvictionDistance = 16;
+        public const int ChunkSizeBytes = 64 * 1024;
+        public const int ReadAheadChunks = 6;
+        public const int MaxRamChunks = 96;
+        public const int RamEvictionDistance = 14;
 
         // Download Settings
-        public const int MaxConcurrentDownloads = 2;
-        public const int DownloadTimeoutMs = 30_000;
-        public const int DownloadSlotTimeoutMs = 800;
+        public const int MaxConcurrentDownloads = 3;
+        public const int DownloadTimeoutMs = 15_000;
+        public const int DownloadSlotTimeoutMs = 300;
 
         // Retry / Resilience
         public const int MaxNetworkRetries = 3;
-        public const int NetworkRetryBaseDelayMs = 800;
+        public const int NetworkRetryBaseDelayMs = 500;
         public const bool UseExponentialBackoff = true;
         public const int Max403BeforeCircuitBreak = 3;
-        public const int RefreshCooldownMs = 5000;
-        public const int PostRefreshDelayMs = 800;
+        public const int RefreshCooldownMs = 3000;
+        public const int PostRefreshDelayMs = 500;
 
         // Pre-buffer Settings
         public const int InitialChunksToLoad = 4;
         public const int SeekPreloadChunks = 6;
 
         // Background Fill
-        public const int BackgroundFillIdleCycles = 8;
-        public const int BackgroundFillIntervalMs = 5000;
-        public const int MaxBackgroundChunksPerSession = 60;
+        public const int BackgroundFillIdleCycles = 5;
+        public const int BackgroundFillIntervalMs = 3000;
+        public const int MaxBackgroundChunksPerSession = 0;
 
         /// <summary>
         /// Минимум буфера впереди перед началом фоновой докачки.
         /// </summary>
-        /// <remarks>
-        /// <para><b>ВАЖНО:</b> Значение ДОЛЖНО быть ≤ ReadAheadChunks.
-        /// Preload loop считает chunksAhead в диапазоне [0..ReadAheadChunks],
-        /// максимум = ReadAheadChunks + 1 итераций. При значении > ReadAheadChunks
-        /// условие <c>chunksAhead >= MinBufferAheadForBackgroundFill</c>
-        /// НИКОГДА не выполняется → background fill заблокирован навсегда.</para>
-        /// </remarks>
-        public const int MinBufferAheadForBackgroundFill = 3;
+        public const int MinBufferAheadForBackgroundFill = 4;
 
         // Preload Loop
-        public const int PreloadIntervalMs = 800;
+        public const int PreloadIntervalMs = 500;
     }
 }

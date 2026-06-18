@@ -35,23 +35,12 @@ public sealed partial class CachingStreamSource
 
     /// <summary>
     /// Фоновый цикл предзагрузки чанков.
-    /// 
-    /// <para><b>Три режима:</b></para>
-    /// <list type="bullet">
-    ///   <item><b>Suspend mode:</b> Загружает только critical read-ahead (5 чанков вперёд).
-    ///     Чанки загружаются последовательно (await) для надёжности при тротлинге сети.
-    ///     Блокируется на _suspendGate до Resume или timeout 500ms.</item>
-    ///   <item><b>Active seek mode:</b> Оптимизирован: убрано подавление предзагрузки при seek,
-    ///     так как задержка дебаунса отключена ради максимальной скорости.</item>
-    ///   <item><b>Normal mode:</b> Полный preload с parallel downloads и background fill.</item>
-    /// </list>
+    /// Динамически адаптирует свои аппетиты (окно скачивания) под состояние сети (Latency).
     /// </summary>
     private async Task PreloadLoopAsync(CancellationToken ct)
     {
         int idleCycles = 0;
         _backgroundChunksLoaded = 0;
-
-        // Флаг: только что вышли из suspend — нужна пауза перед новыми загрузками.
         bool justResumed = false;
 
 #if DEBUG
@@ -68,13 +57,13 @@ public sealed partial class CachingStreamSource
                 // PAUSE DETECT
                 if (isPaused)
                 {
-                    try
-                    {
-                        _playbackGate.Wait(PlaybackGateTimeoutMs, ct);
-                    }
+                    try { _playbackGate.Wait(PlaybackGateTimeoutMs, ct); }
                     catch (OperationCanceledException) { break; }
                     continue;
                 }
+
+                // Пересчитываем адаптивные пределы каждый цикл на основе свежей статистики сети
+                GetAdaptivePreloadParams(out int adaptiveReadAhead, out int adaptiveMinBuffer, out _);
 
                 if (isSuspended)
                 {
@@ -82,7 +71,7 @@ public sealed partial class CachingStreamSource
                     int current = Volatile.Read(ref _currentChunk);
                     var epochAtStart = Interlocked.Read(ref _downloadEpoch);
 
-                    int criticalAhead = Math.Min(5, _config.ReadAheadChunks + 1);
+                    int criticalAhead = Math.Min(5, adaptiveReadAhead + 1);
 
                     for (int i = 0; i <= criticalAhead; i++)
                     {
@@ -111,10 +100,7 @@ public sealed partial class CachingStreamSource
                         }
                     }
 
-                    try
-                    {
-                        _suspendGate.Wait(PlaybackGateCriticalTimeoutMs, ct);
-                    }
+                    try { _suspendGate.Wait(PlaybackGateCriticalTimeoutMs, ct); }
                     catch (OperationCanceledException) { break; }
 
                     if (_suspendGate.IsSet)
@@ -128,10 +114,7 @@ public sealed partial class CachingStreamSource
                 if (justResumed)
                 {
                     justResumed = false;
-                    try
-                    {
-                        await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false);
-                    }
+                    try { await Task.Delay(_config.PreloadIntervalMs, ct).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                     continue;
                 }
@@ -154,8 +137,8 @@ public sealed partial class CachingStreamSource
                 bool activePreload = false;
                 int chunksAhead = 0;
 
-                for (int i = 0; i <= _config.ReadAheadChunks
-                         && pending < _config.MaxConcurrentDownloads; i++)
+                // Используем адаптивное расширенное окно предзагрузки
+                for (int i = 0; i <= adaptiveReadAhead && pending < _config.MaxConcurrentDownloads; i++)
                 {
                     if (Interlocked.Read(ref _downloadEpoch) != epochNormal)
                     {
@@ -187,13 +170,14 @@ public sealed partial class CachingStreamSource
 
                 bool isResumedPartialCache = _cacheEntry.DownloadedChunks > 0
                     && !_cacheEntry.IsComplete
-                    && chunksAhead >= _config.ReadAheadChunks;
+                    && chunksAhead >= adaptiveReadAhead;
 
+                // Запуск фоновой докачки использует адаптивный порог
                 bool canBackgroundFill =
                     !activePreload
                     && (isResumedPartialCache || idleCycles >= _config.BackgroundFillIdleCycles)
                     && pending < _config.MaxConcurrentDownloads
-                    && chunksAhead >= _config.MinBufferAheadForBackgroundFill
+                    && chunksAhead >= adaptiveMinBuffer
                     && (_config.MaxBackgroundChunksPerSession == 0
                         || _backgroundChunksLoaded < _config.MaxBackgroundChunksPerSession);
 

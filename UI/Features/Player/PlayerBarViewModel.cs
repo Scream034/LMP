@@ -232,7 +232,11 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     [Reactive] public string StreamInfo { get; private set; } = "";
     [Reactive] public bool ShowStreamInfo { get; private set; }
-    [Reactive] public string DownloadSpeedText { get; private set; } = "";
+    [Reactive] public string NetworkSpeedText { get; private set; } = "";
+    [Reactive] public string PingText { get; private set; } = "";
+    [Reactive] public IBrush PingBrush { get; private set; } = Brushes.White;
+    [Reactive] public FontWeight PingWeight { get; private set; } = FontWeight.SemiBold;
+    [Reactive] public bool ShowNetworkStats { get; private set; }
 
     public ObservableCollection<StreamOption> AvailableFormats { get; } = [];
 
@@ -646,9 +650,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
                 PositionSeconds = pos.TotalSeconds;
                 Position = pos;
                 SyncBufferState();
-                
+
                 // Детерминированный сброс состояния занятости по факту физического завершения
-                IsSeekBusy = false; 
+                IsSeekBusy = false;
             })
             .DisposeWith(_heavySubscriptions);
 
@@ -663,11 +667,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         Observable.Interval(TimeSpan.FromMilliseconds(FallbackPositionIntervalMs))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => FallbackPositionUpdate())
-            .DisposeWith(_heavySubscriptions);
-
-        Observable.Interval(TimeSpan.FromMilliseconds(FallbackPositionIntervalMs))
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => UpdateDownloadSpeed())
             .DisposeWith(_heavySubscriptions);
     }
 
@@ -704,6 +703,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (CurrentTrack.IsDownloaded)
         {
             SetFullyBuffered();
+            UpdateNetworkStats(0, 0); // Отключаем стату для локальных файлов
             return;
         }
 
@@ -716,6 +716,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
             BufferProgressPercent = state.Progress;
             IsFullyBuffered = state.IsFullyBuffered;
             rawRanges = state.Ranges;
+
+            // Обновляем UI телеметрию из движка
+            UpdateNetworkStats(state.SpeedBytesPerSec, state.AveragePingMs);
         }
         else
         {
@@ -727,6 +730,7 @@ public sealed class PlayerBarViewModel : ViewModelBase
         if (IsFullyBuffered)
         {
             SetFullyBuffered();
+            UpdateNetworkStats(0, 0);
             return;
         }
 
@@ -774,6 +778,69 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
 
         this.RaisePropertyChanged(nameof(UseSegmentedBuffer));
+    }
+
+    private void UpdateNetworkStats(double speedBytesPerSec, double pingMs)
+    {
+        if (IsFullyBuffered || (speedBytesPerSec <= 0 && pingMs <= 0))
+        {
+            ShowNetworkStats = false;
+            return;
+        }
+
+        ShowNetworkStats = true;
+
+        // Локализованное форматирование скорости
+        if (speedBytesPerSec > 1024 * 1024)
+        {
+            double speedMb = speedBytesPerSec / (1024.0 * 1024.0);
+            NetworkSpeedText = string.Format(LocalizationService.Instance.Get("Stream_Speed_Mb", "{0:F1} MB/s"), speedMb);
+        }
+        else if (speedBytesPerSec > 0)
+        {
+            double speedKb = speedBytesPerSec / 1024.0;
+            NetworkSpeedText = string.Format(LocalizationService.Instance.Get("Stream_Speed_Kb", "{0:F0} KB/s"), speedKb);
+        }
+        else
+        {
+            NetworkSpeedText = string.Format(LocalizationService.Instance.Get("Stream_Speed_Kb", "0 KB/s"), 0);
+        }
+
+        // Локализованный пинг
+        PingText = string.Format(LocalizationService.Instance.Get("Stream_Ping_Ms", "{0:F0} ms"), pingMs);
+
+        // Динамическая адаптивная стилизация задержки сети
+        var app = Application.Current;
+        if (pingMs < 200)
+        {
+            // Стабильный пинг: обычный цвет как у формата (TextMutedBrush), начертание по умолчанию
+            if (app?.Resources.TryGetResource("TextMutedBrush", app.ActualThemeVariant, out var b) == true && b is IBrush brush)
+                PingBrush = brush;
+            else
+                PingBrush = Brushes.Gray;
+
+            PingWeight = FontWeight.SemiBold;
+        }
+        else if (pingMs < 500)
+        {
+            // Менее стабильный: акцентный цвет плеера, начертание по умолчанию
+            if (app?.Resources.TryGetResource("AccentBrush", app.ActualThemeVariant, out var b) == true && b is IBrush brush)
+                PingBrush = brush;
+            else
+                PingBrush = Brushes.DodgerBlue;
+
+            PingWeight = FontWeight.SemiBold;
+        }
+        else
+        {
+            // Критическая задержка: системный красный цвет и сверхжирное начертание (Heavy)
+            if (app?.Resources.TryGetResource("AccentBrush", app.ActualThemeVariant, out var b) == true && b is IBrush brush)
+                PingBrush = brush;
+            else
+                PingBrush = Brushes.Red;
+
+            PingWeight = FontWeight.Heavy;
+        }
     }
 
     private void SetFullyBuffered()
@@ -886,13 +953,13 @@ public sealed class PlayerBarViewModel : ViewModelBase
     {
         CancelFormatsLoading();
         _pendingStreamInfoTrackId = null;
-        _lastDownloadedBytes = 0;
         _lastValidStreamInfo = "";
         AvailableFormats.Clear();
         Duration = TimeSpan.Zero;
         DurationSeconds = 1;
         ShowStreamInfo = false;
         StreamInfo = "";
+        ShowNetworkStats = false;
         IsLiked = false;
         IsTrackResetting = false;
         Position = TimeSpan.Zero;
@@ -900,6 +967,9 @@ public sealed class PlayerBarViewModel : ViewModelBase
         ResetBufferState();
     }
 
+    /// <summary>
+    /// Принудительно синхронизирует состояние отображения панели с низкоуровневым движком.
+    /// </summary>
     private void HandleForceSync()
     {
         if (!HasTrack || CurrentTrack == null)
@@ -941,11 +1011,10 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
         _lastDownloadedBytes = _audio.GetDownloadedBytes();
         _lastSpeedCheck = DateTime.UtcNow;
-        DownloadSpeedText = "";
 
-        int currentEngineVolume = (int)Math.Round(_audio.GetVolume());
-        if (Volume != currentEngineVolume)
-            Volume = currentEngineVolume;
+        NetworkSpeedText = "";
+        PingText = "";
+        ShowNetworkStats = false;
 
         RaiseTrackInfoChanged();
         this.RaisePropertyChanged(nameof(DurationTooltip));
@@ -1027,33 +1096,6 @@ public sealed class PlayerBarViewModel : ViewModelBase
         }
 
         ShowStreamInfo = true;
-    }
-
-    private void UpdateDownloadSpeed()
-    {
-        if (!HasTrack || CurrentTrack?.IsDownloaded == true || IsFullyBuffered)
-        {
-            if (DownloadSpeedText.Length > 0)
-                DownloadSpeedText = "";
-            return;
-        }
-
-        var currentBytes = _audio.GetDownloadedBytes();
-        var now = DateTime.UtcNow;
-        var elapsed = (now - _lastSpeedCheck).TotalSeconds;
-
-        if (elapsed >= MinSpeedCalcIntervalSec && _lastSpeedCheck != DateTime.MinValue)
-        {
-            var kbs = (currentBytes - _lastDownloadedBytes) / elapsed / BytesPerKb;
-            DownloadSpeedText = kbs > SpeedDisplayThresholdKbs
-                ? (kbs >= BytesPerKb
-                    ? string.Format(SL["Stream_Speed_Mb"] ?? "{0:F1} MB/s", kbs / BytesPerKb)
-                    : string.Format(SL["Stream_Speed_Kb"] ?? "{0:F0} KB/s", kbs))
-                : "";
-        }
-
-        _lastDownloadedBytes = currentBytes;
-        _lastSpeedCheck = now;
     }
 
     private void FallbackPositionUpdate()
@@ -1441,13 +1483,19 @@ public sealed class PlayerBarViewModel : ViewModelBase
 
     #region LifeCycle
 
+    /// <summary>
+    /// Вызывается при сворачивании или приостановке работы интерфейса.
+    /// </summary>
     protected override void OnSuspend(SuspendLevel level)
     {
         _heavySubscriptions?.Dispose();
         _heavySubscriptions = null;
 
         CancelFormatsLoading();
-        DownloadSpeedText = "";
+
+        NetworkSpeedText = "";
+        PingText = "";
+        ShowNetworkStats = false;
 
         SuspendRequested?.Invoke();
 

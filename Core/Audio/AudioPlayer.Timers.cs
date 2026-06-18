@@ -54,13 +54,21 @@ public sealed partial class AudioPlayer
         _bufferTimer = null;
     }
 
-    /// <summary>Публикует текущее состояние буфера.</summary>
+    /// <summary>Публикует текущее состояние буфера и расчетную скорость загрузки.</summary>
     private void RaiseBufferState()
     {
         var pipeline = _activePipeline;
         if (pipeline == null) return;
 
         var source = pipeline.Source;
-        _events.RaiseBufferState(new BufferState(source.BufferProgress, source.IsFullyBuffered, source.GetBufferedRanges()));
+        double speed = source is Sources.CachingStreamSource caching ? caching.EstimatedSpeedBytesPerSec : 0;
+        double ping = source is Sources.CachingStreamSource c ? c.AveragePingMs : 0;
+
+        _events.RaiseBufferState(new BufferState(
+            source.BufferProgress,
+            source.IsFullyBuffered,
+            source.GetBufferedRanges(),
+            speed,
+            ping));
     }
 }

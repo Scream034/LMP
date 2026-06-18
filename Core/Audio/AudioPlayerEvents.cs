@@ -60,4 +60,6 @@ public readonly record struct AudioPlayerError(string Message, Exception? Except
 public readonly record struct BufferState(
     double Progress,           // 0-100%
     bool IsFullyBuffered,
-    IReadOnlyList<(double Start, double End)> Ranges);
+    IReadOnlyList<(double Start, double End)> Ranges,
+    double SpeedBytesPerSec = 0,
+    double AveragePingMs = 0);

@@ -446,7 +446,7 @@
                 </Grid>
                 <Border Grid.Column="3" Width="1" Margin="10,10"
                     Background="{DynamicResource BgHighlightBrush}" />
-                <StackPanel Grid.Column="4" Width="180" VerticalAlignment="Center" Spacing="4">
+                <StackPanel Grid.Column="4" Width="230" VerticalAlignment="Center" Spacing="4">
                     <Grid ColumnDefinitions="*,*">
                         <StackPanel Grid.Column="0" HorizontalAlignment="Left"
                             IsVisible="{Binding TotalTracksInQueue, Converter={StaticResource GreaterThanConverter}, ConverterParameter=0}"
@@ -481,8 +481,13 @@
                             IsVisible="{Binding ShowStreamInfo}">
                             <Button.Flyout>
                                 <Flyout Placement="Top">
-                                    <StackPanel MinWidth="220" Spacing="4">
-                                        <TextBlock Margin="4" FontWeight="Bold"
+                                    <!-- Задали MinWidth=250 под ширину нижней кнопки панели -->
+                                    <StackPanel MinWidth="250" Spacing="6" Margin="4">
+                                        <!-- Отцентрированный заголовок -->
+                                        <TextBlock Margin="0,4,0,8"
+                                            FontWeight="Bold"
+                                            FontSize="13"
+                                            HorizontalAlignment="Center"
                                             Text="{Binding L[Stream_SelectQuality]}" />
 
                                         <StackPanel Orientation="Horizontal" Spacing="10"
@@ -500,35 +505,66 @@
                                                 VerticalAlignment="Center" />
                                         </StackPanel>
 
+                                        <!-- Табличная сетка на основе высокопроизводительного Grid -->
                                         <ItemsControl ItemsSource="{Binding AvailableFormats}"
                                             IsVisible="{Binding !IsFormatsLoading}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <Button HorizontalAlignment="Stretch"
-                                                        Classes="sidebar-btn"
+                                                        Margin="0,2"
+                                                        Classes="format-item-btn"
+                                                        Classes.active="{Binding IsActive}"
                                                         Command="{Binding $parent[UserControl].DataContext.SwitchFormatCommand}"
                                                         CommandParameter="{Binding}">
-                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
-                                                            <Panel Grid.Column="0" Width="22">
-                                                                <PathIcon Grid.Column="0" Width="16"
-                                                                    Height="16"
+
+                                                        <Grid
+                                                            ColumnDefinitions="24, 45, 65, 45, *, 24, 45">
+
+                                                            <!-- Столбец 0: Статус скачивания -->
+                                                            <Panel Grid.Column="0">
+                                                                <PathIcon Width="14" Height="14"
                                                                     Foreground="{DynamicResource AccentBrush}"
                                                                     Data="{StaticResource Icon.CheckCircle}"
                                                                     IsVisible="{Binding IsDownloaded}" />
                                                             </Panel>
+
+                                                            <!-- Столбец 1: Кодек (Opus/AAC) -->
                                                             <TextBlock Grid.Column="1"
+                                                                Text="{Binding Codec}"
                                                                 FontWeight="{Binding IsActive, Converter={StaticResource BoolToFontWeight}}"
-                                                                Text="{Binding DisplayName}" />
-                                                            <Panel Grid.Column="2" Width="20"
-                                                                Margin="4,0">
-                                                                <PathIcon Grid.Column="2" Width="14"
-                                                                    Height="14"
+                                                                VerticalAlignment="Center" />
+
+                                                            <!-- Столбец 2: Битрейт с округлением на
+                                                            лету -->
+                                                            <TextBlock Grid.Column="2"
+                                                                Text="{Binding Bitrate, StringFormat={}{0:F0} kbps}"
+                                                                FontWeight="{Binding IsActive, Converter={StaticResource BoolToFontWeight}}"
+                                                                VerticalAlignment="Center" />
+
+                                                            <!-- Столбец 3: Расширение в скобках -->
+                                                            <TextBlock Grid.Column="3"
+                                                                Text="{Binding Container, StringFormat=({0})}"
+                                                                FontSize="11"
+                                                                Foreground="{DynamicResource TextMutedBrush}"
+                                                                VerticalAlignment="Center" />
+
+                                                            <!-- Столбец 4: Пружина-растяжка
+                                                            (сдвигает индикатор и вес вправо) -->
+
+                                                            <!-- Столбец 5: Динамик активного потока -->
+                                                            <Panel Grid.Column="5">
+                                                                <PathIcon Width="14" Height="14"
                                                                     Foreground="{DynamicResource AccentBrush}"
                                                                     Data="{StaticResource Icon.VolumeHighSmall}"
                                                                     IsVisible="{Binding IsActive}" />
                                                             </Panel>
-                                                            <TextBlock Grid.Column="3"
-                                                                Margin="4,0,0,0" FontSize="11"
+
+                                                            <!-- Столбец 6: Размер файла -->
+                                                            <TextBlock Grid.Column="6"
+                                                                HorizontalAlignment="Right"
+                                                                FontSize="11"
+                                                                FontWeight="SemiBold"
+                                                                VerticalAlignment="Center"
                                                                 Foreground="{DynamicResource TextMutedBrush}"
                                                                 Text="{Binding SizeMbFormatted}" />
                                                         </Grid>
@@ -539,16 +575,32 @@
                                     </StackPanel>
                                 </Flyout>
                             </Button.Flyout>
-                            <StackPanel Orientation="Horizontal" Spacing="4">
+                            <StackPanel Orientation="Horizontal" Spacing="5"
+                                VerticalAlignment="Center">
                                 <TextBlock FontSize="10"
+                                    FontWeight="SemiBold"
                                     Foreground="{DynamicResource TextMutedBrush}"
                                     Text="{Binding StreamInfo}" />
-                                <PathIcon Width="10" Height="10"
+                                <Ellipse Width="3" Height="3"
+                                    Fill="{DynamicResource BgHighlightBrush}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding ShowNetworkStats}" />
+                                <TextBlock FontSize="10"
+                                    FontWeight="{Binding PingWeight}"
+                                    Foreground="{Binding PingBrush}"
+                                    Text="{Binding PingText}"
+                                    IsVisible="{Binding ShowNetworkStats}"
+                                    VerticalAlignment="Center" />
+                                <Ellipse Width="3" Height="3"
+                                    Fill="{DynamicResource BgHighlightBrush}"
+                                    VerticalAlignment="Center"
+                                    IsVisible="{Binding ShowNetworkStats}" />
+                                <TextBlock FontSize="10"
+                                    FontWeight="Bold"
                                     Foreground="{DynamicResource TextMutedBrush}"
-                                    Data="{StaticResource Icon.ChevronUp}" />
-                                <TextBlock FontSize="10" Foreground="{DynamicResource AccentBrush}"
-                                    IsVisible="{Binding DownloadSpeedText, Converter={StaticResource NullToVisible}}"
-                                    Text="{Binding DownloadSpeedText}" />
+                                    Text="{Binding NetworkSpeedText}"
+                                    IsVisible="{Binding ShowNetworkStats}"
+                                    VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                     </Panel>

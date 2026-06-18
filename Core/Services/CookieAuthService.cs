@@ -4,6 +4,7 @@ using System.Text.Json;
 using LMP.Core.Youtube;
 using LMP.Core.Helpers.Extensions;
 using System.Text.RegularExpressions;
+using LMP.Core.Youtube.Utils;
 
 namespace LMP.Core.Services;
 
@@ -60,7 +61,7 @@ public partial class CookieAuthService
         }
     }
 
-    public void UpdateUserProfile(string name, string email, string avatarUrl, string activeGaiaId = "")
+    public void UpdateUserProfile(string name, string email, string avatarUrl, string activeGaiaId)
     {
         State.UserName = name;
         State.UserEmail = email;
@@ -180,7 +181,7 @@ public partial class CookieAuthService
 
             // Используем стандартный GET эндпоинт получения свичера
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.youtube.com/getAccountSwitcherEndpoint");
-            request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36");
+            request.Headers.UserAgent.ParseAdd(YoutubeClientUtils.UaWeb);
             request.Headers.Add("Cookie", cookiesHeader);
             request.Headers.Add("Origin", mainOrigin);
             request.Headers.Add("X-Origin", mainOrigin);

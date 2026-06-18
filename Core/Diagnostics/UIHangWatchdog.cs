@@ -47,7 +47,7 @@ public sealed class UIHangWatchdog : IDisposable
     /// </summary>
     /// <param name="dumpDirectory">Директория сохранения дампов. По умолчанию — папка логов LMP.</param>
     /// <param name="hangThresholdMs">Время ожидания отклика UI в миллисекундах.</param>
-    public UIHangWatchdog(string? dumpDirectory = null, int hangThresholdMs = 1000)
+    public UIHangWatchdog(string? dumpDirectory = null, int hangThresholdMs = 500)
     {
         _dumpDirectory = dumpDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LMP", "Logs");
         _hangThresholdMs = hangThresholdMs;

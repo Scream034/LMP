@@ -202,7 +202,6 @@
             <Transitions>
                 <ThicknessTransition Property="BorderThickness" Duration="0:0:0.1" />
                 <ThicknessTransition Property="Padding" Duration="0:0:0.1" />
-                <BrushTransition Property="Background" Duration="0:0:0.15" />
                 <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
             </Transitions>
         </Setter>
@@ -210,20 +209,16 @@
     <Style Selector="Button.primary-btn:pointerover">
         <Setter Property="BorderThickness" Value="3" />
         <Setter Property="Padding" Value="23,11" />
-        <Setter Property="Background" Value="{DynamicResource AccentTransparentBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style
         Selector="Button.primary-btn:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
     </Style>
     <Style Selector="Button.primary-btn:pressed">
-        <Setter Property="Background" Value="{DynamicResource AccentTransparentBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
     <Style Selector="Button.primary-btn:pressed /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}" />
     </Style>
 
