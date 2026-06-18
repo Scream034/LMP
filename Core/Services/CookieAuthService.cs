@@ -222,7 +222,7 @@ public partial class CookieAuthService
 
                 var results = new List<YoutubeAccountItem>();
                 bool hasActiveAccount = false;
-                string? activeName = null, activeEmail = null, activeAvatar = null;
+                string? activeName = null, activeEmail = null, activeAvatar = null, activeGaiaId = null;
                 string? activeHandle = null;
 
                 // getAccountSwitcherEndpoint оборачивает весь InnerTube ответ в свойство "data"
@@ -300,6 +300,7 @@ public partial class CookieAuthService
                         activeEmail = sectionEmail;
                         activeAvatar = avatar;
                         activeHandle = handle;
+                        activeGaiaId = gaiaId;
                     }
                 }
 
@@ -359,7 +360,7 @@ public partial class CookieAuthService
                 if (hasActiveAccount)
                 {
                     UpdateCachedAccounts(results);
-                    UpdateUserProfile(activeName ?? "User", activeEmail ?? "", activeAvatar ?? "");
+                    UpdateUserProfile(activeName ?? "User", activeEmail ?? "", activeAvatar ?? "", activeGaiaId ?? "");
                     return (true, null, false);
                 }
 
