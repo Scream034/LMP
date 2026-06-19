@@ -1,5 +1,4 @@
-// Core/Audio/Sources/LocalFileSource.cs
-
+using LMP.Core.Audio.Cache;
 using LMP.Core.Audio.Interfaces;
 using LMP.Core.Audio.Parsers;
 using LMP.Core.Exceptions;
@@ -28,14 +27,16 @@ public sealed class LocalFileSource : IAudioSource
 
     private readonly string _filePath;
     private readonly long _expectedSize;
-    private readonly string? _trackId; // Храним trackId для точечной инвалидации кэша
+    private readonly string? _trackId;
+    private readonly AudioCacheManager? _cacheManager;
+    private readonly string? _cacheKey;
 
     private FileStream? _fileStream;
     private IContainerParser? _parser;
     private long _positionMs;
     private bool _initialized;
     private bool _disposed;
-
+    private bool _leaseAcquired;
 
     /// <summary>
     /// Создаёт источник из локального файла.
@@ -43,11 +44,25 @@ public sealed class LocalFileSource : IAudioSource
     /// <param name="filePath">Путь к аудио файлу.</param>
     /// <param name="expectedSize">Ожидаемый размер файла в байтах.</param>
     /// <param name="trackId">Идентификатор трека (если файл открыт из кэша).</param>
-    public LocalFileSource(string filePath, long expectedSize = 0, string? trackId = null)
+    /// <param name="cacheManager">
+    /// Менеджер кэша для lease tracking.
+    /// <c>null</c> для файлов вне cache (пользовательские downloads).
+    /// </param>
+    /// <param name="cacheKey">
+    /// Ключ кэша для lease. Обязателен если <paramref name="cacheManager"/> не <c>null</c>.
+    /// </param>
+    public LocalFileSource(
+        string filePath,
+        long expectedSize = 0,
+        string? trackId = null,
+        AudioCacheManager? cacheManager = null,
+        string? cacheKey = null)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _expectedSize = expectedSize;
         _trackId = trackId;
+        _cacheManager = cacheManager;
+        _cacheKey = cacheKey;
 
         if (!File.Exists(filePath))
             throw new FileNotFoundException("Audio file not found", filePath);
@@ -100,6 +115,12 @@ public sealed class LocalFileSource : IAudioSource
 
         try
         {
+            if (_cacheManager != null && _cacheKey != null)
+            {
+                _cacheManager.AcquireLease(_cacheKey);
+                _leaseAcquired = true;
+            }
+
             _fileStream = new FileStream(
                 _filePath,
                 FileMode.Open,
@@ -336,6 +357,9 @@ public sealed class LocalFileSource : IAudioSource
 
         _parser?.Dispose();
         _fileStream?.Dispose();
+
+        if (_leaseAcquired)
+            _cacheManager?.ReleaseLease(_cacheKey!);
     }
 
     /// <inheritdoc/>
@@ -345,10 +369,13 @@ public sealed class LocalFileSource : IAudioSource
         _disposed = true;
 
         if (_parser != null)
-            await _parser.DisposeAsync();
+            await _parser.DisposeAsync().ConfigureAwait(false);
 
         if (_fileStream != null)
-            await _fileStream.DisposeAsync();
+            await _fileStream.DisposeAsync().ConfigureAwait(false);
+
+        if (_leaseAcquired)
+            _cacheManager?.ReleaseLease(_cacheKey!);
     }
 
     #endregion

@@ -939,7 +939,7 @@ public sealed partial class CachingStreamSource
                     memoryOwner.Dispose();
                 }
 
-                _ = WriteToDiskFireAndForgetAsync(plan.Start, diskCopy, actualLength);
+                _ = WriteToDiskTrackedAsync(plan.Start, diskCopy, actualLength);
 
                 if (!committedToRam)
                 {
@@ -971,11 +971,28 @@ public sealed partial class CachingStreamSource
         return totalRead;
     }
 
-    private async Task WriteToDiskFireAndForgetAsync(long offset, byte[] rentedCopy, int length)
+    /// <summary>
+    /// Записывает скачанные данные на диск с отслеживанием pending-count
+    /// для безопасного освобождения lease при dispose source.
+    /// </summary>
+    private async Task WriteToDiskTrackedAsync(long offset, byte[] rentedCopy, int length)
     {
-        try { await _cacheManager.WriteRangeAsync(_cacheKey, offset, rentedCopy.AsMemory(0, length), CancellationToken.None).ConfigureAwait(false); }
-        catch (IOException ex) { Log.Warn($"[CachingSource] Disk write range {offset}-{offset + length - 1}: {ex.Message}"); }
-        finally { ArrayPool<byte>.Shared.Return(rentedCopy); }
+        Interlocked.Increment(ref _pendingDiskWrites);
+        try
+        {
+            await _cacheManager.WriteRangeAsync(
+                _cacheKey, offset, rentedCopy.AsMemory(0, length), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (IOException ex)
+        {
+            Log.Warn($"[CachingSource] Disk write range {offset}-{offset + length - 1}: {ex.Message}");
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rentedCopy);
+            Interlocked.Decrement(ref _pendingDiskWrites);
+        }
     }
 
     #endregion
@@ -1007,56 +1024,97 @@ public sealed partial class CachingStreamSource
     #region URL Refresh
 
     /// <summary>
-    /// Гарантирует наличие валидного stream URL перед первой сетевой загрузкой.
+    /// Гарантирует наличие валидного continuation URL перед сетевой загрузкой.
+    /// Реализует single-flight модель: одновременно выполняется только один URL resolution,
+    /// все остальные ожидающие разделяют тот же promise.
     /// </summary>
     /// <param name="ct">Токен отмены.</param>
-    /// <returns>
-    /// <c>true</c>, если URL доступен;
-    /// <c>false</c>, если получить URL не удалось.
-    /// </returns>
-    /// <remarks>
-    /// <para>
-    /// Используется для режима Partial Cache Fast Start:
-    /// source стартует из локального partial cache без готового URL,
-    /// а continuation URL может быть ещё не подготовлен.
-    /// </para>
-    /// <para>
-    /// На первом реальном network miss source лениво получает URL через
-    /// <see cref="_urlRefresher"/>, не блокируя startup path заранее.
-    /// </para>
-    /// </remarks>
+    /// <returns><c>true</c>, если URL доступен; иначе <c>false</c>.</returns>
     private async Task<bool> EnsureUrlAvailableAsync(CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(_currentUrl))
             return true;
 
-        if (_urlRefresher == null)
+        if (_urlAcquirer == null)
             return false;
 
-        try
-        {
-            await _refreshLock.WaitAsync(ct).ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            return false;
-        }
+        Task<string?> waitTask;
+        bool isInitiator = false;
 
-        try
+        lock (_continuationLock)
         {
             if (!string.IsNullOrWhiteSpace(_currentUrl))
                 return true;
 
-            Log.Debug("[CachingSource] No active stream URL. Acquiring continuation URL lazily...");
-            await RefreshUrlAsync(ct).ConfigureAwait(false);
+            if (_continuationUrlTcs != null)
+            {
+                waitTask = _continuationUrlTcs.Task;
+            }
+            else
+            {
+                var tcs = new TaskCompletionSource<string?>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _continuationUrlTcs = tcs;
+                waitTask = tcs.Task;
+                isInitiator = true;
+            }
+        }
 
+        if (isInitiator)
+            _ = ResolveContinuationUrlSingleFlightAsync(ct);
+
+        try
+        {
+            await waitTask.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
             return !string.IsNullOrWhiteSpace(_currentUrl);
         }
-        finally
+
+        return !string.IsNullOrWhiteSpace(_currentUrl);
+    }
+
+    /// <summary>
+    /// Single-flight resolution continuation URL через <see cref="_urlRefresher"/>.
+    /// Результат доставляется через <see cref="_continuationUrlTcs"/>.
+    /// Если URL уже был прикреплён через <see cref="TryAttachContinuationUrl"/>
+    /// до завершения этого метода, <see cref="TaskCompletionSource{TResult}.TrySetResult"/>
+    /// просто вернёт <c>false</c> — без побочных эффектов.
+    /// </summary>
+    private async Task ResolveContinuationUrlSingleFlightAsync(CancellationToken ct)
+    {
+        string? resolvedUrl = null;
+
+        try
         {
-            try { _refreshLock.Release(); }
-            catch (ObjectDisposedException) { }
+            Log.Debug("[CachingSource] Acquiring continuation URL (single-flight)...");
+            resolvedUrl = await _urlAcquirer!(ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Warn($"[CachingSource] Continuation URL resolution failed: {ex.Message}");
+        }
+
+        TaskCompletionSource<string?>? tcs;
+
+        lock (_continuationLock)
+        {
+            tcs = _continuationUrlTcs;
+            _continuationUrlTcs = null;
+
+            if (!string.IsNullOrEmpty(resolvedUrl) && string.IsNullOrWhiteSpace(_currentUrl))
+            {
+                _currentUrl = resolvedUrl;
+                if (_cacheEntry != null)
+                    _cacheEntry.OriginalUrl = resolvedUrl;
+
+                Log.Info("[CachingSource] Continuation URL resolved via single-flight");
+            }
+        }
+
+        tcs?.TrySetResult(resolvedUrl);
     }
 
     private async Task CoordinatedRefreshAsync(CancellationToken ct)

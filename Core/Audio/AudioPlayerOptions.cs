@@ -26,6 +26,13 @@ public sealed class AudioPlayerOptions
     public StreamingConfig? StreamingConfig { get; init; }
 
     /// <summary>
+    /// Callback, определяющий, нужен ли fast-replay текущего трека
+    /// при естественном завершении (RepeatMode.One).
+    /// Если возвращает <c>true</c>, player выполняет rewind pipeline без пересоздания.
+    /// </summary>
+    public Func<bool>? ShouldFastReplay { get; init; }
+
+    /// <summary>
     /// Callback конфигурации pipeline перед открытием gate.
     /// </summary>
     /// <remarks>
@@ -44,4 +51,10 @@ public sealed class AudioPlayerOptions
     /// Аргументы: trackId, locked gain.
     /// </summary>
     public Action<string, float>? OnGainLocked { get; init; }
+
+    /// <summary>
+    /// Callback для первичного получения continuation URL у partial-cache source.
+    /// Используется только для initial network acquire, не для 403 refresh.
+    /// </summary>
+    public Func<string, CancellationToken, ValueTask<string?>>? UrlAcquireCallback { get; init; }
 }

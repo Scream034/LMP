@@ -115,6 +115,7 @@ public static class AudioSourceFactory
     public static async Task<IAudioSource> CreateAsync(
           string url,
           HttpClient httpClient,
+          Func<CancellationToken, Task<string?>>? urlAcquirer = null,
           Func<CancellationToken, Task<string?>>? urlRefresher = null,
           string? trackId = null,
           int bitrateHint = 0,
@@ -132,7 +133,6 @@ public static class AudioSourceFactory
 
         if (string.IsNullOrEmpty(url))
         {
-            // Полностью закэшированный трек → LocalFileSource
             var cached = FindAnyCachedTrack(trackId);
             if (cached != null)
             {
@@ -141,13 +141,11 @@ public static class AudioSourceFactory
                 return new LocalFileSource(
                     cached.Value.Path,
                     cached.Value.Entry.TotalSize,
-                    trackId);
+                    trackId,
+                    _globalCacheManager,
+                    cached.Value.Entry.CacheKey);
             }
 
-            // Partial Cache Fast Start:
-            // AudioEngine мог намеренно передать пустой URL как сигнал:
-            // "локального contiguous префикса уже хватает для старта,
-            // continuation URL будет поднят лениво через urlRefresher".
             int bootstrapBytes = Math.Min(
                 config.InitialPrebufferBytes,
                 int.MaxValue);
@@ -170,18 +168,19 @@ public static class AudioSourceFactory
                     httpClient: httpClient,
                     cacheManager: _globalCacheManager,
                     config: config,
+                    urlAcquirer: urlAcquirer,
                     urlRefresher: urlRefresher);
             }
 
             throw new ArgumentException("No URL provided and no cache available", nameof(url));
         }
 
-        var format = await DetectFormatAsync(url, httpClient, ct);
+        var format = await DetectFormatAsync(url, httpClient, ct).ConfigureAwait(false);
         if (format == AudioFormat.Unknown)
             throw new NotSupportedException($"Could not detect audio format for: {url}");
 
         var (contentLength, codec, detectedBitrate) =
-            await GetStreamInfoAsync(url, format, httpClient, ct);
+            await GetStreamInfoAsync(url, format, httpClient, ct).ConfigureAwait(false);
 
         int finalBitrate = bitrateHint > 0 ? bitrateHint : detectedBitrate;
         string cacheKey = BuildCacheKey(trackId, format, finalBitrate);
@@ -193,15 +192,30 @@ public static class AudioSourceFactory
             {
                 var exactEntry = _globalCacheManager.GetCacheInfo(cacheKey);
                 Log.Info($"[AudioSourceFactory] Exact cache hit: {cacheKey}");
-                return new LocalFileSource(cachePath, exactEntry?.TotalSize ?? 0, trackId);
+                return new LocalFileSource(
+                    cachePath,
+                    exactEntry?.TotalSize ?? 0,
+                    trackId,
+                    _globalCacheManager,
+                    cacheKey);
             }
         }
 
         Log.Info($"[AudioSourceFactory] Streaming {format}/{codec}/{finalBitrate}kbps: {cacheKey}");
 
         return new CachingStreamSource(
-            cacheKey, trackId, url, contentLength, format, codec,
-            finalBitrate, httpClient, _globalCacheManager, config, urlRefresher);
+            cacheKey,
+            trackId,
+            url,
+            contentLength,
+            format,
+            codec,
+            finalBitrate,
+            httpClient,
+            _globalCacheManager,
+            config,
+            urlAcquirer,
+            urlRefresher);
     }
 
     /// <summary>

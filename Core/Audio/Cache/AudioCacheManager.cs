@@ -42,7 +42,7 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _trackIndex = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _saveLock = new(1, 1);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SafeFileHandle> _fileHandles = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CacheFileHandle> _fileHandles = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _timerCts = new();
     private readonly Task _autoSaveTask;
     private volatile bool _disposed;
@@ -395,20 +395,44 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         if (bitrate.HasValue) entry.Bitrate = bitrate.Value;
 
         UpdateFileSizeCache(entry);
-        DisposeHandle(cacheKey);
+        // Handle закроется автоматически при release lease — не нужен ForceClose
         Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
         _ = SaveIndexAsync();
         RaiseFormatCached(entry);
     }
 
+    public void RemoveCache(string cacheKey)
+    {
+        if (!_entries.TryRemove(cacheKey, out var entry)) return;
+
+        RemoveFromTrackIndex(entry.TrackId, cacheKey);
+        ForceCloseHandle(cacheKey);
+
+        var filePath = GetCachePath(cacheKey);
+        try { if (File.Exists(filePath)) File.Delete(filePath); } catch { }
+
+        _ = SaveIndexAsync();
+    }
+
+    private void InvalidateCompleteEntry(CacheEntry entry)
+    {
+        entry.IsComplete = false;
+        entry.CompletedAt = null;
+        entry.ResetDownloadedRanges();
+        entry.ActualFileSize = 0;
+        ForceCloseHandle(entry.CacheKey);
+        _ = SaveIndexAsync();
+    }
+
     /// <summary>
     /// Записывает произвольный диапазон байт в файл кэша.
+    /// I/O отслеживается через lease-модель для безопасного закрытия дескриптора.
     /// </summary>
     public async ValueTask WriteRangeAsync(
-     string cacheKey,
-     long offset,
-     ReadOnlyMemory<byte> data,
-     CancellationToken ct = default)
+        string cacheKey,
+        long offset,
+        ReadOnlyMemory<byte> data,
+        CancellationToken ct = default)
     {
         if (!_entries.TryGetValue(cacheKey, out var entry)) return;
         if (data.IsEmpty) return;
@@ -423,9 +447,12 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         var fileLock = _fileLocks.GetOrAdd(cacheKey, static _ => new SemaphoreSlim(1, 1));
         await fileLock.WaitAsync(ct).ConfigureAwait(false);
 
+        var fileHandle = GetFileHandle(cacheKey);
+        fileHandle.BeginIo();
+
         try
         {
-            var handle = GetOrCreateHandle(cacheKey);
+            var handle = fileHandle.GetOrOpen();
             await RandomAccess.WriteAsync(handle, data, offset, ct).ConfigureAwait(false);
 
             entry.MarkRangeDownloaded(offset, data.Length);
@@ -440,27 +467,22 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
                 entry.IsComplete = true;
                 entry.CompletedAt = DateTime.UtcNow;
                 entry.ActualFileSize = Math.Max(entry.ActualFileSize, entry.TotalSize);
-                DisposeHandle(cacheKey);
                 Log.Info($"[AudioCache] Track fully cached: {cacheKey}");
                 RaiseFormatCached(entry);
             }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"[AudioCache] Write range failed: {ex.Message}");
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { Log.Warn($"[AudioCache] Write range failed: {ex.Message}"); }
         finally
         {
+            fileHandle.EndIo();
             fileLock.Release();
         }
     }
 
     /// <summary>
     /// Читает произвольный диапазон байт из файла кэша.
+    /// I/O отслеживается через lease-модель для безопасного закрытия дескриптора.
     /// </summary>
     public async ValueTask<(IMemoryOwner<byte> Owner, int Length)?> ReadRangeAsync(
         string cacheKey,
@@ -478,27 +500,25 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         int expectedLength = length;
         if (expectedLength > remaining)
             expectedLength = (int)remaining;
-
         if (expectedLength <= 0) return null;
 
-        var handle = TryGetHandle(cacheKey);
-        if (handle is null) return null;
+        var fileHandle = TryGetFileHandle(cacheKey);
+        if (fileHandle == null) return null;
 
+        fileHandle.BeginIo();
         var memoryOwner = MemoryPool<byte>.Shared.Rent(expectedLength);
 
         try
         {
+            var handle = fileHandle.GetOrOpen(FileMode.Open);
             int totalRead = 0;
             var buffer = memoryOwner.Memory[..expectedLength];
 
             while (totalRead < expectedLength)
             {
                 int read = await RandomAccess.ReadAsync(
-                    handle,
-                    buffer[totalRead..expectedLength],
-                    offset + totalRead,
-                    ct).ConfigureAwait(false);
-
+                    handle, buffer[totalRead..expectedLength],
+                    offset + totalRead, ct).ConfigureAwait(false);
                 if (read == 0) break;
                 totalRead += read;
             }
@@ -507,7 +527,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             {
                 memoryOwner.Dispose();
                 entry.InvalidateRange(offset, expectedLength);
-
                 Log.Warn($"[AudioCache] Short read range of {cacheKey}: " +
                          $"offset={offset}, expected={expectedLength}, got={totalRead}. Range invalidated.");
                 return null;
@@ -525,6 +544,10 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         {
             memoryOwner.Dispose();
             return null;
+        }
+        finally
+        {
+            fileHandle.EndIo();
         }
     }
 
@@ -546,26 +569,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             FileShare.ReadWrite | FileShare.Delete,
             bufferSize: CacheFileBufferSize,
             useAsync: false);
-    }
-
-    public void RemoveCache(string cacheKey)
-    {
-        if (!_entries.TryRemove(cacheKey, out var entry)) return;
-
-        RemoveFromTrackIndex(entry.TrackId, cacheKey);
-        DisposeHandle(cacheKey);
-
-        var filePath = GetCachePath(cacheKey);
-        try
-        {
-            if (File.Exists(filePath))
-                File.Delete(filePath);
-        }
-        catch
-        {
-        }
-
-        _ = SaveIndexAsync();
     }
 
     public async Task CleanupAsync(CancellationToken ct = default)
@@ -593,6 +596,35 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
         }
 
         Log.Info($"[AudioCache] Cleanup complete, new size: {totalSize / 1024 / 1024}MB");
+    }
+
+    #endregion
+
+    #region Lease API
+
+    /// <summary>
+    /// Регистрирует lifetime lease на cache-файл.
+    /// Source вызывает при инициализации, чтобы гарантировать жизнь дескриптора
+    /// до явного <see cref="ReleaseLease"/>.
+    /// </summary>
+    /// <param name="cacheKey">Уникальный ключ кэша.</param>
+    public void AcquireLease(string cacheKey)
+    {
+        var entry = _fileHandles.GetOrAdd(cacheKey,
+            key => new CacheFileHandle(GetCachePath(key)));
+        entry.AddLease();
+    }
+
+    /// <summary>
+    /// Освобождает lifetime lease на cache-файл.
+    /// Если после release не осталось lease'ов и in-flight I/O,
+    /// дескриптор закрывается автоматически.
+    /// </summary>
+    /// <param name="cacheKey">Уникальный ключ кэша.</param>
+    public void ReleaseLease(string cacheKey)
+    {
+        if (_fileHandles.TryGetValue(cacheKey, out var entry))
+            entry.RemoveLease();
     }
 
     #endregion
@@ -1089,19 +1121,6 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Сбрасывает complete-статус записи кэша и освобождает связанные ресурсы.
-    /// </summary>
-    private void InvalidateCompleteEntry(CacheEntry entry)
-    {
-        entry.IsComplete = false;
-        entry.CompletedAt = null;
-        entry.ResetDownloadedRanges();
-        entry.ActualFileSize = 0;
-        DisposeHandle(entry.CacheKey);
-        _ = SaveIndexAsync();
-    }
-
-    /// <summary>
     /// Инвалидирует диапазон байт в кэше.
     /// </summary>
     public void InvalidateRange(string cacheKey, long offset, int length)
@@ -1155,47 +1174,26 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
             _trackIndex.TryRemove(trackId, out _);
     }
 
-    private SafeFileHandle GetOrCreateHandle(string cacheKey)
+    /// <summary>Возвращает или создаёт <see cref="CacheFileHandle"/> для cacheKey.</summary>
+    private CacheFileHandle GetFileHandle(string cacheKey) =>
+        _fileHandles.GetOrAdd(cacheKey, key => new CacheFileHandle(GetCachePath(key)));
+
+    /// <summary>Возвращает <see cref="CacheFileHandle"/> если существует.</summary>
+    private CacheFileHandle? TryGetFileHandle(string cacheKey) =>
+        _fileHandles.TryGetValue(cacheKey, out var entry) ? entry : null;
+
+    /// <summary>Принудительно закрывает дескриптор cache-файла.</summary>
+    private void ForceCloseHandle(string cacheKey)
     {
-        if (_fileHandles.TryGetValue(cacheKey, out var existing))
-            return existing;
-
-        string filePath = GetCachePath(cacheKey);
-        var created = File.OpenHandle(
-            filePath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.ReadWrite | FileShare.Delete,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
-
-        if (_fileHandles.TryAdd(cacheKey, created))
-            return created;
-
-        created.Dispose();
-        return _fileHandles[cacheKey];
+        if (_fileHandles.TryGetValue(cacheKey, out var entry))
+            entry.ForceClose();
     }
 
-    private SafeFileHandle? TryGetHandle(string cacheKey)
+    /// <summary>Принудительно закрывает все дескрипторы.</summary>
+    private void ForceCloseAllHandles()
     {
-        if (_fileHandles.TryGetValue(cacheKey, out var existing))
-            return existing;
-
-        string filePath = GetCachePath(cacheKey);
-        if (!File.Exists(filePath))
-            return null;
-
-        var created = File.OpenHandle(
-            filePath,
-            FileMode.Open,
-            FileAccess.ReadWrite,
-            FileShare.ReadWrite | FileShare.Delete,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
-
-        if (_fileHandles.TryAdd(cacheKey, created))
-            return created;
-
-        created.Dispose();
-        return _fileHandles.TryGetValue(cacheKey, out var winner) ? winner : null;
+        foreach (var entry in _fileHandles.Values)
+            entry.ForceClose();
     }
 
     private void DisposeHandle(string cacheKey)
@@ -1476,12 +1474,11 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         _disposed = true;
         _timerCts.Cancel();
-        DisposeAllHandles();
+        ForceCloseAllHandles();
 
         foreach (var fileLock in _fileLocks.Values)
         {
-            try { fileLock.Dispose(); }
-            catch { }
+            try { fileLock.Dispose(); } catch { }
         }
 
         _timerCts.Dispose();
@@ -1494,23 +1491,16 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
 
         _timerCts.Cancel();
 
-        try
-        {
-            await _autoSaveTask.ConfigureAwait(false);
-        }
-        catch
-        {
-        }
+        try { await _autoSaveTask.ConfigureAwait(false); } catch { }
 
         await SaveIndexAsync().ConfigureAwait(false);
 
         _disposed = true;
-        DisposeAllHandles();
+        ForceCloseAllHandles();
 
         foreach (var fileLock in _fileLocks.Values)
         {
-            try { fileLock.Dispose(); }
-            catch { }
+            try { fileLock.Dispose(); } catch { }
         }
 
         _timerCts.Dispose();
@@ -1518,6 +1508,150 @@ public sealed class AudioCacheManager : IAsyncDisposable, IDisposable
     }
 
     #endregion
+
+    /// <summary>
+    /// Владеющая запись файлового дескриптора cache-файла.
+    /// Обеспечивает lease-based ownership и in-flight I/O tracking.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Инварианты:</b></para>
+    /// <list type="bullet">
+    ///   <item>Handle открывается лениво при первом I/O запросе через <see cref="GetOrOpen"/>.</item>
+    ///   <item>Handle закрывается автоматически при quiescence:
+    ///         <c>LeaseCount == 0 &amp;&amp; ActiveIoCount == 0</c>.</item>
+    ///   <item>Все мутации состояния потокобезопасны через <see cref="_lock"/>.</item>
+    /// </list>
+    /// </remarks>
+    private sealed class CacheFileHandle : IDisposable
+    {
+        private readonly string _filePath;
+        private readonly Lock _lock = new();
+        private SafeFileHandle? _handle;
+        private int _leaseCount;
+        private int _activeIoCount;
+        private TaskCompletionSource? _quiescenceWaiter;
+
+        public CacheFileHandle(string filePath) => _filePath = filePath;
+
+        /// <summary>Количество активных lease.</summary>
+        public int LeaseCount => Volatile.Read(ref _leaseCount);
+
+        /// <summary>Количество in-flight I/O операций.</summary>
+        public int ActiveIoCount => Volatile.Read(ref _activeIoCount);
+
+        /// <summary>Handle закрыт или не открывался.</summary>
+        public bool IsClosed
+        {
+            get { lock (_lock) return _handle is null or { IsClosed: true }; }
+        }
+
+        /// <summary>Увеличивает lease counter.</summary>
+        public void AddLease()
+        {
+            lock (_lock) _leaseCount++;
+        }
+
+        /// <summary>Уменьшает lease counter. Закрывает handle при quiescence.</summary>
+        public void RemoveLease()
+        {
+            lock (_lock)
+            {
+                if (_leaseCount > 0) _leaseCount--;
+                TryCloseIfQuiescent();
+            }
+        }
+
+        /// <summary>Регистрирует начало I/O операции.</summary>
+        public void BeginIo() => Interlocked.Increment(ref _activeIoCount);
+
+        /// <summary>Регистрирует завершение I/O. Закрывает handle при quiescence.</summary>
+        public void EndIo()
+        {
+            if (Interlocked.Decrement(ref _activeIoCount) <= 0
+                && Volatile.Read(ref _leaseCount) <= 0)
+            {
+                lock (_lock) TryCloseIfQuiescent();
+            }
+        }
+
+        /// <summary>Возвращает OS handle, лениво открывая файл при необходимости.</summary>
+        public SafeFileHandle GetOrOpen(FileMode mode = FileMode.OpenOrCreate)
+        {
+            lock (_lock)
+            {
+                if (_handle is { IsClosed: false })
+                    return _handle;
+
+                _handle = File.OpenHandle(
+                    _filePath, mode,
+                    FileAccess.ReadWrite,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    FileOptions.Asynchronous | FileOptions.RandomAccess);
+
+                return _handle;
+            }
+        }
+
+        /// <summary>
+        /// Принудительно закрывает handle, независимо от lease/I/O counters.
+        /// Используется при удалении файла или dispose менеджера.
+        /// </summary>
+        public void ForceClose()
+        {
+            TaskCompletionSource? waiter;
+            lock (_lock)
+            {
+                waiter = _quiescenceWaiter;
+                _quiescenceWaiter = null;
+
+                if (_handle is { IsClosed: false })
+                {
+                    try { _handle.Dispose(); } catch { }
+                }
+                _handle = null;
+            }
+            waiter?.TrySetResult();
+        }
+
+        /// <summary>
+        /// Ожидает завершения всех I/O операций. Используется на dispose path.
+        /// </summary>
+        public Task WaitForQuiescenceAsync(int timeoutMs)
+        {
+            lock (_lock)
+            {
+                if (_leaseCount <= 0 && _activeIoCount <= 0)
+                    return Task.CompletedTask;
+
+                _quiescenceWaiter ??= new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            return _quiescenceWaiter.Task.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs));
+        }
+
+        /// <summary>Проверяет quiescence и закрывает handle. Вызывается под lock.</summary>
+        private void TryCloseIfQuiescent()
+        {
+            if (_leaseCount > 0 || _activeIoCount > 0) return;
+
+            var waiter = _quiescenceWaiter;
+            _quiescenceWaiter = null;
+
+            if (_handle is { IsClosed: false })
+            {
+                try { _handle.Dispose(); } catch { }
+                _handle = null;
+            }
+
+            waiter?.TrySetResult();
+        }
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            ForceClose();
+        }
+    }
 }
 
 /// <summary>

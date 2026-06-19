@@ -159,6 +159,7 @@ public sealed class AudioPipeline : IAsyncDisposable
         string url,
         string? trackId,
         int bitrateHint,
+        Func<CancellationToken, Task<string?>>? urlAcquirer,
         Func<CancellationToken, Task<string?>>? urlRefresher,
         AudioPlayerOptions options,
         IPlaybackBackend sharedBackend,
@@ -173,8 +174,14 @@ public sealed class AudioPipeline : IAsyncDisposable
         try
         {
             source = await AudioSourceFactory.CreateAsync(
-                url, Http.SharedHttpClient.Instance, urlRefresher, trackId,
-                bitrateHint, options.StreamingConfig, lifetimeCts.Token).ConfigureAwait(false);
+                url,
+                Http.SharedHttpClient.Instance,
+                urlAcquirer,
+                urlRefresher,
+                trackId,
+                bitrateHint,
+                options.StreamingConfig,
+                lifetimeCts.Token).ConfigureAwait(false);
 
             if (!await source.InitializeAsync(lifetimeCts.Token).ConfigureAwait(false))
             {

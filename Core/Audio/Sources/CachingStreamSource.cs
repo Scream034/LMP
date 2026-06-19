@@ -109,6 +109,17 @@ public sealed partial class CachingStreamSource : IAudioSource
     // ── Dependencies ──
     private readonly HttpClient _httpClient;
     private readonly AudioCacheManager _cacheManager;
+
+    /// <summary>
+    /// Callback для первичного continuation acquire.
+    /// Используется в <see cref="EnsureUrlAvailableAsync"/> при первом network miss.
+    /// </summary>
+    private readonly Func<CancellationToken, Task<string?>>? _urlAcquirer;
+
+    /// <summary>
+    /// Callback для forced URL refresh.
+    /// Используется только при 403/expired URL.
+    /// </summary>
     private readonly Func<CancellationToken, Task<string?>>? _urlRefresher;
 
     // ── Parsing ──
@@ -159,6 +170,20 @@ public sealed partial class CachingStreamSource : IAudioSource
     // ── Lifecycle ──
     private CancellationTokenSource? _lifetimeCts;
     private Task? _preloadTask;
+
+    /// <summary>Счётчик незавершённых фоновых disk-write операций.</summary>
+    private int _pendingDiskWrites;
+
+    /// <summary>Флаг того, что lease был успешно взят.</summary>
+    private volatile bool _leaseAcquired;
+
+    /// <summary>
+    /// Single-flight promise для первичного получения continuation URL.
+    /// Гарантирует, что одновременно выполняется только один URL resolution.
+    /// Не используется для 403 refresh — тот идёт через <see cref="CoordinatedRefreshAsync"/>.
+    /// </summary>
+    private TaskCompletionSource<string?>? _continuationUrlTcs;
+    private readonly Lock _continuationLock = new();
 
     // ── Position tracking ──
     private long _currentReadOffset;
@@ -291,6 +316,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         HttpClient httpClient,
         AudioCacheManager cacheManager,
         StreamingConfig config,
+        Func<CancellationToken, Task<string?>>? urlAcquirer = null,
         Func<CancellationToken, Task<string?>>? urlRefresher = null)
     {
         _config = config;
@@ -302,6 +328,7 @@ public sealed partial class CachingStreamSource : IAudioSource
         _bitrate = bitrate;
         _httpClient = httpClient;
         _cacheManager = cacheManager;
+        _urlAcquirer = urlAcquirer;
         _urlRefresher = urlRefresher;
         Codec = codec;
 
@@ -573,6 +600,9 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         try
         {
+            _cacheManager.AcquireLease(_cacheKey);
+            _leaseAcquired = true;
+
             _cacheEntry = _cacheManager.CreateOrUpdate(
                 _cacheKey, _trackId, _currentUrl, _contentLength, _format,
                 AudioSourceFactory.GetCodecForFormat(_format), _bitrate,
@@ -871,29 +901,31 @@ public sealed partial class CachingStreamSource : IAudioSource
     /// <c>false</c>, если source уже имел URL, был disposed или входной URL невалиден.
     /// </returns>
     /// <remarks>
-    /// <para>
-    /// Используется режимом Partial Cache Fast Start:
-    /// playback уже стартовал из локального partial cache, а continuation URL
-    /// был подготовлен в фоне и теперь должен быть немедленно доступен
-    /// при первом network miss.
-    /// </para>
-    /// <para>
-    /// Метод intentionally одноразовый: если <see cref="_currentUrl"/> уже заполнен,
-    /// новый URL не перезаписывает текущее значение, чтобы не ломать активную сеть/epoch.
-    /// </para>
+    /// <para>Если <see cref="EnsureUrlAvailableAsync"/> уже ожидает URL через
+    /// <see cref="_continuationUrlTcs"/>, данный метод завершает promise
+    /// и все ожидающие потоки немедленно продолжат работу.</para>
     /// </remarks>
     internal bool TryAttachContinuationUrl(string url)
     {
         if (_disposed) return false;
         if (string.IsNullOrWhiteSpace(url)) return false;
 
-        if (!string.IsNullOrWhiteSpace(_currentUrl))
-            return false;
+        TaskCompletionSource<string?>? pendingTcs;
 
-        _currentUrl = url;
+        lock (_continuationLock)
+        {
+            if (!string.IsNullOrWhiteSpace(_currentUrl))
+                return false;
+
+            _currentUrl = url;
+            pendingTcs = _continuationUrlTcs;
+            _continuationUrlTcs = null;
+        }
 
         if (_cacheEntry != null)
             _cacheEntry.OriginalUrl = url;
+
+        pendingTcs?.TrySetResult(url);
 
         Log.Debug("[CachingSource] Continuation URL attached externally");
         return true;
@@ -926,6 +958,31 @@ public sealed partial class CachingStreamSource : IAudioSource
 
     #region Dispose
 
+    /// <summary>Общий эпилог dispose: освобождение всех ресурсов.</summary>
+    private void DisposeSharedResources()
+    {
+        try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
+
+        _readStream?.Dispose();
+        DisposeAllRamChunks();
+
+        lock (_continuationLock)
+        {
+            var tcs = _continuationUrlTcs;
+            _continuationUrlTcs = null;
+            tcs?.TrySetResult(null);
+        }
+
+        try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
+        try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
+
+        _suspendGate.Dispose();
+        _playbackGate.Dispose();
+
+        if (_leaseAcquired)
+            _cacheManager.ReleaseLease(_cacheKey);
+    }
+
     /// <summary>Диспозит все блоки в RAM-кэше.</summary>
     private void DisposeAllRamChunks() => _ramCache.DisposeAll();
 
@@ -955,21 +1012,6 @@ public sealed partial class CachingStreamSource : IAudioSource
         catch (ObjectDisposedException) { }
     }
 
-    /// <summary>Общий эпилог dispose: освобождение всех ресурсов.</summary>
-    private void DisposeSharedResources()
-    {
-        try { _lifetimeCts?.Dispose(); } catch (ObjectDisposedException) { }
-
-        _readStream?.Dispose();
-        DisposeAllRamChunks();
-
-        try { _refreshLock.Dispose(); } catch (ObjectDisposedException) { }
-        try { _downloadSlots.Dispose(); } catch (ObjectDisposedException) { }
-
-        _suspendGate.Dispose();
-        _playbackGate.Dispose();
-    }
-
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -978,6 +1020,7 @@ public sealed partial class CachingStreamSource : IAudioSource
 
         BeginDispose();
         _parser?.Dispose();
+        DrainPendingDiskWritesSync();
         DisposeSharedResources();
     }
 
@@ -1000,12 +1043,47 @@ public sealed partial class CachingStreamSource : IAudioSource
             catch { }
         }
 
+        await DrainPendingDiskWritesAsync().ConfigureAwait(false);
         await Task.Delay(DisposalDelayMs).ConfigureAwait(false);
 
         if (_parser != null)
             await _parser.DisposeAsync().ConfigureAwait(false);
 
         DisposeSharedResources();
+    }
+
+    /// <summary>
+    /// Ожидает завершения всех фоновых disk-write операций перед освобождением lease.
+    /// </summary>
+    private async Task DrainPendingDiskWritesAsync()
+    {
+        const int maxWaitMs = 2000;
+        const int pollIntervalMs = 25;
+        int elapsed = 0;
+
+        while (Volatile.Read(ref _pendingDiskWrites) > 0 && elapsed < maxWaitMs)
+        {
+            await Task.Delay(pollIntervalMs).ConfigureAwait(false);
+            elapsed += pollIntervalMs;
+        }
+
+        int remaining = Volatile.Read(ref _pendingDiskWrites);
+        if (remaining > 0)
+            Log.Warn($"[CachingSource] {remaining} pending disk writes not drained within {maxWaitMs}ms");
+    }
+
+    /// <summary>Sync fallback для дренажа pending writes.</summary>
+    private void DrainPendingDiskWritesSync()
+    {
+        const int maxWaitMs = 500;
+        const int pollIntervalMs = 10;
+        int elapsed = 0;
+
+        while (Volatile.Read(ref _pendingDiskWrites) > 0 && elapsed < maxWaitMs)
+        {
+            Thread.Sleep(pollIntervalMs);
+            elapsed += pollIntervalMs;
+        }
     }
 
     #endregion

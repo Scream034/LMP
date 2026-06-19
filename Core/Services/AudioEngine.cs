@@ -100,6 +100,23 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     private readonly Lock _sessionLock = new();
 
     /// <summary>
+    /// Single-flight задачи первичного получения continuation URL по trackId.
+    /// Разделяются между background priming и source-level lazy acquire.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, Task<ContinuationUrlResult?>> _pendingUrlAcquisitions
+        = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Результат получения continuation URL с сопутствующей metadata stream variant.
+    /// </summary>
+    private readonly record struct ContinuationUrlResult(
+        string Url,
+        long Size,
+        int Bitrate,
+        string Container,
+        string Codec);
+
+    /// <summary>
     /// Task цикла обработки команд (<see cref="ProcessCommandsAsync"/>).
     /// Сохраняется для детерминированного ожидания при dispose:
     /// без ожидания возможна гонка — команда уже извлечена из канала,
@@ -261,12 +278,14 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
         _player = new AudioPlayer(new AudioPlayerOptions
         {
+            UrlAcquireCallback = AcquireUrlCallbackAsync,
             UrlRefreshCallback = RefreshUrlCallbackAsync,
-            PositionUpdateInterval = TimeSpan.FromMilliseconds(500), // Частота рассылки события снижена до 500мс для разгрузки UI-потока. Плавность слайдера обеспечивается экстраполяцией.
+            PositionUpdateInterval = TimeSpan.FromMilliseconds(500),
             MaxRetryAttempts = 3,
             UseNullBackend = false,
             OnPipelineConfiguring = ConfigurePipelineBeforeStart,
-            OnGainLocked = HandleGainLocked
+            OnGainLocked = HandleGainLocked,
+            ShouldFastReplay = () => RepeatMode == RepeatMode.One
         });
 
         SubscribeToPlayerEvents();
@@ -575,6 +594,80 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
 
     #region Internal Playback
 
+    /// <summary>
+    /// Возвращает или запускает single-flight получение continuation URL для трека.
+    /// Этот путь используется и background priming'ом, и source-level lazy acquire.
+    /// </summary>
+    /// <param name="track">Текущий трек.</param>
+    private Task<ContinuationUrlResult?> GetOrStartContinuationUrlAcquisitionAsync(TrackInfo track)
+    {
+        if (_pendingUrlAcquisitions.TryGetValue(track.Id, out var existing))
+            return existing;
+
+        var sessionToken = GetSessionToken();
+        var created = AcquireContinuationUrlCoreAsync(track, sessionToken);
+
+        if (_pendingUrlAcquisitions.TryAdd(track.Id, created))
+        {
+            _ = RemovePendingContinuationAcquisitionAsync(track.Id, created);
+            return created;
+        }
+
+        return _pendingUrlAcquisitions[track.Id];
+    }
+
+    /// <summary>
+    /// Выполняет реальное получение continuation URL без force-refresh.
+    /// Результат кэшируется в runtime-модели трека.
+    /// </summary>
+    /// <param name="track">Текущий трек.</param>
+    /// <param name="ct">Сессионный токен.</param>
+    private async Task<ContinuationUrlResult?> AcquireContinuationUrlCoreAsync(
+        TrackInfo track,
+        CancellationToken ct)
+    {
+        var info = await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false);
+        if (info is null || string.IsNullOrEmpty(info.Value.Url))
+            return null;
+
+        track.StreamUrl = info.Value.Url;
+        track.TransientBitrate = info.Value.Bitrate;
+        track.TransientSize = info.Value.Size;
+        track.TransientContainer = info.Value.Container;
+        track.CachedCodec = info.Value.Codec;
+        track.CachedBitrate = info.Value.Bitrate;
+        track.CachedContainer = info.Value.Container;
+        track.IsHlsOnly = false;
+        track.HlsManifestUrl = null;
+
+        return new ContinuationUrlResult(
+            info.Value.Url,
+            info.Value.Size,
+            info.Value.Bitrate,
+            info.Value.Container,
+            info.Value.Codec);
+    }
+
+    /// <summary>
+    /// Удаляет завершённую single-flight задачу continuation acquire,
+    /// не затрагивая более новую задачу для того же trackId.
+    /// </summary>
+    private async Task RemovePendingContinuationAcquisitionAsync(
+        string trackId,
+        Task<ContinuationUrlResult?> task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
+        _pendingUrlAcquisitions.TryRemove(
+            new KeyValuePair<string, Task<ContinuationUrlResult?>>(trackId, task));
+    }
+
     /// <summary>Вызывается при фиксации gain нормализации.</summary>
     private void HandleGainLocked(string trackId, float gain)
     {
@@ -773,6 +866,40 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     }
 
     /// <summary>
+    /// Callback для первичного continuation acquire у partial-cache source.
+    /// Не делает force-refresh и разделяет single-flight задачу с background priming.
+    /// </summary>
+    private async ValueTask<string?> AcquireUrlCallbackAsync(string trackId, CancellationToken ct)
+    {
+        if (IsSealedFailedTrack(trackId))
+            return null;
+
+        var track = await _library.GetTrackAsync(trackId, ct).ConfigureAwait(false);
+        if (track == null || IsSealedFailedTrack(trackId))
+            return null;
+
+        try
+        {
+            var task = GetOrStartContinuationUrlAcquisitionAsync(track);
+            var result = await task.WaitAsync(ct).ConfigureAwait(false);
+            return result?.Url;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception) when (!string.Equals(CurrentTrack?.Id, trackId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"[AudioEngine] Acquire URL skipped for {trackId}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Вычисляет минимальный объём contiguous local prefix, достаточный
     /// для Partial Cache Fast Start.
     /// </summary>
@@ -816,61 +943,71 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     /// </summary>
     /// <param name="track">Текущий трек.</param>
     /// <param name="url">Финальный stream URL.</param>
-    private void TryAttachPrimedContinuationUrlToActiveSource(TrackInfo track, string url)
+    /// <returns>
+    /// <c>true</c>, если URL успешно передан в активный source;
+    /// <c>false</c>, если пайплайн/source ещё не готовы или имеют неподходящий тип.
+    /// </returns>
+    private bool TryAttachPrimedContinuationUrlToActiveSource(TrackInfo track, string url)
     {
         if (_disposed || string.IsNullOrWhiteSpace(url))
-            return;
+            return false;
 
         var current = CurrentTrack;
         if (current == null || !string.Equals(current.Id, track.Id, StringComparison.Ordinal))
-            return;
+            return false;
 
         var pipeline = _player.GetActivePipeline();
         if (pipeline?.Source is not Audio.Sources.CachingStreamSource cachingSource)
-            return;
+            return false;
 
         if (cachingSource.TryAttachContinuationUrl(url))
         {
             Log.Debug($"[AudioEngine] Primed continuation URL attached to live source: {track.Id}");
+            return true;
         }
+
+        return false;
     }
 
     /// <summary>
-    /// Асинхронно подготавливает continuation URL в фоне, не блокируя старт playback.
+    /// Подготавливает continuation URL для partial-cache source в фоне.
+    /// Использует тот же single-flight acquire task, что и source-level lazy acquire.
     /// </summary>
-    /// <param name="track">Текущий трек.</param>
-    /// <param name="ct">Токен текущей playback session.</param>
-    private async Task PrimeContinuationUrlAsync(TrackInfo track, CancellationToken ct)
+    private async Task PrimeContinuationUrlAsync(
+        TrackInfo track,
+        CacheEntry expectedEntry,
+        CancellationToken ct)
     {
         try
         {
             if (ct.IsCancellationRequested || IsSealedFailedTrack(track.Id))
                 return;
 
-            if (!string.IsNullOrEmpty(track.StreamUrl))
+            if (TryGetCompatibleContinuationUrl(track, expectedEntry, out var existingUrl))
             {
-                TryAttachPrimedContinuationUrlToActiveSource(track, track.StreamUrl);
+                TryAttachPrimedContinuationUrlToActiveSource(track, existingUrl);
                 return;
             }
 
-            var info = await _youtube.RefreshStreamUrlAsync(track, false, ct).ConfigureAwait(false);
-            if (info is null || string.IsNullOrEmpty(info.Value.Url))
+            var result = await GetOrStartContinuationUrlAcquisitionAsync(track)
+                .WaitAsync(ct)
+                .ConfigureAwait(false);
+
+            if (result == null || string.IsNullOrEmpty(result.Value.Url))
                 return;
 
-            track.StreamUrl = info.Value.Url;
-            track.TransientBitrate = info.Value.Bitrate;
-            track.TransientSize = info.Value.Size;
-            track.TransientContainer = info.Value.Container;
-            track.CachedCodec = info.Value.Codec;
-            track.CachedBitrate = info.Value.Bitrate;
-            track.CachedContainer = info.Value.Container;
-            track.IsHlsOnly = false;
-            track.HlsManifestUrl = null;
+            if (!IsContinuationVariantCompatible(expectedEntry, result.Value.Container, result.Value.Bitrate))
+            {
+                Log.Warn($"[AudioEngine] Continuation priming variant mismatch for {track.Id}: " +
+                         $"expected={expectedEntry.Format}/{expectedEntry.Bitrate}kbps, " +
+                         $"actual={result.Value.Container}/{result.Value.Bitrate}kbps");
+                return;
+            }
 
-            TryAttachPrimedContinuationUrlToActiveSource(track, info.Value.Url);
+            TryAttachPrimedContinuationUrlToActiveSource(track, result.Value.Url);
 
             Log.Info($"[AudioEngine] Partial-cache continuation primed: {track.Id} " +
-                     $"({info.Value.Codec}/{info.Value.Bitrate}kbps)");
+                     $"({result.Value.Codec}/{result.Value.Bitrate}kbps)");
         }
         catch (OperationCanceledException)
         {
@@ -950,7 +1087,16 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
             track.TransientSize = bootstrapCache.TotalSize;
             TryHydrateTrackNormalizationFromCache(track, bootstrapCache);
 
-            _ = PrimeContinuationUrlAsync(track, ct);
+            if (TryGetCompatibleContinuationUrl(track, bootstrapCache, out var eagerUrl))
+            {
+                Log.Info($"[AudioEngine] Partial-cache fast start with eager continuation URL: {track.Id} " +
+                         $"(prefix={bootstrapCache.GetContiguousDownloadedBytesFrom(0) / 1024}KB, " +
+                         $"downloaded={bootstrapCache.DownloadedBytes / 1024}KB/{bootstrapCache.TotalSize / 1024}KB)");
+
+                return (eagerUrl, bootstrapCache.TotalSize, bootstrapCache.Bitrate);
+            }
+
+            _ = PrimeContinuationUrlAsync(track, bootstrapCache, ct);
 
             Log.Info($"[AudioEngine] Partial-cache fast start: {track.Id} " +
                      $"(prefix={bootstrapCache.GetContiguousDownloadedBytesFrom(0) / 1024}KB, " +
@@ -1375,6 +1521,62 @@ public sealed partial class AudioEngine : ReactiveObject, ISuspendable, IDisposa
     #endregion
 
     #region Helpers
+
+    /// <summary>
+    /// Проверяет, совместим ли continuation stream variant с уже выбранным partial cache.
+    /// Это предотвращает прикрепление URL от другого контейнера/битрейта к существующему cache bucket.
+    /// </summary>
+    /// <param name="expectedEntry">Ожидаемая cache entry partial bootstrap.</param>
+    /// <param name="container">Контейнер continuation stream.</param>
+    /// <param name="bitrate">Битрейт continuation stream.</param>
+    private static bool IsContinuationVariantCompatible(
+        CacheEntry expectedEntry,
+        string? container,
+        int bitrate)
+    {
+        if (string.IsNullOrEmpty(container) || bitrate <= 0)
+            return false;
+
+        if (!Enum.TryParse<AudioFormat>(container, true, out var format))
+            return false;
+
+        if (format != expectedEntry.Format)
+            return false;
+
+        string candidateKey = AudioSourceFactory.BuildCacheKey(
+            expectedEntry.TrackId,
+            format,
+            bitrate);
+
+        return string.Equals(candidateKey, expectedEntry.CacheKey, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Пытается извлечь уже известный continuation URL, если он подтверждённо
+    /// совместим с выбранным partial-cache variant.
+    /// </summary>
+    /// <param name="track">Текущий трек.</param>
+    /// <param name="expectedEntry">Ожидаемая cache entry partial bootstrap.</param>
+    /// <param name="url">Совместимый continuation URL.</param>
+    private static bool TryGetCompatibleContinuationUrl(
+        TrackInfo track,
+        CacheEntry expectedEntry,
+        out string url)
+    {
+        url = track.StreamUrl;
+        if (string.IsNullOrEmpty(url))
+            return false;
+
+        string? container = !string.IsNullOrEmpty(track.TransientContainer)
+            ? track.TransientContainer
+            : track.CachedContainer;
+
+        int bitrate = track.TransientBitrate > 0
+            ? track.TransientBitrate
+            : track.CachedBitrate;
+
+        return IsContinuationVariantCompatible(expectedEntry, container, bitrate);
+    }
 
     /// <summary>
     /// Возвращает наиболее релевантную metadata-запись кэша для нормализации.

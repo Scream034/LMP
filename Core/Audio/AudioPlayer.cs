@@ -28,6 +28,8 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     private const int DisposeTaskTimeoutSec = 2;
     private const int ResumeMinBufferMs = 100;
     private const int ResumeWarmupTimeoutMs = 500;
+    /// <summary>Таймаут остановки decoder при fast-rewind (мс).</summary>
+    private const int RewindDecoderStopTimeoutMs = 300;
     private const int BitsPerByte = 8;
 
     #endregion
@@ -89,6 +91,8 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
     private string? _currentTrackId;
     private Func<CancellationToken, Task<string?>>? _cachedUrlRefresher;
     private string? _cachedUrlRefresherTrackId;
+    private Func<CancellationToken, Task<string?>>? _cachedUrlAcquirer;
+    private string? _cachedUrlAcquirerTrackId;
 
     private readonly SharedPlaybackState _sharedState = new();
 
@@ -655,8 +659,14 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             ct.ThrowIfCancellationRequested();
 
             var pipeline = await AudioPipeline.CreateAsync(
-                cmd.Url, cmd.TrackId, cmd.BitrateHint, CreateUrlRefresher(),
-                _options, _sharedBackend, ct).ConfigureAwait(false);
+                cmd.Url,
+                cmd.TrackId,
+                cmd.BitrateHint,
+                CreateUrlAcquirer(),
+                CreateUrlRefresher(),
+                _options,
+                _sharedBackend,
+                ct).ConfigureAwait(false);
 
             if (_session.IsStale(cmd.SessionId))
             {
@@ -830,14 +840,27 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Обрабатывает естественное завершение трека внутри actor loop.
+    /// При активном fast-replay (RepeatMode.One) выполняет rewind pipeline
+    /// без пересоздания source/decoder/file handles.
     /// </summary>
-    private Task HandleTrackEndedAsync(TrackEndedCommand cmd)
+    private async Task HandleTrackEndedAsync(TrackEndedCommand cmd)
     {
         if (_state is not (PlayerState.Buffering or PlayerState.Playing or PlayerState.Paused or PlayerState.Seeking))
-            return Task.CompletedTask;
+            return;
 
         if (_activePipeline == null)
-            return Task.CompletedTask;
+            return;
+
+        if (_options.ShouldFastReplay?.Invoke() == true)
+        {
+            var pipeline = _activePipeline;
+            if (pipeline is { IsDisposed: false, IsDeviceLost: false }
+                && pipeline.Source.CanSeek)
+            {
+                if (await FastRewindInternalAsync(pipeline, cmd.SessionId).ConfigureAwait(false))
+                    return;
+            }
+        }
 
         SetPlaybackIntent(PlaybackIntent.Stop);
         StopTimers();
@@ -852,7 +875,117 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
             TrackAndFirePipelineDispose(old);
 
         SetState(PlayerState.Idle);
-        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Выполняет fast-rewind текущего pipeline в начало трека
+    /// без пересоздания source, decoder и файловых дескрипторов.
+    /// </summary>
+    /// <remarks>
+    /// <para>Работает для любого seekable source: <see cref="Sources.LocalFileSource"/>,
+    /// <see cref="Sources.CachingStreamSource"/> (fully/partially buffered).</para>
+    /// <para>Preload loop <see cref="Sources.CachingStreamSource"/> остаётся живым,
+    /// данные начала файла с высокой вероятностью уже в disk/RAM кэше.</para>
+    /// </remarks>
+    /// <param name="pipeline">Активный pipeline для rewind.</param>
+    /// <param name="sessionId">ID текущей сессии.</param>
+    /// <returns><c>true</c> если rewind успешен; <c>false</c> — нужен fallback на полный restart.</returns>
+    private async Task<bool> FastRewindInternalAsync(AudioPipeline pipeline, int sessionId)
+    {
+        try
+        {
+            SetState(PlayerState.Buffering);
+            StopTimers();
+            _lastRawPlayedSamples = -1;
+
+            await pipeline.StopDecodingAsync(
+                TimeSpan.FromMilliseconds(RewindDecoderStopTimeoutMs)).ConfigureAwait(false);
+
+            pipeline.Stop();
+            pipeline.Flush();
+            pipeline.PrepareForSeek(0);
+
+            bool seeked = await pipeline.Source
+                .SeekAsync(0, _lifetimeCts.Token).ConfigureAwait(false);
+
+            if (!seeked)
+            {
+                Log.Warn("[AudioPlayer] Fast rewind: seek(0) failed");
+                return false;
+            }
+
+            pipeline.SetDecodedSamplesPosition(0);
+
+            if (_disposed || _session.IsStale(sessionId))
+                return false;
+
+            pipeline.StartDecoding(
+                CreateUrlRefresher(),
+                _options,
+                CreateTrackEndedCallback(sessionId),
+                CreateErrorCallback(sessionId, pipeline));
+
+            var warmupPlan = ComputePlaybackWarmupPlan(pipeline, isSeek: false);
+
+            bool pcmReady = warmupPlan.PcmThresholdSamples <= 0;
+
+            if (!pcmReady && warmupPlan.WarmupTimeoutMs > 0)
+            {
+                pcmReady = await pipeline.WaitForBufferAsync(
+                    warmupPlan.PcmThresholdSamples,
+                    warmupPlan.WarmupTimeoutMs,
+                    _lifetimeCts.Token).ConfigureAwait(false);
+            }
+
+            bool sourceReady = IsSourceReadyForResume(pipeline, warmupPlan.SourceAheadMs);
+
+            if (_disposed || _session.IsStale(sessionId))
+                return false;
+
+            if (CurrentPlaybackIntent != PlaybackIntent.Play)
+            {
+                pipeline.Stop();
+                SetState(PlayerState.Paused);
+                return true;
+            }
+
+            if ((pcmReady && sourceReady) || pipeline.Source.IsFullyBuffered)
+            {
+                ResumePlaybackSequence(
+                    pipeline,
+                    startTimers: true,
+                    configurePipeline: false);
+            }
+            else
+            {
+                pipeline.ActivateBufferingMode();
+
+                int seekGeneration = Volatile.Read(ref _seekGeneration);
+                var deferredResumeCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+                var previousCts = Interlocked.Exchange(ref _deferredResumeCts, deferredResumeCts);
+                CancelCtsAsync(previousCts);
+
+                _ = AwaitDeferredSeekBufferAndResumeAsync(
+                    pipeline,
+                    warmupPlan.PcmThresholdSamples,
+                    warmupPlan.SourceAheadMs,
+                    sessionId,
+                    seekGeneration,
+                    deferredResumeCts);
+            }
+
+            Log.Info("[AudioPlayer] Fast rewind completed (repeat-one)");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[AudioPlayer] Fast rewind failed: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -982,6 +1115,22 @@ public sealed partial class AudioPlayer : IAsyncDisposable, IDisposable
 
     private PlaybackIntent CurrentPlaybackIntent =>
         (PlaybackIntent)Volatile.Read(ref _playbackIntent);
+
+    private Func<CancellationToken, Task<string?>>? CreateUrlAcquirer()
+    {
+        if (_options.UrlAcquireCallback == null || string.IsNullOrEmpty(_currentTrackId))
+            return null;
+
+        string? trackId = _currentTrackId;
+
+        if (_cachedUrlAcquirer != null && _cachedUrlAcquirerTrackId == trackId)
+            return _cachedUrlAcquirer;
+
+        var callback = _options.UrlAcquireCallback;
+        _cachedUrlAcquirerTrackId = trackId;
+        _cachedUrlAcquirer = ct => callback(trackId, ct).AsTask();
+        return _cachedUrlAcquirer;
+    }
 
     private Func<CancellationToken, Task<string?>>? CreateUrlRefresher()
     {
